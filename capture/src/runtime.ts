@@ -1,4 +1,4 @@
-import { CaptureAuthenticationError } from "./api"
+import { CaptureAuthenticationError, CaptureUpgradeError } from "./api"
 import type { Job } from "../../web/shared/types"
 
 export type CaptureStatus = {
@@ -99,7 +99,7 @@ export class CaptureRuntime<B extends Browser> {
           this.emptyPolls = 0
           const base = Math.min(60_000, Math.max(1_000, this.options.pollMs) * 2 ** Math.min(errors - 1, 10))
           const retryInMs = Math.min(60_000, Math.round(base * (0.8 + (this.options.random?.() ?? Math.random()) * 0.4)))
-          this.emit({ state: "disconnected", error: error instanceof CaptureAuthenticationError ? "Capture token rejected (401). Check your capture token." : "Unable to reach the capture queue", retryInMs })
+          this.emit({ state: "disconnected", error: error instanceof CaptureAuthenticationError ? "Capture token rejected (401). Check your capture token." : error instanceof CaptureUpgradeError ? error.message : "Unable to reach the capture queue", retryInMs })
           this.options.logError?.("Queue poll failed; retrying.")
           if (this.options.once) break
           await this.wait(retryInMs)

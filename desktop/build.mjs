@@ -67,6 +67,8 @@ const [outDir] = await packager({
   name: "Snip",
   platform: "darwin",
   arch: "arm64",
+  // The native Node child must be able to read local-server.cjs directly.
+  asar: false,
   out: outputDir ?? path.join(here, "dist"),
   overwrite: true,
   icon,

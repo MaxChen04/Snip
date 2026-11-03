@@ -154,13 +154,15 @@ api.get("/references/:id", async (c) => {
 
 api.post("/references/:id/recapture", async (c) => {
   const id = c.req.param("id")
-  // Old files are removed when the capture worker claims the job.
+  // Retire the current file namespace and schedule its cleanup.
   await db.requeueReference(c.env.DB, id)
+  c.executionCtx.waitUntil(db.cleanupRetiredFiles(c.env.DB, c.env.FILES))
   return c.json({ ok: true })
 })
 
 api.delete("/references/:id", async (c) => {
-  await db.deleteReference(c.env.DB, c.env.FILES, c.req.param("id"))
+  await db.deleteReference(c.env.DB, c.req.param("id"))
+  c.executionCtx.waitUntil(db.cleanupRetiredFiles(c.env.DB, c.env.FILES))
   return c.json({ ok: true })
 })
 
@@ -195,54 +197,83 @@ app.route("/api", api)
 
 const agent = new Hono<AppEnv>()
 agent.use("*", requireCaptureToken)
+agent.use("*", async (c, next) => {
+  if (c.req.header("x-snip-capture-protocol") !== "2") return c.json({ error: "Capture agent upgrade required. Install the latest Snip capture agent." }, 426)
+  await next()
+})
+
+const attemptFrom = (c: { req: { header(name: string): string | undefined } }) => c.req.header("x-snip-capture-attempt") ?? ""
+const validAttempt = (attempt: string) => /^[a-f0-9]{32}$/.test(attempt)
 
 agent.post("/jobs/claim", async (c) => {
   const job = await db.claimJob(c.env.DB)
-  // Rows from any earlier attempt are gone, so drop its files; the new attempt writes under its own folder.
-  // Awaited so it can't race the new attempt's uploads.
-  if (job) await db.deletePrefix(c.env.FILES, `refs/${job.id}/`).catch((e) => console.error("cleanup failed", e))
+  c.executionCtx.waitUntil(db.cleanupRetiredFiles(c.env.DB, c.env.FILES))
   await db.touchPresence(c.env.DB, job ? "busy" : "idle", job?.id ?? null)
   return job ? c.json(job) : c.body(null, 204)
 })
 
-// Sent while a capture is running, so long pages don't make a busy worker look offline.
 agent.post("/heartbeat", async (c) => {
   const { jobId } = await c.req.json<{ jobId?: string | null }>().catch(() => ({ jobId: null }))
+  const attempt = attemptFrom(c)
+  if (jobId && (!validAttempt(attempt) || !(await db.renewLease(c.env.DB, jobId, attempt)))) return c.json({ error: "job is gone" }, 410)
   await db.touchPresence(c.env.DB, jobId ? "busy" : "idle", jobId ?? null)
   return c.json({ ok: true })
 })
 
 agent.post("/jobs/:id/progress", async (c) => {
+  const attempt = attemptFrom(c)
   const { message } = await c.req.json<{ message: string }>()
-  await Promise.all([db.setProgress(c.env.DB, c.req.param("id"), message), db.touchPresence(c.env.DB, "busy", c.req.param("id"))])
+  if (!validAttempt(attempt) || !(await db.setProgress(c.env.DB, c.req.param("id"), attempt, message))) return c.json({ error: "job is gone" }, 410)
+  await db.touchPresence(c.env.DB, "busy", c.req.param("id"))
   return c.json({ ok: true })
 })
 
 agent.put("/files/*", async (c) => {
   const key = c.req.path.slice("/agent/files/".length)
+  const attempt = attemptFrom(c)
   if (!KEY_RE.test(key) || key.includes("..")) return c.json({ error: "bad key" }, 400)
-  if (!(await db.isCapturing(c.env.DB, key.split("/")[1]!))) return c.json({ error: "job is gone" }, 410)
+  const parts = key.split("/")
+  if (!validAttempt(attempt) || parts[2] !== attempt) return c.json({ error: "job is gone" }, 410)
+  const upload = await db.beginUpload(c.env.DB, parts[1]!, attempt, key)
+  if (!upload) return c.json({ error: "job is gone" }, 410)
   const contentType = c.req.header("content-type") ?? "application/octet-stream"
+  // Keep the durable intent if the write, postcheck or stale-key deletion fails.
   await c.env.FILES.put(key, c.req.raw.body, { httpMetadata: { contentType } })
+  if (!(await db.isCapturing(c.env.DB, parts[1]!, attempt))) {
+    await c.env.FILES.delete(key)
+    await db.finishUpload(c.env.DB, upload)
+    return c.json({ error: "job is gone" }, 410)
+  }
+  await db.finishUpload(c.env.DB, upload)
   return c.json({ key })
 })
 
 agent.post("/jobs/:id/pages", async (c) => {
-  if (!(await db.isCapturing(c.env.DB, c.req.param("id")))) return c.json({ error: "job is gone" }, 410)
+  const id = c.req.param("id")
+  const attempt = attemptFrom(c)
+  if (!validAttempt(attempt)) return c.json({ error: "job is gone" }, 410)
   const page = await c.req.json<PageUpload>()
-  const pageId = await db.addPage(c.env.DB, c.req.param("id"), page)
-  return c.json({ id: pageId })
+  const prefix = `refs/${id}/${attempt}/`
+  const keys = [page.desktopKey, page.desktopThumbKey, page.mobileKey, page.mobileThumbKey, page.snapshotKey, page.stylesKey, ...page.animations.flatMap((a) => [a.gifKey, a.sheetKey])]
+  if (keys.some((key) => key && !key.startsWith(prefix))) return c.json({ error: "bad file key" }, 400)
+  const pageId = await db.addPage(c.env.DB, id, attempt, page)
+  return pageId ? c.json({ id: pageId }) : c.json({ error: "job is gone" }, 410)
 })
 
 agent.post("/jobs/:id/complete", async (c) => {
-  await db.completeJob(c.env.DB, c.req.param("id"), await c.req.json<JobComplete>())
+  const id = c.req.param("id")
+  const attempt = attemptFrom(c)
+  const body = await c.req.json<JobComplete>()
+  if (body.coverKey && !body.coverKey.startsWith(`refs/${id}/${attempt}/`)) return c.json({ error: "bad file key" }, 400)
+  if (!validAttempt(attempt) || !(await db.completeJob(c.env.DB, id, attempt, body))) return c.json({ error: "job is gone" }, 410)
   await db.touchPresence(c.env.DB, "idle", null)
   return c.json({ ok: true })
 })
 
 agent.post("/jobs/:id/fail", async (c) => {
+  const attempt = attemptFrom(c)
   const { error } = await c.req.json<{ error: string }>()
-  await db.failJob(c.env.DB, c.req.param("id"), error)
+  if (!validAttempt(attempt) || !(await db.failJob(c.env.DB, c.req.param("id"), attempt, error))) return c.json({ error: "job is gone" }, 410)
   await db.touchPresence(c.env.DB, "idle", null)
   return c.json({ ok: true })
 })

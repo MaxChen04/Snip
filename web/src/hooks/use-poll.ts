@@ -1,9 +1,6 @@
 import { useEffect, useRef } from "react"
 
-/**
- * Calls `fn` while `active`, starting every 4s and backing off to 30s.
- * Pauses while the tab is hidden and polls once, with the delay reset, when it is shown again.
- */
+/** Poll without overlapping requests; pause in hidden tabs and refresh when shown. */
 export function usePoll(fn: () => unknown, active: boolean, { minMs = 4_000, maxMs = 30_000 } = {}) {
   const fnRef = useRef(fn)
   fnRef.current = fn
@@ -12,24 +9,53 @@ export function usePoll(fn: () => unknown, active: boolean, { minMs = 4_000, max
     if (!active) return
     let delay = minMs
     let timer: ReturnType<typeof setTimeout> | undefined
+    let stopped = false
+    let running = false
+    let refreshOnFinish = false
+    let resetAfterRefresh = false
+
     const schedule = () => {
       clearTimeout(timer)
-      if (document.hidden) return
-      timer = setTimeout(() => {
-        void fnRef.current()
-        delay = Math.min(maxMs, Math.round(delay * 1.5))
-        schedule()
-      }, delay)
+      if (!stopped && !document.hidden) timer = setTimeout(() => void poll(), delay)
+    }
+    const poll = async () => {
+      if (stopped || document.hidden) return
+      if (running) {
+        refreshOnFinish = true
+        return
+      }
+      running = true
+      try {
+        await fnRef.current()
+      } catch {
+        // The caller owns error display; a rejected refresh must not stop polling.
+      } finally {
+        running = false
+        if (stopped || document.hidden) return
+        if (refreshOnFinish) {
+          refreshOnFinish = false
+          void poll()
+        } else {
+          if (resetAfterRefresh) resetAfterRefresh = false
+          else delay = Math.min(maxMs, Math.round(delay * 1.5))
+          schedule()
+        }
+      }
     }
     const onVisibility = () => {
-      if (document.hidden) return clearTimeout(timer)
+      clearTimeout(timer)
+      if (document.hidden) {
+        refreshOnFinish = false
+        return
+      }
       delay = minMs
-      void fnRef.current()
-      schedule()
+      resetAfterRefresh = true
+      void poll()
     }
     schedule()
     document.addEventListener("visibilitychange", onVisibility)
     return () => {
+      stopped = true
       clearTimeout(timer)
       document.removeEventListener("visibilitychange", onVisibility)
     }

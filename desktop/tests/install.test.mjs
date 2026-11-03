@@ -2,8 +2,11 @@ import assert from "node:assert/strict"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import test from "node:test"
+import { test as nodeTest } from "node:test"
 import { installApp } from "../install.mjs"
+
+// These exercise real macOS bundle identity checks through plutil.
+const test = (name, fn) => nodeTest(name, { skip: process.platform !== "darwin" && "macOS bundle identity checks" }, fn)
 
 function bundle(dir, id, marker) {
   fs.mkdirSync(path.join(dir, "Contents"), { recursive: true })

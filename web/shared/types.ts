@@ -127,7 +127,7 @@ export interface Job {
   url: string
   mode: CaptureMode
   maxPages: number
-  /** Files for this attempt go under refs/<id>/<attempt>/, so a recapture never reuses a cached URL. */
+  /** Server-issued capture lease and file namespace. */
   attempt: string
 }
 

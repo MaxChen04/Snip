@@ -9,7 +9,12 @@ export class JobGoneError extends Error {
   constructor() { super("The reference was deleted or recaptured during capture") }
 }
 
+export class CaptureUpgradeError extends Error {
+  constructor() { super("Capture agent upgrade required. Install the latest Snip capture agent.") }
+}
+
 export class SnipApi {
+  private attempt: string | null = null
   constructor(
     private base: string,
     private token: string,
@@ -23,11 +28,15 @@ export class SnipApi {
     const res = await fetch(`${this.base}${path}`, {
       ...init,
       signal: init.signal ?? AbortSignal.timeout(path === "/agent/jobs/claim" ? this.claimTimeoutMs : this.requestTimeoutMs),
-      headers: { authorization: `Bearer ${this.token}`, ...(init.headers ?? {}) },
+      headers: { authorization: `Bearer ${this.token}`, "x-snip-capture-protocol": "2", ...(this.attempt ? { "x-snip-capture-attempt": this.attempt } : {}), ...(init.headers ?? {}) },
     })
     if (res.status === 401) {
       await res.body?.cancel()
       throw new CaptureAuthenticationError()
+    }
+    if (res.status === 426) {
+      await res.body?.cancel()
+      throw new CaptureUpgradeError()
     }
     if (res.status === 410) {
       await res.body?.cancel()
@@ -42,11 +51,13 @@ export class SnipApi {
 
   async claim(): Promise<Job | null> {
     const res = await this.call("/agent/jobs/claim", { method: "POST" })
-    return res.status === 204 ? null : ((await res.json()) as Job)
+    const job = res.status === 204 ? null : ((await res.json()) as Job)
+    this.attempt = job?.attempt ?? null
+    return job
   }
 
   async progress(jobId: string, message: string) {
-    await this.call(`/agent/jobs/${jobId}/progress`, json({ message })).catch(() => {})
+    await this.call(`/agent/jobs/${jobId}/progress`, json({ message })).catch((error: unknown) => { if (error instanceof JobGoneError) throw error })
   }
 
   async heartbeat(jobId: string | null) {

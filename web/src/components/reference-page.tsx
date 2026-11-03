@@ -60,13 +60,13 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
   const { collections, refresh: refreshCollections } = useCollections()
 
   const load = useCallback(() => {
-    api
+    return api
       .reference(id)
       .then(setData)
       .catch((e) => setError((e as Error).message))
   }, [id])
 
-  useEffect(load, [load])
+  useEffect(() => { void load() }, [load])
 
   const busy = data && (data.reference.status === "queued" || data.reference.status === "capturing")
   usePoll(load, !!busy)

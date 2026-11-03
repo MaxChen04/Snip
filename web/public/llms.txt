@@ -78,8 +78,8 @@ To try it locally first: copy `web/.dev.vars.example` to `web/.dev.vars`, run `n
 ## MCP tools
 
 - `search_references`: search by text, collection or domain
-- `get_reference`: start with `part: "overview"`; use paginated `pages`, `animations`, or `tokens` with `token_group` for details. `overview` is the default.
-- `get_page`: one page with an inline screenshot, coverage information, a token summary, signed original file URLs and optional paginated HTML. Use `get_page_styles` for computed styles.
+- `get_reference`: start with `part: "overview"`; use paginated `pages`, `animations`, or `tokens` with `token_group` for details. Omitting `part` retains the legacy full response.
+- `get_page`: one page with an inline screenshot, coverage information, a token summary, signed original file URLs and optional paginated HTML. `include_styles` points to `get_page_styles` for computed styles.
 - `get_page_styles`: valid, bounded computed styles; filter elements by selector or text, or request keyframes, hover rules, font faces or CSS variables
 - `get_animation`: a contact sheet, a sampled frame, the GIF or a manifest with timing provenance. Old captures retain GIFs; recapture to generate stills.
 - `get_capture_status`: capture progress and worker freshness. Follow `pollAfterSeconds`; stop polling when it is null and show the advice.

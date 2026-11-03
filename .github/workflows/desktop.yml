@@ -1,10 +1,11 @@
 name: Desktop app
-# macOS runner minutes cost 10x, so this only runs when the app or what it launches changes.
+# Keep the native check for application/runtime inputs; documentation-only changes can skip it.
 on:
   pull_request:
     paths:
       - 'desktop/**'
       - 'capture/**'
+      - 'web/**'
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/desktop.yml'
@@ -13,6 +14,7 @@ on:
     paths:
       - 'desktop/**'
       - 'capture/**'
+      - 'web/**'
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/desktop.yml'
