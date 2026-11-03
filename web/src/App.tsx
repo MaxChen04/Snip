@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
 import { Route, Switch } from "wouter"
+import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
 import { api, UnauthorizedError } from "@/lib/api"
@@ -30,7 +31,7 @@ export function App() {
     return (
       <div className="grid min-h-svh place-items-center px-4">
         <div className="flex max-w-sm flex-col items-center gap-5 text-center">
-          <Logo className="size-10" />
+          <Logo className="size-20" />
           <div className="space-y-1.5">
             <h1 className="text-2xl font-semibold">Snip</h1>
             <p className="text-sm text-muted-foreground">Your private library of website design references.</p>
@@ -59,14 +60,7 @@ export function App() {
 }
 
 export function Logo({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 32 32" className={className} aria-hidden="true">
-      <rect x="3" y="5" width="11" height="14" rx="3" className="fill-primary" />
-      <rect x="18" y="5" width="11" height="9" rx="3" className="fill-foreground/80" />
-      <rect x="3" y="22" width="11" height="5" rx="2.5" className="fill-foreground/30" />
-      <rect x="18" y="17" width="11" height="10" rx="3" className="fill-foreground/55" />
-    </svg>
-  )
+  return <img src="/logo.png" alt="" aria-hidden="true" draggable={false} className={cn("object-contain select-none", className)} />
 }
 
 function GithubMark() {

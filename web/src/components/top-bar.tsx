@@ -48,7 +48,7 @@ export function TopBar({
     <header className="sticky top-0 z-30 flex items-center gap-3 px-4 py-3 sm:px-6">
       <div className={cn(pill, "shrink-0 gap-1 p-1")}>
         <Link href="/" className="grid size-8 place-items-center rounded-full hover:bg-fill-2" aria-label="Snip home">
-          <Logo className="size-5" />
+          <Logo className="size-7" />
         </Link>
         <nav className="hidden items-center sm:flex">
           {VIEWS.map((v) =>
