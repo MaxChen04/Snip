@@ -35,6 +35,7 @@ export function TopBar({
   query,
   onQuery,
   collection,
+  solid,
 }: {
   login: string
   view?: View
@@ -43,9 +44,11 @@ export function TopBar({
   onQuery?: (q: string) => void
   /** Preselected in the add flow when browsing a collection. */
   collection?: string
+  /** Opaque background, for pages with their own sticky bar underneath so content can't show through. */
+  solid?: boolean
 }) {
   return (
-    <header className="sticky top-0 z-30 flex items-center gap-3 px-4 py-3 sm:px-6">
+    <header className={cn("sticky top-0 z-30 flex items-center gap-3 px-4 py-3 sm:px-6", solid && "bg-background")}>
       <div className={cn(pill, "shrink-0 gap-1 p-1")}>
         <Link href="/" className="grid size-8 place-items-center rounded-full hover:bg-fill-2" aria-label="Snip home">
           <Logo className="size-7" />
