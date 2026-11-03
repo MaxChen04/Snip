@@ -291,7 +291,7 @@ export async function requeueReference(db: D1Database, id: string) {
     db.prepare(`DELETE FROM pages WHERE reference_id = ?`).bind(id), // animations cascade
     db
       .prepare(
-        `UPDATE refs SET status = 'queued', progress = 'Waiting for the capture agent', error = NULL, page_count = 0, animation_count = 0, claimed_at = NULL, updated_at = ? WHERE id = ?`,
+        `UPDATE refs SET status = 'queued', progress = 'Waiting for the capture agent', error = NULL, page_count = 0, animation_count = 0, cover_key = NULL, claimed_at = NULL, updated_at = ? WHERE id = ?`,
       )
       .bind(now(), id),
   ])
@@ -367,7 +367,7 @@ export async function claimJob(db: D1Database): Promise<Job | null> {
   const ts = now()
   const r = await db
     .prepare(
-      `UPDATE refs SET status = 'capturing', claimed_at = ?, updated_at = ?, progress = 'Starting capture'
+      `UPDATE refs SET status = 'capturing', claimed_at = ?, updated_at = ?, progress = 'Starting capture', cover_key = NULL, page_count = 0, animation_count = 0
        WHERE id = (
          SELECT id FROM refs
          WHERE status = 'queued' OR (status = 'capturing' AND claimed_at < ?)
