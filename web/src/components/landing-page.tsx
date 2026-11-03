@@ -294,21 +294,25 @@ function MotionSection() {
               Each page gets a smooth scroll recording at 30 fps. Elements with hover effects get their own short loop.
             </p>
           </div>
-          <div className="relative grid min-h-[260px] flex-1 grid-cols-2 gap-3">
-            <div className="relative overflow-clip rounded-lg bg-card shadow-md ring-1 ring-black/10">
-              {/* Two captured pages stacked; the strip scrolls down and back like a scroll recording. */}
+          <div className="mt-auto grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="relative aspect-[5/4] overflow-clip rounded-lg bg-card shadow-md ring-1 ring-black/10">
+              {/* Two captured pages stacked; the strip scrolls from its top edge to its bottom edge and back. */}
               <div className="landing-scroll absolute inset-x-0 top-0 flex flex-col">
                 <img src={img("stripe-home")} alt="" loading="lazy" className="w-full" />
                 <img src={img("stripe-pricing")} alt="" loading="lazy" className="w-full" />
               </div>
+              <MotionChip>Scroll · stripe.com</MotionChip>
             </div>
-            <div className="relative overflow-clip rounded-lg bg-card shadow-md ring-1 ring-black/10">
-              <img src={img("stripe-pricing")} alt="" loading="lazy" className="absolute inset-0 size-full object-cover object-left-top" />
+            <div className="relative aspect-[5/4] overflow-clip rounded-lg bg-card shadow-md ring-1 ring-black/10">
+              {/* Zooms into the "Start accepting payments" button, standing in for a hover loop. */}
+              <img
+                src={img("stripe-pricing")}
+                alt=""
+                loading="lazy"
+                className="landing-hover absolute inset-0 size-full origin-[22%_72%] object-cover object-left-top"
+              />
+              <MotionChip>Hover · stripe.com</MotionChip>
             </div>
-            <span className="absolute bottom-3 left-3 flex h-7 items-center gap-1.5 rounded-full bg-background px-2.5 text-2xs font-medium shadow-sm ring-1 ring-black/5">
-              <span className="size-1.5 animate-pulse rounded-full bg-primary" />
-              Scroll · stripe.com
-            </span>
           </div>
         </div>
         <div className="reveal flex flex-col gap-6 rounded-4xl bg-foreground p-6 text-background md:p-8 lg:flex-[5_1_0%]">
@@ -339,6 +343,15 @@ function MotionSection() {
         </div>
       </div>
     </section>
+  )
+}
+
+function MotionChip({ children }: { children: ReactNode }) {
+  return (
+    <span className="absolute bottom-2 left-2 flex h-7 items-center gap-1.5 rounded-full bg-background px-2.5 text-2xs font-medium shadow-sm ring-1 ring-black/5">
+      <span className="size-1.5 animate-pulse rounded-full bg-primary" />
+      {children}
+    </span>
   )
 }
 

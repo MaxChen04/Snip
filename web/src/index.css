@@ -273,10 +273,17 @@
   }
 }
 
+/* top moves by the frame's height, translate by the strip's own: together they scroll from top-aligned to bottom-aligned. */
 @keyframes landing-scroll {
-  0%, 12% { translate: 0 0; }
-  44%, 56% { translate: 0 -50%; }
-  88%, 100% { translate: 0 0; }
+  0%, 12% { top: 0; translate: 0 0; }
+  44%, 56% { top: 100%; translate: 0 -100%; }
+  88%, 100% { top: 0; translate: 0 0; }
+}
+
+@keyframes landing-hover {
+  0%, 20% { scale: 1; }
+  45%, 70% { scale: 1.9; }
+  95%, 100% { scale: 1; }
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -285,6 +292,9 @@
   }
   .landing-scroll {
     animation: landing-scroll 9s ease-in-out infinite;
+  }
+  .landing-hover {
+    animation: landing-hover 6s cubic-bezier(0.65, 0, 0.35, 1) infinite;
   }
   @supports (animation-timeline: view()) {
     .reveal {
