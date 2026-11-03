@@ -42,6 +42,18 @@ npx playwright install chromium                   # once
 npm run capture
 ```
 
+### Mac app
+
+Once local development works, build a clickable **Snip.app** instead of using two terminals:
+
+```bash
+npm run app        # builds Snip.app and installs it in /Applications
+```
+
+Opening Snip starts the web app and the capture agent, then shows the gallery in its own window. A menu bar icon starts and stops each one and opens the logs (`~/Library/Logs/Snip`). Closing the window keeps Snip running in the menu bar; **Quit Snip** stops both. The capture agent finishes its current job when stopped from the menu, and gets five seconds when you quit.
+
+The app runs this repo in place, so code changes show up the next time you open it. Rebuild only if you move the repo or change `desktop/`. It's ad-hoc signed for your own Mac; it isn't notarized for distribution. `npm run app:dev` runs the launcher without building.
+
 ## Deploy to Cloudflare (free plan)
 
 1. **GitHub OAuth app** (github.com → Settings → Developer settings → OAuth Apps → New):
