@@ -10,6 +10,8 @@ const STYLES_JS = script("styles")
 const SNAPSHOT_JS = script("snapshot")
 const HOVER_JS = script("hover-targets")
 const META_JS = script("meta")
+const DISMISS_JS = script("dismiss")
+const DISMISS_POPUPS = process.env.DISMISS_POPUPS !== "false"
 const run = <T>(page: PwPage, source: string, arg?: unknown) => page.evaluate(`(${source})(${JSON.stringify(arg ?? null)})`) as Promise<T>
 
 const DESKTOP = { width: 1440, height: 900 }
@@ -69,20 +71,22 @@ async function load(page: PwPage, url: string) {
   await sleep(600)
 }
 
-async function dismissBanners(page: PwPage) {
-  const patterns = /^(accept( all)?( cookies)?|allow all|agree|i agree|got it|ok|okay|close)$/i
-  for (const frame of [page.mainFrame()]) {
-    const buttons = frame.getByRole("button", { name: patterns })
-    const n = Math.min(await buttons.count().catch(() => 0), 3)
-    for (let i = 0; i < n; i++) {
-      const b = buttons.nth(i)
-      if (await b.isVisible().catch(() => false)) {
-        await b.click({ timeout: 1500 }).catch(() => {})
-        await sleep(300)
-        break
-      }
+/** Close cookie banners and popups in the page and its frames. Banners often animate in late, so try twice. */
+export async function dismissBanners(page: PwPage) {
+  if (!DISMISS_POPUPS) return
+  let total = { clicked: 0, hidden: 0 }
+  for (let pass = 0; pass < 2; pass++) {
+    for (const frame of page.frames()) {
+      const r = await frame
+        .evaluate(`(${DISMISS_JS})(null)`)
+        .catch(() => null) as { clicked: number; hidden: number } | null
+      if (r) total = { clicked: total.clicked + r.clicked, hidden: total.hidden + r.hidden }
     }
+    await sleep(pass === 0 ? 700 : 300)
   }
+  // Anything a click revealed (e.g. a second consent step) gets hidden rather than clicked again.
+  await run(page, DISMISS_JS, { hideOnly: true }).catch(() => {})
+  if (total.clicked || total.hidden) log(`  closed popups: ${total.clicked} clicked, ${total.hidden} hidden`)
 }
 
 const docHeight = (page: PwPage) => page.evaluate(() => Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight ?? 0))
@@ -355,6 +359,7 @@ export async function captureJob(browser: Browser, api: SnipApi, job: Job) {
         }
 
         const scrollFrames = await recordScroll(dPage, true)
+        await dismissBanners(dPage) // popups that only appear after scrolling
         const desktopShot = await fullPageShot(dPage, 1)
         const desktopThumb = await dPage.screenshot({ type: "jpeg", quality: 75 })
         const styles = await run<{ tokens: DesignTokens }>(dPage, STYLES_JS, { maxElements: 3000 })
