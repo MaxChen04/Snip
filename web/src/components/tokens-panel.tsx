@@ -1,10 +1,10 @@
-import { toast } from "sonner"
+import { notify } from "@/components/notify"
 import type { DesignTokens } from "../../shared/types"
 import { cn } from "@/lib/utils"
 
 const copy = (v: string) => {
   void navigator.clipboard?.writeText(v)
-  toast.success(`Copied ${v}`)
+  notify(`Copied ${v}`)
 }
 
 export function TokensPanel({ tokens, compact }: { tokens: DesignTokens; compact?: boolean }) {

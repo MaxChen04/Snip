@@ -14,13 +14,15 @@ import {
   XIcon,
 } from "lucide-react"
 import { toast } from "sonner"
+import { notify } from "@/components/notify"
+import { CollectionPicker } from "@/components/collection-picker"
 import { Masonry } from "@/components/gallery-page"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { TokensPanel } from "@/components/tokens-panel"
 import { ActionCircle, Segmented, TopBar } from "@/components/top-bar"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuItem,
@@ -88,7 +90,7 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
 
   return (
     <div className="min-h-svh">
-      <TopBar login={login} onAdd={() => navigate("/")} />
+      <TopBar login={login} />
 
       <div className="flex flex-col items-center gap-3 px-4 pt-8 pb-2 text-center">
         {r.favicon && <img src={r.favicon} alt="" className="size-8 rounded-lg ring-1 ring-border" onError={(e) => (e.currentTarget.style.display = "none")} />}
@@ -114,37 +116,29 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
           <h1 className="mt-1 text-2xl font-medium text-balance">{r.title || r.domain}</h1>
           <a href={r.url} target="_blank" rel="noreferrer" className="mt-1 inline-block text-xs text-muted-foreground hover:text-foreground">
             {r.domain} · {r.pageCount} {r.pageCount === 1 ? "page" : "pages"}
-            {r.animationCount > 0 && ` · ${r.animationCount} GIFs`}
+            {r.animationCount > 0 && ` · ${r.animationCount} ${r.animationCount === 1 ? "GIF" : "GIFs"}`}
           </a>
         </div>
 
         <div className="mt-3 flex items-start gap-6">
           <ActionCircle icon={<ExternalLinkIcon />} label="Visit" href={r.url} />
-          <DropdownMenu>
-            <DropdownMenuTrigger render={<button className="group flex flex-col items-center gap-1.5" />}>
-              <span className="grid size-9 place-items-center rounded-full ring-1 ring-border transition-colors group-hover:bg-fill-2 [&_svg]:size-4">
+          <Popover>
+            <PopoverTrigger className="group flex flex-col items-center gap-1.5">
+              <span className="grid size-9 place-items-center rounded-full ring-1 ring-border transition-colors group-hover:bg-fill-2 group-data-popup-open:bg-foreground group-data-popup-open:text-background [&_svg]:size-4">
                 <FolderIcon />
               </span>
               <span className="text-2xs text-muted-foreground">Organize</span>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="center" className="min-w-48">
-              <DropdownMenuGroup>
-              <DropdownMenuLabel>Collections</DropdownMenuLabel>
-              {collections.map((c) => (
-                <DropdownMenuCheckboxItem key={c.id} checked={r.collectionIds.includes(c.id)} onCheckedChange={(v) => void toggleCollection(c.id, !!v)}>
-                  {c.name}
-                </DropdownMenuCheckboxItem>
-              ))}
-              {!collections.length && <div className="px-2 py-1.5 text-xs text-muted-foreground">Create a collection from the home page.</div>}
-              </DropdownMenuGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
+            </PopoverTrigger>
+            <PopoverContent align="center" className="w-80 rounded-3xl p-3">
+              <CollectionPicker className="max-h-72" selected={r.collectionIds} onToggle={(cid, on) => void toggleCollection(cid, on)} />
+            </PopoverContent>
+          </Popover>
           <ActionCircle
             icon={<RefreshCwIcon />}
             label="Re-capture"
             onClick={async () => {
               await api.recapture(r.id)
-              toast.success("Re-capture queued")
+              notify("Re-capture queued")
               load()
             }}
           />

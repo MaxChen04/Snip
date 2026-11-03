@@ -303,7 +303,10 @@ export async function deletePrefix(files: R2Bucket, prefix: string) {
 export async function listCollections(db: D1Database): Promise<Collection[]> {
   const { results } = await db
     .prepare(
-      `SELECT c.*, (SELECT count(*) FROM reference_collections rc WHERE rc.collection_id = c.id) AS reference_count FROM collections c ORDER BY lower(c.name)`,
+      `SELECT c.*, (SELECT count(*) FROM reference_collections rc WHERE rc.collection_id = c.id) AS reference_count,
+        (SELECT group_concat(cover_key, '|') FROM (SELECT r.cover_key FROM reference_collections rc JOIN refs r ON r.id = rc.reference_id
+          WHERE rc.collection_id = c.id AND r.cover_key IS NOT NULL ORDER BY rc.added_at DESC LIMIT 3)) AS cover_keys
+      FROM collections c ORDER BY lower(c.name)`,
     )
     .all<Row>()
   return results.map((r) => ({
@@ -311,6 +314,7 @@ export async function listCollections(db: D1Database): Promise<Collection[]> {
     name: r.name as string,
     description: (r.description as string) ?? null,
     referenceCount: r.reference_count as number,
+    coverKeys: r.cover_keys ? String(r.cover_keys).split("|") : [],
     createdAt: r.created_at as string,
   }))
 }

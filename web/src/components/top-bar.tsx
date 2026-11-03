@@ -1,5 +1,7 @@
 import { Link } from "wouter"
-import { LogOutIcon, MonitorIcon, MoonIcon, PlusIcon, SearchIcon, SunIcon, XIcon } from "lucide-react"
+import { FolderPlusIcon, GlobeIcon, LogOutIcon, MonitorIcon, MoonIcon, PlusIcon, SearchIcon, SunIcon, TerminalIcon, XIcon } from "lucide-react"
+import { useAddFlow } from "@/components/add-flow"
+import { notify } from "@/components/notify"
 import { useTheme } from "next-themes"
 import { Logo } from "@/App"
 import { Button } from "@/components/ui/button"
@@ -32,14 +34,15 @@ export function TopBar({
   onView,
   query,
   onQuery,
-  onAdd,
+  collection,
 }: {
   login: string
   view?: View
   onView?: (v: View) => void
   query?: string
   onQuery?: (q: string) => void
-  onAdd: () => void
+  /** Preselected in the add flow when browsing a collection. */
+  collection?: string
 }) {
   return (
     <header className="sticky top-0 z-30 flex items-center gap-3 px-4 py-3 sm:px-6">
@@ -89,13 +92,54 @@ export function TopBar({
       </div>
 
       <div className={cn(pill, "shrink-0 gap-1.5 p-1")}>
-        <Button size="sm" onClick={onAdd} className="rounded-full bg-foreground text-background hover:bg-foreground/85">
-          <PlusIcon data-icon="inline-start" />
-          <span className="hidden sm:inline">Add</span>
-        </Button>
+        <CreateMenu collection={collection} />
         <AccountMenu login={login} />
       </div>
     </header>
+  )
+}
+
+function CreateMenu({ collection }: { collection?: string }) {
+  const { addReference, newCollection } = useAddFlow()
+  const item = "flex items-start gap-3 rounded-xl px-2.5 py-2"
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger aria-label="Create" render={<Button size="sm" className="rounded-full bg-foreground text-background hover:bg-foreground/85" />}>
+        <PlusIcon data-icon="inline-start" />
+        <span className="hidden sm:inline">Create</span>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" sideOffset={10} className="w-64 rounded-2xl p-1.5">
+        <DropdownMenuGroup>
+          <DropdownMenuItem className={item} onClick={() => addReference(collection)}>
+            <GlobeIcon className="mt-0.5" />
+            <span className="grid">
+              <span className="font-medium">Reference</span>
+              <span className="text-2xs text-muted-foreground">Capture a page or crawl a site</span>
+            </span>
+          </DropdownMenuItem>
+          <DropdownMenuItem className={item} onClick={newCollection}>
+            <FolderPlusIcon className="mt-0.5" />
+            <span className="grid">
+              <span className="font-medium">Collection</span>
+              <span className="text-2xs text-muted-foreground">Group references together</span>
+            </span>
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            className={item}
+            onClick={() => {
+              void navigator.clipboard?.writeText(`${location.origin}/mcp`)
+              notify("Copied MCP server URL")
+            }}
+          >
+            <TerminalIcon className="mt-0.5" />
+            <span className="grid">
+              <span className="font-medium">Connect an agent</span>
+              <span className="text-2xs text-muted-foreground">Copy the remote MCP URL</span>
+            </span>
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 

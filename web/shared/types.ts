@@ -78,6 +78,8 @@ export interface Collection {
   name: string
   description: string | null
   referenceCount: number
+  /** Covers of the most recently added references, newest first (max 3). */
+  coverKeys: string[]
   createdAt: string
 }
 

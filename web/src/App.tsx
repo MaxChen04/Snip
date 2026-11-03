@@ -6,6 +6,7 @@ import { api, UnauthorizedError } from "@/lib/api"
 import { CollectionsProvider } from "@/lib/collections"
 import { GalleryPage } from "@/components/gallery-page"
 import { ReferencePage } from "@/components/reference-page"
+import { AddFlowProvider } from "@/components/add-flow"
 
 export function App() {
   const [state, setState] = useState<"loading" | "anon" | { login: string }>("loading")
@@ -45,12 +46,14 @@ export function App() {
 
   return (
     <CollectionsProvider>
+      <AddFlowProvider>
       <Switch>
         <Route path="/r/:id">{(p) => <ReferencePage id={p.id} login={state.login} />}</Route>
         <Route>
           <GalleryPage login={state.login} />
         </Route>
       </Switch>
+      </AddFlowProvider>
     </CollectionsProvider>
   )
 }

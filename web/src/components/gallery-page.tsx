@@ -1,13 +1,14 @@
 import { useEffect, useState } from "react"
-import { Link, useSearch } from "wouter"
-import { AlertCircleIcon, ArrowDownUpIcon, CheckIcon, GlobeIcon, PencilIcon, PlusIcon, Trash2Icon } from "lucide-react"
+import { Link, useLocation, useSearch } from "wouter"
+import { AlertCircleIcon, ArrowUpRightIcon, BookmarkIcon, CheckIcon, ChevronDownIcon, CornerDownLeftIcon, GlobeIcon, PencilIcon, PlusIcon, Trash2Icon } from "lucide-react"
 import { toast } from "sonner"
-import { AddReferenceDialog } from "@/components/add-reference-dialog"
+import { useAddFlow } from "@/components/add-flow"
+import { CollectionPicker, CollectionThumb } from "@/components/collection-picker"
 import { GifTile } from "@/components/reference-page"
+import { SiteIcon } from "@/components/site-icon"
 import { ActionCircle, TopBar, type View } from "@/components/top-bar"
-import { Button } from "@/components/ui/button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { useInfinite } from "@/hooks/use-infinite"
@@ -16,106 +17,85 @@ import { useCollections } from "@/lib/collections"
 import { masonryCols, readPref, useGridSize, writePref } from "@/lib/prefs"
 import { cn } from "@/lib/utils"
 
-const SORT_LABEL: Record<Sort, string> = { newest: "Newest", oldest: "Oldest", name: "Name" }
+const SORT_LABEL: Record<Sort, string> = { newest: "Newest", oldest: "Oldest", name: "A–Z" }
+const NOUN: Record<View, [string, string]> = { websites: ["website", "websites"], pages: ["page", "pages"], animations: ["animation", "animations"] }
 
 export function GalleryPage({ login }: { login: string }) {
-  const params = new URLSearchParams(useSearch())
+  const search = useSearch()
+  const [, navigate] = useLocation()
+  const params = new URLSearchParams(search)
+  const collection = params.get("collection") ?? undefined
+  const setCollection = (id?: string) => navigate(id ? `/?collection=${id}` : "/", { replace: true })
+
   const [view, setView] = useState<View>(() => (params.get("view") as View) || readPref("rs.view", "websites"))
   const [sort, setSort] = useState<Sort>(() => readPref("rs.sort", "newest"))
-  const [collection, setCollection] = useState<string | undefined>(() => params.get("collection") ?? undefined)
   const [query, setQuery] = useState("")
   const [q, setQ] = useState("")
-  const [adding, setAdding] = useState(false)
+  const [count, setCount] = useState<number | null>(null)
 
   useEffect(() => {
     const t = setTimeout(() => setQ(query.trim()), 250)
     return () => clearTimeout(t)
   }, [query])
 
-  useEffect(() => {
-    const url = new URL(location.href)
-    url.searchParams.delete("view")
-    if (collection) url.searchParams.set("collection", collection)
-    else url.searchParams.delete("collection")
-    history.replaceState(null, "", url)
-  }, [collection])
-
+  const changeView = (v: View) => {
+    setView(v)
+    writePref("rs.view", v)
+  }
   const effectiveSort: Sort = view === "websites" ? sort : sort === "name" ? "newest" : sort
   const filters: Filters = { q, collection, sort: effectiveSort }
 
   return (
     <div className="min-h-svh">
-      <TopBar
-        login={login}
-        view={view}
-        onView={(v) => {
-          setView(v)
-          writePref("rs.view", v)
-        }}
-        query={query}
-        onQuery={setQuery}
-        onAdd={() => setAdding(true)}
-      />
-      <AddReferenceDialog
-        key={collection ?? "all"}
-        open={adding}
-        onOpenChange={setAdding}
-        defaultCollection={collection}
-        onAdded={() => {
-          setAdding(false)
-          window.dispatchEvent(new Event("rs:reload"))
-        }}
-      />
+      <TopBar login={login} view={view} onView={changeView} query={query} onQuery={setQuery} collection={collection} />
 
       <CollectionStrip active={collection} onSelect={setCollection} />
+      {collection ? <CollectionHeader id={collection} onDeleted={() => setCollection(undefined)} /> : null}
 
-      {collection ? (
-        <CollectionHeader id={collection} onDeleted={() => setCollection(undefined)} onAdd={() => setAdding(true)} />
-      ) : null}
-
-      <div className="flex items-center gap-3 px-4 pt-4 pb-5 sm:px-6">
-        <h1 className="hidden text-lg font-medium sm:block">{q ? `“${q}”` : collection ? "" : { websites: "All websites", pages: "All pages", animations: "All animations" }[view]}</h1>
+      <div className="flex items-center gap-3 px-4 pt-5 pb-4 sm:px-6">
+        <p className="hidden text-xs text-muted-foreground sm:block">
+          {q ? <>Results for <span className="text-foreground">“{q}”</span></> : count !== null && `${count}${count >= 30 ? "+" : ""} ${NOUN[view][count === 1 ? 0 : 1]}`}
+        </p>
         <div className="ml-auto flex items-center gap-2">
-          {/* Mobile view switcher (the pill nav is hidden on small screens) */}
-          <div className="flex rounded-full bg-fill-2 p-0.5 sm:hidden">
+          <div className="flex rounded-full bg-fill-1 p-0.5 sm:hidden">
             {(["websites", "pages", "animations"] as View[]).map((v) => (
               <button
                 key={v}
-                onClick={() => setView(v)}
-                className={cn("h-7 rounded-full px-2.5 text-2xs font-medium text-muted-foreground capitalize", view === v && "bg-background text-foreground shadow-xs")}
+                onClick={() => changeView(v)}
+                className={cn("h-7 rounded-full px-2.5 text-2xs font-medium text-muted-foreground capitalize", view === v && "bg-background text-foreground shadow-xs ring-1 ring-border")}
               >
                 {v}
               </button>
             ))}
           </div>
           <DropdownMenu>
-            <DropdownMenuTrigger render={<Button variant="outline" size="sm" className="rounded-full" />}>
-              {SORT_LABEL[effectiveSort]} <ArrowDownUpIcon data-icon="inline-end" />
+            <DropdownMenuTrigger className="flex h-8 items-center gap-1 rounded-full px-3 text-xs font-medium text-muted-foreground hover:bg-fill-1 hover:text-foreground data-popup-open:bg-fill-1">
+              {SORT_LABEL[effectiveSort]} <ChevronDownIcon className="size-3.5" />
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
+            <DropdownMenuContent align="end" className="rounded-2xl p-1.5">
               <DropdownMenuGroup>
-              <DropdownMenuLabel>Sort by</DropdownMenuLabel>
-              {(["newest", "oldest", ...(view === "websites" ? ["name"] : [])] as Sort[]).map((s) => (
-                <DropdownMenuItem
-                  key={s}
-                  onClick={() => {
-                    setSort(s)
-                    writePref("rs.sort", s)
-                  }}
-                >
-                  <CheckIcon className={cn(effectiveSort !== s && "invisible")} /> {SORT_LABEL[s]}
-                </DropdownMenuItem>
-              ))}
+                <DropdownMenuLabel>Sort by</DropdownMenuLabel>
+                {(["newest", "oldest", ...(view === "websites" ? ["name"] : [])] as Sort[]).map((s) => (
+                  <DropdownMenuItem
+                    key={s}
+                    onClick={() => {
+                      setSort(s)
+                      writePref("rs.sort", s)
+                    }}
+                  >
+                    <CheckIcon className={cn(effectiveSort !== s && "invisible")} /> {SORT_LABEL[s]}
+                  </DropdownMenuItem>
+                ))}
               </DropdownMenuGroup>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
       </div>
 
-      <div className="px-4 pb-24 sm:px-6">
-        {view === "websites" && <WebsitesGrid filters={filters} onAdd={() => setAdding(true)} />}
-        {view === "pages" && <PagesGrid filters={filters} />}
-        {view === "animations" && <AnimationsGrid filters={filters} />}
+      <div className="px-4 pb-28 sm:px-6">
+        {view === "websites" && <WebsitesGrid filters={filters} onCount={setCount} />}
+        {view === "pages" && <PagesGrid filters={filters} onCount={setCount} />}
+        {view === "animations" && <AnimationsGrid filters={filters} onCount={setCount} />}
       </div>
     </div>
   )
@@ -124,86 +104,81 @@ export function GalleryPage({ login }: { login: string }) {
 // ---------- Collections ----------
 
 function CollectionStrip({ active, onSelect }: { active?: string; onSelect: (id?: string) => void }) {
-  const { collections, refresh } = useCollections()
-  const [creating, setCreating] = useState(false)
-  const [name, setName] = useState("")
-
-  const create = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!name.trim()) return setCreating(false)
-    try {
-      const { id } = await api.createCollection(name.trim())
-      await refresh()
-      setName("")
-      setCreating(false)
-      onSelect(id)
-    } catch (err) {
-      toast.error((err as Error).message)
-    }
-  }
-
-  const chip = "h-8 shrink-0 rounded-full px-3.5 text-xs font-medium ring-1 ring-border transition-colors"
+  const { collections } = useCollections()
+  const { newCollection } = useAddFlow()
+  const chip = "flex h-9 shrink-0 items-center gap-2 rounded-full pr-3.5 text-xs font-medium transition-colors"
+  const on = "bg-foreground text-background"
+  const off = "bg-fill-1 text-foreground hover:bg-fill-2"
   return (
-    <div className="flex gap-2 overflow-x-auto px-4 py-1 sm:px-6 [scrollbar-width:none]">
-      <button onClick={() => onSelect(undefined)} className={cn(chip, !active ? "bg-foreground text-background ring-transparent" : "hover:bg-fill-2")}>
+    <div className="flex gap-1.5 overflow-x-auto px-4 py-1 sm:px-6 [scrollbar-width:none]">
+      <button onClick={() => onSelect(undefined)} className={cn(chip, "pl-3.5", !active ? on : off)}>
         Everything
       </button>
       {collections.map((c) => (
-        <button
-          key={c.id}
-          onClick={() => onSelect(c.id)}
-          className={cn(chip, "flex items-center gap-1.5", active === c.id ? "bg-foreground text-background ring-transparent" : "hover:bg-fill-2")}
-        >
+        <button key={c.id} onClick={() => onSelect(c.id)} className={cn(chip, "pl-1", active === c.id ? on : off)}>
+          <CollectionThumb c={c} className="size-7 rounded-full ring-0 [&>span]:rounded-full" />
           {c.name}
-          <span className={cn("text-2xs", active === c.id ? "text-background/60" : "text-muted-foreground")}>{c.referenceCount}</span>
+          <span className={cn("tabular-nums", active === c.id ? "text-background/55" : "text-muted-foreground")}>{c.referenceCount}</span>
         </button>
       ))}
-      {creating ? (
-        <form onSubmit={create}>
-          <input
-            autoFocus
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            onBlur={create}
-            onKeyDown={(e) => e.key === "Escape" && setCreating(false)}
-            placeholder="Collection name"
-            className={cn(chip, "w-44 bg-transparent outline-none focus:ring-2 focus:ring-primary")}
-          />
-        </form>
-      ) : (
-        <button onClick={() => setCreating(true)} className={cn(chip, "flex items-center gap-1 border-dashed text-muted-foreground hover:bg-fill-2 hover:text-foreground")}>
-          <PlusIcon className="size-3.5" /> New collection
-        </button>
-      )}
+      <button onClick={newCollection} className={cn(chip, "pl-3 text-muted-foreground ring-1 ring-border ring-inset hover:bg-fill-1 hover:text-foreground")}>
+        <PlusIcon className="size-3.5" /> New collection
+      </button>
     </div>
   )
 }
 
-function CollectionHeader({ id, onDeleted, onAdd }: { id: string; onDeleted: () => void; onAdd: () => void }) {
+function CollectionHeader({ id, onDeleted }: { id: string; onDeleted: () => void }) {
   const { collections, refresh } = useCollections()
+  const { addReference } = useAddFlow()
+  const [editing, setEditing] = useState(false)
   const c = collections.find((x) => x.id === id)
   if (!c) return null
+
+  const rename = async (name: string) => {
+    setEditing(false)
+    if (!name.trim() || name.trim() === c.name) return
+    await api.renameCollection(c.id, name.trim())
+    await refresh()
+  }
+
   return (
-    <div className="flex flex-col items-center gap-3 px-4 pt-10 pb-2 text-center">
+    <div className="flex flex-col items-center gap-4 px-4 pt-10 pb-2 text-center">
+      {c.coverKeys.length > 0 && (
+        <div className="flex -space-x-3">
+          {c.coverKeys.map((k, i) => (
+            <img
+              key={k}
+              src={fileUrl(k)}
+              alt=""
+              className="size-12 rounded-xl object-cover object-top shadow-sm ring-2 ring-background"
+              style={{ transform: `rotate(${(i - (c.coverKeys.length - 1) / 2) * 6}deg)` }}
+            />
+          ))}
+        </div>
+      )}
       <div>
-        <h1 className="text-2xl font-medium">{c.name}</h1>
+        {editing ? (
+          <input
+            autoFocus
+            defaultValue={c.name}
+            onBlur={(e) => void rename(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") e.currentTarget.blur()
+              if (e.key === "Escape") setEditing(false)
+            }}
+            className="w-64 rounded-lg bg-fill-1 text-center text-2xl font-medium outline-none"
+          />
+        ) : (
+          <h1 className="text-2xl font-medium tracking-tight">{c.name}</h1>
+        )}
         <p className="mt-1 text-xs text-muted-foreground">
           {c.referenceCount} {c.referenceCount === 1 ? "reference" : "references"}
         </p>
       </div>
-      <div className="mt-2 flex items-start gap-6">
-        <ActionCircle icon={<PlusIcon />} label="Add" onClick={onAdd} />
-        <ActionCircle
-          icon={<PencilIcon />}
-          label="Rename"
-          onClick={async () => {
-            const next = prompt("Rename collection", c.name)
-            if (next?.trim()) {
-              await api.renameCollection(c.id, next.trim())
-              await refresh()
-            }
-          }}
-        />
+      <div className="flex items-start gap-6">
+        <ActionCircle icon={<PlusIcon />} label="Add" onClick={() => addReference(c.id)} />
+        <ActionCircle icon={<PencilIcon />} label="Rename" onClick={() => setEditing(true)} />
         <ActionCircle
           icon={<Trash2Icon />}
           label="Delete"
@@ -230,14 +205,15 @@ function useReloadEvent(reload: () => void) {
 
 export function Masonry({ children }: { children: React.ReactNode }) {
   const [grid] = useGridSize()
-  return <div className={cn(masonryCols[grid], "gap-4 [&>*]:mb-4 [&>*]:break-inside-avoid")}>{children}</div>
+  return <div className={cn(masonryCols[grid], "gap-4 lg:gap-5 [&>*]:mb-4 lg:[&>*]:mb-5 [&>*]:break-inside-avoid")}>{children}</div>
 }
 
 function GridFooter({ loading, done, count, sentinel, empty }: { loading: boolean; done: boolean; count: number; sentinel: React.RefObject<HTMLDivElement | null>; empty: React.ReactNode }) {
   if (!loading && done && count === 0) return <>{empty}</>
   return (
-    <div ref={sentinel} className="flex justify-center py-8">
+    <div ref={sentinel} className="flex justify-center py-10">
       {loading && count > 0 && <Spinner className="text-muted-foreground" />}
+      {done && count > 0 && <span className="size-1.5 rounded-full bg-fill-3" aria-hidden />}
     </div>
   )
 }
@@ -245,30 +221,105 @@ function GridFooter({ loading, done, count, sentinel, empty }: { loading: boolea
 function SkeletonGrid() {
   return (
     <Masonry>
-      {Array.from({ length: 10 }, (_, i) => (
-        <Skeleton key={i} className={cn("w-full rounded-sm", ["aspect-[4/5]", "aspect-[16/10]", "aspect-square"][i % 3])} />
+      {Array.from({ length: 12 }, (_, i) => (
+        <Skeleton key={i} className={cn("w-full rounded-md", ["aspect-[16/10]", "aspect-[4/5]", "aspect-[16/11]", "aspect-square"][i % 4])} />
       ))}
     </Masonry>
   )
 }
 
-/** Image tile with metadata revealed on hover, Cosmos-style. */
-function Tile({ href, children, title, subtitle, overlay }: { href: string; children: React.ReactNode; title: string; subtitle?: string; overlay?: React.ReactNode }) {
+/** Captionless image tile. Hover reveals a source chip (bottom) and optional actions (top right). */
+function Tile({
+  href,
+  children,
+  label,
+  domain,
+  external,
+  actions,
+  overlay,
+}: {
+  href: string
+  children: React.ReactNode
+  label: string
+  domain: string
+  external?: string
+  actions?: React.ReactNode
+  overlay?: React.ReactNode
+}) {
   return (
-    <Link href={href} className="group relative block overflow-hidden rounded-sm bg-fill-1">
-      {children}
-      {overlay}
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 translate-y-1 bg-gradient-to-t from-black/60 via-black/25 to-transparent px-3 pt-10 pb-2.5 opacity-0 transition-all duration-200 group-hover:translate-y-0 group-hover:opacity-100">
-        <div className="truncate text-xs font-medium text-white">{title}</div>
-        {subtitle && <div className="truncate text-2xs text-white/75">{subtitle}</div>}
+    <div className="group relative">
+      <Link href={href} className="block overflow-hidden rounded-md bg-fill-1 ring-1 ring-black/5 transition-[box-shadow] group-hover:shadow-md dark:ring-white/5">
+        {children}
+        {overlay}
+        <span className="pointer-events-none absolute inset-0 rounded-md bg-black/0 transition-colors group-hover:bg-black/[0.04]" />
+      </Link>
+      <div className="pointer-events-none absolute inset-x-2 bottom-2 flex translate-y-1 justify-start opacity-0 transition-all duration-200 group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:translate-y-0 group-focus-within:opacity-100">
+        <a
+          href={external ?? `https://${domain}`}
+          target="_blank"
+          rel="noreferrer"
+          onClick={(e) => e.stopPropagation()}
+          className="pointer-events-auto flex h-7 max-w-full items-center gap-1.5 rounded-full bg-background/95 pr-2.5 pl-1.5 text-2xs font-medium text-foreground shadow-sm ring-1 ring-black/5 backdrop-blur hover:bg-background"
+          title={label}
+        >
+          <SiteIcon domain={domain} />
+          <span className="truncate">{label}</span>
+          <ArrowUpRightIcon className="size-3 shrink-0 text-muted-foreground" />
+        </a>
       </div>
-    </Link>
+      {actions && (
+        <div className="absolute top-2 right-2 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 has-[[data-popup-open]]:opacity-100">
+          {actions}
+        </div>
+      )}
+    </div>
   )
 }
 
-function WebsitesGrid({ filters, onAdd }: { filters: Filters; onAdd: () => void }) {
+/** Quick "save to collection" from any tile, toggling membership live. */
+function SaveButton({ r }: { r: Reference }) {
+  const { refresh } = useCollections()
+  const [ids, setIds] = useState(r.collectionIds)
+  const saved = ids.length > 0
+  return (
+    <Popover>
+      <PopoverTrigger
+        className={cn(
+          "flex h-8 items-center gap-1.5 rounded-full px-3 text-xs font-medium shadow-sm ring-1 ring-black/5 backdrop-blur",
+          saved ? "bg-foreground text-background" : "bg-background/95 text-foreground hover:bg-background",
+        )}
+      >
+        <BookmarkIcon className={cn("size-3.5", saved && "fill-current")} />
+        {saved ? "Saved" : "Save"}
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-80 rounded-3xl p-3">
+        <CollectionPicker
+          className="max-h-72"
+          selected={ids}
+          onToggle={async (cid, on) => {
+            setIds((s) => (on ? [...s, cid] : s.filter((x) => x !== cid)))
+            try {
+              await api.setMembership(r.id, cid, on)
+              await refresh()
+            } catch (err) {
+              setIds((s) => (on ? s.filter((x) => x !== cid) : [...s, cid]))
+              toast.error((err as Error).message)
+            }
+          }}
+        />
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+function useCountReport(n: number, loading: boolean, onCount: (n: number | null) => void) {
+  useEffect(() => onCount(loading && n === 0 ? null : n), [n, loading, onCount])
+}
+
+function WebsitesGrid({ filters, onCount }: { filters: Filters; onCount: (n: number | null) => void }) {
   const list = useInfinite<Reference>((cursor) => api.references(filters, cursor), [filters.q, filters.collection, filters.sort])
   useReloadEvent(list.reload)
+  useCountReport(list.items.length, list.loading, onCount)
 
   // Poll while any capture is in flight.
   const busy = list.items.some((r) => r.status === "queued" || r.status === "capturing")
@@ -286,9 +337,11 @@ function WebsitesGrid({ filters, onAdd }: { filters: Filters; onAdd: () => void 
           <Tile
             key={r.id}
             href={`/r/${r.id}`}
-            title={r.title || r.domain}
-            subtitle={[r.domain, r.pageCount > 1 && `${r.pageCount} pages`, r.animationCount > 0 && `${r.animationCount} GIFs`].filter(Boolean).join(" · ")}
+            label={r.title || r.domain}
+            domain={r.domain}
+            external={r.url}
             overlay={<StatusOverlay r={r} />}
+            actions={r.status === "ready" ? <SaveButton r={r} /> : undefined}
           >
             {r.coverKey ? (
               <img src={fileUrl(r.coverKey)} alt={r.title ?? r.domain} loading="lazy" className="aspect-[16/10] w-full object-cover object-top" />
@@ -298,68 +351,64 @@ function WebsitesGrid({ filters, onAdd }: { filters: Filters; onAdd: () => void 
           </Tile>
         ))}
       </Masonry>
-      <GridFooter
-        {...list}
-        count={list.items.length}
-        empty={
-          <Empty className="py-24">
-            <EmptyHeader>
-              <EmptyMedia variant="icon">
-                <GlobeIcon />
-              </EmptyMedia>
-              <EmptyTitle>{filters.q || filters.collection ? "Nothing here yet" : "Start your shelf"}</EmptyTitle>
-              <EmptyDescription>
-                {filters.q || filters.collection ? "Try another search, or add a reference to this collection." : "Paste a website you like and your capture agent does the rest."}
-              </EmptyDescription>
-            </EmptyHeader>
-            {!filters.q && (
-              <Button onClick={onAdd} className="rounded-full bg-foreground text-background hover:bg-foreground/85">
-                <PlusIcon data-icon="inline-start" /> Add reference
-              </Button>
-            )}
-          </Empty>
-        }
-      />
+      <GridFooter {...list} count={list.items.length} empty={filters.q || filters.collection ? <EmptyNote filtered={!!filters.q} collection={filters.collection} /> : <Welcome />} />
     </>
   )
 }
 
 function StatusOverlay({ r }: { r: Reference }) {
   if (r.status === "ready") return null
+  const failed = r.status === "failed"
+  const m = r.progress?.match(/(\d+)\/(\d+)/)
+  const pct = m ? Math.min(100, (Number(m[1]) / Number(m[2])) * 100) : r.status === "queued" ? 4 : 12
   return (
-    <div className="absolute inset-0 grid place-items-center bg-background/75 backdrop-blur-sm">
-      <div className="flex max-w-[80%] flex-col items-center gap-2 text-center">
-        {r.status === "failed" ? <AlertCircleIcon className="size-5 text-destructive-foreground" /> : <Spinner className="size-5 text-muted-foreground" />}
-        <span className="text-xs font-medium">{r.domain}</span>
-        <span className="text-2xs text-muted-foreground">
-          {r.status === "failed" ? (r.error ?? "Capture failed") : (r.progress ?? (r.status === "queued" ? "Queued" : "Capturing"))}
-        </span>
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-fill-1/80 p-4 backdrop-blur-md">
+      <div className="flex items-center gap-2 rounded-full bg-background py-1 pr-3 pl-1 text-xs font-medium shadow-sm ring-1 ring-border">
+        <SiteIcon domain={r.domain} className="size-5 rounded-full" />
+        {r.domain}
       </div>
+      {failed ? (
+        <span className="flex max-w-[85%] items-center gap-1.5 text-center text-2xs text-destructive-foreground">
+          <AlertCircleIcon className="size-3.5 shrink-0" />
+          <span className="line-clamp-2">{r.error ?? "Capture failed"}</span>
+        </span>
+      ) : (
+        <>
+          <div className="h-1 w-32 overflow-hidden rounded-full bg-fill-3">
+            <div className="h-full rounded-full bg-foreground transition-[width] duration-700" style={{ width: `${pct}%` }} />
+          </div>
+          <span className="max-w-[85%] truncate text-2xs text-muted-foreground">
+            {r.status === "queued" ? "Waiting for capture agent" : (r.progress?.replace(/^Capturing /, "") ?? "Capturing")}
+          </span>
+        </>
+      )}
     </div>
   )
 }
 
-function PagesGrid({ filters }: { filters: Filters }) {
+function PagesGrid({ filters, onCount }: { filters: Filters; onCount: (n: number | null) => void }) {
   const list = useInfinite<PageWithRef>((cursor) => api.pages(filters, cursor), [filters.q, filters.collection, filters.sort])
   useReloadEvent(list.reload)
+  useCountReport(list.items.length, list.loading, onCount)
   if (list.loading && !list.items.length) return <SkeletonGrid />
   return (
     <>
       <Masonry>
         {list.items.map((p) => (
-          <Tile key={p.id} href={`/r/${p.referenceId}?page=${p.id}`} title={p.title || p.path} subtitle={`${p.reference.domain}${p.path}`}>
+          <Tile key={p.id} href={`/r/${p.referenceId}?page=${p.id}`} label={`${p.reference.domain}${p.path === "/" ? "" : p.path}`} domain={p.reference.domain} external={p.url}>
             <img src={fileUrl(p.desktopThumbKey)} alt={p.title ?? p.path} loading="lazy" className="aspect-[16/10] w-full object-cover object-top" />
           </Tile>
         ))}
       </Masonry>
-      <GridFooter {...list} count={list.items.length} empty={<EmptyNote text="No pages captured yet." />} />
+      <GridFooter {...list} count={list.items.length} empty={<EmptyNote filtered={!!filters.q} collection={filters.collection} />} />
     </>
   )
 }
 
-function AnimationsGrid({ filters }: { filters: Filters }) {
+function AnimationsGrid({ filters, onCount }: { filters: Filters; onCount: (n: number | null) => void }) {
   const list = useInfinite<AnimationWithRef>((cursor) => api.animations(filters, cursor), [filters.q, filters.collection, filters.sort])
   useReloadEvent(list.reload)
+  useCountReport(list.items.length, list.loading, onCount)
   if (list.loading && !list.items.length) return <SkeletonGrid />
   return (
     <>
@@ -368,18 +417,68 @@ function AnimationsGrid({ filters }: { filters: Filters }) {
           <Tile
             key={a.id}
             href={`/r/${a.referenceId}?tab=animations`}
-            title={a.label || a.reference.title || a.reference.domain}
-            subtitle={`${a.kind === "scroll" ? "Scroll" : "Hover"} · ${a.reference.domain}`}
+            label={`${a.kind === "scroll" ? "Scroll" : "Hover"} · ${a.label || a.reference.domain}`}
+            domain={a.reference.domain}
           >
             <GifTile a={a} bare />
           </Tile>
         ))}
       </Masonry>
-      <GridFooter {...list} count={list.items.length} empty={<EmptyNote text="No animations captured yet." />} />
+      <GridFooter {...list} count={list.items.length} empty={<EmptyNote filtered={!!filters.q} collection={filters.collection} />} />
     </>
   )
 }
 
-function EmptyNote({ text }: { text: string }) {
-  return <p className="py-24 text-center text-sm text-muted-foreground">{text}</p>
+const EXAMPLES = ["linear.app", "stripe.com", "vercel.com", "rauno.me"]
+
+/** First-run empty state: a big fake URL bar that opens the add flow, plus one-click examples. */
+function Welcome() {
+  const { addReference } = useAddFlow()
+  return (
+    <div className="mx-auto flex max-w-lg flex-col items-center gap-6 py-20 text-center sm:py-28">
+      <div className="grid grid-cols-3 gap-1.5 opacity-80" aria-hidden>
+        {["h-10", "h-14", "h-8", "h-12", "h-8", "h-14"].map((h, i) => (
+          <span key={i} className={cn("w-12 rounded-md bg-fill-2", h, i % 2 && "bg-fill-3")} />
+        ))}
+      </div>
+      <div className="space-y-1.5">
+        <h2 className="text-2xl font-medium tracking-tight">Start your shelf</h2>
+        <p className="text-sm text-muted-foreground">Paste a website. Your capture agent saves screenshots, styles and motion.</p>
+      </div>
+      <button
+        onClick={() => addReference()}
+        className="flex h-14 w-full items-center gap-3 rounded-2xl bg-fill-1 px-4 text-left text-base text-muted-foreground ring-1 ring-transparent transition-all hover:bg-background hover:shadow-sm hover:ring-border"
+      >
+        <GlobeIcon className="size-5" />
+        <span className="flex-1">Paste a website URL</span>
+        <kbd className="grid size-7 place-items-center rounded-lg bg-background ring-1 ring-border">
+          <CornerDownLeftIcon className="size-3.5" />
+        </kbd>
+      </button>
+      <div className="flex flex-wrap justify-center gap-1.5">
+        <span className="h-7 content-center pr-1 text-2xs text-muted-foreground">Try</span>
+        {EXAMPLES.map((d) => (
+          <button key={d} onClick={() => addReference(undefined, d)} className="flex h-7 items-center gap-1.5 rounded-full bg-fill-1 pr-2.5 pl-1 text-2xs font-medium hover:bg-fill-2">
+            <SiteIcon domain={d} className="size-5 rounded-full" />
+            {d}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function EmptyNote({ filtered, collection }: { filtered: boolean; collection?: string }) {
+  const { addReference } = useAddFlow()
+  return (
+    <div className="flex flex-col items-center gap-3 py-24 text-center">
+      <p className="text-sm font-medium">{filtered ? "No matches" : "Nothing here yet"}</p>
+      <p className="max-w-xs text-xs text-muted-foreground">{filtered ? "Try a different word, or clear the search." : "Captured pages and animations show up here."}</p>
+      {!filtered && (
+        <button onClick={() => addReference(collection)} className="mt-1 flex h-9 items-center gap-1.5 rounded-full bg-foreground px-4 text-xs font-medium text-background hover:bg-foreground/85">
+          <PlusIcon className="size-3.5" /> Add reference
+        </button>
+      )}
+    </div>
+  )
 }
