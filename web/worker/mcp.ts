@@ -20,6 +20,8 @@ import * as db from "./db"
 const LIMITS = {
   /** Serialized JSON bytes for a list section before it is cut and continued. */
   listBytes: 24_000,
+  /** Serialized bytes per token group in a summary. */
+  summaryGroupBytes: 1_500,
   /** Largest image inlined as base64. */
   inlineImageBytes: 900_000,
   /** Characters of HTML per get_page call. */
@@ -47,14 +49,20 @@ const fail = (message: string) => ({ content: [{ type: "text" as const, text: me
  * Take items from `offset` until the item limit or byte budget is hit. Always advances by at least one item;
  * a single item larger than the whole budget is replaced by an omission marker instead of being returned.
  */
-function bounded<T>(all: T[], offset: number, limit: number, bytes = LIMITS.listBytes) {
+function bounded<T>(
+  all: T[],
+  offset: number,
+  limit: number,
+  bytes = LIMITS.listBytes,
+  hint = "use the signed file URL from get_page",
+) {
   const items: (T | { omitted: true; index: number; bytes: number; reason: string })[] = []
   let used = 0
   let taken = 0
   for (let i = offset; i < all.length && taken < limit; i++) {
     const size = JSON.stringify(all[i]).length
     if (size > bytes) {
-      items.push({ omitted: true, index: i, bytes: size, reason: `entry is larger than the ${bytes}-byte response budget; use the signed file URL from get_page` })
+      items.push({ omitted: true, index: i, bytes: size, reason: `entry is larger than the ${bytes}-byte budget; ${hint}` })
       used += 200
     } else {
       if (taken && used + size > bytes) break
@@ -88,13 +96,14 @@ function tokenGroup(t: DesignTokens, g: TokenGroup): unknown[] {
   return (t[g] ?? []) as unknown[]
 }
 
-/** A few values per group plus counts; enough to orient, with a pointer to the full group. */
+/** A few values per group plus counts, with a byte budget per group; enough to orient, with a pointer to the full group. */
 function tokenSummary(t: DesignTokens | null, perGroup = 6) {
   if (!t) return null
   const out: Record<string, { total: number; top: unknown[] }> = {}
   for (const g of TOKEN_GROUPS) {
     const all = tokenGroup(t, g)
-    if (all.length) out[g] = { total: all.length, top: all.slice(0, perGroup) }
+    const hint = g === "cssVariables" ? "see get_page_styles section \"css_variables\"" : `see get_reference part "tokens" token_group "${g}"`
+    if (all.length) out[g] = { total: all.length, top: bounded(all, 0, perGroup, LIMITS.summaryGroupBytes, hint).items }
   }
   return out
 }
