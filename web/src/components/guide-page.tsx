@@ -288,11 +288,15 @@ function SetupSection() {
     {
       t: "Start the capture agent",
       b: "Point capture/.env at your Worker with the same CAPTURE_TOKEN, install Chromium once, then leave the agent running.",
-      c: ["cp capture/.env.example capture/.env", "npx playwright install chromium", "npm run capture"],
+      c: ["cd ..", "cp capture/.env.example capture/.env", "npx playwright install chromium", "npm run capture"],
     },
   ]
   return (
     <Section id="setup" title="Set it up" intro="Everything fits in Cloudflare’s free plan. You need a GitHub account, a Cloudflare account and Node 22.">
+      <p className="max-w-[760px] text-[15px] leading-[1.6] text-muted-foreground">
+        First, clone the repository (GitHub access is required while it is private), install dependencies, and follow the steps from the repository root.
+      </p>
+      <CodeBlock lines={["git clone https://github.com/MaxChen04/Snip.git", "cd Snip", "npm install"]} />
       <ol className="flex max-w-[760px] flex-col">
         {steps.map((s, i) => (
           <li key={s.t} className="flex gap-4 md:gap-6">
@@ -315,7 +319,7 @@ function SetupSection() {
         <div className="flex flex-col gap-1">
           <p className="text-[15px] font-medium">Trying it locally first</p>
           <p className="text-sm leading-[1.6]">
-            Copy web/.dev.vars.example to web/.dev.vars and run npm run dev. DEV_LOGIN skips GitHub sign-in on localhost only, so never set it in production.
+            From the repository root, copy web/.dev.vars.example to web/.dev.vars, run npm run db:migrate:local -w web, then npm run dev. DEV_LOGIN skips GitHub sign-in on localhost only, so never set it in production.
           </p>
         </div>
       </div>
