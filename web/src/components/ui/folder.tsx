@@ -34,21 +34,22 @@ const themes = {
 } as const
 
 export type FolderColor = keyof typeof themes
-export const FOLDER_SCALE = { sm: 0.6, md: 0.8, lg: 1 } as const
+export const FOLDER_SCALE = { sm: 0.42, md: 0.52, lg: 0.68 } as const
 export type FolderSize = keyof typeof FOLDER_SCALE
 
 const W = 321
 const H = 270
-const CARD_W = 164
-const CARD_H = 214
+// Landscape cards so desktop screenshots show uncropped (16:10).
+const CARD_W = 236
+const CARD_H = 148
 const FLAP_PATH =
   "M0 25C0 11.1929 11.1929 0 25 0H136.084C143.044 0 149.689 2.90139 154.42 8.00608L178.08 33.5343C182.811 38.639 189.456 41.5404 196.416 41.5404H296C309.807 41.5404 321 52.7333 321 66.5404V216C321 229.807 309.807 241 296 241H25C11.1929 241 0 229.807 0 216V25Z"
 
 // Resting / hovered pose for the back, middle and front card (front card is drawn last).
 const POSES = [
-  { rest: { y: -34, x: 40, rotate: 10 }, hover: { y: -78, x: 66, rotate: 16 }, delay: 0.12 },
-  { rest: { y: -44, x: 3, rotate: 2 }, hover: { y: -92, x: 2, rotate: -2 }, delay: 0.06 },
-  { rest: { y: -48, x: -40, rotate: -5 }, hover: { y: -86, x: -62, rotate: -12 }, delay: 0 },
+  { rest: { y: -58, x: 22, rotate: 7 }, hover: { y: -112, x: 48, rotate: 12 }, delay: 0.12 },
+  { rest: { y: -68, x: 0, rotate: 1 }, hover: { y: -130, x: 0, rotate: -2 }, delay: 0.06 },
+  { rest: { y: -72, x: -22, rotate: -5 }, hover: { y: -118, x: -48, rotate: -10 }, delay: 0 },
 ]
 
 export function Folder({
@@ -71,8 +72,8 @@ export function Folder({
   const slots = [images[2], images[1], images[0]]
 
   return (
-    <div className={cn("relative select-none", className)} style={{ width: W * scale, height: (H + 80) * scale }}>
-      <div className="absolute left-1/2" style={{ top: 80 * scale, width: W, height: H, transform: `translateX(-50%) scale(${scale})`, transformOrigin: "top center", perspective: 800 }}>
+    <div className={cn("relative select-none", className)} style={{ width: W * scale, height: (H + 120) * scale }}>
+      <div className="absolute left-1/2" style={{ top: 120 * scale, width: W, height: H, transform: `translateX(-50%) scale(${scale})`, transformOrigin: "top center", perspective: 800 }}>
         <div className="absolute inset-0" style={{ borderRadius: 25, backgroundColor: theme.backFill, boxShadow: theme.backInsetShadow }} />
 
         <div className="absolute inset-0 flex items-center justify-center">
@@ -131,13 +132,13 @@ export function Folder({
 function ShotCard({ src }: { src?: string }) {
   const [broken, setBroken] = useState(false)
   return (
-    <div className="overflow-hidden bg-[#F1F1F1] shadow-[inset_3px_5px_6px_rgba(255,255,255,0.9),0_1px_2px_rgba(0,0,0,0.08)] ring-1 ring-[#E0E0E0]" style={{ width: CARD_W, height: CARD_H, borderRadius: 20 }}>
+    <div className="overflow-hidden bg-[#F1F1F1] shadow-[inset_3px_5px_6px_rgba(255,255,255,0.9),0_1px_2px_rgba(0,0,0,0.08)] ring-1 ring-[#E0E0E0]" style={{ width: CARD_W, height: CARD_H, borderRadius: 16 }}>
       {src && !broken ? (
         <img src={src} alt="" loading="lazy" draggable={false} onError={() => setBroken(true)} className="size-full object-cover object-top" />
       ) : (
-        <div className="flex flex-col gap-2 px-3.5 pt-8">
+        <div className="flex flex-col gap-2 px-4 pt-6">
           <span className="h-3 rounded-full bg-[#D4D4D4]" />
-          {Array.from({ length: 8 }, (_, i) => (
+          {Array.from({ length: 5 }, (_, i) => (
             <span key={i} className="grid grid-cols-2 gap-1.5">
               <span className="h-1.5 rounded-full bg-[#D4D4D4]" />
               <span className="h-1.5 rounded-full bg-[#D4D4D4]" />

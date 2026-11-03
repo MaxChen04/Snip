@@ -28,7 +28,7 @@ export interface Reference {
   progress: string | null
   error: string | null
   coverKey: string | null
-  /** Portrait thumbnails (mobile, else desktop) of the first pages, for the folder view. Max 3. */
+  /** Desktop viewport thumbnails (else mobile) of the first pages, for the folder view. Max 3. */
   previewKeys: string[]
   pageCount: number
   animationCount: number

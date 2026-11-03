@@ -349,7 +349,7 @@ function FolderGrid({ children }: { children: React.ReactNode }) {
   const [grid] = useGridSize()
   const w = Math.round(321 * FOLDER_SCALE[FOLDER_SIZE[grid]])
   return (
-    <div className="grid justify-items-center gap-x-6 gap-y-12" style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${w}px, 1fr))` }}>
+    <div className="grid justify-items-center gap-x-4 gap-y-8" style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${w}px, 1fr))` }}>
       {children}
     </div>
   )
@@ -372,7 +372,7 @@ function FolderTile({ r }: { r: Reference }) {
       >
         <Folder images={images} hovered={hovered} size={FOLDER_SIZE[grid]} />
       </Link>
-      <div className="mt-3 flex max-w-full items-center gap-1.5 px-2">
+      <div className="mt-2 flex max-w-full items-center gap-1.5 px-2">
         <SiteIcon domain={r.domain} />
         <Link href={`/r/${r.id}`} className="truncate text-sm font-medium">
           {r.title || r.domain}

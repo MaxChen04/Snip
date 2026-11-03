@@ -116,8 +116,8 @@ export interface ListFilter {
 }
 
 const REF_SELECT = `SELECT r.*, (SELECT group_concat(collection_id) FROM reference_collections rc WHERE rc.reference_id = r.id) AS collection_ids,
-  (SELECT group_concat(k, '|') FROM (SELECT coalesce(p.mobile_thumb_key, p.desktop_thumb_key) AS k FROM pages p
-    WHERE p.reference_id = r.id AND k IS NOT NULL ORDER BY p.ord LIMIT 3)) AS preview_keys
+  (SELECT group_concat(k, '|') FROM (SELECT coalesce(p.desktop_thumb_key, p.mobile_thumb_key) AS k FROM pages p
+    WHERE p.reference_id = r.id AND coalesce(p.desktop_thumb_key, p.mobile_thumb_key) IS NOT NULL ORDER BY p.ord LIMIT 3)) AS preview_keys
   FROM refs r`
 
 export async function listReferences(db: D1Database, f: ListFilter): Promise<Paged<Reference>> {
