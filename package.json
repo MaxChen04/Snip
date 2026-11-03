@@ -4,7 +4,9 @@
   "type": "module",
   "workspaces": ["web", "capture"],
   "scripts": {
-    "test": "node --import tsx --test web/tests/*.test.ts capture/tests/*.test.ts && node --test desktop/tests/*.test.cjs desktop/tests/*.test.mjs",
+    "test": "npm run test:core && npm run test:app",
+    "test:core": "node --import tsx --test web/tests/*.test.ts capture/tests/*.test.ts",
+    "test:app": "node --test desktop/tests/*.test.cjs desktop/tests/*.test.mjs",
     "test:desktop": "node desktop/scripts/smoke.cjs",
     "dev": "npm run dev -w web",
     "deploy": "npm run deploy -w web",

@@ -154,7 +154,7 @@ api.get("/references/:id", async (c) => {
 
 api.post("/references/:id/recapture", async (c) => {
   const id = c.req.param("id")
-  await db.deletePrefix(c.env.FILES, `refs/${id}/`)
+  // Old files are removed when the capture worker claims the job.
   await db.requeueReference(c.env.DB, id)
   return c.json({ ok: true })
 })
@@ -198,6 +198,9 @@ agent.use("*", requireCaptureToken)
 
 agent.post("/jobs/claim", async (c) => {
   const job = await db.claimJob(c.env.DB)
+  // Rows from any earlier attempt are gone, so drop its files; the new attempt writes under its own folder.
+  // Awaited so it can't race the new attempt's uploads.
+  if (job) await db.deletePrefix(c.env.FILES, `refs/${job.id}/`).catch((e) => console.error("cleanup failed", e))
   await db.touchPresence(c.env.DB, job ? "busy" : "idle", job?.id ?? null)
   return job ? c.json(job) : c.body(null, 204)
 })
@@ -218,12 +221,14 @@ agent.post("/jobs/:id/progress", async (c) => {
 agent.put("/files/*", async (c) => {
   const key = c.req.path.slice("/agent/files/".length)
   if (!KEY_RE.test(key) || key.includes("..")) return c.json({ error: "bad key" }, 400)
+  if (!(await db.isCapturing(c.env.DB, key.split("/")[1]!))) return c.json({ error: "job is gone" }, 410)
   const contentType = c.req.header("content-type") ?? "application/octet-stream"
   await c.env.FILES.put(key, c.req.raw.body, { httpMetadata: { contentType } })
   return c.json({ key })
 })
 
 agent.post("/jobs/:id/pages", async (c) => {
+  if (!(await db.isCapturing(c.env.DB, c.req.param("id")))) return c.json({ error: "job is gone" }, 410)
   const page = await c.req.json<PageUpload>()
   const pageId = await db.addPage(c.env.DB, c.req.param("id"), page)
   return c.json({ id: pageId })

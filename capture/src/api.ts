@@ -4,6 +4,11 @@ export class CaptureAuthenticationError extends Error {
   constructor() { super("Snip rejected the capture token (401)") }
 }
 
+/** The reference was deleted or recaptured while this capture ran; stop the job. */
+export class JobGoneError extends Error {
+  constructor() { super("The reference was deleted or recaptured during capture") }
+}
+
 export class SnipApi {
   constructor(
     private base: string,
@@ -23,6 +28,10 @@ export class SnipApi {
     if (res.status === 401) {
       await res.body?.cancel()
       throw new CaptureAuthenticationError()
+    }
+    if (res.status === 410) {
+      await res.body?.cancel()
+      throw new JobGoneError()
     }
     if (!res.ok) throw new Error(`${init.method ?? "GET"} ${path} failed: ${res.status} ${await res.text()}`)
     // Mutations return small acknowledgements. Drain them so a long-lived

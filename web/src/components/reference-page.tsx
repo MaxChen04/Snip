@@ -38,6 +38,7 @@ import { cn } from "@/lib/utils"
 import { api, fileUrl, type Animation, type Page, type Reference } from "@/lib/api"
 import { useCollections } from "@/lib/collections"
 import { referenceViewUrl, useDesktopState } from "@/hooks/use-desktop-state"
+import { usePoll } from "@/hooks/use-poll"
 
 type Detail = { reference: Reference; pages: Page[]; animations: Animation[] }
 
@@ -68,11 +69,7 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
   useEffect(load, [load])
 
   const busy = data && (data.reference.status === "queued" || data.reference.status === "capturing")
-  useEffect(() => {
-    if (!busy) return
-    const t = setInterval(load, 4000)
-    return () => clearInterval(t)
-  }, [busy, load])
+  usePoll(load, !!busy)
 
   if (error) return <div className="grid min-h-svh place-items-center text-sm text-muted-foreground">{error}</div>
   if (!data) {

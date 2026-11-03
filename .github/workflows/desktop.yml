@@ -1,0 +1,42 @@
+name: Desktop app
+# macOS runner minutes cost 10x, so this only runs when the app or what it launches changes.
+on:
+  pull_request:
+    paths:
+      - 'desktop/**'
+      - 'capture/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/desktop.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'desktop/**'
+      - 'capture/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/desktop.yml'
+permissions:
+  contents: read
+jobs:
+  apple-silicon:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            desktop/package-lock.json
+      - run: node -e "if (process.arch !== 'arm64') process.exit(1)"
+      - run: npm ci
+      - run: npm ci --prefix desktop
+      - run: npm run test:app
+      - run: npm run build -w web
+      - run: npx --no-install playwright install chromium
+      - run: npm run test:desktop
+      - run: npm run build --prefix desktop -- --no-install
+      - run: codesign --verify --deep --strict desktop/dist/Snip-darwin-arm64/Snip.app

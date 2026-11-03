@@ -50,6 +50,7 @@ function toReference(r: Row): Reference {
     collectionIds: r.collection_ids ? String(r.collection_ids).split(",") : [],
     createdAt: r.created_at as string,
     updatedAt: r.updated_at as string,
+    claimedAt: (r.claimed_at as string) ?? null,
   }
 }
 
@@ -287,8 +288,7 @@ export async function createReference(
 
 export async function requeueReference(db: D1Database, id: string) {
   await db.batch([
-    db.prepare(`DELETE FROM pages WHERE reference_id = ?`).bind(id),
-    db.prepare(`DELETE FROM animations WHERE reference_id = ?`).bind(id),
+    db.prepare(`DELETE FROM pages WHERE reference_id = ?`).bind(id), // animations cascade
     db
       .prepare(
         `UPDATE refs SET status = 'queued', progress = 'Waiting for the capture agent', error = NULL, page_count = 0, animation_count = 0, claimed_at = NULL, updated_at = ? WHERE id = ?`,
@@ -298,12 +298,8 @@ export async function requeueReference(db: D1Database, id: string) {
 }
 
 export async function deleteReference(db: D1Database, files: R2Bucket, id: string) {
-  await db.batch([
-    db.prepare(`DELETE FROM animations WHERE reference_id = ?`).bind(id),
-    db.prepare(`DELETE FROM pages WHERE reference_id = ?`).bind(id),
-    db.prepare(`DELETE FROM reference_collections WHERE reference_id = ?`).bind(id),
-    db.prepare(`DELETE FROM refs WHERE id = ?`).bind(id),
-  ])
+  // D1 enforces foreign keys: pages, animations and collection memberships cascade.
+  await db.prepare(`DELETE FROM refs WHERE id = ?`).bind(id).run()
   await deletePrefix(files, `refs/${id}/`)
 }
 
@@ -348,10 +344,7 @@ export async function updateCollection(db: D1Database, id: string, name: string,
 }
 
 export async function deleteCollection(db: D1Database, id: string) {
-  await db.batch([
-    db.prepare(`DELETE FROM reference_collections WHERE collection_id = ?`).bind(id),
-    db.prepare(`DELETE FROM collections WHERE id = ?`).bind(id),
-  ])
+  await db.prepare(`DELETE FROM collections WHERE id = ?`).bind(id).run() // memberships cascade
 }
 
 export async function setReferenceCollection(db: D1Database, referenceId: string, collectionId: string, member: boolean) {
@@ -385,12 +378,14 @@ export async function claimJob(db: D1Database): Promise<Job | null> {
     .bind(ts, ts, stale)
     .first<Row>()
   if (!r) return null
-  // A reclaimed stale job starts over.
-  await db.batch([
-    db.prepare(`DELETE FROM animations WHERE reference_id = ?`).bind(r.id),
-    db.prepare(`DELETE FROM pages WHERE reference_id = ?`).bind(r.id),
-  ])
-  return { id: r.id as string, url: r.url as string, mode: r.mode as CaptureMode, maxPages: r.max_pages as number }
+  // A reclaimed stale job starts over. Animations cascade from pages.
+  await db.prepare(`DELETE FROM pages WHERE reference_id = ?`).bind(r.id).run()
+  return { id: r.id as string, url: r.url as string, mode: r.mode as CaptureMode, maxPages: r.max_pages as number, attempt: newId().slice(0, 8) }
+}
+
+/** False once the reference was deleted or requeued, so a running capture stops writing to it. */
+export async function isCapturing(db: D1Database, id: string) {
+  return !!(await db.prepare(`SELECT 1 FROM refs WHERE id = ? AND status = 'capturing'`).bind(id).first())
 }
 
 export async function setProgress(db: D1Database, id: string, progress: string) {
@@ -444,14 +439,14 @@ export async function completeJob(db: D1Database, id: string, c: JobComplete) {
   await db
     .prepare(
       `UPDATE refs SET status = 'ready', progress = NULL, error = NULL, title = coalesce(?, title), description = coalesce(?, description),
-        favicon = coalesce(?, favicon), cover_key = coalesce(?, cover_key), tokens_json = ?, updated_at = ? WHERE id = ?`,
+        favicon = coalesce(?, favicon), cover_key = coalesce(?, cover_key), tokens_json = ?, updated_at = ? WHERE id = ? AND status = 'capturing'`,
     )
     .bind(c.title, c.description, c.favicon, c.coverKey, c.tokens ? JSON.stringify(c.tokens) : null, now(), id)
     .run()
 }
 
 export async function failJob(db: D1Database, id: string, error: string) {
-  await db.prepare(`UPDATE refs SET status = 'failed', progress = NULL, error = ?, updated_at = ? WHERE id = ?`).bind(error.slice(0, 1000), now(), id).run()
+  await db.prepare(`UPDATE refs SET status = 'failed', progress = NULL, error = ?, updated_at = ? WHERE id = ? AND status = 'capturing'`).bind(error.slice(0, 1000), now(), id).run()
 }
 
 // ---------- Capture worker presence ----------
@@ -475,16 +470,13 @@ export async function touchPresence(db: D1Database, activity: "idle" | "busy", j
 }
 
 export async function getCaptureStatus(db: D1Database, ref: Reference): Promise<CaptureStatus> {
-  const [w, row] = await Promise.all([
-    db.prepare(`SELECT * FROM worker_presence WHERE id = ?`).bind(PRESENCE_ID).first<Row>(),
-    db.prepare(`SELECT claimed_at FROM refs WHERE id = ?`).bind(ref.id).first<Row>(),
-  ])
+  const w = await db.prepare(`SELECT * FROM worker_presence WHERE id = ?`).bind(PRESENCE_ID).first<Row>()
   const lastSeenAt = (w?.last_seen_at as string) ?? null
   const secondsSinceSeen = lastSeenAt ? Math.max(0, Math.round((Date.now() - Date.parse(lastSeenAt)) / 1000)) : null
   const freshness = secondsSinceSeen == null ? "never" : secondsSinceSeen <= RECENT_SECONDS ? "recent" : "stale"
   const activity = (w?.activity as "idle" | "busy") ?? null
   const currentJobId = (w?.job_id as string) ?? null
-  const claimedAt = (row?.claimed_at as string) ?? null
+  const claimedAt = ref.claimedAt
   let advice: string
   let pollAfterSeconds: number | null = null
   switch (ref.status) {

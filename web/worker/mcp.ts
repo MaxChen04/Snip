@@ -147,7 +147,7 @@ function buildServer(env: Env, origin: string) {
 
   const listedAnimation = (a: Animation) => ({ id: a.id, pageId: a.pageId, kind: a.kind, label: a.label, representations: representations(a) })
 
-  const server = new McpServer({ name: "snip", version: "1.1.0" }, { instructions: INSTRUCTIONS })
+  const server = new McpServer({ name: "snip", version: "1.2.0" }, { instructions: INSTRUCTIONS })
 
   server.registerTool(
     "search_references",
@@ -187,21 +187,20 @@ function buildServer(env: Env, origin: string) {
     {
       title: "Get a design reference",
       description: `Read one reference in bounded parts.
-- part "overview" (recommended first call): summary, capture status, the first pages and animations, and a few values per token group.
+- part "overview" (default): summary, capture status, the first pages and animations, and a few values per token group.
 - part "pages" / "animations": paginated lists of ids, paths and labels. Use get_page / get_animation for detail.
 - part "tokens": design tokens merged by the capture across pages, by usage count. Pass token_group (${TOKEN_GROUPS.join(", ")}) to page through one group in full.
-- part "full" (default, legacy): every page with signed URLs, every animation and all tokens. Can be very large for crawls; prefer the parts above.
 Signed file URLs expire after 24 hours.`,
       inputSchema: z.object({
         id: z.string().describe("Reference id from search_references"),
-        part: z.enum(["overview", "pages", "animations", "tokens", "full"]).optional(),
+        part: z.enum(["overview", "pages", "animations", "tokens"]).optional(),
         token_group: z.enum(TOKEN_GROUPS).optional().describe("With part \"tokens\": return this group in full, paginated"),
         limit: z.number().int().min(1).max(200).optional().describe("Max items per list (default 25; 100 for a token group)"),
         cursor: z.string().optional().describe("nextCursor from a previous call with the same part"),
       }),
       annotations: { readOnlyHint: true },
     },
-    async ({ id, part = "full", token_group, limit: limitArg, cursor }) => {
+    async ({ id, part = "overview", token_group, limit: limitArg, cursor }) => {
       const limit = limitArg ?? 25
       const r = await db.getReference(env.DB, id)
       if (!r) return fail(`No reference with id "${id}". Call search_references to find ids.`)
@@ -215,17 +214,6 @@ Signed file URLs expire after 24 hours.`,
         return fail(`That cursor belongs to part "${cur.part}"${cur.group ? ` group "${cur.group}"` : ""}. Pass the same part and token_group.`)
       const offset = cur?.offset ?? 0
       const nextCursor = (n: number | null) => (n == null ? null : encodeCursor({ referenceId: id, part, group: token_group, offset: n, rev }))
-
-      if (part === "full") {
-        return ok({
-          ...(await summarizeRef(ref)),
-          description: ref.description,
-          tokens: ref.tokens,
-          pages: await Promise.all(r.pages.map(describePage)),
-          animations: await Promise.all(r.animations.map(describeAnimation)),
-          note: "Legacy full read. Prefer part \"overview\" and the per-item tools to keep results small.",
-        })
-      }
 
       if (part === "overview") {
         const pages = bounded(r.pages.map((p) => ({ id: p.id, path: p.path, title: p.title })), 0, Math.min(limit, 20))
@@ -302,13 +290,12 @@ Signed file URLs expire after 24 hours.`,
       inputSchema: z.object({
         page_id: z.string().describe("From get_reference or a copied Snip prompt"),
         image: z.enum(["none", "desktop", "mobile"]).optional().describe("Inline a viewport-sized screenshot. Default desktop."),
-        include_styles: z.boolean().optional().describe("Deprecated: adds a style summary. Use get_page_styles."),
         include_html: z.boolean().optional(),
         html_offset: z.number().int().min(0).optional().describe("Character offset to continue the HTML from"),
       }),
       annotations: { readOnlyHint: true },
     },
-    async ({ page_id, image = "desktop", include_styles, include_html, html_offset = 0 }) => {
+    async ({ page_id, image = "desktop", include_html, html_offset = 0 }) => {
       const p = await db.getPage(env.DB, page_id)
       if (!p) return fail(`No page with id "${page_id}". Use get_reference(id, part "pages") to list page ids.`)
       const data: Record<string, unknown> = { ...(await describePage(p)), tokens: tokenSummary(p.tokens) }
@@ -327,7 +314,6 @@ Signed file URLs expire after 24 hours.`,
           }
         }
       }
-      if (include_styles) data.styles = "Use get_page_styles(page_id) for valid, filterable computed styles."
       if (include_html) {
         const obj = p.snapshotKey ? await env.FILES.get(p.snapshotKey) : null
         if (!obj) data.html = { included: false, reason: p.snapshotKey ? "file missing from storage" : "not captured" }
