@@ -41,6 +41,7 @@ function toReference(r: Row): Reference {
     progress: (r.progress as string) ?? null,
     error: (r.error as string) ?? null,
     coverKey: (r.cover_key as string) ?? null,
+    previewKeys: r.preview_keys ? String(r.preview_keys).split("|") : [],
     pageCount: r.page_count as number,
     animationCount: r.animation_count as number,
     tokens: parse<DesignTokens>(r.tokens_json),
@@ -114,7 +115,10 @@ export interface ListFilter {
   cursor?: string | null
 }
 
-const REF_SELECT = `SELECT r.*, (SELECT group_concat(collection_id) FROM reference_collections rc WHERE rc.reference_id = r.id) AS collection_ids FROM refs r`
+const REF_SELECT = `SELECT r.*, (SELECT group_concat(collection_id) FROM reference_collections rc WHERE rc.reference_id = r.id) AS collection_ids,
+  (SELECT group_concat(k, '|') FROM (SELECT coalesce(p.mobile_thumb_key, p.desktop_thumb_key) AS k FROM pages p
+    WHERE p.reference_id = r.id AND k IS NOT NULL ORDER BY p.ord LIMIT 3)) AS preview_keys
+  FROM refs r`
 
 export async function listReferences(db: D1Database, f: ListFilter): Promise<Paged<Reference>> {
   const limit = Math.min(Math.max(f.limit ?? 24, 1), 100)

@@ -8,13 +8,14 @@ import { GifTile } from "@/components/reference-page"
 import { SiteIcon } from "@/components/site-icon"
 import { ActionCircle, TopBar, type View } from "@/components/top-bar"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { Folder, FOLDER_SCALE, type FolderSize } from "@/components/ui/folder"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { useInfinite } from "@/hooks/use-infinite"
 import { api, fileUrl, type AnimationWithRef, type Filters, type PageWithRef, type Reference, type Sort } from "@/lib/api"
 import { useCollections } from "@/lib/collections"
-import { masonryCols, readPref, useGridSize, writePref } from "@/lib/prefs"
+import { masonryCols, readPref, useGridSize, writePref, type GridSize } from "@/lib/prefs"
 import { cn } from "@/lib/utils"
 
 const SORT_LABEL: Record<Sort, string> = { newest: "Newest", oldest: "Oldest", name: "A–Z" }
@@ -332,57 +333,87 @@ function WebsitesGrid({ filters, onCount }: { filters: Filters; onCount: (n: num
   if (list.loading && !list.items.length) return <SkeletonGrid />
   return (
     <>
-      <Masonry>
+      <FolderGrid>
         {list.items.map((r) => (
-          <Tile
-            key={r.id}
-            href={`/r/${r.id}`}
-            label={r.title || r.domain}
-            domain={r.domain}
-            external={r.url}
-            overlay={<StatusOverlay r={r} />}
-            actions={r.status === "ready" ? <SaveButton r={r} /> : undefined}
-          >
-            {r.coverKey ? (
-              <img src={fileUrl(r.coverKey)} alt={r.title ?? r.domain} loading="lazy" className="aspect-[16/10] w-full object-cover object-top" />
-            ) : (
-              <div className="aspect-[16/10] w-full" />
-            )}
-          </Tile>
+          <FolderTile key={r.id} r={r} />
         ))}
-      </Masonry>
+      </FolderGrid>
       <GridFooter {...list} count={list.items.length} empty={filters.q || filters.collection ? <EmptyNote filtered={!!filters.q} collection={filters.collection} /> : <Welcome />} />
     </>
   )
 }
 
-function StatusOverlay({ r }: { r: Reference }) {
-  if (r.status === "ready") return null
-  const failed = r.status === "failed"
-  const m = r.progress?.match(/(\d+)\/(\d+)/)
-  const pct = m ? Math.min(100, (Number(m[1]) / Number(m[2])) * 100) : r.status === "queued" ? 4 : 12
+const FOLDER_SIZE: Record<GridSize, FolderSize> = { s: "sm", m: "md", l: "lg" }
+
+function FolderGrid({ children }: { children: React.ReactNode }) {
+  const [grid] = useGridSize()
+  const w = Math.round(321 * FOLDER_SCALE[FOLDER_SIZE[grid]])
   return (
-    <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-fill-1/80 p-4 backdrop-blur-md">
-      <div className="flex items-center gap-2 rounded-full bg-background py-1 pr-3 pl-1 text-xs font-medium shadow-sm ring-1 ring-border">
-        <SiteIcon domain={r.domain} className="size-5 rounded-full" />
-        {r.domain}
+    <div className="grid justify-items-center gap-x-6 gap-y-12" style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${w}px, 1fr))` }}>
+      {children}
+    </div>
+  )
+}
+
+/** A website as a folder of its page screenshots. Hovering fans the pages out. */
+function FolderTile({ r }: { r: Reference }) {
+  const [grid] = useGridSize()
+  const [hovered, setHovered] = useState(false)
+  const images = (r.previewKeys.length ? r.previewKeys : r.coverKey ? [r.coverKey] : []).map(fileUrl)
+  const ready = r.status === "ready"
+  return (
+    <div className="group relative flex flex-col items-center" onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
+      <Link
+        href={`/r/${r.id}`}
+        aria-label={r.title || r.domain}
+        onFocus={() => setHovered(true)}
+        onBlur={() => setHovered(false)}
+        className={cn("rounded-3xl outline-none focus-visible:ring-2 focus-visible:ring-ring/40", !ready && "opacity-70")}
+      >
+        <Folder images={images} hovered={hovered} size={FOLDER_SIZE[grid]} />
+      </Link>
+      <div className="mt-3 flex max-w-full items-center gap-1.5 px-2">
+        <SiteIcon domain={r.domain} />
+        <Link href={`/r/${r.id}`} className="truncate text-sm font-medium">
+          {r.title || r.domain}
+        </Link>
       </div>
-      {failed ? (
-        <span className="flex max-w-[85%] items-center gap-1.5 text-center text-2xs text-destructive-foreground">
-          <AlertCircleIcon className="size-3.5 shrink-0" />
-          <span className="line-clamp-2">{r.error ?? "Capture failed"}</span>
-        </span>
-      ) : (
-        <>
-          <div className="h-1 w-32 overflow-hidden rounded-full bg-fill-3">
-            <div className="h-full rounded-full bg-foreground transition-[width] duration-700" style={{ width: `${pct}%` }} />
-          </div>
-          <span className="max-w-[85%] truncate text-2xs text-muted-foreground">
-            {r.status === "queued" ? "Waiting for capture agent" : (r.progress?.replace(/^Capturing /, "") ?? "Capturing")}
-          </span>
-        </>
+      <FolderMeta r={r} />
+      {ready && (
+        <div className="absolute top-0 right-0 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 has-[[data-popup-open]]:opacity-100">
+          <SaveButton r={r} />
+        </div>
       )}
     </div>
+  )
+}
+
+function FolderMeta({ r }: { r: Reference }) {
+  if (r.status === "failed") {
+    return (
+      <span className="mt-1 flex max-w-[90%] items-center gap-1 text-2xs text-destructive-foreground" title={r.error ?? undefined}>
+        <AlertCircleIcon className="size-3 shrink-0" />
+        <span className="truncate">{r.error ?? "Capture failed"}</span>
+      </span>
+    )
+  }
+  if (r.status !== "ready") {
+    const m = r.progress?.match(/(\d+)\/(\d+)/)
+    const pct = m ? Math.min(100, (Number(m[1]) / Number(m[2])) * 100) : r.status === "queued" ? 4 : 12
+    return (
+      <div className="mt-1.5 flex flex-col items-center gap-1">
+        <div className="h-1 w-28 overflow-hidden rounded-full bg-fill-3">
+          <div className="h-full rounded-full bg-foreground transition-[width] duration-700" style={{ width: `${pct}%` }} />
+        </div>
+        <span className="text-2xs text-muted-foreground">{r.status === "queued" ? "Waiting for capture agent" : m ? `${m[1]} of ${m[2]} pages` : "Capturing"}</span>
+      </div>
+    )
+  }
+  return (
+    <span className="mt-0.5 text-2xs text-muted-foreground">
+      {r.domain} · {r.pageCount} {r.pageCount === 1 ? "page" : "pages"}
+      {r.animationCount > 0 && ` · ${r.animationCount} ${r.animationCount === 1 ? "GIF" : "GIFs"}`}
+    </span>
   )
 }
 
