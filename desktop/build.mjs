@@ -8,11 +8,32 @@ import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { packager } from "@electron/packager"
+import { installApp } from "./install.mjs"
 
 if (process.platform !== "darwin") {
   console.error("Snip.app can only be built on macOS.")
   process.exit(1)
 }
+if (process.arch !== "arm64") {
+  console.error("Snip.app supports Apple Silicon only; Intel Macs are unsupported. If you are using Rosetta, run this build with native arm64 Node.js.")
+  process.exit(1)
+}
+
+let outputDir
+let installDir
+let noInstall = false
+for (let i = 0; i < process.argv.slice(2).length; i++) {
+  const args = process.argv.slice(2)
+  const arg = args[i]
+  if (arg === "--no-install") noInstall = true
+  else if (arg === "--out" || arg === "--install-dir") {
+    const value = args[++i]
+    if (!value || value.startsWith("--")) throw new Error(`${arg} requires a directory`)
+    if (arg === "--out") outputDir = path.resolve(value)
+    else installDir = path.resolve(value)
+  } else throw new Error(`Unknown argument: ${arg}`)
+}
+if (noInstall && installDir) throw new Error("Use either --no-install or --install-dir, not both.")
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(here, "..")
@@ -45,14 +66,15 @@ const [outDir] = await packager({
   dir: here,
   name: "Snip",
   platform: "darwin",
-  arch: process.arch,
-  out: path.join(here, "dist"),
+  arch: "arm64",
+  out: outputDir ?? path.join(here, "dist"),
   overwrite: true,
   icon,
   appBundleId: "dev.snip.desktop",
   appCategoryType: "public.app-category.developer-tools",
+  extendInfo: { LSMinimumSystemVersion: "14.0" },
   // The launcher has no runtime dependencies, so ship only its own files.
-  ignore: [/^\/(dist|build|node_modules)(\/|$)/, /^\/(build\.mjs|package-lock\.json|\.gitignore)$/],
+  ignore: [/^\/(dist|build|node_modules|tests|scripts)(\/|$)/, /^\/(build\.mjs|install\.mjs|package-lock\.json|\.gitignore|README[^/]*)$/i],
   prune: false,
 })
 const built = path.join(outDir, "Snip.app")
@@ -61,15 +83,13 @@ const built = path.join(outDir, "Snip.app")
 run("codesign", ["--force", "--deep", "--sign", "-", built])
 
 // 5. Install.
-let appsDir = "/Applications"
-try {
-  fs.accessSync(appsDir, fs.constants.W_OK)
-} catch {
-  appsDir = path.join(os.homedir(), "Applications")
-  fs.mkdirSync(appsDir, { recursive: true })
+if (noInstall) {
+  console.log(`\nBuilt ${built}`)
+} else {
+  let appsDir = installDir ?? "/Applications"
+  if (!installDir) {
+    try { fs.accessSync(appsDir, fs.constants.W_OK) } catch { appsDir = path.join(os.homedir(), "Applications") }
+  }
+  const target = installApp(built, appsDir)
+  console.log(`\nInstalled ${target}\nOpen it from Launchpad or Spotlight, or drag it to your Dock.`)
 }
-const target = path.join(appsDir, "Snip.app")
-fs.rmSync(target, { recursive: true, force: true })
-run("ditto", [built, target])
-
-console.log(`\nInstalled ${target}\nOpen it from Launchpad or Spotlight, or drag it to your Dock.`)

@@ -44,15 +44,19 @@ npm run capture
 
 ### Mac app
 
-Once local development works, build a clickable **Snip.app** instead of using two terminals:
+On **Apple Silicon with macOS 14 or later**, once local development works, build a clickable **Snip.app**. Use native arm64 Node.js 22.18+ or 24.11+; Intel and Rosetta are unsupported.
 
 ```bash
 npm run app        # builds Snip.app and installs it in /Applications
 ```
 
-Opening Snip starts the web app and the capture agent, then shows the gallery in its own window. A menu bar icon starts and stops each one and opens the logs (`~/Library/Logs/Snip`). Closing the window keeps Snip running in the menu bar; **Quit Snip** stops both. The capture agent finishes its current job when stopped from the menu, and gets five seconds when you quit.
+The normal app serves the built gallery and the existing local Worker API with file watching and the inspector disabled. It uses the same `web/.dev.vars` and `web/.wrangler/state` as local development. Configure `capture/.env` with `SNIP_URL=http://localhost:5173` and the same `CAPTURE_TOKEN` as `web/.dev.vars`.
 
-The app runs this repo in place, so code changes show up the next time you open it. Rebuild only if you move the repo or change `desktop/`. It's ad-hoc signed for your own Mac; it isn't notarized for distribution. `npm run app:dev` runs the launcher without building.
+The menu bar shows whether capture is ready, busy, or disconnected. **Quit Snip** and **Stop web app** let capture finish before stopping its local API. **Force quit** explicitly interrupts unfinished work. Closing the window keeps capture available; the hidden gallery is released after two minutes and restores its selection, search and scroll state when reopened. Chromium loads only for an actual capture and closes after two idle minutes. Healthy empty-queue polling backs off to 30 seconds; adding or re-capturing from the app wakes it immediately. References queued elsewhere may wait up to that interval. Failed connections use retry backoff capped at one minute.
+
+Service logs are capped at three 2 MiB files per service (12 MiB total), including backups; duplicate Wrangler debug-file logging is disabled. Electron's disposable HTTP disk cache has a 64 MiB budget. Captured library assets are retained until you delete them; idle cleanup does not delete your library. The hidden or minimized gallery is released after the grace period, unless a dialog has unfinished input. Minimized snapshot viewers unload their document and reload it when restored. Adjust `BROWSER_IDLE_SECONDS` in `capture/.env` for capture browser retention. Set `SNIP_WINDOW_IDLE_SECONDS` when launching Electron to change the window grace period (`0` disables window release).
+
+The app runs this repo in place. Rebuild web assets after web changes (`npm run build -w web`); rebuild the app after moving the repo or changing `desktop/`. It is ad-hoc signed for your own Mac and is not notarized for distribution. `npm run app:dev` uses Vite with hot reload for development (install desktop dependencies first with `npm ci --prefix desktop`). The installer verifies an existing app's identity, stages and verifies the new copy, and restores the old app if replacement fails. For a build without installation: `npm run build --prefix desktop -- --no-install`; `--out DIR` and `--install-dir DIR` support isolated builds and tests.
 
 ## Deploy to Cloudflare (free plan)
 

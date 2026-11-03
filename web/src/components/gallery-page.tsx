@@ -13,6 +13,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { useInfinite } from "@/hooks/use-infinite"
+import { useDesktopState } from "@/hooks/use-desktop-state"
 import { api, fileUrl, type AnimationWithRef, type Filters, type PageWithRef, type Reference, type Sort } from "@/lib/api"
 import { useCollections } from "@/lib/collections"
 import { masonryCols, readPref, useGridSize, writePref, type GridSize } from "@/lib/prefs"
@@ -30,8 +31,8 @@ export function GalleryPage({ login }: { login: string }) {
 
   const [view, setView] = useState<View>(() => (params.get("view") as View) || readPref("rs.view", "websites"))
   const [sort, setSort] = useState<Sort>(() => readPref("rs.sort", "newest"))
-  const [query, setQuery] = useState("")
-  const [q, setQ] = useState("")
+  const [query, setQuery] = useDesktopState("snip:gallery:query", "")
+  const [q, setQ] = useState(query.trim())
   const [count, setCount] = useState<number | null>(null)
 
   useEffect(() => {

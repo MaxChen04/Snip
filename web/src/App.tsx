@@ -48,7 +48,7 @@ export function App() {
         <Route path="/guide">
           <GuidePage signedIn />
         </Route>
-        <Route path="/r/:id">{(p) => <ReferencePage id={p.id} login={state.login} />}</Route>
+        <Route path="/r/:id">{(p) => <ReferencePage key={p.id} id={p.id} login={state.login} />}</Route>
         <Route>
           <GalleryPage login={state.login} />
         </Route>

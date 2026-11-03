@@ -41,9 +41,16 @@ export const api = {
   animations: (f: Filters, cursor?: string | null) =>
     request<Paged<AnimationWithRef>>(`/api/animations?${qs({ ...f, cursor, limit: 30 })}`),
   reference: (id: string) => request<{ reference: Reference; pages: Page[]; animations: Animation[] }>(`/api/references/${id}`),
-  addReference: (body: { url: string; mode: CaptureMode; maxPages?: number; collectionIds?: string[] }) =>
-    request<Reference>("/api/references", { method: "POST", body: JSON.stringify(body) }),
-  recapture: (id: string) => request<{ ok: true }>(`/api/references/${id}/recapture`, { method: "POST" }),
+  addReference: async (body: { url: string; mode: CaptureMode; maxPages?: number; collectionIds?: string[] }) => {
+    const result = await request<Reference>("/api/references", { method: "POST", body: JSON.stringify(body) })
+    window.snipDesktop?.checkQueue()
+    return result
+  },
+  recapture: async (id: string) => {
+    const result = await request<{ ok: true }>(`/api/references/${id}/recapture`, { method: "POST" })
+    window.snipDesktop?.checkQueue()
+    return result
+  },
   deleteReference: (id: string) => request<{ ok: true }>(`/api/references/${id}`, { method: "DELETE" }),
   setMembership: (id: string, cid: string, member: boolean) =>
     request<{ ok: true }>(`/api/references/${id}/collections/${cid}`, { method: member ? "PUT" : "DELETE" }),
