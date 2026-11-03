@@ -16,7 +16,9 @@ import { cn } from "@/lib/utils"
 import { GithubMark, Logo } from "@/App"
 import { Footer } from "@/components/landing-page"
 import { HL } from "@/lib/hairline/kernel.js"
-import { network } from "@/lib/hairline/network.js"
+import { LEADS, network } from "@/lib/hairline/network.js"
+
+const LEAD_LABELS: Record<number, string> = { 0: "Machine", 2: "Worker", 3: "Storage" }
 
 const sections = [
   { id: "privacy", title: "Your data stays yours" },
@@ -175,10 +177,23 @@ function NetworkFigure() {
     }
   }, [])
   return (
-    <div className="relative flex items-center rounded-2xl bg-card pt-10 ring-1 ring-border [--hairline-plate:var(--card)]">
+    <div className="relative flex items-center rounded-2xl bg-card pt-10 ring-1 ring-border [--hairline-edge:color-mix(in_oklab,var(--foreground)_85%,transparent)] [--hairline-hi:var(--primary)] [--hairline-lo:color-mix(in_oklab,var(--foreground)_18%,transparent)] [--hairline-mid:color-mix(in_oklab,var(--foreground)_45%,transparent)] [--hairline-plate:var(--card)] [--hairline-stroke:1.15]">
       <p className="absolute top-4 left-5 text-xs text-muted-foreground">Hover a part to trace its route</p>
       <p aria-live="polite" className="absolute top-4 right-5 font-mono text-xs">{readout}</p>
-      <div ref={stage} data-hairline={network.name} role="img" aria-label={network.means} className="mx-auto w-full max-w-[560px]" />
+      <div className="relative mx-auto w-full max-w-[560px]">
+        <div ref={stage} data-hairline={network.name} role="img" aria-label={network.means} />
+        {/* Labels at the ends of the figure's leader lines, in viewBox units (400 × 320). */}
+        {LEADS.map(([part, y]) => (
+          <span
+            key={part}
+            aria-hidden="true"
+            className="absolute -translate-y-1/2 font-mono text-2xs tracking-wide text-muted-foreground uppercase"
+            style={{ left: `${(348 / 400) * 100}%`, top: `${(y / 320) * 100}%` }}
+          >
+            {LEAD_LABELS[part]}
+          </span>
+        ))}
+      </div>
     </div>
   )
 }

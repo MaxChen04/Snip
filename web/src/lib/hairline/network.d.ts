@@ -9,3 +9,5 @@ export interface HairlineFigure {
   mount(host: { stage: HTMLElement; svg: SVGElement; read: HairlineRead }, value: number): { set(value: number): void; destroy(): void }
 }
 export declare const network: HairlineFigure
+/** [part index, viewBox y] where each leader line ends; the page puts its labels there. */
+export declare const LEADS: [number, number][]

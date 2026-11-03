@@ -1,14 +1,14 @@
 /**
- * Network: Snip as hardware. On one platform, your Cloudflare account: the
- * Worker as a three-unit rack server, D1 as a database drum, R2 as a storage
- * chassis with drive bays and KV as a small key unit. On the other, your
- * machine: a laptop running the capture agent. Dashed guides join them. The
- * pointer picks a part; the route from the laptop through the Worker to it
- * lights hop by hop, and a packet runs along it while the pointer stays. At
- * rest the Worker's top light is the bright mark. The slider is the time per
- * hop, in ms.
+ * Network: Snip as hardware. In the middle, the Worker: a two-tier server with
+ * a dial on its lid, a grille and vents. Behind it, a row of storage modules:
+ * D1 with a drum on its lid, R2 with drive bays, KV with key lights. In front,
+ * your desk: a plate holding the capture agent and the laptop it runs on.
+ * Routed connectors run on the ground with joints at every bend. The pointer
+ * picks a part; the route from the laptop to it lights hop by hop and a packet
+ * rides it. Leader lines run out to the right for the page's labels. At rest
+ * the Worker's dial is the bright mark. The slider is the time per hop, in ms.
  *
- * The pattern: one of many, picked at each part's own rest height, so the
+ * The pattern: one of many, picked at each part's own mid-height, so the
  * packet and the lit edges never change the choice.
  */
 import { HL } from "./kernel.js";
@@ -18,111 +18,134 @@ const {
   disposer, mk, place, pointer, put, register, solid,
 } = HL;
 
-// [read-out, parent, x, y, half-width x, half-width y, height, kind]; the laptop is the root of every route
+// [read-out, parent, x, y, half x, half y, height, route in from the parent as ground points]
 const PARTS = [
-  ["laptop", -1, 70, 58, 13, 9, 3, "laptop"],
-  ["Worker", 0, 0, 0, 14, 10, 21, "rack"],
-  ["D1 · records", 1, -50, 2, 9, 9, 18, "drum"],
-  ["R2 · files", 1, 0, -50, 12, 8, 14, "bays"],
-  ["KV · tokens", 1, -48, -48, 6, 6, 9, "key"],
+  ["laptop", -1, 74, 10, 11, 8, 3, null],
+  ["capture agent", 0, 74, -24, 7, 7, 11, [[74, 2], [74, -17]]],
+  ["Worker", 1, 0, 0, 26, 26, 21, [[67, -24], [46, -24], [46, 0], [26, 0]]],
+  ["D1 · records", 2, -76, -40, 8, 8, 13, [[-26, -12], [-42, -12], [-42, -40], [-68, -40]]],
+  ["R2 · files", 2, -76, -14, 8, 8, 13, [[-26, 2], [-52, 2], [-52, -14], [-68, -14]]],
+  ["KV · tokens", 2, -76, 12, 8, 8, 13, [[-26, 12], [-68, 12]]],
 ];
-const UNIT = 7, LIDH = 15, LEAN = 16, EASE = bezier(0.32, 0.72, 0, 1);
+// [part, y]: where each leader line ends, in the viewBox; the page sets its labels there
+export const LEADS = [[3, 70], [2, 112], [0, 236]];
+const LIDH = 13, LEAN = 16, EASE = bezier(0.32, 0.72, 0, 1);
 
 function mount({ stage, svg, read }, value) {
   const bag = disposer();
   let step = value;
-  const C = Cam(45, 0.5, 1.9);
-  fit(C, [[-72, -72, -3], [96, 84, -3], [96, -72, -3], [-72, 84, -3], [0, 0, 24], [70, 49, LIDH + 4]], 200, 166);
+  const C = Cam(45, 0.5, 1.4);
+  fit(C, [[-88, -52, 0], [92, 32, 0], [92, -52, 0], [-88, 32, 0], [0, 0, 22], [74, 2, LIDH + 4]], 184, 170);
   const P = proj(C), front = facing(C);
   const g = mk("g", {}, svg);
-  const plate = (x0, y0, x1, y1) => { const [r, i] = rings(x0, y0, x1, y1, 7, 1.8); put(solid(g), prism(P, front, r, i, -3, 0)); };
-  plate(-72, -72, 24, 24); // your Cloudflare account
-  plate(42, 32, 96, 84); // your desk
+  const face = (pts, cls, r = 0.8) => mk("path", { d: poly(fillet(pts, pts.map(() => r), 3)), class: cls }, g);
+  const dot = (pt, cls, r = 1.1) => place(mk("circle", { r, class: cls }, g), pt);
 
-  // the links, as guides on the ground under everything that stands
-  const links = PARTS.map(([, p, x, y]) => (p < 0 ? null : mk("path", { d: seg(P(PARTS[p][2], PARTS[p][3], 0), P(x, y, 0)), class: "nf dash" }, g)));
+  // a faint grid on the ground, under everything
+  const grid = [];
+  for (let v = -60; v <= 40; v += 20) grid.push(seg(P(-100, v, 0), P(100, v, 0)));
+  for (let u = -100; u <= 100; u += 20) grid.push(seg(P(u, -60, 0), P(u, 40, 0)));
+  mk("path", { d: grid.join(""), class: "nf lo dash" }, g);
+
+  // the routes: polylines on the ground, a joint at every bend
+  const links = PARTS.map(([, , , , , , , pts]) => {
+    if (!pts) return null;
+    const el = mk("path", { d: open(pts.map(([x, y]) => P(x, y, 0))), class: "nf" }, g);
+    pts.slice(1, -1).forEach(([x, y]) => dot(P(x, y, 0), "dot m", 1.2));
+    return el;
+  });
   const hop = PARTS.map(function depth(q) { return q[1] < 0 ? 0 : 1 + depth(PARTS[q[1]]); });
+  const sils = PARTS.map(() => []);
+  const box = (i, x0, y0, x1, y1, z0, z1, r = 2.4) => {
+    const [ring, inner] = rings(x0, y0, x1, y1, r, 0.9), el = solid(g);
+    put(el, prism(P, front, ring, inner, z0, z1));
+    if (i >= 0) sils[i].push(el.sil);
+  };
 
-  const parts = PARTS.map(([name, , x, y, hx, hy, h, kind], i) => ({ i, name, x, y, hx, hy, h, kind, sils: [] }))
-    .sort((a, b) => a.x + a.y - (b.x + b.y));
-  let topLed = null;
-  for (const n of parts) {
-    const { x, y, hx, hy, h } = n, x0 = x - hx, x1 = x + hx, y0 = y - hy, y1 = y + hy;
-    const face = (pts, cls) => mk("path", { d: poly(fillet(pts, pts.map(() => 0.8), 3)), class: cls }, g);
-    if (n.kind === "rack") {
-      // three units stacked, each with a light and a vent on its front
-      const [r, i] = rings(x0, y0, x1, y1, 2.4, 0.9);
-      for (let u = 0; u < 3; u++) {
-        const el = solid(g), z = u * UNIT, zc = z + UNIT / 2;
-        put(el, prism(P, front, r, i, z + 0.6, z + UNIT));
-        n.sils.push(el.sil);
-        const led = mk("circle", { r: 1.1, class: u === 2 ? "dot" : "dot off" }, g);
-        place(led, P(x0 + 4, y1, zc));
-        if (u === 2) topLed = led;
-        mk("path", { d: [-1, 1].map((d) => seg(P(x0 + 9, y1, zc + d), P(x1 - 4, y1, zc + d))).join(""), class: "nf lo" }, g);
-      }
-      continue;
+  // the storage row, back to front
+  for (const i of [3, 4, 5]) {
+    const [, , x, y, hx, hy, h] = PARTS[i], x1 = x + hx, y1 = y + hy;
+    box(i, x - hx, y - hy, x1, y1, 0, h);
+    dot(P(x1, y - 4, h - 3), "dot off"); dot(P(x1, y + 4, h - 3), "dot off");
+    if (i === 3) {
+      // D1: a drum on the lid
+      const at = (R) => circ(R, 20).map((q) => ({ ...q, u: q.u + x, v: q.v + y }));
+      const el = solid(g), ring = at(4.5);
+      put(el, prism(P, front, ring, at(3.6), h, h + 4));
+      mk("path", { d: open(ringAt(P, run(ring, front), h + 2)), class: "nf lo" }, g);
     }
-    if (n.kind === "drum") {
-      // a database drum: a cylinder with two seams round its front
-      const at = (R) => circ(R, 24).map((q) => ({ ...q, u: q.u + x, v: q.v + y }));
-      const ring = at(hx), el = solid(g);
-      put(el, prism(P, front, ring, at(hx - 1.2), 0, h));
-      n.sils.push(el.sil);
-      mk("path", { d: [h / 3, (2 * h) / 3].map((z) => open(ringAt(P, run(ring, front), z))).join(""), class: "nf lo" }, g);
-      continue;
-    }
-    const [r, i] = rings(x0, y0, x1, y1, n.kind === "key" ? 2 : 2.4, 0.9), el = solid(g);
-    put(el, prism(P, front, r, i, 0, h));
-    n.sils.push(el.sil);
-    if (n.kind === "bays") for (let b = 0; b < 4; b++) {
-      // four drive bays across the front
-      const wb = (2 * hx - 6) / 4, u0 = x0 + 3 + b * wb + 0.6, u1 = u0 + wb - 1.2;
-      face([P(u0, y1, 2.5), P(u1, y1, 2.5), P(u1, y1, h - 2.5), P(u0, y1, h - 2.5)], "nf lo");
-    }
-    if (n.kind === "key") place(mk("circle", { r: 1.1, class: "dot off" }, g), P(x, y1, h / 2));
-    if (n.kind === "laptop") {
-      // keys on the base, and a lid leaning back from its far edge
-      mk("path", { d: [-3, 0, 3].map((d) => seg(P(x0 + 4, y + d, h), P(x1 - 4, y + d, h))).join(""), class: "nf lo" }, g);
-      const s = Math.sin(rad(LEAN)), c = Math.cos(rad(LEAN)), w = (u, v) => P(u, y0 + 1 - v * s, h + v * c);
-      n.sils.push(face([w(x0 + 1, 0), w(x1 - 1, 0), w(x1 - 1, LIDH), w(x0 + 1, LIDH)], "sil"));
-      face([w(x0 + 3, 2), w(x1 - 3, 2), w(x1 - 3, LIDH - 2), w(x0 + 3, LIDH - 2)], "nf lo");
-    }
+    if (i === 4) for (let b = 0; b < 3; b++) face([P(x1, y - 5 + b * 3.6, 2), P(x1, y - 3 + b * 3.6, 2), P(x1, y - 3 + b * 3.6, h - 6), P(x1, y - 5 + b * 3.6, h - 6)], "nf lo", 0.5);
+    if (i === 5) face([P(x1, y - 3, 3), P(x1, y + 3, 3), P(x1, y + 3, 6), P(x1, y - 3, 6)], "nf lo", 0.6);
   }
-  const byIndex = [];
-  parts.forEach((n) => { byIndex[n.i] = n; });
 
-  // the packet: a dot that runs the lit route, laptop first
-  const packet = mk("circle", { r: 1.6, class: "dot" }, g);
+  // the Worker: a slab, a body, a dial on the lid, a grille and vents
+  box(2, -26, -26, 26, 26, 0, 5, 6);
+  box(2, -21, -21, 21, 21, 6, 21, 5);
+  [-14, 14].forEach((v) => { dot(P(26, v, 2.5), "dot off"); dot(P(v, 26, 2.5), "dot off"); });
+  const lidRing = (R) => poly(ringAt(P, circ(R, 32), 21));
+  mk("path", { d: lidRing(14), class: "nf" }, g);
+  const dial = mk("path", { d: lidRing(9.5), class: "nf hi" }, g);
+  mk("path", { d: lidRing(3), class: "nf" }, g);
+  face([P(-14, 21, 9), P(-2, 21, 9), P(-2, 21, 17), P(-14, 21, 17)], "nf");
+  mk("path", { d: [-12, -10, -8, -6, -4].map((x) => seg(P(x, 21, 10.5), P(x, 21, 15.5))).join(""), class: "nf lo" }, g);
+  dot(P(8, 21, 13), "dot m", 1.4);
+  face([P(21, -12, 10), P(21, 10, 10), P(21, 10, 16), P(21, -12, 16)], "nf");
+  mk("path", { d: [-8, -4, 0, 4].map((y) => seg(P(21, y, 11.5), P(21, y + 2, 14.5))).join(""), class: "nf lo" }, g);
+
+  // your desk: a plate, the capture agent and the laptop
+  box(-1, 60, -38, 88, 26, 0, 3, 5);
+  const [, , ax, ay, ah, , aH] = PARTS[1];
+  box(1, ax - ah, ay - ah, ax + ah, ay + ah, 3, 3 + aH);
+  for (let k = 0; k < 6; k++) dot(P(ax - 3 + (k % 3) * 3, ay - 1.5 + Math.floor(k / 3) * 3, 3 + aH), "dot m", 0.8);
+  const [, , lx, ly, lhx, lhy, lh] = PARTS[0], lz = 3 + lh, s = Math.sin(rad(LEAN)), c = Math.cos(rad(LEAN));
+  box(0, lx - lhx, ly - lhy, lx + lhx, ly + lhy, 3, lz);
+  mk("path", { d: [-3, 0, 3].map((d) => seg(P(lx - lhx + 3, ly + d, lz), P(lx + lhx - 3, ly + d, lz))).join(""), class: "nf lo" }, g);
+  const w = (u, v) => P(u, ly - lhy + 1 - v * s, lz + v * c);
+  sils[0].push(face([w(lx - lhx + 1, 0), w(lx + lhx - 1, 0), w(lx + lhx - 1, LIDH), w(lx - lhx + 1, LIDH)], "sil", 1.4));
+  face([w(lx - lhx + 3, 2), w(lx + lhx - 3, 2), w(lx + lhx - 3, LIDH - 2), w(lx - lhx + 3, LIDH - 2)], "nf lo");
+
+  // leader lines out to the labels: up or down from the part, then across
+  const anchor = (i) => { const [, , x, y, hx, hy, h] = PARTS[i]; return P(x + hx * 0.4, y - hy * 0.4, h + (i === 0 ? LIDH : 0)); };
+  mk("path", { d: LEADS.map(([i, y]) => { const a = anchor(i); return open([a, [a[0], y], [344, y]]); }).join(""), class: "nf lo" }, g);
+  LEADS.forEach(([i]) => dot(anchor(i), "dot m", 1.2));
+
+  // the packet rides the lit route, laptop first
+  const packet = mk("circle", { r: 1.8, class: "dot" }, g);
   const show = (on) => { if (!on) packet.remove(); else if (!packet.isConnected) g.append(packet); };
   show(false);
+  const along = (pts, t) => {
+    const len = pts.slice(1).map((p, k) => Math.hypot(p[0] - pts[k][0], p[1] - pts[k][1]));
+    let d = t * len.reduce((a, b) => a + b, 0), k = 0;
+    while (k < len.length - 1 && d > len[k]) d -= len[k++];
+    const f = len[k] ? d / len[k] : 0;
+    return [lerp(pts[k][0], pts[k + 1][0], f), lerp(pts[k][1], pts[k + 1][1], f)];
+  };
 
   let act = -1, t0 = 0, route = [];
   const B = register(stage, (_dt, now) => {
     const lit = (i) => route.includes(i) && now >= t0 + hop[i] * step;
-    for (const n of parts) {
-      n.sils.forEach((el) => el.classList.toggle("hi", lit(n.i)));
-      const l = links[n.i];
-      if (l) { l.classList.toggle("dash", !lit(n.i)); l.classList.toggle("hi", lit(n.i)); }
-    }
+    PARTS.forEach((_, i) => {
+      sils[i].forEach((el) => el.classList.toggle("hi", lit(i)));
+      if (links[i]) links[i].classList.toggle("hi", lit(i));
+    });
     if (route.length < 2) { show(false); return false; }
     // one lap: a hop per link, then a pause as long as one hop
-    const hops = route.length - 1, lap = (hops + 1) * step, t = ((now - t0) % lap) / step;
+    const hops = route.length - 1, t = ((now - t0) % ((hops + 1) * step)) / step;
     show(t < hops);
     if (t >= hops) return true;
-    const k = Math.floor(t), a = byIndex[route[k]], b = byIndex[route[k + 1]], e = EASE(t - k);
-    place(packet, P(lerp(a.x, b.x, e), lerp(a.y, b.y, e), 0));
+    const k = Math.floor(t), [x, y] = along(PARTS[route[k + 1]][7], EASE(t - k));
+    place(packet, P(x, y, 0));
     return true;
   });
   bag.add(B.unregister);
 
   // the hit test: the pointer at each part's own mid-height, against its resting footprint
   function pick([sx, sy]) {
-    let best = -1, bd = 1.45;
-    for (const n of parts) {
-      const [wx, wy] = unproj(C, sx, sy, n.h / 2), d = Math.max(Math.abs(wx - n.x) / n.hx, Math.abs(wy - n.y) / n.hy);
-      if (d < bd) { best = n.i; bd = d; }
-    }
+    let best = -1, bd = 1.3;
+    PARTS.forEach(([, , x, y, hx, hy, h], i) => {
+      const [wx, wy] = unproj(C, sx, sy, h / 2 + (i < 2 ? 3 : 0)), d = Math.max(Math.abs(wx - x) / hx, Math.abs(wy - y) / hy);
+      if (d < bd) { best = i; bd = d; }
+    });
     return best;
   }
 
@@ -130,7 +153,7 @@ function mount({ stage, svg, read }, value) {
     if (a === act) return;
     act = a; t0 = performance.now(); route = [];
     for (let i = a; i >= 0; i = PARTS[i][1]) route.unshift(i);
-    topLed.classList.toggle("off", a >= 0);
+    dial.classList.toggle("hi", a < 0);
     read.textContent = a < 0 ? "rest" : PARTS[a][0];
     B.wake();
   }
@@ -146,9 +169,9 @@ function mount({ stage, svg, read }, value) {
 /** The figure, as the hairline-create skill declares it; guide-page.tsx mounts it. */
 export const network = {
   name: "network",
-  means: "Your laptop and your Cloudflare servers: the route to the part under the pointer lights, and a packet runs it.",
+  means: "Your laptop and your Cloudflare servers: the route to the part under the pointer lights, and a packet rides it.",
   rules: [1, 4, 5, 6],
   range: [160, 280, 440],
-  tour: [[208, 232], [122, 102], [260, 104], null],
+  tour: [[235, 210], [85, 134], [135, 109], null],
   mount,
 };
