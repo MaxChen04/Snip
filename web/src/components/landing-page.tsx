@@ -397,7 +397,7 @@ const faqs: { q: string; a: ReactNode }[] = [
     a: (
       <>
         Yes.{" "}
-        <a href="/guide#agent-setup" className="font-medium text-foreground underline-offset-4 hover:underline">
+        <a href="/llms.txt" className="font-medium text-foreground underline-offset-4 hover:underline">
           Point your agent at our llms.txt
         </a>{" "}
         and it can configure everything for you. Once deployed, connect it to your library through the MCP endpoint.
@@ -471,7 +471,11 @@ export function Footer() {
         <Logo className="size-7" />
         <span className="text-sm font-semibold tracking-[-0.025em]">Snip</span>
       </a>
-      <p className="text-xs text-muted-foreground">Runs on Cloudflare Workers, D1 and R2.</p>
+      <nav aria-label="Footer" className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-muted-foreground">
+        <a href="/guide" className="transition-colors hover:text-foreground">Setup guide</a>
+        <a href="/llms.txt" className="font-mono transition-colors hover:text-foreground">llms.txt</a>
+        <span>Runs on Cloudflare Workers, D1 and R2.</span>
+      </nav>
     </footer>
   )
 }
