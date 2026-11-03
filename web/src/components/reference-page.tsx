@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react"
 import { Link, useLocation, useSearch } from "wouter"
 import {
-  ArrowLeftIcon,
   CodeIcon,
   ExternalLinkIcon,
   FileJsonIcon,
@@ -15,28 +14,28 @@ import {
   XIcon,
 } from "lucide-react"
 import { toast } from "sonner"
+import { Masonry } from "@/components/gallery-page"
 import { TokensPanel } from "@/components/tokens-panel"
-import { Badge } from "@/components/ui/badge"
+import { ActionCircle, Segmented, TopBar } from "@/components/top-bar"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { api, fileUrl, type Animation, type Page, type Reference } from "@/lib/api"
 import { useCollections } from "@/lib/collections"
 
 type Detail = { reference: Reference; pages: Page[]; animations: Animation[] }
 
-export function ReferencePage({ id }: { id: string }) {
+export function ReferencePage({ id, login }: { id: string; login: string }) {
   const [, navigate] = useLocation()
   const search = new URLSearchParams(useSearch())
   const [data, setData] = useState<Detail | null>(null)
@@ -85,134 +84,153 @@ export function ReferencePage({ id }: { id: string }) {
   const scrollGifs = animations.filter((a) => a.kind === "scroll")
   const hoverGifs = animations.filter((a) => a.kind === "hover")
 
+  const inCollections = collections.filter((c) => r.collectionIds.includes(c.id))
+
   return (
     <div className="min-h-svh">
-      <header className="sticky top-0 z-20 border-b border-border bg-background/85 backdrop-blur-md">
-        <div className="mx-auto flex max-w-7xl items-center gap-3 px-4 py-3 sm:px-6">
-          <Button variant="ghost" size="icon-sm" aria-label="Back" render={<Link href="/" />} nativeButton={false}>
-            <ArrowLeftIcon />
-          </Button>
-          {r.favicon && <img src={r.favicon} alt="" className="size-5 rounded-sm" onError={(e) => (e.currentTarget.style.display = "none")} />}
-          <div className="min-w-0">
-            <h1 className="truncate text-base font-semibold">{r.title || r.domain}</h1>
-            <a href={r.url} target="_blank" rel="noreferrer" className="flex items-center gap-1 truncate text-2xs text-muted-foreground hover:text-foreground">
-              {r.url} <ExternalLinkIcon className="size-3" />
-            </a>
-          </div>
-          <div className="ml-auto flex items-center gap-2">
-            {r.collectionIds.length > 0 && (
-              <div className="hidden gap-1 sm:flex">
-                {collections
-                  .filter((c) => r.collectionIds.includes(c.id))
-                  .map((c) => (
-                    <Badge key={c.id} variant="secondary">
-                      {c.name}
-                    </Badge>
-                  ))}
-              </div>
-            )}
-            <DropdownMenu>
-              <DropdownMenuTrigger render={<Button variant="outline" size="sm" />}>
-                <FolderIcon data-icon="inline-start" /> Collections
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="min-w-48">
-                <DropdownMenuLabel>Add to collection</DropdownMenuLabel>
-                {collections.map((c) => (
-                  <DropdownMenuCheckboxItem key={c.id} checked={r.collectionIds.includes(c.id)} onCheckedChange={(v) => void toggleCollection(c.id, !!v)}>
-                    {c.name}
-                  </DropdownMenuCheckboxItem>
-                ))}
-                {!collections.length && <div className="px-2 py-1.5 text-xs text-muted-foreground">Create one from the sidebar.</div>}
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <DropdownMenu>
-              <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label="More" />}>
-                <MoreHorizontalIcon />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem
-                  onClick={async () => {
-                    await api.recapture(r.id)
-                    toast.success("Re-capture queued")
-                    load()
-                  }}
-                >
-                  <RefreshCwIcon /> Re-capture
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  variant="destructive"
-                  onClick={async () => {
-                    if (!confirm("Delete this reference and all its captures?")) return
-                    await api.deleteReference(r.id)
-                    void refreshCollections()
-                    navigate("/")
-                  }}
-                >
-                  <Trash2Icon /> Delete
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        </div>
-      </header>
+      <TopBar login={login} onAdd={() => navigate("/")} />
 
-      <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6">
+      <div className="flex flex-col items-center gap-3 px-4 pt-8 pb-2 text-center">
+        {r.favicon && <img src={r.favicon} alt="" className="size-8 rounded-lg ring-1 ring-border" onError={(e) => (e.currentTarget.style.display = "none")} />}
+        <div className="max-w-2xl">
+          <p className="text-xs text-muted-foreground">
+            <Link href="/" className="hover:text-foreground">
+              Everything
+            </Link>
+            {inCollections.length > 0 && (
+              <>
+                {" / "}
+                {inCollections.map((c, i) => (
+                  <span key={c.id}>
+                    {i > 0 && ", "}
+                    <Link href={`/?collection=${c.id}`} className="hover:text-foreground">
+                      {c.name}
+                    </Link>
+                  </span>
+                ))}
+              </>
+            )}
+          </p>
+          <h1 className="mt-1 text-2xl font-medium text-balance">{r.title || r.domain}</h1>
+          <a href={r.url} target="_blank" rel="noreferrer" className="mt-1 inline-block text-xs text-muted-foreground hover:text-foreground">
+            {r.domain} · {r.pageCount} {r.pageCount === 1 ? "page" : "pages"}
+            {r.animationCount > 0 && ` · ${r.animationCount} GIFs`}
+          </a>
+        </div>
+
+        <div className="mt-3 flex items-start gap-6">
+          <ActionCircle icon={<ExternalLinkIcon />} label="Visit" href={r.url} />
+          <DropdownMenu>
+            <DropdownMenuTrigger render={<button className="group flex flex-col items-center gap-1.5" />}>
+              <span className="grid size-9 place-items-center rounded-full ring-1 ring-border transition-colors group-hover:bg-fill-2 [&_svg]:size-4">
+                <FolderIcon />
+              </span>
+              <span className="text-2xs text-muted-foreground">Organize</span>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="center" className="min-w-48">
+              <DropdownMenuGroup>
+              <DropdownMenuLabel>Collections</DropdownMenuLabel>
+              {collections.map((c) => (
+                <DropdownMenuCheckboxItem key={c.id} checked={r.collectionIds.includes(c.id)} onCheckedChange={(v) => void toggleCollection(c.id, !!v)}>
+                  {c.name}
+                </DropdownMenuCheckboxItem>
+              ))}
+              {!collections.length && <div className="px-2 py-1.5 text-xs text-muted-foreground">Create a collection from the home page.</div>}
+              </DropdownMenuGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <ActionCircle
+            icon={<RefreshCwIcon />}
+            label="Re-capture"
+            onClick={async () => {
+              await api.recapture(r.id)
+              toast.success("Re-capture queued")
+              load()
+            }}
+          />
+          <DropdownMenu>
+            <DropdownMenuTrigger render={<button className="group flex flex-col items-center gap-1.5" />}>
+              <span className="grid size-9 place-items-center rounded-full ring-1 ring-border transition-colors group-hover:bg-fill-2 [&_svg]:size-4">
+                <MoreHorizontalIcon />
+              </span>
+              <span className="text-2xs text-muted-foreground">More</span>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="center">
+              <DropdownMenuItem
+                variant="destructive"
+                onClick={async () => {
+                  if (!confirm("Delete this reference and all its captures?")) return
+                  await api.deleteReference(r.id)
+                  void refreshCollections()
+                  navigate("/")
+                }}
+              >
+                <Trash2Icon /> Delete reference
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+
         {r.status !== "ready" && (
-          <div className="mb-6 flex items-center gap-3 rounded-xl bg-fill-1 px-4 py-3 text-sm">
+          <div className="mt-3 flex items-center gap-2 rounded-full bg-fill-1 px-4 py-2 text-xs">
             {r.status === "failed" ? <AlertCircleIcon className="size-4 text-destructive-foreground" /> : <Spinner className="text-muted-foreground" />}
             <span>{r.status === "failed" ? `Capture failed: ${r.error ?? "unknown error"}` : (r.progress ?? "Waiting for the capture agent")}</span>
           </div>
         )}
+      </div>
 
-        <Tabs value={tab} onValueChange={(v) => setTab(v as string)} className="flex-col">
-          <TabsList>
-            <TabsTrigger value="pages">Pages {pages.length > 0 && <span className="text-muted-foreground">{pages.length}</span>}</TabsTrigger>
-            <TabsTrigger value="animations">
-              Animations {animations.length > 0 && <span className="text-muted-foreground">{animations.length}</span>}
-            </TabsTrigger>
-            <TabsTrigger value="tokens">Design tokens</TabsTrigger>
-          </TabsList>
+      <div className="px-4 pt-6 pb-24 sm:px-6">
+        <div className="mb-6 flex justify-center">
+          <Segmented
+            value={tab}
+            onChange={setTab}
+            options={[
+              { value: "pages", label: `Pages${pages.length ? ` ${pages.length}` : ""}` },
+              { value: "animations", label: `Animations${animations.length ? ` ${animations.length}` : ""}` },
+              { value: "tokens", label: "Design tokens" },
+            ]}
+            className="[&_button]:h-8 [&_button]:px-3.5"
+          />
+        </div>
 
-          <TabsContent value="pages" className="pt-4">
-            <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+        {tab === "pages" && (
+          <>
+            <Masonry>
               {pages.map((p) => (
-                <button key={p.id} className="group text-left" onClick={() => setOpenPage(p.id)}>
-                  <div className="relative overflow-hidden rounded-xl bg-fill-1 ring-1 ring-border transition-shadow group-hover:shadow-lg">
-                    <img src={fileUrl(p.desktopThumbKey)} alt="" loading="lazy" className="aspect-[16/10] w-full object-cover object-top" />
-                    {p.mobileThumbKey && (
-                      <img
-                        src={fileUrl(p.mobileThumbKey)}
-                        alt=""
-                        loading="lazy"
-                        className="absolute right-3 bottom-3 h-[55%] rounded-md object-cover object-top shadow-lg ring-1 ring-border"
-                      />
-                    )}
-                  </div>
-                  <div className="mt-2 px-0.5">
-                    <div className="truncate text-sm font-medium">{p.title || p.path}</div>
-                    <div className="truncate text-2xs text-muted-foreground">{p.path}</div>
+                <button key={p.id} className="group relative block w-full overflow-hidden rounded-sm bg-fill-1 text-left" onClick={() => setOpenPage(p.id)}>
+                  <img src={fileUrl(p.desktopThumbKey)} alt={p.title ?? p.path} loading="lazy" className="aspect-[16/10] w-full object-cover object-top" />
+                  {p.mobileThumbKey && (
+                    <img
+                      src={fileUrl(p.mobileThumbKey)}
+                      alt=""
+                      loading="lazy"
+                      className="absolute right-3 bottom-3 h-[55%] rounded-md object-cover object-top shadow-lg ring-1 ring-black/10 transition-transform duration-300 group-hover:-translate-y-1"
+                    />
+                  )}
+                  <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/60 to-transparent px-3 pt-10 pb-2.5 opacity-0 transition-opacity group-hover:opacity-100">
+                    <div className="truncate text-xs font-medium text-white">{p.title || p.path}</div>
+                    <div className="truncate text-2xs text-white/75">{p.path}</div>
                   </div>
                 </button>
               ))}
-            </div>
+            </Masonry>
             {!pages.length && <p className="py-16 text-center text-sm text-muted-foreground">No pages captured yet.</p>}
-          </TabsContent>
+          </>
+        )}
 
-          <TabsContent value="animations" className="space-y-8 pt-4">
+        {tab === "animations" && (
+          <div className="space-y-10">
             {!animations.length && <p className="py-16 text-center text-sm text-muted-foreground">No animations captured yet.</p>}
-            {scrollGifs.length > 0 && (
-              <AnimationSection title="Scroll" items={scrollGifs} pages={pages} />
-            )}
-            {hoverGifs.length > 0 && (
-              <AnimationSection title="Hover" items={hoverGifs} pages={pages} />
-            )}
-          </TabsContent>
+            {scrollGifs.length > 0 && <AnimationSection title="Scroll" items={scrollGifs} pages={pages} />}
+            {hoverGifs.length > 0 && <AnimationSection title="Hover" items={hoverGifs} pages={pages} />}
+          </div>
+        )}
 
-          <TabsContent value="tokens" className="pt-4">
+        {tab === "tokens" && (
+          <div className="mx-auto max-w-6xl">
             {r.tokens ? <TokensPanel tokens={r.tokens} /> : <p className="py-16 text-center text-sm text-muted-foreground">Tokens appear after capture.</p>}
-          </TabsContent>
-        </Tabs>
+          </div>
+        )}
       </div>
 
       {current && <PageViewer page={current} onClose={() => setOpenPage(null)} />}
@@ -227,27 +245,30 @@ function AnimationSection({ title, items, pages }: { title: string; items: Anima
   }
   return (
     <section>
-      <h2 className="mb-3 text-sm font-medium">{title}</h2>
-      <div className="columns-1 gap-5 sm:columns-2 lg:columns-3 [&>*]:mb-5 [&>*]:break-inside-avoid">
+      <h2 className="mb-3 text-sm font-medium">
+        {title} <span className="text-muted-foreground">{items.length}</span>
+      </h2>
+      <Masonry>
         {items.map((a) => (
-          <figure key={a.id}>
-            <GifTile a={a} />
-            <figcaption className="mt-1.5 truncate px-0.5 text-2xs text-muted-foreground">
+          <figure key={a.id} className="group relative overflow-hidden rounded-sm">
+            <GifTile a={a} bare />
+            <figcaption className="pointer-events-none absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-black/60 to-transparent px-3 pt-8 pb-2 text-2xs text-white opacity-0 transition-opacity group-hover:opacity-100">
               {a.label ? `${a.label} · ` : ""}
               {pageName(a.pageId)}
             </figcaption>
           </figure>
         ))}
-      </div>
+      </Masonry>
     </section>
   )
 }
 
-export function GifTile({ a }: { a: Animation }) {
+export function GifTile({ a, bare }: { a: Animation; bare?: boolean }) {
   // Hover GIFs are small element crops: show them at natural size, centered, instead of upscaling.
   const small = a.kind === "hover" && a.width < 480
+  const frame = bare ? "rounded-sm bg-fill-1" : "rounded-xl bg-fill-1 ring-1 ring-border"
   return (
-    <div className={small ? "grid place-items-center overflow-hidden rounded-xl bg-fill-1 p-6 ring-1 ring-border" : "overflow-hidden rounded-xl bg-fill-1 ring-1 ring-border"}>
+    <div className={small ? `grid place-items-center overflow-hidden p-8 ${frame}` : `overflow-hidden ${frame}`}>
       <img
         src={fileUrl(a.gifKey)}
         alt={a.label ?? ""}

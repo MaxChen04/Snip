@@ -36,7 +36,7 @@ export function AddReferenceButton({ onAdded, defaultCollection }: { onAdded: (r
   )
 }
 
-function AddReferenceDialog({
+export function AddReferenceDialog({
   open,
   onOpenChange,
   onAdded,

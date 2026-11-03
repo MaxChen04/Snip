@@ -1,66 +1,31 @@
 import { useEffect, useState } from "react"
-import { Link } from "wouter"
-import {
-  FolderIcon,
-  LayersIcon,
-  LogOutIcon,
-  MoreHorizontalIcon,
-  PlusIcon,
-  SearchIcon,
-  Trash2Icon,
-  PencilIcon,
-  GlobeIcon,
-  FilmIcon,
-  FileImageIcon,
-  AlertCircleIcon,
-} from "lucide-react"
+import { Link, useSearch } from "wouter"
+import { AlertCircleIcon, ArrowDownUpIcon, CheckIcon, GlobeIcon, PencilIcon, PlusIcon, Trash2Icon } from "lucide-react"
 import { toast } from "sonner"
-import { Logo } from "@/App"
-import { AddReferenceButton } from "@/components/add-reference-dialog"
+import { AddReferenceDialog } from "@/components/add-reference-dialog"
 import { GifTile } from "@/components/reference-page"
-import { Badge } from "@/components/ui/badge"
+import { ActionCircle, TopBar, type View } from "@/components/top-bar"
 import { Button } from "@/components/ui/button"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
-import { Input } from "@/components/ui/input"
-import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useInfinite } from "@/hooks/use-infinite"
 import { api, fileUrl, type AnimationWithRef, type Filters, type PageWithRef, type Reference, type Sort } from "@/lib/api"
 import { useCollections } from "@/lib/collections"
+import { masonryCols, readPref, useGridSize, writePref } from "@/lib/prefs"
 import { cn } from "@/lib/utils"
 
-type View = "websites" | "pages" | "animations"
-
-const readPref = <T extends string>(key: string, fallback: T): T => {
-  try {
-    return (localStorage.getItem(key) as T) || fallback
-  } catch {
-    return fallback
-  }
-}
-const writePref = (key: string, v: string) => {
-  try {
-    localStorage.setItem(key, v)
-  } catch {
-    /* ignore */
-  }
-}
+const SORT_LABEL: Record<Sort, string> = { newest: "Newest", oldest: "Oldest", name: "Name" }
 
 export function GalleryPage({ login }: { login: string }) {
-  const [view, setView] = useState<View>(() => readPref("rs.view", "websites"))
+  const params = new URLSearchParams(useSearch())
+  const [view, setView] = useState<View>(() => (params.get("view") as View) || readPref("rs.view", "websites"))
   const [sort, setSort] = useState<Sort>(() => readPref("rs.sort", "newest"))
-  const [collection, setCollection] = useState<string | undefined>(() => new URLSearchParams(location.search).get("collection") ?? undefined)
+  const [collection, setCollection] = useState<string | undefined>(() => params.get("collection") ?? undefined)
   const [query, setQuery] = useState("")
   const [q, setQ] = useState("")
+  const [adding, setAdding] = useState(false)
 
   useEffect(() => {
     const t = setTimeout(() => setQ(query.trim()), 250)
@@ -69,102 +34,103 @@ export function GalleryPage({ login }: { login: string }) {
 
   useEffect(() => {
     const url = new URL(location.href)
+    url.searchParams.delete("view")
     if (collection) url.searchParams.set("collection", collection)
     else url.searchParams.delete("collection")
     history.replaceState(null, "", url)
   }, [collection])
 
-  const filters: Filters = { q, collection, sort: view === "websites" ? sort : sort === "name" ? "newest" : sort }
+  const effectiveSort: Sort = view === "websites" ? sort : sort === "name" ? "newest" : sort
+  const filters: Filters = { q, collection, sort: effectiveSort }
 
   return (
-    <div className="flex min-h-svh">
-      <CollectionsSidebar login={login} active={collection} onSelect={setCollection} />
-      <main className="min-w-0 flex-1">
-        <header className="sticky top-0 z-20 flex items-center gap-3 border-b border-border bg-background/85 px-4 py-3 backdrop-blur-md sm:px-6">
-          <Link href="/" className="flex items-center gap-2 md:hidden">
-            <Logo className="size-6" />
-          </Link>
-          <div className="relative max-w-md flex-1">
-            <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input placeholder="Search references" className="pl-8" value={query} onChange={(e) => setQuery(e.target.value)} />
-          </div>
-          <div className="ml-auto">
-            <AddReferenceButton defaultCollection={collection} onAdded={() => window.dispatchEvent(new Event("rs:reload"))} />
-          </div>
-        </header>
+    <div className="min-h-svh">
+      <TopBar
+        login={login}
+        view={view}
+        onView={(v) => {
+          setView(v)
+          writePref("rs.view", v)
+        }}
+        query={query}
+        onQuery={setQuery}
+        onAdd={() => setAdding(true)}
+      />
+      <AddReferenceDialog
+        key={collection ?? "all"}
+        open={adding}
+        onOpenChange={setAdding}
+        defaultCollection={collection}
+        onAdded={() => {
+          setAdding(false)
+          window.dispatchEvent(new Event("rs:reload"))
+        }}
+      />
 
-        <div className="flex flex-wrap items-center gap-3 px-4 pt-5 pb-4 sm:px-6">
-          <Tabs
-            value={view}
-            onValueChange={(v) => {
-              setView(v as View)
-              writePref("rs.view", v as string)
-            }}
-          >
-            <TabsList>
-              <TabsTrigger value="websites">
-                <GlobeIcon /> Websites
-              </TabsTrigger>
-              <TabsTrigger value="pages">
-                <FileImageIcon /> Pages
-              </TabsTrigger>
-              <TabsTrigger value="animations">
-                <FilmIcon /> Animations
-              </TabsTrigger>
-            </TabsList>
-          </Tabs>
-          <MobileCollectionPicker active={collection} onSelect={setCollection} />
-          <div className="ml-auto flex items-center gap-2">
-            <span className="text-xs text-muted-foreground">Sort</span>
-            <NativeSelect
-              size="sm"
-              value={sort}
-              onChange={(e) => {
-                setSort(e.target.value as Sort)
-                writePref("rs.sort", e.target.value)
-              }}
-            >
-              <NativeSelectOption value="newest">Newest</NativeSelectOption>
-              <NativeSelectOption value="oldest">Oldest</NativeSelectOption>
-              {view === "websites" && <NativeSelectOption value="name">Name A–Z</NativeSelectOption>}
-            </NativeSelect>
-          </div>
-        </div>
+      <CollectionStrip active={collection} onSelect={setCollection} />
 
-        <div className="px-4 pb-16 sm:px-6">
-          {view === "websites" && <WebsitesGrid filters={filters} />}
-          {view === "pages" && <PagesGrid filters={filters} />}
-          {view === "animations" && <AnimationsGrid filters={filters} />}
+      {collection ? (
+        <CollectionHeader id={collection} onDeleted={() => setCollection(undefined)} onAdd={() => setAdding(true)} />
+      ) : null}
+
+      <div className="flex items-center gap-3 px-4 pt-4 pb-5 sm:px-6">
+        <h1 className="hidden text-lg font-medium sm:block">{q ? `“${q}”` : collection ? "" : { websites: "All websites", pages: "All pages", animations: "All animations" }[view]}</h1>
+        <div className="ml-auto flex items-center gap-2">
+          {/* Mobile view switcher (the pill nav is hidden on small screens) */}
+          <div className="flex rounded-full bg-fill-2 p-0.5 sm:hidden">
+            {(["websites", "pages", "animations"] as View[]).map((v) => (
+              <button
+                key={v}
+                onClick={() => setView(v)}
+                className={cn("h-7 rounded-full px-2.5 text-2xs font-medium text-muted-foreground capitalize", view === v && "bg-background text-foreground shadow-xs")}
+              >
+                {v}
+              </button>
+            ))}
+          </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger render={<Button variant="outline" size="sm" className="rounded-full" />}>
+              {SORT_LABEL[effectiveSort]} <ArrowDownUpIcon data-icon="inline-end" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuGroup>
+              <DropdownMenuLabel>Sort by</DropdownMenuLabel>
+              {(["newest", "oldest", ...(view === "websites" ? ["name"] : [])] as Sort[]).map((s) => (
+                <DropdownMenuItem
+                  key={s}
+                  onClick={() => {
+                    setSort(s)
+                    writePref("rs.sort", s)
+                  }}
+                >
+                  <CheckIcon className={cn(effectiveSort !== s && "invisible")} /> {SORT_LABEL[s]}
+                </DropdownMenuItem>
+              ))}
+              </DropdownMenuGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
-      </main>
+      </div>
+
+      <div className="px-4 pb-24 sm:px-6">
+        {view === "websites" && <WebsitesGrid filters={filters} onAdd={() => setAdding(true)} />}
+        {view === "pages" && <PagesGrid filters={filters} />}
+        {view === "animations" && <AnimationsGrid filters={filters} />}
+      </div>
     </div>
   )
 }
 
-// ---------- Sidebar ----------
+// ---------- Collections ----------
 
-function MobileCollectionPicker({ active, onSelect }: { active?: string; onSelect: (id?: string) => void }) {
-  const { collections } = useCollections()
-  return (
-    <NativeSelect size="sm" className="md:hidden" value={active ?? ""} onChange={(e) => onSelect(e.target.value || undefined)} aria-label="Collection">
-      <NativeSelectOption value="">All references</NativeSelectOption>
-      {collections.map((c) => (
-        <NativeSelectOption key={c.id} value={c.id}>
-          {c.name}
-        </NativeSelectOption>
-      ))}
-    </NativeSelect>
-  )
-}
-
-function CollectionsSidebar({ login, active, onSelect }: { login: string; active?: string; onSelect: (id?: string) => void }) {
+function CollectionStrip({ active, onSelect }: { active?: string; onSelect: (id?: string) => void }) {
   const { collections, refresh } = useCollections()
   const [creating, setCreating] = useState(false)
   const [name, setName] = useState("")
 
   const create = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!name.trim()) return
+    if (!name.trim()) return setCreating(false)
     try {
       const { id } = await api.createCollection(name.trim())
       await refresh()
@@ -176,107 +142,80 @@ function CollectionsSidebar({ login, active, onSelect }: { login: string; active
     }
   }
 
+  const chip = "h-8 shrink-0 rounded-full px-3.5 text-xs font-medium ring-1 ring-border transition-colors"
   return (
-    <aside className="sticky top-0 hidden h-svh w-60 shrink-0 flex-col border-r border-border bg-sidebar md:flex">
-      <Link href="/" onClick={() => onSelect(undefined)} className="flex items-center gap-2 px-4 py-4">
-        <Logo className="size-6" />
-        <span className="text-sm font-semibold">Refshelf</span>
-      </Link>
-      <nav className="flex-1 overflow-y-auto px-2">
-        <SidebarItem active={!active} onClick={() => onSelect(undefined)} icon={<LayersIcon />} label="All references" />
-        <div className="mt-5 mb-1 flex items-center justify-between px-2">
-          <span className="text-2xs font-medium text-muted-foreground uppercase">Collections</span>
-          <Button variant="ghost" size="icon-xs" aria-label="New collection" onClick={() => setCreating(true)}>
-            <PlusIcon />
-          </Button>
-        </div>
-        {creating && (
-          <form onSubmit={create} className="px-1 pb-1">
-            <Input
-              className="h-7"
-              autoFocus
-              placeholder="Collection name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              onBlur={() => !name && setCreating(false)}
-              onKeyDown={(e) => e.key === "Escape" && setCreating(false)}
-            />
-          </form>
-        )}
-        {collections.map((c) => (
-          <SidebarItem
-            key={c.id}
-            active={active === c.id}
-            onClick={() => onSelect(c.id)}
-            icon={<FolderIcon />}
-            label={c.name}
-            count={c.referenceCount}
-            menu={<CollectionMenu id={c.id} name={c.name} onDeleted={() => active === c.id && onSelect(undefined)} />}
-          />
-        ))}
-        {!collections.length && !creating && <p className="px-2 py-1 text-2xs text-muted-foreground">No collections yet.</p>}
-      </nav>
-      <div className="flex items-center justify-between border-t border-border px-4 py-3">
-        <span className="truncate text-xs text-muted-foreground">@{login}</span>
-        <Button variant="ghost" size="icon-xs" aria-label="Sign out" render={<a href="/auth/logout" />} nativeButton={false}>
-          <LogOutIcon />
-        </Button>
-      </div>
-    </aside>
-  )
-}
-
-function SidebarItem(props: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string; count?: number; menu?: React.ReactNode }) {
-  return (
-    <div
-      className={cn(
-        "group/item flex h-8 items-center gap-2 rounded-lg px-2 text-sm text-foreground/80 hover:bg-fill-2 [&>svg]:size-4 [&>svg]:shrink-0 [&>svg]:text-muted-foreground",
-        props.active && "bg-fill-2 font-medium text-foreground",
-      )}
-    >
-      <button className="flex min-w-0 flex-1 items-center gap-2 text-left [&_svg]:size-4 [&_svg]:text-muted-foreground" onClick={props.onClick}>
-        {props.icon}
-        <span className="truncate">{props.label}</span>
+    <div className="flex gap-2 overflow-x-auto px-4 py-1 sm:px-6 [scrollbar-width:none]">
+      <button onClick={() => onSelect(undefined)} className={cn(chip, !active ? "bg-foreground text-background ring-transparent" : "hover:bg-fill-2")}>
+        Everything
       </button>
-      {props.count !== undefined && <span className="text-2xs text-muted-foreground group-hover/item:hidden">{props.count}</span>}
-      {props.menu && <span className="hidden group-hover/item:block">{props.menu}</span>}
+      {collections.map((c) => (
+        <button
+          key={c.id}
+          onClick={() => onSelect(c.id)}
+          className={cn(chip, "flex items-center gap-1.5", active === c.id ? "bg-foreground text-background ring-transparent" : "hover:bg-fill-2")}
+        >
+          {c.name}
+          <span className={cn("text-2xs", active === c.id ? "text-background/60" : "text-muted-foreground")}>{c.referenceCount}</span>
+        </button>
+      ))}
+      {creating ? (
+        <form onSubmit={create}>
+          <input
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onBlur={create}
+            onKeyDown={(e) => e.key === "Escape" && setCreating(false)}
+            placeholder="Collection name"
+            className={cn(chip, "w-44 bg-transparent outline-none focus:ring-2 focus:ring-primary")}
+          />
+        </form>
+      ) : (
+        <button onClick={() => setCreating(true)} className={cn(chip, "flex items-center gap-1 border-dashed text-muted-foreground hover:bg-fill-2 hover:text-foreground")}>
+          <PlusIcon className="size-3.5" /> New collection
+        </button>
+      )}
     </div>
   )
 }
 
-function CollectionMenu({ id, name, onDeleted }: { id: string; name: string; onDeleted: () => void }) {
-  const { refresh } = useCollections()
+function CollectionHeader({ id, onDeleted, onAdd }: { id: string; onDeleted: () => void; onAdd: () => void }) {
+  const { collections, refresh } = useCollections()
+  const c = collections.find((x) => x.id === id)
+  if (!c) return null
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger render={<Button variant="ghost" size="icon-xs" aria-label="Collection options" />}>
-        <MoreHorizontalIcon />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        <DropdownMenuItem
+    <div className="flex flex-col items-center gap-3 px-4 pt-10 pb-2 text-center">
+      <div>
+        <h1 className="text-2xl font-medium">{c.name}</h1>
+        <p className="mt-1 text-xs text-muted-foreground">
+          {c.referenceCount} {c.referenceCount === 1 ? "reference" : "references"}
+        </p>
+      </div>
+      <div className="mt-2 flex items-start gap-6">
+        <ActionCircle icon={<PlusIcon />} label="Add" onClick={onAdd} />
+        <ActionCircle
+          icon={<PencilIcon />}
+          label="Rename"
           onClick={async () => {
-            const next = prompt("Rename collection", name)
+            const next = prompt("Rename collection", c.name)
             if (next?.trim()) {
-              await api.renameCollection(id, next.trim())
+              await api.renameCollection(c.id, next.trim())
               await refresh()
             }
           }}
-        >
-          <PencilIcon /> Rename
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem
-          variant="destructive"
+        />
+        <ActionCircle
+          icon={<Trash2Icon />}
+          label="Delete"
           onClick={async () => {
-            if (!confirm(`Delete collection "${name}"? References stay in your library.`)) return
-            await api.deleteCollection(id)
+            if (!confirm(`Delete collection "${c.name}"? References stay in your library.`)) return
+            await api.deleteCollection(c.id)
             await refresh()
             onDeleted()
           }}
-        >
-          <Trash2Icon /> Delete
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+        />
+      </div>
+    </div>
   )
 }
 
@@ -289,8 +228,9 @@ function useReloadEvent(reload: () => void) {
   }, [reload])
 }
 
-function Masonry({ children }: { children: React.ReactNode }) {
-  return <div className="columns-1 gap-5 sm:columns-2 lg:columns-3 2xl:columns-4 [&>*]:mb-5 [&>*]:break-inside-avoid">{children}</div>
+export function Masonry({ children }: { children: React.ReactNode }) {
+  const [grid] = useGridSize()
+  return <div className={cn(masonryCols[grid], "gap-4 [&>*]:mb-4 [&>*]:break-inside-avoid")}>{children}</div>
 }
 
 function GridFooter({ loading, done, count, sentinel, empty }: { loading: boolean; done: boolean; count: number; sentinel: React.RefObject<HTMLDivElement | null>; empty: React.ReactNode }) {
@@ -305,17 +245,28 @@ function GridFooter({ loading, done, count, sentinel, empty }: { loading: boolea
 function SkeletonGrid() {
   return (
     <Masonry>
-      {Array.from({ length: 8 }, (_, i) => (
-        <div key={i} className="space-y-2">
-          <Skeleton className={cn("w-full rounded-xl", i % 3 ? "aspect-[16/10]" : "aspect-[4/5]")} />
-          <Skeleton className="h-4 w-1/2" />
-        </div>
+      {Array.from({ length: 10 }, (_, i) => (
+        <Skeleton key={i} className={cn("w-full rounded-sm", ["aspect-[4/5]", "aspect-[16/10]", "aspect-square"][i % 3])} />
       ))}
     </Masonry>
   )
 }
 
-function WebsitesGrid({ filters }: { filters: Filters }) {
+/** Image tile with metadata revealed on hover, Cosmos-style. */
+function Tile({ href, children, title, subtitle, overlay }: { href: string; children: React.ReactNode; title: string; subtitle?: string; overlay?: React.ReactNode }) {
+  return (
+    <Link href={href} className="group relative block overflow-hidden rounded-sm bg-fill-1">
+      {children}
+      {overlay}
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 translate-y-1 bg-gradient-to-t from-black/60 via-black/25 to-transparent px-3 pt-10 pb-2.5 opacity-0 transition-all duration-200 group-hover:translate-y-0 group-hover:opacity-100">
+        <div className="truncate text-xs font-medium text-white">{title}</div>
+        {subtitle && <div className="truncate text-2xs text-white/75">{subtitle}</div>}
+      </div>
+    </Link>
+  )
+}
+
+function WebsitesGrid({ filters, onAdd }: { filters: Filters; onAdd: () => void }) {
   const list = useInfinite<Reference>((cursor) => api.references(filters, cursor), [filters.q, filters.collection, filters.sort])
   useReloadEvent(list.reload)
 
@@ -332,7 +283,19 @@ function WebsitesGrid({ filters }: { filters: Filters }) {
     <>
       <Masonry>
         {list.items.map((r) => (
-          <ReferenceCard key={r.id} r={r} />
+          <Tile
+            key={r.id}
+            href={`/r/${r.id}`}
+            title={r.title || r.domain}
+            subtitle={[r.domain, r.pageCount > 1 && `${r.pageCount} pages`, r.animationCount > 0 && `${r.animationCount} GIFs`].filter(Boolean).join(" · ")}
+            overlay={<StatusOverlay r={r} />}
+          >
+            {r.coverKey ? (
+              <img src={fileUrl(r.coverKey)} alt={r.title ?? r.domain} loading="lazy" className="aspect-[16/10] w-full object-cover object-top" />
+            ) : (
+              <div className="aspect-[16/10] w-full" />
+            )}
+          </Tile>
         ))}
       </Masonry>
       <GridFooter
@@ -344,11 +307,16 @@ function WebsitesGrid({ filters }: { filters: Filters }) {
               <EmptyMedia variant="icon">
                 <GlobeIcon />
               </EmptyMedia>
-              <EmptyTitle>{filters.q || filters.collection ? "Nothing matches" : "No references yet"}</EmptyTitle>
+              <EmptyTitle>{filters.q || filters.collection ? "Nothing here yet" : "Start your shelf"}</EmptyTitle>
               <EmptyDescription>
-                {filters.q || filters.collection ? "Try another search or collection." : "Click Add reference and paste a website you like."}
+                {filters.q || filters.collection ? "Try another search, or add a reference to this collection." : "Paste a website you like and your capture agent does the rest."}
               </EmptyDescription>
             </EmptyHeader>
+            {!filters.q && (
+              <Button onClick={onAdd} className="rounded-full bg-foreground text-background hover:bg-foreground/85">
+                <PlusIcon data-icon="inline-start" /> Add reference
+              </Button>
+            )}
           </Empty>
         }
       />
@@ -359,55 +327,15 @@ function WebsitesGrid({ filters }: { filters: Filters }) {
 function StatusOverlay({ r }: { r: Reference }) {
   if (r.status === "ready") return null
   return (
-    <div className="absolute inset-0 grid place-items-center bg-background/70 backdrop-blur-sm">
+    <div className="absolute inset-0 grid place-items-center bg-background/75 backdrop-blur-sm">
       <div className="flex max-w-[80%] flex-col items-center gap-2 text-center">
         {r.status === "failed" ? <AlertCircleIcon className="size-5 text-destructive-foreground" /> : <Spinner className="size-5 text-muted-foreground" />}
-        <span className="text-xs text-muted-foreground">
+        <span className="text-xs font-medium">{r.domain}</span>
+        <span className="text-2xs text-muted-foreground">
           {r.status === "failed" ? (r.error ?? "Capture failed") : (r.progress ?? (r.status === "queued" ? "Queued" : "Capturing"))}
         </span>
       </div>
     </div>
-  )
-}
-
-function ReferenceCard({ r }: { r: Reference }) {
-  const { collections } = useCollections()
-  const cols = collections.filter((c) => r.collectionIds.includes(c.id))
-  return (
-    <Link href={`/r/${r.id}`} className="group block">
-      <div className="relative overflow-hidden rounded-xl bg-fill-1 ring-1 ring-border transition-shadow group-hover:shadow-lg">
-        {r.coverKey ? (
-          <img src={fileUrl(r.coverKey)} alt="" loading="lazy" className="aspect-[16/10] w-full object-cover object-top transition-transform duration-500 group-hover:scale-[1.02]" />
-        ) : (
-          <div className="aspect-[16/10] w-full" />
-        )}
-        <StatusOverlay r={r} />
-      </div>
-      <div className="mt-2 flex items-start gap-2 px-0.5">
-        {r.favicon ? (
-          <img src={r.favicon} alt="" className="mt-0.5 size-4 rounded-sm" onError={(e) => (e.currentTarget.style.display = "none")} />
-        ) : (
-          <GlobeIcon className="mt-0.5 size-4 text-muted-foreground" />
-        )}
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-medium">{r.title || r.domain}</div>
-          <div className="flex items-center gap-1.5 text-2xs text-muted-foreground">
-            <span className="truncate">{r.domain}</span>
-            {r.pageCount > 0 && <span>· {r.pageCount} {r.pageCount === 1 ? "page" : "pages"}</span>}
-            {r.animationCount > 0 && <span>· {r.animationCount} GIFs</span>}
-          </div>
-        </div>
-        {cols.length > 0 && (
-          <div className="flex shrink-0 gap-1">
-            {cols.slice(0, 2).map((c) => (
-              <Badge key={c.id} variant="secondary">
-                {c.name}
-              </Badge>
-            ))}
-          </div>
-        )}
-      </div>
-    </Link>
   )
 }
 
@@ -419,18 +347,9 @@ function PagesGrid({ filters }: { filters: Filters }) {
     <>
       <Masonry>
         {list.items.map((p) => (
-          <Link key={p.id} href={`/r/${p.referenceId}?page=${p.id}`} className="group block">
-            <div className="overflow-hidden rounded-xl bg-fill-1 ring-1 ring-border transition-shadow group-hover:shadow-lg">
-              <img src={fileUrl(p.desktopThumbKey)} alt="" loading="lazy" className="aspect-[16/10] w-full object-cover object-top" />
-            </div>
-            <div className="mt-2 px-0.5">
-              <div className="truncate text-sm font-medium">{p.title || p.path}</div>
-              <div className="truncate text-2xs text-muted-foreground">
-                {p.reference.domain}
-                {p.path}
-              </div>
-            </div>
-          </Link>
+          <Tile key={p.id} href={`/r/${p.referenceId}?page=${p.id}`} title={p.title || p.path} subtitle={`${p.reference.domain}${p.path}`}>
+            <img src={fileUrl(p.desktopThumbKey)} alt={p.title ?? p.path} loading="lazy" className="aspect-[16/10] w-full object-cover object-top" />
+          </Tile>
         ))}
       </Masonry>
       <GridFooter {...list} count={list.items.length} empty={<EmptyNote text="No pages captured yet." />} />
@@ -446,15 +365,14 @@ function AnimationsGrid({ filters }: { filters: Filters }) {
     <>
       <Masonry>
         {list.items.map((a) => (
-          <Link key={a.id} href={`/r/${a.referenceId}?tab=animations`} className="group block">
-            <div className="transition-shadow group-hover:shadow-lg rounded-xl">
-              <GifTile a={a} />
-            </div>
-            <div className="mt-2 flex items-center gap-2 px-0.5">
-              <Badge variant="outline">{a.kind === "scroll" ? "Scroll" : "Hover"}</Badge>
-              <span className="truncate text-sm">{a.label || a.reference.title || a.reference.domain}</span>
-            </div>
-          </Link>
+          <Tile
+            key={a.id}
+            href={`/r/${a.referenceId}?tab=animations`}
+            title={a.label || a.reference.title || a.reference.domain}
+            subtitle={`${a.kind === "scroll" ? "Scroll" : "Hover"} · ${a.reference.domain}`}
+          >
+            <GifTile a={a} bare />
+          </Tile>
         ))}
       </Masonry>
       <GridFooter {...list} count={list.items.length} empty={<EmptyNote text="No animations captured yet." />} />

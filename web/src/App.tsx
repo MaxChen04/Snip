@@ -46,7 +46,7 @@ export function App() {
   return (
     <CollectionsProvider>
       <Switch>
-        <Route path="/r/:id">{(p) => <ReferencePage id={p.id} />}</Route>
+        <Route path="/r/:id">{(p) => <ReferencePage id={p.id} login={state.login} />}</Route>
         <Route>
           <GalleryPage login={state.login} />
         </Route>
