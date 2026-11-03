@@ -3,6 +3,7 @@ import type { Browser, BrowserContext, Page as PwPage } from "playwright"
 import type { DesignTokens, Job, PageUpload } from "../../web/shared/types"
 import type { SnipApi } from "./api"
 import { encodeGif, type Frame } from "./gif"
+import { buildStills } from "./sheet"
 
 // In-page scripts live in plain .js files so the TS toolchain can't inject helpers into them.
 const script = (name: string) => readFileSync(new URL(`./inpage/${name}.js`, import.meta.url), "utf8")
@@ -109,7 +110,10 @@ export async function recordScroll(page: PwPage, record: boolean): Promise<Frame
   for (let y = 0; ; y += step) {
     await page.evaluate((top) => window.scrollTo({ top, behavior: "instant" as ScrollBehavior }), y)
     await sleep(record ? 30 : 60)
-    if (record) frames.push({ png: await shot(), delay })
+    if (record) {
+      const scrollY = await page.evaluate(() => Math.round(window.scrollY))
+      frames.push({ png: await shot(), delay, scrollY, phase: "scroll" })
+    }
     height = await docHeight(page) // infinite/lazy pages can grow
     if (y >= Math.min(height, 40_000) - vh || (record && frames.length >= MAX_SCROLL_FRAMES)) break
   }
@@ -135,7 +139,7 @@ async function recordHovers(page: PwPage, seen: Set<string>) {
   const found = await run<{ i: number; label: string; selector: string }[]>(page, HOVER_JS, { max: MAX_HOVER_GIFS * 2 })
   // Shared chrome (nav links, footer buttons) repeats on every page: record each effect once per site.
   const targets = found.filter((t) => !seen.has(`${t.selector}|${t.label}`)).slice(0, MAX_HOVER_GIFS)
-  const out: { gif: Buffer; width: number; height: number; label: string; selector: string }[] = []
+  const out: { gif: Buffer; width: number; height: number; label: string; selector: string; frames: Frame[]; observedStyles: Record<string, string> | null }[] = []
   for (const t of targets) {
     try {
       const el = page.locator(`[data-rs-hover="${t.i}"]`).first()
@@ -156,20 +160,42 @@ async function recordHovers(page: PwPage, seen: Set<string>) {
       clip.height = Math.min(clip.height, vp.height - clip.y)
       if (clip.width < 20 || clip.height < 20) continue
 
+      // Resting computed styles of the target: observed values only, not the site's source CSS or its :hover rule.
+      const observedStyles = await el
+        .evaluate((node) => {
+          const cs = getComputedStyle(node)
+          const props = ["transition", "transition-property", "transition-duration", "transition-timing-function", "transition-delay",
+            "animation", "transform", "opacity", "color", "background-color", "border-color", "box-shadow", "filter"]
+          const o: Record<string, string> = {}
+          for (const p of props) {
+            const v = cs.getPropertyValue(p)
+            if (v && v !== "none" && v !== "all 0s ease 0s" && v !== "0s") o[p] = v
+          }
+          return o
+        })
+        .catch(() => null)
+
       const frames: Frame[] = []
-      let last = Date.now()
+      const t0 = Date.now()
+      let last = t0
+      let phase: Frame["phase"] = "rest"
       const grab = async () => {
         const png = await page.screenshot({ type: "png", clip })
         const now = Date.now()
         if (frames.length) frames[frames.length - 1]!.delay = now - last
-        frames.push({ png, delay: 80 })
+        frames.push({ png, delay: 80, offsetMs: now - t0, phase })
         last = now
       }
       await grab()
+      phase = "enter"
       await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 4 })
       const start = Date.now()
-      while (Date.now() - start < 900) await grab()
+      while (Date.now() - start < 900) {
+        await grab()
+        if (Date.now() - start > 450) phase = "hold"
+      }
       frames[frames.length - 1]!.delay = 700
+      phase = "leave"
       await page.mouse.move(2, 2, { steps: 4 })
       const leave = Date.now()
       while (Date.now() - leave < 600) await grab()
@@ -180,7 +206,7 @@ async function recordHovers(page: PwPage, seen: Set<string>) {
       const scale = clip.width > 700 ? 2 : 1
       const gif = encodeGif(frames, { scale })
       seen.add(`${t.selector}|${t.label}`)
-      out.push({ gif: gif.bytes, width: gif.width, height: gif.height, label: t.label, selector: t.selector })
+      out.push({ gif: gif.bytes, width: gif.width, height: gif.height, label: t.label, selector: t.selector, frames, observedStyles })
     } catch (e) {
       log("  hover capture skipped:", (e as Error).message.split("\n")[0])
     }
@@ -380,9 +406,18 @@ export async function captureJob(browser: Browser, api: SnipApi, job: Job) {
 
         // ---- Upload ----
         const animations: PageUpload["animations"] = []
+        const stills = async (key: string, frames: Frame[], timing: "synthetic" | "measured", observed: Record<string, string> | null) => {
+          try {
+            return await buildStills(browser, api, key, frames, timing, observed)
+          } catch (e) {
+            log("  contact sheet skipped:", (e as Error).message.split("\n")[0])
+            return { sheetKey: null, meta: null }
+          }
+        }
         if (scrollFrames.length > 1) {
           const gif = encodeGif(scrollFrames, { scale: 2 })
           animations.push({
+            ...(await stills(`${p}/scroll`, scrollFrames, "synthetic", null)),
             kind: "scroll",
             label: path === "/" ? "Home" : path,
             selector: null,
@@ -395,6 +430,7 @@ export async function captureJob(browser: Browser, api: SnipApi, job: Job) {
         for (let i = 0; i < hovers.length; i++) {
           const h = hovers[i]!
           animations.push({
+            ...(await stills(`${p}/hover-${i}`, h.frames, "measured", h.observedStyles)),
             kind: "hover",
             label: h.label,
             selector: h.selector,

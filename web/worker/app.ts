@@ -198,12 +198,20 @@ agent.use("*", requireCaptureToken)
 
 agent.post("/jobs/claim", async (c) => {
   const job = await db.claimJob(c.env.DB)
+  await db.touchPresence(c.env.DB, job ? "busy" : "idle", job?.id ?? null)
   return job ? c.json(job) : c.body(null, 204)
+})
+
+// Sent while a capture is running, so long pages don't make a busy worker look offline.
+agent.post("/heartbeat", async (c) => {
+  const { jobId } = await c.req.json<{ jobId?: string | null }>().catch(() => ({ jobId: null }))
+  await db.touchPresence(c.env.DB, jobId ? "busy" : "idle", jobId ?? null)
+  return c.json({ ok: true })
 })
 
 agent.post("/jobs/:id/progress", async (c) => {
   const { message } = await c.req.json<{ message: string }>()
-  await db.setProgress(c.env.DB, c.req.param("id"), message)
+  await Promise.all([db.setProgress(c.env.DB, c.req.param("id"), message), db.touchPresence(c.env.DB, "busy", c.req.param("id"))])
   return c.json({ ok: true })
 })
 
@@ -223,12 +231,14 @@ agent.post("/jobs/:id/pages", async (c) => {
 
 agent.post("/jobs/:id/complete", async (c) => {
   await db.completeJob(c.env.DB, c.req.param("id"), await c.req.json<JobComplete>())
+  await db.touchPresence(c.env.DB, "idle", null)
   return c.json({ ok: true })
 })
 
 agent.post("/jobs/:id/fail", async (c) => {
   const { error } = await c.req.json<{ error: string }>()
   await db.failJob(c.env.DB, c.req.param("id"), error)
+  await db.touchPresence(c.env.DB, "idle", null)
   return c.json({ ok: true })
 })
 

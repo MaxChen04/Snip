@@ -6,7 +6,15 @@ export interface Frame {
   png: Buffer
   /** ms this frame stays on screen */
   delay: number
+  /** Measured ms since recording started, where known. */
+  offsetMs?: number
+  /** window.scrollY when the frame was taken (scroll recordings). */
+  scrollY?: number
+  phase?: "rest" | "enter" | "hold" | "leave" | "scroll"
 }
+
+/** Width and height from a PNG header. */
+export const pngSize = (buf: Buffer) => ({ width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) })
 
 /** Decode a PNG, optionally downscaling by an integer factor (box filter). */
 function decode(buf: Buffer, scale: number) {

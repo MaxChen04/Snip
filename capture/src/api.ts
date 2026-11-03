@@ -27,6 +27,10 @@ export class SnipApi {
     await this.call(`/agent/jobs/${jobId}/progress`, json({ message })).catch(() => {})
   }
 
+  async heartbeat(jobId: string | null) {
+    await this.call("/agent/heartbeat", json({ jobId })).catch(() => {})
+  }
+
   async upload(key: string, body: Buffer | string, contentType: string) {
     await this.call(`/agent/files/${key}`, { method: "PUT", body: typeof body === "string" ? body : new Uint8Array(body), headers: { "content-type": contentType } })
     return key

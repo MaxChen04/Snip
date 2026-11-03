@@ -53,12 +53,15 @@ while (!stopping) {
   }
   if (job) {
     busy = true
+    // Presence while busy: a single long page can take minutes between progress reports.
+    const beat = setInterval(() => api.heartbeat(job.id), 30_000)
     try {
       await captureJob(await getBrowser(), api, job)
     } catch (e) {
       console.error(`[${job.id}] failed:`, (e as Error).message)
       await api.fail(job.id, (e as Error).message.split("\n")[0] ?? "Capture failed")
     }
+    clearInterval(beat)
     busy = false
     continue
   }
