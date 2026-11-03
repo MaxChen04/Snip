@@ -5,6 +5,7 @@ import {
   ExternalLinkIcon,
   FileJsonIcon,
   FolderIcon,
+  SparklesIcon,
   MonitorIcon,
   MoreHorizontalIcon,
   RefreshCwIcon,
@@ -16,6 +17,7 @@ import {
 import { toast } from "sonner"
 import { notify } from "@/components/notify"
 import { CollectionPicker } from "@/components/collection-picker"
+import { EMPTY_SELECTION, SelectCheck, SelectionBar, toggleIn, type Selection } from "@/components/prompt-selection"
 import { Masonry } from "@/components/gallery-page"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { TokensPanel } from "@/components/tokens-panel"
@@ -32,6 +34,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
+import { cn } from "@/lib/utils"
 import { api, fileUrl, type Animation, type Page, type Reference } from "@/lib/api"
 import { useCollections } from "@/lib/collections"
 
@@ -44,6 +47,8 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
   const [error, setError] = useState<string | null>(null)
   const [tab, setTab] = useState(search.get("tab") ?? "pages")
   const [openPage, setOpenPage] = useState<string | null>(search.get("page"))
+  const [selecting, setSelecting] = useState(false)
+  const [sel, setSel] = useState<Selection>(EMPTY_SELECTION)
   const { collections, refresh: refreshCollections } = useCollections()
 
   const load = useCallback(() => {
@@ -122,6 +127,7 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
 
         <div className="mt-3 flex items-start gap-6">
           <ActionCircle icon={<ExternalLinkIcon />} label="Visit" href={r.url} />
+          <ActionCircle icon={<SparklesIcon />} label="Prompt" onClick={() => setSelecting((v) => !v)} />
           <Popover>
             <PopoverTrigger className="group flex flex-col items-center gap-1.5">
               <span className="grid size-9 place-items-center rounded-full ring-1 ring-border transition-colors group-hover:bg-fill-2 group-data-popup-open:bg-foreground group-data-popup-open:text-background [&_svg]:size-4">
@@ -191,8 +197,12 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
           <>
             <Masonry>
               {pages.map((p) => (
-                <button key={p.id} className="group relative block w-full overflow-hidden rounded-sm bg-fill-1 text-left" onClick={() => setOpenPage(p.id)}>
-                  <img src={fileUrl(p.desktopThumbKey)} alt={p.title ?? p.path} loading="lazy" className="aspect-[16/10] w-full object-cover object-top" />
+                <div key={p.id} className="group relative">
+                <SelectCheck on={sel.pages.includes(p.id)} active={selecting} label={`Select ${p.path}`} onToggle={() => setSel((x) => ({ ...x, pages: toggleIn(x.pages, p.id) }))} />
+                <button
+                  className={cn("group relative block w-full overflow-hidden rounded-sm bg-fill-1 text-left", sel.pages.includes(p.id) && "ring-2 ring-foreground ring-offset-2 ring-offset-background")}
+                  onClick={() => (selecting ? setSel((x) => ({ ...x, pages: toggleIn(x.pages, p.id) })) : setOpenPage(p.id))}
+                >                  <img src={fileUrl(p.desktopThumbKey)} alt={p.title ?? p.path} loading="lazy" className="aspect-[16/10] w-full object-cover object-top" />
                   {p.mobileThumbKey && (
                     <img
                       src={fileUrl(p.mobileThumbKey)}
@@ -206,6 +216,7 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
                     <div className="truncate text-2xs text-white/75">{p.path}</div>
                   </div>
                 </button>
+                </div>
               ))}
             </Masonry>
             {!pages.length && <p className="py-16 text-center text-sm text-muted-foreground">No pages captured yet.</p>}
@@ -215,24 +226,63 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
         {tab === "animations" && (
           <div className="space-y-10">
             {!animations.length && <p className="py-16 text-center text-sm text-muted-foreground">No animations captured yet.</p>}
-            {scrollGifs.length > 0 && <AnimationSection title="Scroll" items={scrollGifs} pages={pages} />}
-            {hoverGifs.length > 0 && <AnimationSection title="Hover" items={hoverGifs} pages={pages} />}
+            {scrollGifs.length > 0 && <AnimationSection title="Scroll" items={scrollGifs} pages={pages} selected={sel.animations} selecting={selecting} onToggle={(id) => setSel((x) => ({ ...x, animations: toggleIn(x.animations, id) }))} />}
+            {hoverGifs.length > 0 && <AnimationSection title="Hover" items={hoverGifs} pages={pages} selected={sel.animations} selecting={selecting} onToggle={(id) => setSel((x) => ({ ...x, animations: toggleIn(x.animations, id) }))} />}
           </div>
         )}
 
         {tab === "tokens" && (
           <div className="mx-auto max-w-6xl">
+            {r.tokens && (
+              <button
+                onClick={() => {
+                  setSelecting(true)
+                  setSel((x) => ({ ...x, tokens: !x.tokens }))
+                }}
+                className={cn("mb-4 flex h-9 items-center gap-2 rounded-full px-3.5 text-xs font-medium ring-1 ring-border hover:bg-fill-1", sel.tokens && "bg-foreground text-background ring-foreground hover:bg-foreground/85")}
+              >
+                <SparklesIcon className="size-3.5" />
+                {sel.tokens ? "Tokens added to prompt" : "Add tokens to prompt"}
+              </button>
+            )}
             {r.tokens ? <TokensPanel tokens={r.tokens} /> : <p className="py-16 text-center text-sm text-muted-foreground">Tokens appear after capture.</p>}
           </div>
         )}
       </div>
 
+      {(selecting || sel.pages.length + sel.animations.length > 0 || sel.tokens) && (
+        <SelectionBar
+          reference={r}
+          pages={pages}
+          animations={animations}
+          selection={sel}
+          onChange={setSel}
+          onDone={() => {
+            setSelecting(false)
+            setSel(EMPTY_SELECTION)
+          }}
+        />
+      )}
       {current && <PageViewer page={current} onClose={() => setOpenPage(null)} />}
     </div>
   )
 }
 
-function AnimationSection({ title, items, pages }: { title: string; items: Animation[]; pages: Page[] }) {
+function AnimationSection({
+  title,
+  items,
+  pages,
+  selected,
+  selecting,
+  onToggle,
+}: {
+  title: string
+  items: Animation[]
+  pages: Page[]
+  selected: string[]
+  selecting: boolean
+  onToggle: (id: string) => void
+}) {
   const pageName = (id: string | null) => {
     const p = pages.find((x) => x.id === id)
     return p ? p.title || p.path : ""
@@ -244,7 +294,12 @@ function AnimationSection({ title, items, pages }: { title: string; items: Anima
       </h2>
       <Masonry>
         {items.map((a) => (
-          <figure key={a.id} className="group relative overflow-hidden rounded-sm">
+          <figure
+            key={a.id}
+            className={cn("group relative rounded-sm", selecting && "cursor-pointer", selected.includes(a.id) && "ring-2 ring-foreground ring-offset-2 ring-offset-background")}
+            onClick={selecting ? () => onToggle(a.id) : undefined}
+          >
+            <SelectCheck on={selected.includes(a.id)} active={selecting} label={`Select ${a.label ?? a.kind} animation`} onToggle={() => onToggle(a.id)} />
             <GifTile a={a} bare />
             <figcaption className="pointer-events-none absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-black/60 to-transparent px-3 pt-8 pb-2 text-2xs text-white opacity-0 transition-opacity group-hover:opacity-100">
               {a.label ? `${a.label} · ` : ""}

@@ -3,7 +3,10 @@ import { toast } from "sonner"
 import { fileUrl } from "@/lib/api"
 
 /** Cosmos-style confirmation: a dark pill with an optional thumbnail and one action. */
-export function notify(text: string, opts: { thumbKey?: string | null; action?: { label: string; onClick: () => void } } = {}) {
+export function notify(
+  text: string,
+  opts: { thumbKey?: string | null; action?: { label: string; onClick: () => void }; position?: "top-center" | "bottom-center" } = {},
+) {
   toast.custom(
     (id) => (
       <div className="flex h-11 items-center gap-2.5 rounded-full bg-neutral-900 py-1.5 pr-1.5 pl-1.5 text-sm text-white shadow-lg ring-1 ring-white/10 dark:bg-neutral-100 dark:text-neutral-900 dark:ring-black/10">
@@ -30,6 +33,6 @@ export function notify(text: string, opts: { thumbKey?: string | null; action?: 
         )}
       </div>
     ),
-    { duration: 4000, unstyled: true, className: "flex! justify-center! w-full!" },
+    { duration: 4000, unstyled: true, position: opts.position, className: "flex! justify-center! w-full!" },
   )
 }
