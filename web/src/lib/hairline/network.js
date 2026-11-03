@@ -1,118 +1,137 @@
 /**
- * Network: Snip's systems as a hub and its branches. The Worker sits in the
- * middle; D1, R2 and KV each hold their records on a branch, and the last
- * branch runs to the capture agent and the laptop it runs on. Links are
- * dashed guides on the ground. The pointer picks a tile; the route from the
- * Worker out to it lights hop by hop, each tile rising as its hop arrives.
- * At rest the Worker's inner rim is the bright mark. The slider is the wait
- * per hop, in ms.
+ * Network: Snip as hardware. On one platform, your Cloudflare account: the
+ * Worker as a three-unit rack server, D1 as a database drum, R2 as a storage
+ * chassis with drive bays and KV as a small key unit. On the other, your
+ * machine: a laptop running the capture agent. Dashed guides join them. The
+ * pointer picks a part; the route from the laptop through the Worker to it
+ * lights hop by hop, and a packet runs along it while the pointer stays. At
+ * rest the Worker's top light is the bright mark. The slider is the time per
+ * hop, in ms.
  *
- * The pattern: one of many, picked on the ground plane at each tile's rest
- * footprint, so a tile rising never changes the choice.
+ * The pattern: one of many, picked at each part's own rest height, so the
+ * packet and the lit edges never change the choice.
  */
 import { HL } from "./kernel.js";
 
 const {
-  Cam, fillet, fit, poly, proj, prism, rad, rings, seg, unproj, facing,
-  tween, tset, tval, tdone, disposer, mk, place, pointer, put, register, solid,
+  Cam, bezier, circ, facing, fillet, fit, lerp, open, poly, proj, prism, rad, rings, ringAt, run, seg, unproj,
+  disposer, mk, place, pointer, put, register, solid,
 } = HL;
 
-// [name, parent, x, y, kind]: kind is "hub", "store" (numbered with dots), "leaf" or "laptop"
-const NODES = [
-  ["Worker", -1, 0, 0, "hub"],
-  ["D1", 0, -44, 4, "store"], ["D1 · refs", 1, -70, -6, "leaf"], ["D1 · pages", 1, -70, 20, "leaf"], ["D1 · collections", 3, -96, 12, "leaf"],
-  ["R2", 0, 4, -44, "store"], ["R2 · shots", 5, -8, -70, "leaf"], ["R2 · gifs", 5, 20, -72, "leaf"], ["R2 · snapshots", 7, 12, -98, "leaf"],
-  ["KV", 0, -2, 44, "store"], ["KV · tokens", 9, 6, 70, "leaf"],
-  ["capture agent", 0, 46, 2, "leaf"], ["machine", 11, 74, 12, "laptop"],
+// [read-out, parent, x, y, half-width x, half-width y, height, kind]; the laptop is the root of every route
+const PARTS = [
+  ["laptop", -1, 70, 58, 13, 9, 3, "laptop"],
+  ["Worker", 0, 0, 0, 14, 10, 21, "rack"],
+  ["D1 · records", 1, -50, 2, 9, 9, 18, "drum"],
+  ["R2 · files", 1, 0, -50, 12, 8, 14, "bays"],
+  ["KV · tokens", 1, -48, -48, 6, 6, 9, "key"],
 ];
-const T = 8, HUB = 16, TH = 3, HH = 6, LIFT = 7, LIDH = 12, LEAN = 16;
+const UNIT = 7, LIDH = 15, LEAN = 16, EASE = bezier(0.32, 0.72, 0, 1);
 
 function mount({ stage, svg, read }, value) {
   const bag = disposer();
   let step = value;
-
-  const C = Cam(45, 0.5, 1.72);
-  fit(C, [[-106, -108, 0], [86, 80, 0], [86, -108, 0], [-106, 80, 0], [-96, 12, TH + LIFT], [74, 4, LIFT + LIDH + 4]], 200, 166);
+  const C = Cam(45, 0.5, 1.9);
+  fit(C, [[-72, -72, -3], [96, 84, -3], [96, -72, -3], [-72, 84, -3], [0, 0, 24], [70, 49, LIDH + 4]], 200, 166);
   const P = proj(C), front = facing(C);
   const g = mk("g", {}, svg);
+  const plate = (x0, y0, x1, y1) => { const [r, i] = rings(x0, y0, x1, y1, 7, 1.8); put(solid(g), prism(P, front, r, i, -3, 0)); };
+  plate(-72, -72, 24, 24); // your Cloudflare account
+  plate(42, 32, 96, 84); // your desk
 
-  // the links: dashed guides on the ground, painted before every plate
-  const links = NODES.map(([, p, x, y]) => (p < 0 ? null : mk("path", { d: seg(P(NODES[p][2], NODES[p][3], 0), P(x, y, 0)), class: "nf dash" }, g)));
+  // the links, as guides on the ground under everything that stands
+  const links = PARTS.map(([, p, x, y]) => (p < 0 ? null : mk("path", { d: seg(P(PARTS[p][2], PARTS[p][3], 0), P(x, y, 0)), class: "nf dash" }, g)));
+  const hop = PARTS.map(function depth(q) { return q[1] < 0 ? 0 : 1 + depth(PARTS[q[1]]); });
 
-  // the hop count of each node from the Worker
-  const hop = NODES.map(function depth(n, i) { return n[1] < 0 ? 0 : 1 + depth(NODES[n[1]], n[1]); });
-
-  // the plates, nearest last
-  const nodes = NODES.map(([name, , x, y, kind], i) => {
-    const h = kind === "hub" ? HUB : T;
-    const [ring, inner] = rings(x - h, y - h, x + h, y + h, kind === "hub" ? 6 : 3.2, kind === "hub" ? 1.6 : 1);
-    return { i, name, x, y, kind, ring, inner, z: tween(0), drawn: NaN };
-  }).sort((a, b) => a.x + a.y - (b.x + b.y));
-  for (const n of nodes) {
-    n.el = solid(g);
-    if (n.kind === "hub") n.rim = mk("path", { class: "nf hi" }, g);
-    if (n.kind === "store") n.dots = Array.from({ length: NODES.slice(0, n.i + 1).filter((m) => m[4] === "store").length }, () => mk("circle", { r: 1.1, class: "dot m" }, g));
-    if (n.kind === "laptop") { n.keys = mk("path", { class: "nf lo" }, g); n.lid = mk("path", { class: "sil" }, g); n.screen = mk("path", { class: "nf lo" }, g); }
+  const parts = PARTS.map(([name, , x, y, hx, hy, h, kind], i) => ({ i, name, x, y, hx, hy, h, kind, sils: [] }))
+    .sort((a, b) => a.x + a.y - (b.x + b.y));
+  let topLed = null;
+  for (const n of parts) {
+    const { x, y, hx, hy, h } = n, x0 = x - hx, x1 = x + hx, y0 = y - hy, y1 = y + hy;
+    const face = (pts, cls) => mk("path", { d: poly(fillet(pts, pts.map(() => 0.8), 3)), class: cls }, g);
+    if (n.kind === "rack") {
+      // three units stacked, each with a light and a vent on its front
+      const [r, i] = rings(x0, y0, x1, y1, 2.4, 0.9);
+      for (let u = 0; u < 3; u++) {
+        const el = solid(g), z = u * UNIT, zc = z + UNIT / 2;
+        put(el, prism(P, front, r, i, z + 0.6, z + UNIT));
+        n.sils.push(el.sil);
+        const led = mk("circle", { r: 1.1, class: u === 2 ? "dot" : "dot off" }, g);
+        place(led, P(x0 + 4, y1, zc));
+        if (u === 2) topLed = led;
+        mk("path", { d: [-1, 1].map((d) => seg(P(x0 + 9, y1, zc + d), P(x1 - 4, y1, zc + d))).join(""), class: "nf lo" }, g);
+      }
+      continue;
+    }
+    if (n.kind === "drum") {
+      // a database drum: a cylinder with two seams round its front
+      const at = (R) => circ(R, 24).map((q) => ({ ...q, u: q.u + x, v: q.v + y }));
+      const ring = at(hx), el = solid(g);
+      put(el, prism(P, front, ring, at(hx - 1.2), 0, h));
+      n.sils.push(el.sil);
+      mk("path", { d: [h / 3, (2 * h) / 3].map((z) => open(ringAt(P, run(ring, front), z))).join(""), class: "nf lo" }, g);
+      continue;
+    }
+    const [r, i] = rings(x0, y0, x1, y1, n.kind === "key" ? 2 : 2.4, 0.9), el = solid(g);
+    put(el, prism(P, front, r, i, 0, h));
+    n.sils.push(el.sil);
+    if (n.kind === "bays") for (let b = 0; b < 4; b++) {
+      // four drive bays across the front
+      const wb = (2 * hx - 6) / 4, u0 = x0 + 3 + b * wb + 0.6, u1 = u0 + wb - 1.2;
+      face([P(u0, y1, 2.5), P(u1, y1, 2.5), P(u1, y1, h - 2.5), P(u0, y1, h - 2.5)], "nf lo");
+    }
+    if (n.kind === "key") place(mk("circle", { r: 1.1, class: "dot off" }, g), P(x, y1, h / 2));
+    if (n.kind === "laptop") {
+      // keys on the base, and a lid leaning back from its far edge
+      mk("path", { d: [-3, 0, 3].map((d) => seg(P(x0 + 4, y + d, h), P(x1 - 4, y + d, h))).join(""), class: "nf lo" }, g);
+      const s = Math.sin(rad(LEAN)), c = Math.cos(rad(LEAN)), w = (u, v) => P(u, y0 + 1 - v * s, h + v * c);
+      n.sils.push(face([w(x0 + 1, 0), w(x1 - 1, 0), w(x1 - 1, LIDH), w(x0 + 1, LIDH)], "sil"));
+      face([w(x0 + 3, 2), w(x1 - 3, 2), w(x1 - 3, LIDH - 2), w(x0 + 3, LIDH - 2)], "nf lo");
+    }
   }
   const byIndex = [];
-  nodes.forEach((n) => { byIndex[n.i] = n; });
+  parts.forEach((n) => { byIndex[n.i] = n; });
 
-  const s = Math.sin(rad(LEAN)), c = Math.cos(rad(LEAN));
-  function drawNode(n, z) {
-    if (z === n.drawn) return;
-    n.drawn = z;
-    const top = z + (n.kind === "hub" ? HH : TH);
-    put(n.el, prism(P, front, n.ring, n.inner, z, top));
-    if (n.rim) n.rim.setAttribute("d", poly(n.inner.map((q) => P(q.u, q.v, top))));
-    if (n.dots) n.dots.forEach((el, k) => place(el, P(n.x + (k - (n.dots.length - 1) / 2) * 4, n.y, top)));
-    if (n.keys) {
-      const { x, y } = n, w = (u, v) => P(u, y - T + 1 - v * s, top + v * c);
-      n.keys.setAttribute("d", [-2, 2, 5].map((dy) => seg(P(x - 5, y + dy, top), P(x + 5, y + dy, top))).join(""));
-      n.lid.setAttribute("d", poly(fillet([w(x - 7, 0), w(x + 7, 0), w(x + 7, LIDH), w(x - 7, LIDH)], [0.6, 0.6, 1.6, 1.6], 3)));
-      n.screen.setAttribute("d", poly(fillet([w(x - 5.2, 1.6), w(x + 5.2, 1.6), w(x + 5.2, LIDH - 1.6), w(x - 5.2, LIDH - 1.6)], [0.6, 0.6, 0.8, 0.8], 3)));
-    }
-  }
+  // the packet: a dot that runs the lit route, laptop first
+  const packet = mk("circle", { r: 1.6, class: "dot" }, g);
+  const show = (on) => { if (!on) packet.remove(); else if (!packet.isConnected) g.append(packet); };
+  show(false);
 
-  let act = -1, t0 = 0, path = new Set();
-  /** Lights every node on the route whose hop has arrived; returns whether one is still waiting. */
-  function light(now) {
-    let waiting = false;
-    for (const n of nodes) {
-      const on = path.has(n.i) && now >= t0 + hop[n.i] * step;
-      if (path.has(n.i) && !on) waiting = true;
-      n.el.sil.classList.toggle("hi", on);
-      if (n.lid) n.lid.classList.toggle("hi", on);
-      const l = links[n.i];
-      if (l) { l.classList.toggle("dash", !on); l.classList.toggle("hi", on); }
-    }
-    return waiting;
-  }
-
+  let act = -1, t0 = 0, route = [];
   const B = register(stage, (_dt, now) => {
-    let moving = light(now);
-    for (const n of nodes) { drawNode(n, tval(n.z, now)); if (!tdone(n.z, now)) moving = true; }
-    return moving;
+    const lit = (i) => route.includes(i) && now >= t0 + hop[i] * step;
+    for (const n of parts) {
+      n.sils.forEach((el) => el.classList.toggle("hi", lit(n.i)));
+      const l = links[n.i];
+      if (l) { l.classList.toggle("dash", !lit(n.i)); l.classList.toggle("hi", lit(n.i)); }
+    }
+    if (route.length < 2) { show(false); return false; }
+    // one lap: a hop per link, then a pause as long as one hop
+    const hops = route.length - 1, lap = (hops + 1) * step, t = ((now - t0) % lap) / step;
+    show(t < hops);
+    if (t >= hops) return true;
+    const k = Math.floor(t), a = byIndex[route[k]], b = byIndex[route[k + 1]], e = EASE(t - k);
+    place(packet, P(lerp(a.x, b.x, e), lerp(a.y, b.y, e), 0));
+    return true;
   });
   bag.add(B.unregister);
 
-  // the hit test: the pointer on the ground, against each tile's resting footprint
+  // the hit test: the pointer at each part's own mid-height, against its resting footprint
   function pick([sx, sy]) {
-    const [wx, wy] = unproj(C, sx, sy, 0);
-    let best = -1, bd = Infinity;
-    for (const n of nodes) {
-      const r = n.kind === "hub" ? HUB + 2 : T + 3, d = Math.max(Math.abs(wx - n.x), Math.abs(wy - n.y));
-      if (d <= r && d < bd) { best = n.i; bd = d; }
+    let best = -1, bd = 1.45;
+    for (const n of parts) {
+      const [wx, wy] = unproj(C, sx, sy, n.h / 2), d = Math.max(Math.abs(wx - n.x) / n.hx, Math.abs(wy - n.y) / n.hy);
+      if (d < bd) { best = n.i; bd = d; }
     }
     return best;
   }
 
   function setActive(a) {
     if (a === act) return;
-    act = a; t0 = performance.now(); path = new Set();
-    for (let i = a; i >= 0; i = NODES[i][1]) path.add(i);
-    for (const n of nodes) tset(n.z, path.has(n.i) ? LIFT : 0, t0, path.has(n.i) ? hop[n.i] * step : 0);
-    byIndex[0].rim.classList.toggle("hi", a < 0);
-    read.textContent = a < 0 ? "rest" : NODES[a][0];
+    act = a; t0 = performance.now(); route = [];
+    for (let i = a; i >= 0; i = PARTS[i][1]) route.unshift(i);
+    topLed.classList.toggle("off", a >= 0);
+    read.textContent = a < 0 ? "rest" : PARTS[a][0];
     B.wake();
   }
   setActive(-2);
@@ -121,15 +140,15 @@ function mount({ stage, svg, read }, value) {
   bag.add(pointer(stage, { move: (p) => setActive(pick(p)), leave: () => setActive(-1) }));
   bag.add(() => svg.replaceChildren());
 
-  return { set: (v) => { step = v; }, destroy: bag.dispose };
+  return { set: (v) => { step = v; B.wake(); }, destroy: bag.dispose };
 }
 
 /** The figure, as the hairline-create skill declares it; guide-page.tsx mounts it. */
 export const network = {
   name: "network",
-  means: "Snip's systems around the Worker: the route to the part under the pointer lights hop by hop.",
-  rules: [1, 2, 4, 6],
-  range: [40, 90, 160],
-  tour: [[110, 130], [258, 236], [290, 150], null],
+  means: "Your laptop and your Cloudflare servers: the route to the part under the pointer lights, and a packet runs it.",
+  rules: [1, 4, 5, 6],
+  range: [160, 280, 440],
+  tour: [[208, 232], [122, 102], [260, 104], null],
   mount,
 };
