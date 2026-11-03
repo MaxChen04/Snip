@@ -42,7 +42,7 @@ app.get("/authorize", async (c) => {
   const consent = await c.env.OAUTH_PROVIDER.describeConsent(authReq)
   const { handle, headers } = await c.env.OAUTH_PROVIDER.beginConsent(authReq)
   const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Connect to Refshelf</title>
+<title>Connect to Snip</title>
 <style>
   body{font-family:Inter,system-ui,sans-serif;background:#fcfcfc;color:#222;display:grid;place-items:center;min-height:100vh;margin:0;padding:16px}
   .card{background:#fff;border:1px solid #0001;border-radius:14px;padding:28px;max-width:420px;box-shadow:0 10px 15px -3px #0000000f}
@@ -53,7 +53,7 @@ app.get("/authorize", async (c) => {
   button.primary{background:oklch(0.585 0.233 277.117);color:#fff;border-color:transparent}
   @media (prefers-color-scheme: dark){body{background:#111;color:#eee}.card{background:#1b1b1b;border-color:#fff2}p{color:#aaa}button{background:#222;color:#eee;border-color:#fff3}}
 </style></head><body><form class="card" method="post" action="/authorize">
-<h1>Allow ${escapeHtml(consent.clientName || "this app")} to use Refshelf?</h1>
+<h1>Allow ${escapeHtml(consent.clientName || "this app")} to use Snip?</h1>
 <p>Signed in as <code>${escapeHtml(login)}</code>. The client will be able to search, read and add design references and collections.</p>
 <p>It will be redirected to <code>${escapeHtml(consent.redirectHost)}</code>.</p>
 <input type="hidden" name="handle" value="${escapeHtml(handle)}">

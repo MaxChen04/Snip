@@ -1,23 +1,23 @@
 import { existsSync } from "node:fs"
 import { chromium, type Browser } from "playwright"
-import { RefshelfApi } from "./api"
+import { SnipApi } from "./api"
 import { captureJob } from "./capture"
 
-// Local capture agent: polls the hosted Refshelf queue, captures sites with a
+// Local capture agent: polls the hosted Snip queue, captures sites with a
 // real browser on this machine and uploads results. Run: npm run capture
 
 const envFile = new URL("../.env", import.meta.url)
 if (existsSync(envFile)) process.loadEnvFile(envFile)
 
-const base = process.env.REFSHELF_URL
+const base = process.env.SNIP_URL
 const token = process.env.CAPTURE_TOKEN
 if (!base || !token) {
-  console.error("Set REFSHELF_URL and CAPTURE_TOKEN in capture/.env (see .env.example).")
+  console.error("Set SNIP_URL and CAPTURE_TOKEN in capture/.env (see .env.example).")
   process.exit(1)
 }
 const once = process.argv.includes("--once")
 const pollMs = Number(process.env.POLL_SECONDS ?? 5) * 1000
-const api = new RefshelfApi(base, token)
+const api = new SnipApi(base, token)
 
 let browser = null as Browser | null
 async function getBrowser() {
@@ -43,7 +43,7 @@ for (const sig of ["SIGINT", "SIGTERM"] as const) {
 }
 
 let busy = false
-console.log(`Refshelf capture agent → ${base} (polling every ${pollMs / 1000}s)`)
+console.log(`Snip capture agent → ${base} (polling every ${pollMs / 1000}s)`)
 while (!stopping) {
   let job = null
   try {

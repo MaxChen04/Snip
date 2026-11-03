@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "refshelf",
+  "name": "snip",
   "main": "worker/index.ts",
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
@@ -14,18 +14,18 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "refshelf",
+      "database_name": "snip",
       "database_id": "REPLACE_WITH_D1_DATABASE_ID",
       "migrations_dir": "migrations"
     }
   ],
-  "r2_buckets": [{ "binding": "FILES", "bucket_name": "refshelf-files" }],
+  "r2_buckets": [{ "binding": "FILES", "bucket_name": "snip-files" }],
   "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "REPLACE_WITH_KV_NAMESPACE_ID" }],
   "vars": {
     // Comma-separated GitHub logins allowed to sign in.
     "ALLOWED_GITHUB_LOGINS": "MaxChen04",
     // Public origin of the deployed Worker, used as the MCP OAuth resource id.
-    "PUBLIC_URL": "https://refshelf.YOUR-SUBDOMAIN.workers.dev"
+    "PUBLIC_URL": "https://snip.YOUR-SUBDOMAIN.workers.dev"
   }
   // Secrets (wrangler secret put / .dev.vars):
   //   GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, SESSION_SECRET, CAPTURE_TOKEN

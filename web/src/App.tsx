@@ -32,7 +32,7 @@ export function App() {
         <div className="flex max-w-sm flex-col items-center gap-5 text-center">
           <Logo className="size-10" />
           <div className="space-y-1.5">
-            <h1 className="text-2xl font-semibold">Refshelf</h1>
+            <h1 className="text-2xl font-semibold">Snip</h1>
             <p className="text-sm text-muted-foreground">Your private library of website design references.</p>
           </div>
           <Button size="lg" render={<a href={`/auth/login?next=${encodeURIComponent(location.pathname)}`} />} nativeButton={false}>

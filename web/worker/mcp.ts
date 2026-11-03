@@ -60,7 +60,7 @@ function buildServer(env: Env, origin: string) {
     height: a.height,
   })
 
-  const server = new McpServer({ name: "refshelf", version: "1.0.0" })
+  const server = new McpServer({ name: "snip", version: "1.0.0" })
 
   server.registerTool(
     "search_references",

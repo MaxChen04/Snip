@@ -1,6 +1,6 @@
 import type { Job, JobComplete, PageUpload } from "../../web/shared/types"
 
-export class RefshelfApi {
+export class SnipApi {
   constructor(
     private base: string,
     private token: string,
@@ -13,7 +13,7 @@ export class RefshelfApi {
       ...init,
       headers: { authorization: `Bearer ${this.token}`, ...(init.headers ?? {}) },
     })
-    if (res.status === 401) throw new Error("Refshelf rejected CAPTURE_TOKEN (401). Check capture/.env matches the Worker secret.")
+    if (res.status === 401) throw new Error("Snip rejected CAPTURE_TOKEN (401). Check capture/.env matches the Worker secret.")
     if (!res.ok) throw new Error(`${init.method ?? "GET"} ${path} failed: ${res.status} ${await res.text()}`)
     return res
   }

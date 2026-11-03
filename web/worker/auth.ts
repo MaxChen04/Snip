@@ -131,7 +131,7 @@ export async function finishLogin(c: Context<AppEnv>) {
   if (!token.access_token) return c.text(`GitHub login failed: ${token.error_description ?? "no token"}`, 400)
 
   const userRes = await fetch("https://api.github.com/user", {
-    headers: { authorization: `Bearer ${token.access_token}`, "user-agent": "refshelf", accept: "application/vnd.github+json" },
+    headers: { authorization: `Bearer ${token.access_token}`, "user-agent": "snip", accept: "application/vnd.github+json" },
   })
   const user = (await userRes.json()) as { login?: string }
   if (!user.login || !allowedLogins(c.env).includes(user.login.toLowerCase())) {

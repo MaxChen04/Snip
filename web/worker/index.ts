@@ -18,7 +18,7 @@ function getProvider(env: Env) {
     accessTokenTTL: 60 * 60 * 24 * 7,
     resourceMetadata: {
       resource: `${env.PUBLIC_URL.replace(/\/$/, "")}/mcp`,
-      resource_name: "Refshelf design references",
+      resource_name: "Snip design references",
     },
   })
   return provider

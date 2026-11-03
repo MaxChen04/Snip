@@ -120,7 +120,7 @@
   base.target = "_blank"
   head.insertBefore(base, head.firstChild)
   const meta = doc.createElement("meta")
-  meta.name = "refshelf-captured"
+  meta.name = "snip-captured"
   meta.content = `${location.href} @ ${new Date().toISOString()}`
   head.insertBefore(meta, base.nextSibling)
   // Avoid smooth-scroll jumps when browsing the static snapshot.

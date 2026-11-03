@@ -47,7 +47,7 @@ export function TopBar({
   return (
     <header className="sticky top-0 z-30 flex items-center gap-3 px-4 py-3 sm:px-6">
       <div className={cn(pill, "shrink-0 gap-1 p-1")}>
-        <Link href="/" className="grid size-8 place-items-center rounded-full hover:bg-fill-2" aria-label="Refshelf home">
+        <Link href="/" className="grid size-8 place-items-center rounded-full hover:bg-fill-2" aria-label="Snip home">
           <Logo className="size-5" />
         </Link>
         <nav className="hidden items-center sm:flex">
@@ -79,7 +79,7 @@ export function TopBar({
             <input
               value={query}
               onChange={(e) => onQuery(e.target.value)}
-              placeholder="Search Refshelf…"
+              placeholder="Search Snip…"
               className="h-full min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
             />
             {query && (

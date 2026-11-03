@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs"
 import type { Browser, BrowserContext, Page as PwPage } from "playwright"
 import type { DesignTokens, Job, PageUpload } from "../../web/shared/types"
-import type { RefshelfApi } from "./api"
+import type { SnipApi } from "./api"
 import { encodeGif, type Frame } from "./gif"
 
 // In-page scripts live in plain .js files so the TS toolchain can't inject helpers into them.
@@ -277,7 +277,7 @@ function mergeTokens(list: DesignTokens[]): DesignTokens | null {
   }
 }
 
-export async function captureJob(browser: Browser, api: RefshelfApi, job: Job) {
+export async function captureJob(browser: Browser, api: SnipApi, job: Job) {
   const root = new URL(job.url)
   const prefix = `refs/${job.id}`
   const desktop = await browser.newContext({ viewport: DESKTOP, deviceScaleFactor: 1, colorScheme: "light", locale: "en-US" })
