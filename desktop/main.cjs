@@ -89,6 +89,12 @@ function start(key) {
   p.on("error", (err) => {
     log.write(`\n${err.message}\n`)
     dialog.showErrorBox("Snip", `Couldn't start the ${s.label.toLowerCase()}: ${err.message}\n\nIs Node installed and on your shell's PATH?`)
+    // A failed spawn emits no "exit", so reset here to let Start retry.
+    if (p.pid === undefined) {
+      log.end()
+      Object.assign(s, { proc: null, url: null, stopping: false, status: "crashed" })
+      refresh()
+    }
   })
   p.on("exit", (code, signal) => {
     log.end(`--- exited (${signal ?? code}) ---\n`)
@@ -148,10 +154,13 @@ function createWindow() {
     backgroundColor: "#f6f5f2",
     webPreferences: { contextIsolation: true, sandbox: true },
   })
-  // Links to other sites open in the default browser.
+  // Snip's own new-tab links (HTML snapshots, files) open in their own window
+  // so the gallery stays put; links to other sites open in the default browser.
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (!services.web.url || !url.startsWith(services.web.url)) shell.openExternal(url)
-    else win.loadURL(url)
+    if (services.web.url && url.startsWith(services.web.url)) {
+      return { action: "allow", overrideBrowserWindowOptions: { width: 1280, height: 860, autoHideMenuBar: true } }
+    }
+    shell.openExternal(url)
     return { action: "deny" }
   })
   // Closing the window keeps Snip running in the menu bar.
