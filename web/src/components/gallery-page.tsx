@@ -362,7 +362,12 @@ function FolderTile({ r }: { r: Reference }) {
   const images = (r.previewKeys.length ? r.previewKeys : r.coverKey ? [r.coverKey] : []).map(fileUrl)
   const ready = r.status === "ready"
   return (
-    <div className="group relative flex flex-col items-center" onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
+    <div
+      className="group relative flex min-w-0 flex-col items-center"
+      style={{ width: Math.round(321 * FOLDER_SCALE[FOLDER_SIZE[grid]]) }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
       <Link
         href={`/r/${r.id}`}
         aria-label={r.title || r.domain}
@@ -372,15 +377,15 @@ function FolderTile({ r }: { r: Reference }) {
       >
         <Folder images={images} hovered={hovered} size={FOLDER_SIZE[grid]} />
       </Link>
-      <div className="mt-2 flex max-w-full items-center gap-1.5 px-2">
+      <div className="mt-2 flex w-full min-w-0 items-center justify-center gap-1.5">
         <SiteIcon domain={r.domain} />
-        <Link href={`/r/${r.id}`} className="truncate text-sm font-medium">
+        <Link href={`/r/${r.id}`} title={r.title || r.domain} className="min-w-0 truncate text-sm font-medium">
           {r.title || r.domain}
         </Link>
       </div>
       <FolderMeta r={r} />
       {ready && (
-        <div className="absolute top-0 right-0 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 has-[[data-popup-open]]:opacity-100">
+        <div className="absolute top-0 -right-1 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 has-[[data-popup-open]]:opacity-100">
           <SaveButton r={r} />
         </div>
       )}
@@ -410,7 +415,7 @@ function FolderMeta({ r }: { r: Reference }) {
     )
   }
   return (
-    <span className="mt-0.5 text-2xs text-muted-foreground">
+    <span className="mt-0.5 max-w-full truncate text-2xs text-muted-foreground">
       {r.domain} · {r.pageCount} {r.pageCount === 1 ? "page" : "pages"}
       {r.animationCount > 0 && ` · ${r.animationCount} ${r.animationCount === 1 ? "GIF" : "GIFs"}`}
     </span>
