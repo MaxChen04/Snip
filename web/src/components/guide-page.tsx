@@ -359,9 +359,12 @@ function ConnectSection() {
       Icon: Eye,
       tools: [
         ["search_references", "Search by text, collection or domain"],
-        ["get_reference", "Tokens, every page and its GIFs"],
+        ["get_reference", "An overview, then pages, animations or tokens in smaller parts"],
         ["get_page", "One page with an inline screenshot"],
+        ["get_page_styles", "Computed styles filtered by element, text or section"],
+        ["get_animation", "A contact sheet, sampled frame or original GIF"],
         ["search_animations", "Scroll and hover GIFs across references"],
+        ["get_capture_status", "Capture progress and whether your capture agent is online"],
         ["list_collections", "Collections with counts"],
       ],
     },

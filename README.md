@@ -99,6 +99,10 @@ Every result carries the same JSON as text and as `structuredContent`. Lists are
 
 File URLs returned by the MCP are signed and expire after 24 hours.
 
+`get_page(include_styles: true)` now returns guidance to `get_page_styles` instead of a truncated JSON fragment. Update client prompts to use the new tool for styles. Existing `get_reference` calls without `part` still return the full legacy result, and old animations still offer their GIFs.
+
+Run `npm test` for the MCP response-budget and cursor regression checks.
+
 ## Capture agent options (`capture/.env`)
 
 | Variable | Default | |
