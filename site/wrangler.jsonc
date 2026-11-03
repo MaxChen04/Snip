@@ -1,0 +1,7 @@
+{
+  // Static marketing site for Snip. Deploy with `npx wrangler deploy` from site/.
+  "$schema": "../web/node_modules/wrangler/config-schema.json",
+  "name": "snip-site",
+  "compatibility_date": "2026-10-01",
+  "assets": { "directory": "./public" }
+}

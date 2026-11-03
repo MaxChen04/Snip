@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Snip · Save any website, down to the pixel</title>
+  <meta name="description" content="Snip captures screenshots, computed styles, HTML snapshots and motion from any website into a private design library your AI agent can search. Free to self-host on Cloudflare." />
+  <meta property="og:title" content="Snip" />
+  <meta property="og:description" content="A private design-reference library. Screenshots, styles, snapshots and motion from any site, searchable by your agent." />
+  <meta property="og:image" content="/logo.png" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <!-- Nav (Cosmos-style floating pill) -->
+  <header class="nav-wrap">
+    <a href="#top" class="wordmark" aria-label="Snip home">
+      <img src="/logo.png" alt="" width="28" height="28" class="pixel" />
+      <span>Snip</span>
+    </a>
+    <nav class="nav-pill" aria-label="Primary">
+      <a href="#capture">Capture</a>
+      <a href="#mcp">MCP</a>
+      <a href="#self-host">Self-host</a>
+      <a class="nav-cta" href="https://github.com/MaxChen04/Snip" target="_blank" rel="noopener">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38v-1.33c-2.23.48-2.7-1.07-2.7-1.07-.36-.92-.89-1.17-.89-1.17-.73-.5.06-.49.06-.49.8.06 1.23.83 1.23.83.72 1.22 1.87.87 2.33.67.07-.52.28-.87.5-1.07-1.78-.2-3.65-.89-3.65-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48v2.2c0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        GitHub
+      </a>
+    </nav>
+  </header>
+
+  <main id="top">
+    <!-- Hero: scattered reference cards around a centered serif headline -->
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="scatter" aria-hidden="true">
+        <figure class="card c1" data-depth="0.6">
+          <div class="thumb t-violet"><i></i><b></b><b class="s"></b></div>
+          <figcaption><span>orbit.dev</span><em>12 pages</em></figcaption>
+        </figure>
+        <figure class="card c2" data-depth="0.3">
+          <div class="thumb t-cream"><i></i><b></b><b class="s"></b><u></u></div>
+          <figcaption><span>fieldnotes.studio</span><em>GIF</em></figcaption>
+        </figure>
+        <figure class="card c3 tokens" data-depth="0.9">
+          <p class="mono">tokens / color</p>
+          <div class="swatches"><s style="--c:#e5483b"></s><s style="--c:#f3e9dc"></s><s style="--c:#1c1b1a"></s><s style="--c:#f5d33a"></s><s style="--c:#7c6cf2"></s></div>
+          <p class="mono dim">Instrument Serif · 64/72</p>
+        </figure>
+        <figure class="card c4 phone" data-depth="0.5">
+          <div class="thumb t-green tall"><i></i><b></b><b class="s"></b><u></u><u></u></div>
+        </figure>
+        <figure class="card c5" data-depth="0.4">
+          <div class="thumb t-ink"><i></i><b></b><b class="s"></b></div>
+          <figcaption><span>kiln.co</span><em>hover</em></figcaption>
+        </figure>
+        <figure class="card c6 quote" data-depth="0.7">
+          <p class="mono dim">computed style</p>
+          <code>letter-spacing: -0.02em;<br>backdrop-filter: blur(12px);</code>
+        </figure>
+        <figure class="card c7" data-depth="0.25">
+          <div class="thumb t-peach"><i></i><b></b><b class="s"></b></div>
+        </figure>
+      </div>
+
+      <div class="hero-copy">
+        <p class="eyebrow mono"><span class="dot"></span> Open source · free on Cloudflare</p>
+        <h1 id="hero-title">Save any website,<br><em>down to the pixel.</em></h1>
+        <p class="lede">Paste a URL. Snip captures every page's screenshots, computed styles, HTML and motion into a private library your agent can search.</p>
+        <div class="cta-row">
+          <a class="btn btn-light" href="#self-host">Deploy your own <span aria-hidden="true">→</span></a>
+          <a class="btn btn-ghost" href="https://github.com/MaxChen04/Snip" target="_blank" rel="noopener">Star on GitHub</a>
+        </div>
+      </div>
+
+      <a class="scroll-hint mono" href="#capture">Scroll to explore <span aria-hidden="true">↓</span></a>
+    </section>
+
+    <!-- App window (Save.design-style framed product shot) -->
+    <section class="window-section" aria-label="The Snip gallery">
+      <div class="window">
+        <div class="window-bar"><span></span><span></span><span></span><p class="mono">snip.you.workers.dev</p></div>
+        <div class="app">
+          <div class="app-top">
+            <div class="app-tabs"><b>Websites</b><span>Pages</span><span>Animations</span></div>
+            <div class="app-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="m20 20-3.5-3.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>Search references…</div>
+            <div class="app-add">+ Add</div>
+          </div>
+          <div class="app-chips"><b>Everything</b><span>SaaS landing <i>14</i></span><span>Pricing <i>9</i></span><span>Onboarding <i>6</i></span><span class="ghost">+ New collection</span></div>
+          <div class="app-grid">
+            <div class="tile"><div class="thumb t-violet"><i></i><b></b><b class="s"></b><u></u></div><p>orbit.dev <em>12 pages</em></p></div>
+            <div class="tile"><div class="thumb t-cream"><i></i><b></b><b class="s"></b><u></u></div><p>fieldnotes.studio <em>4 pages</em></p></div>
+            <div class="tile"><div class="thumb t-ink"><i></i><b></b><b class="s"></b><u></u></div><p>kiln.co <em>8 pages</em></p></div>
+            <div class="tile"><div class="thumb t-green"><i></i><b></b><b class="s"></b><u></u></div><p>meadow.app <em>21 pages</em></p></div>
+            <div class="tile"><div class="thumb t-peach"><i></i><b></b><b class="s"></b><u></u></div><p>sunday.fm <em>3 pages</em></p></div>
+            <div class="tile"><div class="thumb t-blue"><i></i><b></b><b class="s"></b><u></u></div><p>harbor.so <em>16 pages</em></p></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Statement (Cosmos manifesto) -->
+    <section class="statement">
+      <p>Screenshots show you <em>what</em> a site looks like.<br>Snip keeps <em>how</em> it was built.</p>
+    </section>
+
+    <!-- What a capture holds (Save.design ticked grid) -->
+    <section id="capture" class="light" aria-labelledby="capture-title">
+      <div class="container">
+        <p class="kicker mono">01 / Capture</p>
+        <h2 id="capture-title">One URL in.<br>Everything you'd want to study, out.</h2>
+        <p class="sub">Choose <b>Static page</b> or <b>Crawl site</b>. A capture agent on your machine visits every page on the same domain and records it all.</p>
+
+        <div class="grid ticks">
+          <article>
+            <p class="label mono"><span>▦</span> Screenshots</p>
+            <h3>Desktop and mobile, full page.</h3>
+            <p>1440px and 390px captures of every page, with cookie banners and popups closed first.</p>
+          </article>
+          <article>
+            <p class="label mono"><span>{ }</span> Computed styles</p>
+            <h3>Only what differs from defaults.</h3>
+            <p>Per-element styles, <code>::before</code> and <code>::after</code>, keyframes, <code>:hover</code> rules and CSS variables.</p>
+          </article>
+          <article>
+            <p class="label mono"><span>&lt;/&gt;</span> HTML snapshot</p>
+            <h3>A self-contained copy that still renders.</h3>
+            <p>CSS inlined, CSS-in-JS materialized, web fonts embedded, scripts stripped.</p>
+          </article>
+          <article>
+            <p class="label mono"><span>◐</span> Motion</p>
+            <h3>Scroll and hover GIFs.</h3>
+            <p>Smooth 30 fps scroll recordings per page, plus hover GIFs for elements with transitions.</p>
+          </article>
+          <article>
+            <p class="label mono"><span>◆</span> Design tokens</p>
+            <h3>The system behind the surface.</h3>
+            <p>Colors, fonts, type scale, spacing, radii, shadows and transitions, extracted automatically.</p>
+          </article>
+          <article>
+            <p class="label mono"><span>▤</span> Collections</p>
+            <h3>An infinite, sortable gallery.</h3>
+            <p>Browse by Websites, Pages or Animations. Search, sort and group references into collections.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- How it works -->
+    <section class="light how" aria-labelledby="how-title">
+      <div class="container">
+        <p class="kicker mono">02 / How it works</p>
+        <h2 id="how-title">Your library in the cloud.<br>Your browser does the heavy lifting.</h2>
+        <ol class="flow">
+          <li>
+            <span class="step mono">A</span>
+            <h3>Queue a URL</h3>
+            <p>Hit <b>+ Add</b> in the gallery, or ask your agent to add it over MCP.</p>
+          </li>
+          <li>
+            <span class="step mono">B</span>
+            <h3>Capture locally</h3>
+            <p>A Playwright agent on your Mac picks up the job, crawls and records each page.</p>
+          </li>
+          <li>
+            <span class="step mono">C</span>
+            <h3>Store on Cloudflare</h3>
+            <p>Files land in R2, metadata in D1. Browse from any device, signed in with GitHub.</p>
+          </li>
+        </ol>
+        <p class="footnote">Capture runs on your machine because free cloud browsers can't crawl a whole site. Queued references simply wait until the agent is running.</p>
+      </div>
+    </section>
+
+    <!-- MCP -->
+    <section id="mcp" class="dark" aria-labelledby="mcp-title">
+      <div class="container split">
+        <div>
+          <p class="kicker mono">03 / MCP</p>
+          <h2 id="mcp-title">Your library,<br><em>inside your agent.</em></h2>
+          <p class="sub">Snip ships a remote MCP server with GitHub OAuth. Connect Claude Code, Claude Desktop or any MCP client once, and your agent can search references, pull exact styles and queue new captures.</p>
+          <ul class="tools mono">
+            <li>search_references</li><li>get_reference</li><li>get_page</li><li>search_animations</li>
+            <li>list_collections</li><li>add_reference</li><li>create_collection</li><li>set_collection_membership</li>
+          </ul>
+        </div>
+        <div class="terminal" role="img" aria-label="Terminal showing an agent using Snip's MCP tools">
+          <div class="window-bar"><span></span><span></span><span></span><p class="mono">~/projects/landing</p></div>
+          <pre class="mono"><span class="p">$</span> claude mcp add --transport http snip \
+    https://snip.you.workers.dev/mcp
+
+<span class="u">›</span> Build a pricing section like the ones
+  in my "Pricing" collection.
+
+<span class="t">⏺ snip.search_references</span>(collection: "Pricing")
+  <span class="dim">⎿ 9 references · orbit.dev, harbor.so, …</span>
+<span class="t">⏺ snip.get_page</span>(orbit.dev/pricing, styles: true)
+  <span class="dim">⎿ screenshot + 412 computed rules</span>
+
+<span class="a">Matching orbit.dev: 3 tiers, 24px radius,
+-0.02em headings, 12px backdrop blur…</span><span class="caret"></span></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- Self-host -->
+    <section id="self-host" class="light" aria-labelledby="host-title">
+      <div class="container">
+        <p class="kicker mono">04 / Self-host</p>
+        <h2 id="host-title">Yours to run.<br>Free on Cloudflare.</h2>
+        <p class="sub">Snip runs entirely on your own Cloudflare account and your own machine. Nothing is shared, nobody else holds your library, and the free plan covers it.</p>
+
+        <div class="host">
+          <ol class="steps">
+            <li><span class="mono">1</span><div><h3>Clone and install</h3><p>Node 22 and a free Cloudflare account.</p></div></li>
+            <li><span class="mono">2</span><div><h3>Create a GitHub OAuth app</h3><p>It's how you, and only you, sign in.</p></div></li>
+            <li><span class="mono">3</span><div><h3>Create D1, KV and R2, then deploy</h3><p>A few <code>wrangler</code> commands. The README walks through each one.</p></div></li>
+            <li><span class="mono">4</span><div><h3>Start the capture agent</h3><p>Point it at your Worker and leave it running.</p></div></li>
+          </ol>
+
+          <div class="code-card">
+            <div class="code-head"><p class="mono">Terminal</p><button class="copy mono" type="button" data-copy="git clone https://github.com/MaxChen04/Snip.git &amp;&amp; cd Snip &amp;&amp; npm install">Copy</button></div>
+            <pre class="mono"><span class="dim"># 1. get the code</span>
+git clone https://github.com/MaxChen04/Snip.git
+cd Snip &amp;&amp; npm install
+
+<span class="dim"># 3. provision + deploy (from web/)</span>
+npx wrangler d1 create snip
+npx wrangler kv namespace create OAUTH_KV
+npx wrangler r2 bucket create snip-files
+npm run db:migrate:remote &amp;&amp; npm run deploy
+
+<span class="dim"># 4. capture</span>
+npx playwright install chromium
+npm run capture</pre>
+          </div>
+        </div>
+
+        <dl class="stats">
+          <div><dt class="mono">Cost</dt><dd>$0<span>/mo</span></dd></div>
+          <div><dt class="mono">R2 free storage</dt><dd>10<span>GB</span></dd></div>
+          <div><dt class="mono">Roughly</dt><dd>1.5–3k<span>pages</span></dd></div>
+          <div><dt class="mono">Workers</dt><dd>100k<span>req/day</span></dd></div>
+        </dl>
+      </div>
+    </section>
+
+    <!-- Closing (Luma float + Cosmos pill) -->
+    <section class="closing" aria-labelledby="closing-title">
+      <div class="floaters" aria-hidden="true">
+        <span class="f f1">▦</span><span class="f f2">{ }</span><span class="f f3">◐</span><span class="f f4">&lt;/&gt;</span>
+      </div>
+      <img src="/logo.png" alt="" width="112" height="112" class="pixel mascot" />
+      <h2 id="closing-title">What will you snip?</h2>
+      <p>Set up your own library in an afternoon.</p>
+      <a class="btn btn-big" href="https://github.com/MaxChen04/Snip#deploy-to-cloudflare-free-plan" target="_blank" rel="noopener">Get Snip on GitHub <span aria-hidden="true">→</span></a>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="wordmark small"><img src="/logo.png" alt="" width="20" height="20" class="pixel" /><span>Snip</span><em>© 2026</em></div>
+    <nav aria-label="Footer"><a href="https://github.com/MaxChen04/Snip" target="_blank" rel="noopener">GitHub</a><a href="https://github.com/MaxChen04/Snip#readme" target="_blank" rel="noopener">Docs</a><a href="#mcp">MCP</a></nav>
+  </footer>
+
+  <script src="/script.js" defer></script>
+</body>
+</html>
