@@ -304,3 +304,10 @@
     }
   }
 }
+
+/* The guide's network figure: the packet riding a lit route is a subtle yellow. Unlayered, like the figure's own styles, so it wins over them. */
+.network-figure svg circle.dot:not(.m):not(.off) {
+  fill: var(--note);
+  stroke: color-mix(in oklab, var(--note-ink) 45%, transparent);
+  stroke-width: 0.6px;
+}

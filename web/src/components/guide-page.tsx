@@ -177,10 +177,10 @@ function NetworkFigure() {
     }
   }, [])
   return (
-    <div className="relative flex items-center rounded-2xl bg-card pt-10 ring-1 ring-border [--hairline-edge:color-mix(in_oklab,var(--foreground)_85%,transparent)] [--hairline-hi:var(--primary)] [--hairline-lo:color-mix(in_oklab,var(--foreground)_18%,transparent)] [--hairline-mid:color-mix(in_oklab,var(--foreground)_45%,transparent)] [--hairline-plate:var(--card)] [--hairline-stroke:1.15]">
+    <div className="network-figure relative flex items-center overflow-hidden rounded-2xl bg-card pt-10 ring-1 ring-border [--hairline-edge:color-mix(in_oklab,var(--foreground)_55%,transparent)] [--hairline-hi:var(--foreground)] [--hairline-lo:color-mix(in_oklab,var(--foreground)_18%,transparent)] [--hairline-mid:color-mix(in_oklab,var(--foreground)_45%,transparent)] [--hairline-plate:var(--card)] [--hairline-stroke:1.15]">
       <p className="absolute top-4 left-5 text-xs text-muted-foreground">Hover a part to trace its route</p>
       <p aria-live="polite" className="absolute top-4 right-5 font-mono text-xs">{readout}</p>
-      <div className="relative mx-auto w-full max-w-[560px]">
+      <div className="relative mx-auto -my-[10%] w-full max-w-[640px]">
         <div ref={stage} data-hairline={network.name} role="img" aria-label={network.means} />
         {/* Labels at the ends of the figure's leader lines, in viewBox units (400 × 320). */}
         {LEADS.map(([part, y]) => (
@@ -204,7 +204,7 @@ function PrivacySection() {
     { k: "D1", v: "References, pages, animations, collections", Icon: Database },
     { k: "R2", v: "Screenshots, GIFs, HTML snapshots, styles", Icon: HardDrive },
     { k: "KV", v: "OAuth tokens for connected agents", Icon: KeyRound },
-    { k: "Machine", v: "The capture agent: Playwright and Chromium. Polls your queue, records each page, uploads the files.", Icon: Monitor },
+    { k: "Machine", v: "Runs the capture agent. Queued captures wait until it is running.", Icon: Monitor },
   ]
   const facts = [
     {
@@ -227,17 +227,18 @@ function PrivacySection() {
       title="Your data stays yours"
       intro="There is no Snip server. You deploy the app to your Cloudflare account, and a capture agent on your laptop does the browsing. Every screenshot, snapshot and token is stored in resources you own."
     >
-      <div className="grid grid-cols-1 gap-3 rounded-4xl bg-fill-1 p-3 ring-1 ring-border lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
+      <div className="flex flex-col gap-3 rounded-4xl bg-fill-1 p-3 ring-1 ring-border">
         <NetworkFigure />
-        <dl className="flex flex-col justify-center rounded-2xl bg-card px-6 py-2 ring-1 ring-border">
-          {systems.map(({ k, v, Icon }, i) => (
-            <div key={k} className={cn("flex items-start gap-3 py-3", i > 0 && "border-t")}>
-              <Icon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-              <dt className="w-16 shrink-0 font-mono text-xs leading-5 font-medium">{k}</dt>
-              <dd className="text-sm text-muted-foreground">{v}</dd>
+        <dl className="grid grid-cols-2 gap-x-6 gap-y-4 rounded-2xl bg-card px-5 py-4 ring-1 ring-border sm:grid-cols-3 lg:grid-cols-5">
+          {systems.map(({ k, v, Icon }) => (
+            <div key={k} className="flex flex-col gap-1">
+              <dt className="flex items-center gap-1.5 font-mono text-xs font-medium">
+                <Icon className="size-3.5 shrink-0 text-muted-foreground" />
+                {k}
+              </dt>
+              <dd className="text-xs leading-[1.5] text-muted-foreground">{v}</dd>
             </div>
           ))}
-          <p className="border-t pt-3 pb-1 text-xs leading-[1.5] text-muted-foreground">Queued captures wait until the agent is running.</p>
         </dl>
       </div>
       <div className="grid grid-cols-1 gap-x-12 gap-y-8 pt-2 md:grid-cols-2">
