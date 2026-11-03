@@ -1,9 +1,7 @@
-import { useEffect, useState, type ReactNode } from "react"
+import { useEffect, useRef, useState, type ReactNode } from "react"
 import {
   ArrowLeft,
-  ArrowRight,
   Clock,
-  Cloud,
   Database,
   Eye,
   HardDrive,
@@ -17,6 +15,8 @@ import {
 import { cn } from "@/lib/utils"
 import { GithubMark, Logo } from "@/App"
 import { Footer } from "@/components/landing-page"
+import { HL } from "@/lib/hairline/kernel.js"
+import { network } from "@/lib/hairline/network.js"
 
 const sections = [
   { id: "privacy", title: "Your data stays yours" },
@@ -147,17 +147,49 @@ function CodeBlock({ lines, label, wrap }: { lines: string[]; label?: string; wr
   )
 }
 
+/** Snip's systems as a Hairline figure: the Worker at the hub, its stores and your machine on branches. Hover a tile and its route lights up hop by hop; until then it walks its own tour. */
+function NetworkFigure() {
+  const stage = useRef<HTMLDivElement>(null)
+  const [readout, setReadout] = useState("rest")
+  useEffect(() => {
+    const el = stage.current
+    if (!el) return
+    HL.inject(document)
+    const svg = HL.mk("svg", { viewBox: "0 0 400 320", "aria-hidden": "true" }, el)
+    let text: string | null = "rest"
+    const read = {
+      get textContent() {
+        return text
+      },
+      set textContent(v: string | null) {
+        text = v
+        setReadout(v ?? "")
+      },
+    }
+    const figure = network.mount({ stage: el, svg, read }, network.range[1])
+    const lap = HL.tour(el, network.tour ?? [])
+    return () => {
+      lap.stop()
+      figure.destroy()
+      svg.remove()
+    }
+  }, [])
+  return (
+    <div className="relative flex items-center rounded-2xl bg-card pt-10 ring-1 ring-border [--hairline-plate:var(--card)]">
+      <p className="absolute top-4 left-5 text-xs text-muted-foreground">Hover a part to trace its route</p>
+      <p aria-live="polite" className="absolute top-4 right-5 font-mono text-xs">{readout}</p>
+      <div ref={stage} data-hairline={network.name} role="img" aria-label={network.means} className="mx-auto w-full max-w-[560px]" />
+    </div>
+  )
+}
+
 function PrivacySection() {
-  const resources = [
+  const systems = [
     { k: "Worker", v: "Gallery, API and the /mcp endpoint", Icon: Server },
     { k: "D1", v: "References, pages, animations, collections", Icon: Database },
     { k: "R2", v: "Screenshots, GIFs, HTML snapshots, styles", Icon: HardDrive },
     { k: "KV", v: "OAuth tokens for connected agents", Icon: KeyRound },
-  ]
-  const flows = [
-    { l: "poll", toCloud: true },
-    { l: "job", toCloud: false },
-    { l: "upload", toCloud: true },
+    { k: "Machine", v: "The capture agent: Playwright and Chromium. Polls your queue, records each page, uploads the files.", Icon: Monitor },
   ]
   const facts = [
     {
@@ -180,45 +212,18 @@ function PrivacySection() {
       title="Your data stays yours"
       intro="There is no Snip server. You deploy the app to your Cloudflare account, and a capture agent on your laptop does the browsing. Every screenshot, snapshot and token is stored in resources you own."
     >
-      <div className="flex flex-col gap-3 rounded-4xl bg-fill-1 p-3 ring-1 ring-border md:flex-row md:items-stretch">
-        <div className="flex flex-1 flex-col gap-5 rounded-2xl bg-card p-6 shadow-xs ring-1 ring-border">
-          <div className="flex items-center gap-2">
-            <Cloud className="size-4" />
-            <p className="text-[15px] font-medium">Your Cloudflare account</p>
-          </div>
-          <dl className="flex flex-col">
-            {resources.map(({ k, v, Icon }) => (
-              <div key={k} className="flex items-center gap-3 border-t py-3">
-                <Icon className="size-3.5 shrink-0 text-muted-foreground" />
-                <dt className="w-14 shrink-0 font-mono text-xs font-medium">{k}</dt>
-                <dd className="text-sm text-muted-foreground">{v}</dd>
-              </div>
-            ))}
-          </dl>
-        </div>
-        <div aria-hidden="true" className="hidden w-[120px] shrink-0 flex-col justify-center gap-4 md:flex">
-          {flows.map((f) => (
-            <div key={f.l} className="flex flex-col items-center gap-1">
-              <span className="font-mono text-2xs text-muted-foreground">{f.l}</span>
-              <div className="flex w-full items-center">
-                {f.toCloud && <ArrowLeft className="-mr-1.5 size-3.5" />}
-                <span className="h-px flex-1 bg-foreground" />
-                {!f.toCloud && <ArrowRight className="-ml-1.5 size-3.5" />}
-              </div>
+      <div className="grid grid-cols-1 gap-3 rounded-4xl bg-fill-1 p-3 ring-1 ring-border lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
+        <NetworkFigure />
+        <dl className="flex flex-col justify-center rounded-2xl bg-card px-6 py-2 ring-1 ring-border">
+          {systems.map(({ k, v, Icon }, i) => (
+            <div key={k} className={cn("flex items-start gap-3 py-3", i > 0 && "border-t")}>
+              <Icon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+              <dt className="w-16 shrink-0 font-mono text-xs leading-5 font-medium">{k}</dt>
+              <dd className="text-sm text-muted-foreground">{v}</dd>
             </div>
           ))}
-        </div>
-        <div className="flex flex-col gap-5 rounded-2xl bg-foreground p-6 text-background md:w-[300px] md:shrink-0">
-          <div className="flex items-center gap-2">
-            <Monitor className="size-4" />
-            <p className="text-[15px] font-medium">Your machine</p>
-          </div>
-          <div className="flex flex-col gap-2 rounded-xl bg-background/10 p-4">
-            <p className="font-mono text-xs font-medium">capture agent</p>
-            <p className="text-sm leading-[1.5] text-background/70">Playwright and Chromium. Polls your queue, records each page, uploads the files.</p>
-          </div>
-          <p className="mt-auto text-xs leading-[1.5] text-background/70">Queued captures wait until the agent is running.</p>
-        </div>
+          <p className="border-t pt-3 pb-1 text-xs leading-[1.5] text-muted-foreground">Queued captures wait until the agent is running.</p>
+        </dl>
       </div>
       <div className="grid grid-cols-1 gap-x-12 gap-y-8 pt-2 md:grid-cols-2">
         {facts.map(({ t, b, Icon }) => (
