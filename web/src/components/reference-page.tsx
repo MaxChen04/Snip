@@ -37,18 +37,25 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { cn } from "@/lib/utils"
 import { api, fileUrl, type Animation, type Page, type Reference } from "@/lib/api"
 import { useCollections } from "@/lib/collections"
+import { referenceViewUrl, useDesktopState } from "@/hooks/use-desktop-state"
 
 type Detail = { reference: Reference; pages: Page[]; animations: Animation[] }
 
 export function ReferencePage({ id, login }: { id: string; login: string }) {
-  const [, navigate] = useLocation()
-  const search = new URLSearchParams(useSearch())
+  const [location, navigate] = useLocation()
+  const query = useSearch()
+  const search = new URLSearchParams(query)
   const [data, setData] = useState<Detail | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [tab, setTab] = useState(search.get("tab") ?? "pages")
-  const [openPage, setOpenPage] = useState<string | null>(search.get("page"))
-  const [selecting, setSelecting] = useState(false)
-  const [sel, setSel] = useState<Selection>(EMPTY_SELECTION)
+  const tab = search.get("tab") ?? "pages"
+  const openPage = search.get("page")
+  const setView = (key: "tab" | "page", value: string | null) => {
+    navigate(referenceViewUrl(location, query, key, value), { replace: true })
+  }
+  const setTab = (value: string) => setView("tab", value)
+  const setOpenPage = (value: string | null) => setView("page", value)
+  const [selecting, setSelecting] = useDesktopState(`snip:${id}:selecting`, false)
+  const [sel, setSel] = useDesktopState<Selection>(`snip:${id}:selection`, EMPTY_SELECTION)
   const { collections, refresh: refreshCollections } = useCollections()
 
   const load = useCallback(() => {

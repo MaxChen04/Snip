@@ -1,9 +1,15 @@
 import type { Job, JobComplete, PageUpload } from "../../web/shared/types"
 
+export class CaptureAuthenticationError extends Error {
+  constructor() { super("Snip rejected the capture token (401)") }
+}
+
 export class SnipApi {
   constructor(
     private base: string,
     private token: string,
+    private requestTimeoutMs = 120_000,
+    private claimTimeoutMs = 15_000,
   ) {
     this.base = base.replace(/\/$/, "")
   }
@@ -11,10 +17,17 @@ export class SnipApi {
   private async call(path: string, init: RequestInit = {}) {
     const res = await fetch(`${this.base}${path}`, {
       ...init,
+      signal: init.signal ?? AbortSignal.timeout(path === "/agent/jobs/claim" ? this.claimTimeoutMs : this.requestTimeoutMs),
       headers: { authorization: `Bearer ${this.token}`, ...(init.headers ?? {}) },
     })
-    if (res.status === 401) throw new Error("Snip rejected CAPTURE_TOKEN (401). Check capture/.env matches the Worker secret.")
+    if (res.status === 401) {
+      await res.body?.cancel()
+      throw new CaptureAuthenticationError()
+    }
     if (!res.ok) throw new Error(`${init.method ?? "GET"} ${path} failed: ${res.status} ${await res.text()}`)
+    // Mutations return small acknowledgements. Drain them so a long-lived
+    // agent can reuse HTTP connections without relying on garbage collection.
+    if (path !== "/agent/jobs/claim") await res.arrayBuffer()
     return res
   }
 

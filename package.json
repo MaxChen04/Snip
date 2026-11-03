@@ -4,10 +4,13 @@
   "type": "module",
   "workspaces": ["web", "capture"],
   "scripts": {
-    "test": "node --import tsx --test web/tests/*.test.ts",
+    "test": "node --import tsx --test web/tests/*.test.ts capture/tests/*.test.ts && node --test desktop/tests/*.test.cjs desktop/tests/*.test.mjs",
+    "test:desktop": "node desktop/scripts/smoke.cjs",
     "dev": "npm run dev -w web",
     "deploy": "npm run deploy -w web",
     "capture": "npm run start -w capture",
-    "typecheck": "npm run typecheck -w web && npm run typecheck -w capture"
+    "typecheck": "npm run typecheck -w web && npm run typecheck -w capture",
+    "app": "npm ci --prefix desktop && npm run build -w web && npm run build --prefix desktop",
+    "app:dev": "npm start --prefix desktop -- --dev"
   }
 }

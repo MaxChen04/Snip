@@ -1,15 +1,10 @@
 import { existsSync } from "node:fs"
-import { chromium, type Browser } from "playwright"
 import { SnipApi } from "./api"
+import { CaptureRuntime } from "./runtime"
 
-// Local capture agent: polls the hosted Snip queue, captures sites with a
-// real browser on this machine and uploads results. Run: npm run capture
-
+// Load capture settings before importing modules that read them at initialization.
 const envFile = new URL("../.env", import.meta.url)
 if (existsSync(envFile)) process.loadEnvFile(envFile)
-
-// Capture modules read their settings at initialization, after capture/.env is loaded.
-const { captureJob } = await import("./capture")
 
 const base = process.env.SNIP_URL
 const token = process.env.CAPTURE_TOKEN
@@ -17,57 +12,46 @@ if (!base || !token) {
   console.error("Set SNIP_URL and CAPTURE_TOKEN in capture/.env (see .env.example).")
   process.exit(1)
 }
-const once = process.argv.includes("--once")
-const pollMs = Number(process.env.POLL_SECONDS ?? 5) * 1000
+const seconds = (value: string | undefined, fallback: number) => {
+  const n = Number(value ?? fallback)
+  return Number.isFinite(n) && n > 0 ? n * 1000 : fallback * 1000
+}
+const pollMs = seconds(process.env.POLL_SECONDS, 5)
 const api = new SnipApi(base, token)
-
-let browser = null as Browser | null
-async function getBrowser() {
-  if (browser?.isConnected()) return browser
-  browser = await chromium.launch({
+const runtime = new CaptureRuntime({
+  api,
+  launch: async () => (await import("playwright")).chromium.launch({
     headless: process.env.HEADLESS !== "false",
     executablePath: process.env.CHROMIUM_PATH || undefined,
-  })
-  return browser
-}
+  }),
+  capture: async (browser, job) => (await import("./capture")).captureJob(browser, api, job),
+  status: (status) => {
+    if (process.connected && process.send) {
+      try { process.send(status, () => {}) } catch { /* parent disconnected */ }
+    }
+  },
+  pollMs,
+  idleMs: seconds(process.env.BROWSER_IDLE_SECONDS, 120),
+  once: process.argv.includes("--once"),
+  logError: (message) => console.error(message),
+})
 
-let stopping = false
+let interrupted = false
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
-  process.on(sig, async () => {
-    if (stopping) process.exit(1)
-    stopping = true
+  process.on(sig, () => {
+    if (interrupted) process.exit(1)
+    interrupted = true
     console.log("\nStopping after the current job (Ctrl+C again to force)…")
-    if (!busy) {
-      await browser?.close().catch(() => {})
-      process.exit(0)
-    }
+    runtime.stop()
   })
 }
+process.on("disconnect", () => runtime.stop())
+process.on("message", (message: unknown) => {
+  if (!message || typeof message !== "object" || !("type" in message)) return
+  if (message.type === "snip:stop") runtime.stop()
+  if (message.type === "snip:retry") runtime.retry()
+})
 
-let busy = false
 console.log(`Snip capture agent → ${base} (polling every ${pollMs / 1000}s)`)
-while (!stopping) {
-  let job = null
-  try {
-    job = await api.claim()
-  } catch (e) {
-    console.error("Queue poll failed:", (e as Error).message)
-  }
-  if (job) {
-    busy = true
-    // Presence while busy: a single long page can take minutes between progress reports.
-    const beat = setInterval(() => api.heartbeat(job.id), 30_000)
-    try {
-      await captureJob(await getBrowser(), api, job)
-    } catch (e) {
-      console.error(`[${job.id}] failed:`, (e as Error).message)
-      await api.fail(job.id, (e as Error).message.split("\n")[0] ?? "Capture failed")
-    }
-    clearInterval(beat)
-    busy = false
-    continue
-  }
-  if (once) break
-  await new Promise((r) => setTimeout(r, pollMs))
-}
-await (browser as Browser | null)?.close().catch(() => {})
+await runtime.run()
+if (process.connected) process.disconnect?.()
