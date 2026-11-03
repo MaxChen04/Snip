@@ -16,7 +16,11 @@ const DESKTOP = { width: 1440, height: 900 }
 const MOBILE = { width: 390, height: 844 }
 const MOBILE_DPR = 1.5
 const MAX_SHOT_PX = 16000 // Chromium texture limit for full-page screenshots
-const MAX_SCROLL_FRAMES = 70
+// Scroll GIF: frames are captured at fixed scroll increments and played back at a fixed rate,
+// so playback is smooth no matter how long each screenshot took.
+const SCROLL_FPS = Math.min(50, Math.max(5, Number(process.env.SCROLL_FPS ?? 30)))
+const SCROLL_STEP = Math.max(8, Number(process.env.SCROLL_STEP ?? 40)) // px per frame at 1440 wide
+const MAX_SCROLL_FRAMES = Math.max(20, Number(process.env.SCROLL_MAX_FRAMES ?? 360))
 const MAX_HOVER_GIFS = 6
 const FONT_BUDGET = 4_000_000
 
@@ -84,27 +88,32 @@ async function dismissBanners(page: PwPage) {
 const docHeight = (page: PwPage) => page.evaluate(() => Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight ?? 0))
 
 /** Scroll through the page recording frames; also triggers lazy loading and scroll-reveal content. */
-async function recordScroll(page: PwPage, record: boolean): Promise<Frame[]> {
+export async function recordScroll(page: PwPage, record: boolean): Promise<Frame[]> {
   const frames: Frame[] = []
   const vh = page.viewportSize()!.height
   let height = await docHeight(page)
   const travel = Math.max(0, height - vh)
-  const step = Math.max(160, Math.ceil(travel / (MAX_SCROLL_FRAMES - 1)))
-  let last = Date.now()
+  // Small fixed steps for smooth motion; long pages take bigger steps to stay under the frame cap.
+  const step = record ? Math.max(SCROLL_STEP, Math.ceil(travel / (MAX_SCROLL_FRAMES - 1))) : 400
+  const delay = Math.round(1000 / SCROLL_FPS)
+  // Raw CDP with optimizeForSpeed is ~3-4x faster than page.screenshot for PNG frames.
+  const cdp = record ? await page.context().newCDPSession(page) : null
+  const shot = async () => {
+    const { data } = await cdp!.send("Page.captureScreenshot", { format: "png", optimizeForSpeed: true } as { format: "png" })
+    return Buffer.from(data, "base64")
+  }
   for (let y = 0; ; y += step) {
     await page.evaluate((top) => window.scrollTo({ top, behavior: "instant" as ScrollBehavior }), y)
-    await sleep(record ? 110 : 60)
-    if (record) {
-      const png = await page.screenshot({ type: "png" })
-      const now = Date.now()
-      if (frames.length) frames[frames.length - 1]!.delay = Math.min(now - last, 160)
-      frames.push({ png, delay: 160 })
-      last = now
-    }
+    await sleep(record ? 30 : 60)
+    if (record) frames.push({ png: await shot(), delay })
     height = await docHeight(page) // infinite/lazy pages can grow
-    if (y >= Math.min(height, 40_000) - vh) break
+    if (y >= Math.min(height, 40_000) - vh || (record && frames.length >= MAX_SCROLL_FRAMES)) break
   }
-  if (frames.length) frames[frames.length - 1]!.delay = 1200
+  await cdp?.detach().catch(() => {})
+  if (frames.length) {
+    frames[0]!.delay = 700 // beat at the top before it starts moving
+    frames[frames.length - 1]!.delay = 1200
+  }
   await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" as ScrollBehavior }))
   await sleep(400)
   return frames
