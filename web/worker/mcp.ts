@@ -4,6 +4,7 @@ import { z } from "zod"
 import type { Animation, DesignTokens, Page, Reference } from "../shared/types"
 import { signFileUrl } from "./auth"
 import * as db from "./db"
+import { bounded, decodeCursor, encodeCursor } from "./mcp-bounds"
 
 // Remote MCP server. Read tools let an agent pull references (screenshots, motion stills,
 // design tokens, computed styles, HTML snapshots); write tools let it add references and
@@ -18,8 +19,6 @@ import * as db from "./db"
 
 /** Server-side limits, in explicit units. */
 const LIMITS = {
-  /** Serialized JSON bytes for a list section before it is cut and continued. */
-  listBytes: 24_000,
   /** Serialized bytes per token group in a summary. */
   summaryGroupBytes: 1_500,
   /** Largest image inlined as base64. */
@@ -44,47 +43,6 @@ const ok = (data: Record<string, unknown>, images: Content[] = []) => ({
 })
 
 const fail = (message: string) => ({ content: [{ type: "text" as const, text: message }], isError: true })
-
-/**
- * Take items from `offset` until the item limit or byte budget is hit. Always advances by at least one item;
- * a single item larger than the whole budget is replaced by an omission marker instead of being returned.
- */
-function bounded<T>(
-  all: T[],
-  offset: number,
-  limit: number,
-  bytes = LIMITS.listBytes,
-  hint = "use the signed file URL from get_page",
-) {
-  const items: (T | { omitted: true; index: number; bytes: number; reason: string })[] = []
-  let used = 0
-  let taken = 0
-  for (let i = offset; i < all.length && taken < limit; i++) {
-    const size = JSON.stringify(all[i]).length
-    if (size > bytes) {
-      items.push({ omitted: true, index: i, bytes: size, reason: `entry is larger than the ${bytes}-byte budget; ${hint}` })
-      used += 200
-    } else {
-      if (taken && used + size > bytes) break
-      items.push(all[i]!)
-      used += size
-    }
-    taken++
-  }
-  const next = offset + taken
-  return { items, total: all.length, offset, nextOffset: next < all.length ? next : null }
-}
-
-// Cursors are bound to the reference's capture revision so a recapture can't silently mix results.
-const encodeCursor = (c: { part: string; group?: string; offset: number; rev: string }) => btoa(JSON.stringify(c))
-function decodeCursor(s: string | undefined) {
-  if (!s) return null
-  try {
-    return JSON.parse(atob(s)) as { part: string; group?: string; offset: number; rev: string }
-  } catch {
-    return null
-  }
-}
 
 const TOKEN_GROUPS = ["colors", "fonts", "fontSizes", "spacing", "radii", "shadows", "transitions", "keyframes", "cssVariables"] as const
 type TokenGroup = (typeof TOKEN_GROUPS)[number]
@@ -251,11 +209,12 @@ Signed file URLs expire after 24 hours.`,
       const rev = ref.updatedAt
       const cur = decodeCursor(cursor)
       if (cursor && !cur) return fail("cursor is not valid. Call again without cursor to start from the beginning.")
+      if (cur && cur.referenceId !== id) return fail("That cursor belongs to a different reference. Call again without cursor.")
       if (cur && cur.rev !== rev) return fail("This reference was recaptured or changed since that cursor was issued. Call again without cursor.")
       if (cur && (cur.part !== part || (cur.group ?? null) !== (token_group ?? null)))
         return fail(`That cursor belongs to part "${cur.part}"${cur.group ? ` group "${cur.group}"` : ""}. Pass the same part and token_group.`)
       const offset = cur?.offset ?? 0
-      const nextCursor = (n: number | null) => (n == null ? null : encodeCursor({ part, group: token_group, offset: n, rev }))
+      const nextCursor = (n: number | null) => (n == null ? null : encodeCursor({ referenceId: id, part, group: token_group, offset: n, rev }))
 
       if (part === "full") {
         return ok({
@@ -429,19 +388,22 @@ Signed file URLs expire after 24 hours.`,
         return fail("The styles file for this page could not be parsed. Use computedStylesUrl from get_page instead.")
       }
       const provenance = "Computed styles sampled from the desktop render at capture time."
-      if (section === "summary")
+      if (section === "summary") {
+        const names = bounded((s.keyframes ?? []).map((k) => k.name), 0, 40)
         return ok({
           pageId: page_id,
           provenance,
           viewport: s.viewport,
           document: s.document,
           elements: { total: s.elements?.length ?? 0, captureTruncated: !!s.truncated },
-          keyframes: (s.keyframes ?? []).map((k) => k.name),
+          keyframes: names.items,
+          keyframesOmitted: names.total - names.items.length,
           hoverRules: s.hoverRules?.length ?? 0,
           fontFaces: s.fontFaces?.length ?? 0,
           cssVariables: Object.keys(s.cssVariables ?? {}).length,
           next: "section \"elements\" with selector_contains, or \"keyframes\" / \"hover_rules\" / \"css_variables\"",
         })
+      }
       let all: unknown[]
       if (section === "elements") {
         const sel = selector_contains?.toLowerCase()
@@ -513,6 +475,7 @@ Scroll timing is synthetic playback; hover offsets are measured. Treat easing an
 
       const images: Content[] = []
       if (representation === "contact_sheet") {
+        data.contactSheetUrl = await url(a.sheetKey)
         const res = await inlineImage(a.sheetKey)
         if ("image" in res) {
           images.push(res.image)
@@ -521,6 +484,7 @@ Scroll timing is synthetic playback; hover offsets are measured. Treat easing an
       } else if (representation === "frame") {
         const f = frame == null ? null : m?.frames[frame]
         if (!f) return fail(m?.frames.length ? `Pass frame as an index from 0 to ${m.frames.length - 1}.` : "This animation has no stored frames. Use representation \"gif\".")
+        data.frameUrl = await url(f.key)
         const res = await inlineImage(f.key)
         if ("image" in res) {
           images.push(res.image)
@@ -569,9 +533,9 @@ Scroll timing is synthetic playback; hover offsets are measured. Treat easing an
       annotations: { readOnlyHint: true },
     },
     async ({ reference_id }) => {
-      const r = await db.getReference(env.DB, reference_id)
+      const r = await db.getReferenceRecord(env.DB, reference_id)
       if (!r) return fail(`No reference with id "${reference_id}". Call search_references to find ids.`)
-      return ok({ referenceId: reference_id, ...(await db.getCaptureStatus(env.DB, r.reference)) })
+      return ok({ referenceId: reference_id, ...(await db.getCaptureStatus(env.DB, r)) })
     },
   )
 

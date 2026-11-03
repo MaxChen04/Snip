@@ -178,15 +178,20 @@ export async function listReferences(db: D1Database, f: ListFilter): Promise<Pag
   return { items: rows, nextCursor }
 }
 
-export async function getReference(db: D1Database, id: string) {
+export async function getReferenceRecord(db: D1Database, id: string) {
   const r = await db.prepare(`${REF_SELECT} WHERE r.id = ?`).bind(id).first<Row>()
+  return r ? toReference(r) : null
+}
+
+export async function getReference(db: D1Database, id: string) {
+  const r = await getReferenceRecord(db, id)
   if (!r) return null
   const [pages, anims] = await Promise.all([
     db.prepare(`SELECT * FROM pages WHERE reference_id = ? ORDER BY ord, created_at`).bind(id).all<Row>(),
     db.prepare(`SELECT * FROM animations WHERE reference_id = ? ORDER BY created_at`).bind(id).all<Row>(),
   ])
   return {
-    reference: toReference(r),
+    reference: r,
     pages: pages.results.map(toPage),
     animations: anims.results.map(toAnimation),
   }
