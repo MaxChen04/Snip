@@ -1,0 +1,12 @@
+{
+  "name": "refshelf",
+  "private": true,
+  "type": "module",
+  "workspaces": ["web", "capture"],
+  "scripts": {
+    "dev": "npm run dev -w web",
+    "deploy": "npm run deploy -w web",
+    "capture": "npm run start -w capture",
+    "typecheck": "npm run typecheck -w web && npm run typecheck -w capture"
+  }
+}
