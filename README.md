@@ -83,16 +83,25 @@ For Claude.ai or Claude Desktop, add it as a custom connector with the same URL.
 
 | Tool | What it does |
 | --- | --- |
-| `search_references` | Search by text, collection or domain; returns summaries with cover URLs |
-| `get_reference` | Tokens, every page (desktop/mobile screenshots, HTML snapshot, computed styles URLs) and GIFs |
-| `get_page` | One page, with an inline screenshot and optional computed styles / HTML (truncated) |
-| `search_animations` | Scroll and hover GIFs across all references |
+| `search_references` | Search by text, collection or domain; returns summaries with ids |
+| `get_reference` | One reference in bounded parts: `overview`, `pages`, `animations`, `tokens` (optionally one `token_group`, paginated). `full` is the legacy everything-at-once read |
+| `get_page` | One page: signed screenshot URLs with coverage, a token summary, an inline viewport screenshot and optional HTML in chunks |
+| `get_page_styles` | Valid, bounded computed styles: summary, filtered elements, keyframes, hover rules, font faces, CSS variables |
+| `get_animation` | One animation: a manifest (timing provenance, sampled frames, the element's observed styles) plus a contact sheet, a single frame or the GIF |
+| `search_animations` | Scroll and hover animations across all references |
+| `get_capture_status` | Job state, last progress and when the capture worker last checked in, with a suggested poll delay |
 | `list_collections` | Collections with counts |
 | `add_reference` | Queue a URL (`single` or `crawl`) for capture |
 | `create_collection` | New collection |
 | `set_collection_membership` | Add or remove a reference from a collection |
 
+Every result carries the same JSON as text and as `structuredContent`. Lists are capped by item count and bytes and say what they left out and how to continue. Many models only see the first frame of a GIF, so new captures also store sampled frames and a contact sheet per animation (animations captured earlier only have the GIF until you recapture).
+
 File URLs returned by the MCP are signed and expire after 24 hours.
+
+`get_page(include_styles: true)` now returns guidance to `get_page_styles` instead of a truncated JSON fragment. Update client prompts to use the new tool for styles. Existing `get_reference` calls without `part` still return the full legacy result, and old animations still offer their GIFs.
+
+Run `npm test` for the MCP response-budget and cursor regression checks.
 
 ## Capture agent options (`capture/.env`)
 
@@ -103,6 +112,8 @@ File URLs returned by the MCP are signed and expire after 24 hours.
 | `CHROMIUM_PATH` | Playwright's Chromium | Use your installed Chrome instead |
 | `POLL_SECONDS` | `5` | Queue poll interval |
 | `HEADLESS` | `true` | `false` to watch the browser |
+| `SHEET_FRAMES` | `9` | Frames sampled per animation for its contact sheet (2–16) |
+| `SHEET_WIDTH` | `1536` | Max contact sheet width in px |
 
 `npm run once -w capture` drains the queue and exits.
 

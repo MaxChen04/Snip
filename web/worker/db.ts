@@ -1,6 +1,8 @@
 import type {
   Animation,
+  AnimationMeta,
   CaptureMode,
+  CaptureStatus,
   Collection,
   DesignTokens,
   Job,
@@ -86,6 +88,8 @@ function toAnimation(r: Row): Animation {
     gifKey: r.gif_key as string,
     width: r.width as number,
     height: r.height as number,
+    sheetKey: (r.sheet_key as string) ?? null,
+    meta: parse<AnimationMeta>(r.meta_json),
     createdAt: r.created_at as string,
   }
 }
@@ -174,18 +178,28 @@ export async function listReferences(db: D1Database, f: ListFilter): Promise<Pag
   return { items: rows, nextCursor }
 }
 
-export async function getReference(db: D1Database, id: string) {
+export async function getReferenceRecord(db: D1Database, id: string) {
   const r = await db.prepare(`${REF_SELECT} WHERE r.id = ?`).bind(id).first<Row>()
+  return r ? toReference(r) : null
+}
+
+export async function getReference(db: D1Database, id: string) {
+  const r = await getReferenceRecord(db, id)
   if (!r) return null
   const [pages, anims] = await Promise.all([
     db.prepare(`SELECT * FROM pages WHERE reference_id = ? ORDER BY ord, created_at`).bind(id).all<Row>(),
     db.prepare(`SELECT * FROM animations WHERE reference_id = ? ORDER BY created_at`).bind(id).all<Row>(),
   ])
   return {
-    reference: toReference(r),
+    reference: r,
     pages: pages.results.map(toPage),
     animations: anims.results.map(toAnimation),
   }
+}
+
+export async function getAnimation(db: D1Database, id: string) {
+  const r = await db.prepare(`SELECT * FROM animations WHERE id = ?`).bind(id).first<Row>()
+  return r ? toAnimation(r) : null
 }
 
 export async function getPage(db: D1Database, id: string) {
@@ -404,9 +418,13 @@ export async function addPage(db: D1Database, referenceId: string, p: PageUpload
     stmts.push(
       db
         .prepare(
-          `INSERT INTO animations (id, reference_id, page_id, kind, label, selector, viewport, gif_key, width, height, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO animations (id, reference_id, page_id, kind, label, selector, viewport, gif_key, width, height, sheet_key, meta_json, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
-        .bind(newId(), referenceId, pageId, a.kind, a.label, a.selector, a.viewport, a.gifKey, a.width, a.height, ts),
+        .bind(
+          newId(), referenceId, pageId, a.kind, a.label, a.selector, a.viewport, a.gifKey, a.width, a.height,
+          a.sheetKey ?? null, a.meta ? JSON.stringify(a.meta) : null, ts,
+        ),
     )
   }
   stmts.push(
@@ -434,4 +452,84 @@ export async function completeJob(db: D1Database, id: string, c: JobComplete) {
 
 export async function failJob(db: D1Database, id: string, error: string) {
   await db.prepare(`UPDATE refs SET status = 'failed', progress = NULL, error = ?, updated_at = ? WHERE id = ?`).bind(error.slice(0, 1000), now(), id).run()
+}
+
+// ---------- Capture worker presence ----------
+
+const PRESENCE_ID = "capture"
+const PRESENCE_WRITE_SECONDS = 20
+const RECENT_SECONDS = 90
+
+/** Record that the capture worker contacted the server. Throttled so idle polling costs at most a few writes a minute. */
+export async function touchPresence(db: D1Database, activity: "idle" | "busy", jobId: string | null) {
+  const ts = now()
+  const before = new Date(Date.now() - PRESENCE_WRITE_SECONDS * 1000).toISOString()
+  await db
+    .prepare(
+      `INSERT INTO worker_presence (id, last_seen_at, activity, job_id) VALUES (?1, ?2, ?3, ?4)
+       ON CONFLICT (id) DO UPDATE SET last_seen_at = ?2, activity = ?3, job_id = ?4
+       WHERE worker_presence.last_seen_at < ?5 OR worker_presence.activity != ?3 OR coalesce(worker_presence.job_id, '') != coalesce(?4, '')`,
+    )
+    .bind(PRESENCE_ID, ts, activity, jobId, before)
+    .run()
+}
+
+export async function getCaptureStatus(db: D1Database, ref: Reference): Promise<CaptureStatus> {
+  const [w, row] = await Promise.all([
+    db.prepare(`SELECT * FROM worker_presence WHERE id = ?`).bind(PRESENCE_ID).first<Row>(),
+    db.prepare(`SELECT claimed_at FROM refs WHERE id = ?`).bind(ref.id).first<Row>(),
+  ])
+  const lastSeenAt = (w?.last_seen_at as string) ?? null
+  const secondsSinceSeen = lastSeenAt ? Math.max(0, Math.round((Date.now() - Date.parse(lastSeenAt)) / 1000)) : null
+  const freshness = secondsSinceSeen == null ? "never" : secondsSinceSeen <= RECENT_SECONDS ? "recent" : "stale"
+  const activity = (w?.activity as "idle" | "busy") ?? null
+  const currentJobId = (w?.job_id as string) ?? null
+  const claimedAt = (row?.claimed_at as string) ?? null
+  let advice: string
+  let pollAfterSeconds: number | null = null
+  switch (ref.status) {
+    case "ready":
+      advice = "Capture finished. Use get_reference with part \"overview\" to see what was captured."
+      break
+    case "failed":
+      advice = `Capture failed${ref.error ? `: ${ref.error}` : ""}. Tell the user; they can recapture from the Snip app.`
+      break
+    case "queued":
+      if (freshness === "recent") {
+        advice = activity === "busy" ? "Waiting in the queue while the capture worker finishes another job." : "The capture worker is online and should pick this up shortly."
+        pollAfterSeconds = activity === "busy" ? 60 : 15
+      } else {
+        advice =
+          freshness === "never"
+            ? "No capture worker has ever contacted Snip. Ask the user to run `npm run capture` on their machine. Stop polling until they do."
+            : `The capture worker was last seen ${secondsSinceSeen}s ago and is probably not running. Ask the user to start \`npm run capture\`. Stop polling until they do.`
+      }
+      break
+    case "capturing": {
+      const progressAge = claimedAt ? Math.round((Date.now() - Date.parse(claimedAt)) / 1000) : null
+      if (freshness !== "recent") {
+        advice = `The capture was in progress but the worker has not been seen for ${secondsSinceSeen ?? "?"}s. It may have stopped; it will be retried when a worker reconnects. Ask the user to check \`npm run capture\`.`
+      } else if (currentJobId && currentJobId !== ref.id) {
+        advice = "The worker is online but busy with a different job; this capture may have been interrupted and will be retried."
+        pollAfterSeconds = 60
+      } else {
+        advice =
+          progressAge != null && progressAge > 300
+            ? `The worker is online but this capture has not reported progress for ${progressAge}s. A slow page can cause this; keep polling slowly.`
+            : "Capturing. Progress shows the current page."
+        pollAfterSeconds = progressAge != null && progressAge > 300 ? 120 : 20
+      }
+      break
+    }
+  }
+  return {
+    state: ref.status,
+    progress: ref.progress,
+    error: ref.error,
+    // claimed_at is refreshed on every progress report, so it is the last progress time, not the attempt start.
+    lastProgressAt: ref.status === "capturing" ? claimedAt : null,
+    worker: { lastSeenAt, secondsSinceSeen, freshness, activity, currentJobId },
+    pollAfterSeconds,
+    advice,
+  }
 }

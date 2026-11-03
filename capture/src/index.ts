@@ -1,13 +1,15 @@
 import { existsSync } from "node:fs"
 import { chromium, type Browser } from "playwright"
 import { SnipApi } from "./api"
-import { captureJob } from "./capture"
 
 // Local capture agent: polls the hosted Snip queue, captures sites with a
 // real browser on this machine and uploads results. Run: npm run capture
 
 const envFile = new URL("../.env", import.meta.url)
 if (existsSync(envFile)) process.loadEnvFile(envFile)
+
+// Capture modules read their settings at initialization, after capture/.env is loaded.
+const { captureJob } = await import("./capture")
 
 const base = process.env.SNIP_URL
 const token = process.env.CAPTURE_TOKEN
@@ -53,12 +55,15 @@ while (!stopping) {
   }
   if (job) {
     busy = true
+    // Presence while busy: a single long page can take minutes between progress reports.
+    const beat = setInterval(() => api.heartbeat(job.id), 30_000)
     try {
       await captureJob(await getBrowser(), api, job)
     } catch (e) {
       console.error(`[${job.id}] failed:`, (e as Error).message)
       await api.fail(job.id, (e as Error).message.split("\n")[0] ?? "Capture failed")
     }
+    clearInterval(beat)
     busy = false
     continue
   }
