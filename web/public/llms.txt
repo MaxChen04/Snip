@@ -1,0 +1,87 @@
+# Snip
+
+> Snip is a private, self-hosted library of website design references. You deploy it to your own Cloudflare account (free plan). A capture agent on your machine records every page of a site: desktop and mobile screenshots, computed styles, a self-contained HTML snapshot, scroll and hover GIFs, and extracted design tokens. A remote MCP server lets agents search, read and add references.
+
+Source: https://github.com/MaxChen04/Snip
+
+## Instructions for agents setting up Snip
+
+Run the steps below in order. Stop and ask the user for anything only they can do: creating the GitHub OAuth app, signing in to Cloudflare (`npx wrangler login`), and typing secret values. Never print, log or commit secret values.
+
+Requirements: Node 22, a GitHub account, a Cloudflare account.
+
+1. Clone the repository and install dependencies:
+   ```
+   git clone https://github.com/MaxChen04/Snip && cd Snip
+   npm install
+   ```
+2. Ask the user to create a GitHub OAuth app (github.com → Settings → Developer settings → OAuth Apps → New) with:
+   - Homepage URL: `https://snip.<your-subdomain>.workers.dev`
+   - Callback URL: `https://snip.<your-subdomain>.workers.dev/auth/callback`
+3. Create the Cloudflare resources and paste the printed ids into `web/wrangler.jsonc`:
+   ```
+   cd web
+   npx wrangler d1 create snip
+   npx wrangler kv namespace create OAUTH_KV
+   npx wrangler r2 bucket create snip-files
+   ```
+   Also set `PUBLIC_URL` (the Worker URL) and `ALLOWED_GITHUB_LOGINS` (comma-separated GitHub logins allowed to sign in) in `web/wrangler.jsonc`.
+4. Add the secrets. Generate `SESSION_SECRET` and `CAPTURE_TOKEN` with `openssl rand -hex 32`; the user supplies the GitHub client id and secret:
+   ```
+   npx wrangler secret put GITHUB_CLIENT_ID
+   npx wrangler secret put GITHUB_CLIENT_SECRET
+   npx wrangler secret put SESSION_SECRET
+   npx wrangler secret put CAPTURE_TOKEN
+   ```
+5. Create the database tables and deploy:
+   ```
+   npm run db:migrate:remote
+   npm run deploy
+   ```
+6. Configure and start the capture agent from the repository root. Set `SNIP_URL` to the Worker URL and `CAPTURE_TOKEN` to the same value as the Worker secret:
+   ```
+   cp capture/.env.example capture/.env
+   npx playwright install chromium
+   npm run capture
+   ```
+   Queued captures wait until this agent is running. `npm run once -w capture` drains the queue and exits.
+7. Connect an MCP client to `https://snip.<your-subdomain>.workers.dev/mcp`. The user signs in with GitHub and approves the client on a consent screen.
+   ```
+   claude mcp add --transport http snip https://snip.<your-subdomain>.workers.dev/mcp
+   ```
+   For Claude.ai or Claude Desktop, add a custom connector with the same URL.
+
+## Trying it locally first
+
+```
+cp web/.dev.vars.example web/.dev.vars
+npm run db:migrate:local -w web
+npm run dev
+```
+The app runs at http://localhost:5173. `DEV_LOGIN` in `.dev.vars` skips GitHub sign-in on localhost only; never set it in production. In a second terminal, copy `capture/.env.example` to `capture/.env` with `SNIP_URL=http://localhost:5173` and the `CAPTURE_TOKEN` from `.dev.vars`, then run `npm run capture`.
+
+## MCP tools
+
+- `search_references`: search by text, collection or domain
+- `get_reference`: tokens, every page (screenshots, HTML snapshot, computed styles URLs) and GIFs
+- `get_page`: one page with an inline screenshot and optional computed styles or HTML
+- `search_animations`: scroll and hover GIFs across all references
+- `list_collections`: collections with counts
+- `add_reference`: queue a URL (`single` or `crawl`) for capture
+- `create_collection`: new collection
+- `set_collection_membership`: add or remove a reference from a collection
+
+File URLs returned by the MCP are signed and expire after 24 hours.
+
+## Privacy
+
+- All data lives in the user's own Cloudflare account: D1 (references, pages, animations, collections), R2 (screenshots, GIFs, HTML snapshots, styles) and KV (OAuth tokens).
+- Only GitHub logins listed in `ALLOWED_GITHUB_LOGINS` can sign in. Sessions are signed cookies that last 30 days.
+- Pages are captured by Chromium on the user's machine, not by a shared server.
+
+## Known limits
+
+- Free plan: R2 10 GB (roughly 1,500 to 3,000 captured pages), D1 5 GB, Workers 100k requests a day.
+- Full-page screenshots are capped at 16,000 px tall.
+- Crawls stay on the same hostname and ignore query strings.
+- Captures show what an anonymous browser sees; sites behind logins are not supported.
