@@ -218,7 +218,7 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
               )
             ) : (
               <PromptPill on={false} onClick={() => setSelecting(true)}>
-                Prompt
+                Select
               </PromptPill>
             )}
           </div>

@@ -55,6 +55,8 @@
   --color-syntax-removed: var(--syntax-removed);
   --color-syntax-added-word: var(--syntax-added-word);
   --color-syntax-removed-word: var(--syntax-removed-word);
+  --color-note: var(--note);
+  --color-note-ink: var(--note-ink);
   --color-fill-1: var(--fill-1);
   --color-fill-2: var(--fill-2);
   --color-fill-3: var(--fill-3);
@@ -154,6 +156,8 @@
   --sidebar-accent-foreground: oklch(0.145 0 0);
   --sidebar-border: oklch(0.145 0 0 / 10%);
   --sidebar-ring: oklch(0.708 0 0);
+  --note: oklch(0.916 0.128 94.1);
+  --note-ink: oklch(0.306 0.063 93.2);
   --fill-1: oklch(0.556 0 0 / 5%);
   --fill-2: oklch(0.556 0 0 / 8%);
   --fill-3: oklch(0.556 0 0 / 12%);
@@ -216,6 +220,8 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+  --note: oklch(0.916 0.128 94.1);
+  --note-ink: oklch(0.306 0.063 93.2);
   --fill-1: oklch(1 0 0 / 5%);
   --fill-2: oklch(1 0 0 / 10%);
   --fill-3: oklch(1 0 0 / 14%);
@@ -251,4 +257,57 @@
   body {
     @apply bg-background text-foreground antialiased;
   }
+}
+
+/* Landing page motion. Everything here is off for visitors who prefer reduced motion. */
+@property --peel {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 72px;
+}
+
+@keyframes landing-reveal {
+  from {
+    opacity: 0;
+    translate: 0 12px;
+  }
+}
+
+/* top moves by the frame's height, translate by the strip's own: together they scroll from top-aligned to bottom-aligned. */
+@keyframes landing-scroll {
+  0%, 12% { top: 0; translate: 0 0; }
+  44%, 56% { top: 100%; translate: 0 -100%; }
+  88%, 100% { top: 0; translate: 0 0; }
+}
+
+@keyframes landing-hover {
+  0%, 20% { scale: 1; }
+  45%, 70% { scale: 1.9; }
+  95%, 100% { scale: 1; }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .peel {
+    transition: --peel 300ms cubic-bezier(0.23, 1, 0.32, 1);
+  }
+  .landing-scroll {
+    animation: landing-scroll 9s ease-in-out infinite;
+  }
+  .landing-hover {
+    animation: landing-hover 6s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+  }
+  @supports (animation-timeline: view()) {
+    .reveal {
+      animation: landing-reveal linear both;
+      animation-timeline: view();
+      animation-range: entry 0% entry 35%;
+    }
+  }
+}
+
+/* The guide's network figure: the packet riding a lit route is a subtle yellow. Unlayered, like the figure's own styles, so it wins over them. */
+.network-figure svg circle.dot:not(.m):not(.off) {
+  fill: var(--note);
+  stroke: color-mix(in oklab, var(--note-ink) 45%, transparent);
+  stroke-width: 0.6px;
 }
