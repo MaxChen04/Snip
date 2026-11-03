@@ -43,17 +43,27 @@ const ok = (data: Record<string, unknown>, images: Content[] = []) => ({
 
 const fail = (message: string) => ({ content: [{ type: "text" as const, text: message }], isError: true })
 
-/** Take items from `offset` until the item limit or byte budget is hit. Always returns at least one item if any remain. */
+/**
+ * Take items from `offset` until the item limit or byte budget is hit. Always advances by at least one item;
+ * a single item larger than the whole budget is replaced by an omission marker instead of being returned.
+ */
 function bounded<T>(all: T[], offset: number, limit: number, bytes = LIMITS.listBytes) {
-  const items: T[] = []
+  const items: (T | { omitted: true; index: number; bytes: number; reason: string })[] = []
   let used = 0
-  for (let i = offset; i < all.length && items.length < limit; i++) {
+  let taken = 0
+  for (let i = offset; i < all.length && taken < limit; i++) {
     const size = JSON.stringify(all[i]).length
-    if (items.length && used + size > bytes) break
-    items.push(all[i]!)
-    used += size
+    if (size > bytes) {
+      items.push({ omitted: true, index: i, bytes: size, reason: `entry is larger than the ${bytes}-byte response budget; use the signed file URL from get_page` })
+      used += 200
+    } else {
+      if (taken && used + size > bytes) break
+      items.push(all[i]!)
+      used += size
+    }
+    taken++
   }
-  const next = offset + items.length
+  const next = offset + taken
   return { items, total: all.length, offset, nextOffset: next < all.length ? next : null }
 }
 
