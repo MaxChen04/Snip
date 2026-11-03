@@ -127,7 +127,6 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
 
         <div className="mt-3 flex items-start gap-6">
           <ActionCircle icon={<ExternalLinkIcon />} label="Visit" href={r.url} />
-          <ActionCircle icon={<SparklesIcon />} label="Prompt" onClick={() => setSelecting((v) => !v)} />
           <Popover>
             <PopoverTrigger className="group flex flex-col items-center gap-1.5">
               <span className="grid size-9 place-items-center rounded-full ring-1 ring-border transition-colors group-hover:bg-fill-2 group-data-popup-open:bg-foreground group-data-popup-open:text-background [&_svg]:size-4">
@@ -180,7 +179,8 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
       </div>
 
       <div className="px-4 pt-6 pb-24 sm:px-6">
-        <div className="mb-6 flex justify-center">
+        <div className="sticky top-16 z-20 -mx-4 mb-6 flex flex-col items-center gap-2 bg-background/90 px-4 py-2 backdrop-blur-md sm:-mx-6 sm:grid sm:grid-cols-[1fr_auto_1fr] sm:gap-3 sm:px-6">
+          <span className="hidden sm:block" />
           <Segmented
             value={tab}
             onChange={setTab}
@@ -191,6 +191,37 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
             ]}
             className="[&_button]:h-8 [&_button]:px-3.5"
           />
+          <div className="flex min-w-0 justify-end">
+            {selecting || sel.pages.length + sel.animations.length > 0 || sel.tokens ? (
+              <SelectionBar
+                reference={r}
+                pages={pages}
+                animations={animations}
+                selection={sel}
+                onChange={setSel}
+                onDone={() => {
+                  setSelecting(false)
+                  setSel(EMPTY_SELECTION)
+                }}
+              />
+            ) : tab === "tokens" ? (
+              r.tokens && (
+                <PromptPill
+                  on={false}
+                  onClick={() => {
+                    setSelecting(true)
+                    setSel((x) => ({ ...x, tokens: true }))
+                  }}
+                >
+                  Add tokens to prompt
+                </PromptPill>
+              )
+            ) : (
+              <PromptPill on={false} onClick={() => setSelecting(true)}>
+                Prompt
+              </PromptPill>
+            )}
+          </div>
         </div>
 
         {tab === "pages" && (
@@ -233,38 +264,29 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
 
         {tab === "tokens" && (
           <div className="mx-auto max-w-6xl">
-            {r.tokens && (
-              <button
-                onClick={() => {
-                  setSelecting(true)
-                  setSel((x) => ({ ...x, tokens: !x.tokens }))
-                }}
-                className={cn("mb-4 flex h-9 items-center gap-2 rounded-full px-3.5 text-xs font-medium ring-1 ring-border hover:bg-fill-1", sel.tokens && "bg-foreground text-background ring-foreground hover:bg-foreground/85")}
-              >
-                <SparklesIcon className="size-3.5" />
-                {sel.tokens ? "Tokens added to prompt" : "Add tokens to prompt"}
-              </button>
-            )}
             {r.tokens ? <TokensPanel tokens={r.tokens} /> : <p className="py-16 text-center text-sm text-muted-foreground">Tokens appear after capture.</p>}
           </div>
         )}
       </div>
 
-      {(selecting || sel.pages.length + sel.animations.length > 0 || sel.tokens) && (
-        <SelectionBar
-          reference={r}
-          pages={pages}
-          animations={animations}
-          selection={sel}
-          onChange={setSel}
-          onDone={() => {
-            setSelecting(false)
-            setSel(EMPTY_SELECTION)
-          }}
-        />
-      )}
       {current && <PageViewer page={current} onClose={() => setOpenPage(null)} />}
     </div>
+  )
+}
+
+function PromptPill({ on, onClick, children }: { on: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      aria-pressed={on}
+      className={cn(
+        "flex h-9 shrink-0 items-center gap-1.5 rounded-full px-3.5 text-xs font-medium whitespace-nowrap ring-1 ring-border transition-colors hover:bg-fill-1",
+        on && "bg-foreground text-background ring-foreground hover:bg-foreground/85",
+      )}
+    >
+      <SparklesIcon className="size-3.5" />
+      <span>{children}</span>
+    </button>
   )
 }
 

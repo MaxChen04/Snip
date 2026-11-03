@@ -36,7 +36,7 @@ export function SelectCheck({ on, active, onToggle, label }: { on: boolean; acti
   )
 }
 
-/** Floating bar: what's selected, a tokens toggle, and "Copy prompt". */
+/** Compact bar on the tabs row: what's selected, a tokens toggle, and "Copy prompt". */
 export function SelectionBar({
   reference,
   pages,
@@ -70,7 +70,7 @@ export function SelectionBar({
     )
     try {
       await navigator.clipboard.writeText(prompt)
-      notify("Prompt copied. Paste it into your agent chat", { position: "top-center" }) // the bar sits where toasts usually go
+      notify("Prompt copied. Paste it into your agent chat")
     } catch {
       // Clipboard blocked (e.g. insecure origin): fall back to a prompt dialog the user can copy from.
       window.prompt("Copy this prompt", prompt)
@@ -78,17 +78,16 @@ export function SelectionBar({
   }
 
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-6 z-40 flex justify-center px-4">
-      <div className="pointer-events-auto flex h-12 max-w-full items-center gap-1 rounded-full bg-neutral-900 p-1.5 text-sm text-white shadow-xl ring-1 ring-white/10 dark:bg-neutral-100 dark:text-neutral-900 dark:ring-black/10">
-        <button onClick={onDone} aria-label="Done selecting" className="grid size-9 shrink-0 place-items-center rounded-full hover:bg-white/10 dark:hover:bg-black/10">
+    <div className="flex h-10 max-w-full items-center gap-0.5 rounded-full bg-neutral-900 p-1 text-xs text-white shadow-md ring-1 ring-white/10 dark:bg-neutral-100 dark:text-neutral-900 dark:ring-black/10">
+        <button onClick={onDone} aria-label="Done selecting" className="grid size-8 shrink-0 place-items-center rounded-full hover:bg-white/10 dark:hover:bg-black/10">
           <XIcon className="size-4" />
         </button>
-        <span className="truncate px-1.5 font-medium whitespace-nowrap">{parts.length ? parts.join(" · ") : n ? "Tokens only" : "Select pages or animations"}</span>
+        <span className="truncate px-1 font-medium whitespace-nowrap">{parts.length ? parts.join(" · ") : n ? "Tokens only" : "Pick items"}</span>
         <button
           onClick={() => onChange({ ...selection, tokens: !selection.tokens })}
           aria-pressed={selection.tokens}
           className={cn(
-            "flex h-9 shrink-0 items-center gap-1.5 rounded-full px-3 text-xs font-medium",
+            "flex h-8 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium",
             selection.tokens ? "bg-white/20 dark:bg-black/15" : "text-white/60 hover:text-white dark:text-neutral-500 dark:hover:text-neutral-900",
           )}
         >
@@ -98,11 +97,10 @@ export function SelectionBar({
         <button
           onClick={copy}
           disabled={!n}
-          className="flex h-9 shrink-0 items-center gap-1.5 rounded-full bg-white px-4 text-xs font-medium text-neutral-900 hover:bg-white/90 disabled:opacity-40 dark:bg-neutral-900 dark:text-white"
+          className="flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-white px-3.5 text-xs font-medium text-neutral-900 hover:bg-white/90 disabled:opacity-40 dark:bg-neutral-900 dark:text-white"
         >
           <SparklesIcon className="size-3.5" /> Copy prompt
         </button>
-      </div>
     </div>
   )
 }
