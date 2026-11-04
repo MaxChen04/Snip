@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs"
 import type { Browser, BrowserContext, Page as PwPage } from "playwright"
 import type { CrawlState, DesignTokens, Job, PageUpload } from "../../web/shared/types"
-import { STOPPED_EMPTY } from "../../web/shared/capture-errors"
 import { JobGoneError, type SnipApi } from "./api"
 import { encodeGif, type Frame } from "./gif"
 import { buildStills } from "./sheet"
@@ -27,6 +26,9 @@ const SCROLL_STEP = Math.max(8, Number(process.env.SCROLL_STEP ?? 40)) // px per
 const MAX_SCROLL_FRAMES = Math.max(20, Number(process.env.SCROLL_MAX_FRAMES ?? 360))
 const MAX_HOVER_GIFS = 6
 const MAX_SAVED_QUEUE = 2000 // URLs kept when a crawl pauses
+// Same text as STOPPED_EMPTY in web/shared/capture-errors.ts. Released apps ship capture/src without
+// web/shared, so the agent may only import types from there.
+const STOPPED_EMPTY = "Stopped before any pages were captured"
 const FONT_BUDGET = 4_000_000
 
 const MOBILE_UA =
