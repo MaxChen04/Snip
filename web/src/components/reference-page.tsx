@@ -12,6 +12,7 @@ import {
 import { toast } from "sonner"
 import { notify } from "@/components/notify"
 import { CollectionPicker } from "@/components/collection-picker"
+import { diagnoseCaptureError, RetryCaptureButton } from "@/components/capture-retry"
 import { EMPTY_SELECTION, SelectCheck, SelectionBar, toggleIn, type Selection } from "@/components/prompt-selection"
 import { Masonry } from "@/components/gallery-page"
 import { SavePagesButton } from "@/components/save-pages"
@@ -34,6 +35,22 @@ import { api, fileUrl, type Animation, type Page, type Reference } from "@/lib/a
 import { useCollections } from "@/lib/collections"
 import { referenceViewUrl, useDesktopState } from "@/hooks/use-desktop-state"
 import { usePoll } from "@/hooks/use-poll"
+
+/** A failed capture: what went wrong in plain terms, the raw error, and Retry. */
+function CaptureFailure({ id, error, onRetried }: { id: string; error: string | null; onRetried: () => void }) {
+  const diagnosis = diagnoseCaptureError(error)
+  return (
+    <div className="mt-3 flex max-w-xl items-start gap-2.5 rounded-2xl bg-(--red-3) px-3.5 py-2.5 text-left text-xs text-(--red-11) shadow-badge">
+      <AlertCircleIcon className="mt-0.5 size-3.5 shrink-0" />
+      <div className="min-w-0 flex-1 space-y-1">
+        <p className="font-medium">{diagnosis?.summary ?? "Capture failed."}</p>
+        {diagnosis && <p className="text-(--red-11)/80">{diagnosis.fix}</p>}
+        {error && <p className="font-mono text-2xs break-words text-(--red-11)/70">{error}</p>}
+      </div>
+      <RetryCaptureButton id={id} error={error} onRetried={onRetried} />
+    </div>
+  )
+}
 
 type Detail = { reference: Reference; pages: Page[]; animations: Animation[] }
 
@@ -181,10 +198,12 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
           </DropdownMenu>
         </div>
 
-        {r.status !== "ready" && (
-          <div className={cn("mt-3 flex items-center gap-2 rounded-full px-3 py-1.5 text-xs", r.status === "failed" ? "bg-(--red-3) text-(--red-11) shadow-badge" : "bg-control shadow-button")}>
-            {r.status === "failed" ? <AlertCircleIcon className="size-3.5" /> : <Spinner className="size-3.5 text-ink-10" />}
-            <span>{r.status === "failed" ? `Capture failed: ${r.error ?? "unknown error"}` : (r.progress ?? "Waiting for the capture agent")}</span>
+        {r.status === "failed" ? (
+          <CaptureFailure id={r.id} error={r.error} onRetried={load} />
+        ) : r.status !== "ready" && (
+          <div className="mt-3 flex items-center gap-2 rounded-full bg-control px-3 py-1.5 text-xs shadow-button">
+            <Spinner className="size-3.5 text-ink-10" />
+            <span>{r.progress ?? "Waiting for the capture agent"}</span>
           </div>
         )}
       </div>

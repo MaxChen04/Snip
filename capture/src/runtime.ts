@@ -27,7 +27,7 @@ export class CaptureRuntime<B extends Browser> {
 
   constructor(private options: {
     api: Api
-    launch: () => Promise<B>
+    launch: (job: Job) => Promise<B>
     capture: (browser: B, job: Job) => Promise<void>
     status: (status: CaptureStatus) => void
     pollMs: number
@@ -76,11 +76,11 @@ export class CaptureRuntime<B extends Browser> {
     } else if (this.closing) await this.closing
   }
 
-  private async getBrowser() {
+  private async getBrowser(job: Job) {
     if (this.idleTimer) clearTimeout(this.idleTimer)
     this.idleTimer = undefined
     if (this.closing) await this.closing
-    if (!this.browser?.isConnected()) this.browser = await this.options.launch()
+    if (!this.browser?.isConnected()) this.browser = await this.options.launch(job)
     return this.browser
   }
 
@@ -110,7 +110,7 @@ export class CaptureRuntime<B extends Browser> {
           if (!this.stopping) this.emit({ state: "busy", jobId: job.id })
           const beat = setInterval(() => { void this.options.api.heartbeat(job.id) }, 30_000)
           try {
-            await this.options.capture(await this.getBrowser(), job)
+            await this.options.capture(await this.getBrowser(job), job)
           } catch (e) {
             this.options.logError?.(`[${job.id}] capture failed`)
             await this.options.api.fail(job.id, (e instanceof Error ? e.message : "Capture failed").split("\n")[0] || "Capture failed")

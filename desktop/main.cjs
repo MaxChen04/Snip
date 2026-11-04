@@ -412,7 +412,8 @@ async function setup() {
     node = resolved
     node.env = { ...node.env, PATH: [path.dirname(node.executable), node.env.PATH].filter(Boolean).join(path.delimiter), FORCE_COLOR: "0", NO_COLOR: "1", BROWSER: "none", WRANGLER_SEND_METRICS: "false", WRANGLER_WRITE_LOGS: "false" }
     node.env.SNIP_CAPTURE_ENV_FILE = layout.captureEnvPath
-    if (releaseBuild) node.env.PLAYWRIGHT_BROWSERS_PATH = layout.browsersPath
+    // Release builds ship their browser inside the signed bundle; never download into it.
+    if (releaseBuild) Object.assign(node.env, { PLAYWRIGHT_BROWSERS_PATH: layout.browsersPath, SNIP_BROWSER_AUTO_INSTALL: "0" })
     if (!quitting) start("web")
   } catch (error) { startupError = error.message; showLoading() }
   finally { resolvingNode = false; refresh() }

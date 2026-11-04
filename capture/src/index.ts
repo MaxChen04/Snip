@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs"
 import { SnipApi } from "./api"
+import { installBrowser, launchWithRepair } from "./browser"
 import { CaptureRuntime } from "./runtime"
 
 // Load capture settings before importing modules that read them at initialization.
@@ -20,10 +21,18 @@ const pollMs = seconds(process.env.POLL_SECONDS, 5)
 const api = new SnipApi(base, token)
 const runtime = new CaptureRuntime({
   api,
-  launch: async () => (await import("playwright")).chromium.launch({
-    headless: process.env.HEADLESS !== "false",
-    executablePath: process.env.CHROMIUM_PATH || undefined,
-  }),
+  // A Playwright update can expect a browser build that was never downloaded.
+  // Install it once and relaunch instead of failing every capture.
+  launch: async (job) => {
+    const { chromium } = await import("playwright")
+    const headless = process.env.HEADLESS !== "false"
+    return launchWithRepair({
+      launch: () => chromium.launch({ headless, executablePath: process.env.CHROMIUM_PATH || undefined }),
+      install: () => installBrowser(headless, (line) => console.log(`[browser install] ${line}`)),
+      canInstall: !process.env.CHROMIUM_PATH && process.env.SNIP_BROWSER_AUTO_INSTALL !== "0",
+      onInstall: () => api.progress(job.id, "Installing the capture browser (one-time, about a minute)"),
+    })
+  },
   capture: async (browser, job) => (await import("./capture")).captureJob(browser, api, job),
   status: (status) => {
     if (process.connected && process.send) {
