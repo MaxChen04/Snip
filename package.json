@@ -14,6 +14,7 @@
     "capture": "npm run start -w capture",
     "typecheck": "npm run typecheck -w web && npm run typecheck -w capture",
     "app": "npm ci --prefix desktop && npm run build -w web && npm run build --prefix desktop",
-    "app:dev": "npm start --prefix desktop -- --dev"
+    "app:dev": "npm start --prefix desktop -- --dev",
+    "update": "node scripts/update.mjs"
   }
 }

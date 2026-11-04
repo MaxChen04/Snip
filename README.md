@@ -90,6 +90,24 @@ npx playwright install chromium                   # once
 npm run capture
 ```
 
+### Updating
+
+When new changes land on `main`, one command brings your copy up to date:
+
+```bash
+npm run update
+```
+
+It quits Snip.app gracefully (active captures finish first), fast-forwards `main`, runs `npm ci` when dependencies changed, installs the capture browser, backs up and migrates the local database, rebuilds the web app, rebuilds Snip.app when `desktop/` changed, and reopens the app. It never touches untracked files such as `.env` files, your library, `research/` or `output/`. npm lockfile churn is reset automatically; any other local edit, or a terminal `npm run dev` or `npm run capture` still using the database, stops the update before anything changes (`npm run update -- --stash` sets edits aside instead). If a step fails, fix the error and run `npm run update` again to finish. `--full` reruns every step even when you're already up to date.
+
+To run it from any folder, add an alias to `~/.zshrc`:
+
+```bash
+alias snip-update='npm --prefix ~/Desktop/Projects/Snip run update'
+```
+
+Snip.app also checks GitHub hourly (and after sleep). When `main` has new commits it shows a notification and an **Update Snip (N new)** menu item; **Update now** opens Terminal and runs the same command. Checks follow your checkout's `origin` remote, so forks update from their own `main`.
+
 ### Mac app
 
 On **Apple Silicon with macOS 14 or later**, once local development works, build a clickable **Snip.app**. Use native arm64 Node.js 22.18+ or 24.11+; Intel and Rosetta are unsupported.
@@ -104,7 +122,7 @@ The menu bar shows whether capture is ready, busy, or disconnected. **Quit Snip*
 
 Service logs are capped at three 2 MiB files per service (12 MiB total), including backups; duplicate Wrangler debug-file logging is disabled. Electron's disposable HTTP disk cache has a 64 MiB budget. Captured library assets are retained until you delete them; idle cleanup does not delete your library. The hidden or minimized gallery is released after the grace period, unless a dialog has unfinished input. Minimized snapshot viewers unload their document and reload it when restored. Adjust `BROWSER_IDLE_SECONDS` in `capture/.env` for capture browser retention. Set `SNIP_WINDOW_IDLE_SECONDS` when launching Electron to change the window grace period (`0` disables window release).
 
-The app runs this repo in place. Rebuild web assets after web changes (`npm run build -w web`); rebuild the app after moving the repo or changing `desktop/`. It is ad-hoc signed for your own Mac and is not notarized for distribution. `npm run app:dev` uses Vite with hot reload for development (install desktop dependencies first with `npm ci --prefix desktop`). The installer verifies an existing app's identity, stages and verifies the new copy, and restores the old app if replacement fails. For a build without installation: `npm run build --prefix desktop -- --no-install`; `--out DIR` and `--install-dir DIR` support isolated builds and tests.
+The app runs this repo in place; `npm run update` keeps its web build and the app itself current. Rebuild the app manually only after moving the repo. It is ad-hoc signed for your own Mac and is not notarized for distribution. `npm run app:dev` uses Vite with hot reload for development (install desktop dependencies first with `npm ci --prefix desktop`). The installer verifies an existing app's identity, stages and verifies the new copy, and restores the old app if replacement fails. For a build without installation: `npm run build --prefix desktop -- --no-install`; `--out DIR` and `--install-dir DIR` support isolated builds and tests.
 
 ### Release app and updates
 
@@ -112,7 +130,7 @@ Signed release builds contain their own web app, capture engine, Node.js and Chr
 
 Your library and credentials stay outside the app. On first launch, choose an existing Snip project folder or create a new library in Snip's Application Support directory. Stop and drain any separate development server and capture agent before using an existing library; never run them concurrently against the same library. The chosen project folder remains the data location even though release code runs from the app: keep its configuration, `.snip` storage identity record and `web/.wrangler/state`. Imported database, file and OAuth-storage identities stay attached to that library across releases. If its folder moves, **Retry setup** offers to locate it again. Upgrades apply local D1 migrations before serving the app. The latest three successful pre-upgrade database backups are kept under the library's `backups/`; failed-upgrade backups remain for manual recovery. An upgrade failure stops startup and shows the backup location. A bounded private cache restores your reference route and selection after a graceful restart.
 
-**No signed app has been released yet.** The repository is public and v0.1.0 is a source-only release, but there is no Apple Developer signing identity, so build Snip.app yourself with `npm run app`. Local/ad-hoc builds keep in-app updates disabled. The first signed release must be installed manually; later signed releases can update it. Publishing does not happen on a merge. See [the release guide](desktop/RELEASING.md) for signing setup, draft release review and the two-version update acceptance check.
+**No signed app has been released yet.** The repository is public and v0.1.0 is a source-only release, but there is no Apple Developer signing identity, so build Snip.app yourself with `npm run app`. Local/ad-hoc builds update from `main` with `npm run update` instead (see [Updating](#updating)). The first signed release must be installed manually; later signed releases can update it. Publishing does not happen on a merge. See [the release guide](desktop/RELEASING.md) for signing setup, draft release review and the two-version update acceptance check.
 
 ## Deploy to Cloudflare (free plan)
 
@@ -143,7 +161,7 @@ Your library and credentials stay outside the app. On first launch, choose an ex
 
 **Upgrading an existing hosted installation:** Stop all existing capture agents gracefully and wait for captures, uploads, and in-flight Worker requests to finish. Run `npm run db:migrate:remote -w web` **before deploying the updated Worker**; this includes `0003_capture_attempts.sql` and `0004_page_collections.sql`. Then deploy the Worker and update/restart every capture agent. The Worker rejects older agents before they can claim jobs (HTTP 426). Existing saved assets remain readable.
 
-Packaged release apps apply pending local migrations before starting and back up an existing local D1 database first. For a source-linked desktop app or local development checkout, run `npm run db:migrate:local -w web` before starting the updated app. Migration 0004 adds the page-membership table and two indexes; it does not copy or move saved files. Retired-file cleanup retries on queue activity with backoff; interrupted uploads can retain safety metadata when their final write status is uncertain.
+Packaged release apps apply pending local migrations before starting and back up an existing local D1 database first. For a source-linked desktop app or local development checkout, `npm run update` backs up and applies local migrations (or run `npm run db:migrate:local -w web` yourself). Migration 0004 adds the page-membership table and two indexes; it does not copy or move saved files. Retired-file cleanup retries on queue activity with backoff; interrupted uploads can retain safety metadata when their final write status is uncertain.
 
 Free-tier headroom: R2 gives 10 GB (roughly 1,500 to 3,000 captured pages, depending on page length and GIFs), D1 5 GB, Workers 100k requests/day.
 

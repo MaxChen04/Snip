@@ -8,6 +8,7 @@ const { resolveNode } = require("./node-runtime.cjs")
 const { createLog } = require("./rotating-log.cjs")
 const { Service, stopServices } = require("./service.cjs")
 const { Updates } = require("./updates.cjs")
+const { SourceUpdates } = require("./source-updates.cjs")
 const { prepareRuntimeLayout, selectExistingLibrary } = require("./runtime-layout.cjs")
 
 // Explicit alternate profiles support isolated acceptance tests and separate libraries.
@@ -33,7 +34,7 @@ const idleSeconds = Number(process.env.SNIP_WINDOW_IDLE_SECONDS ?? 120)
 const idleMs = Number.isFinite(idleSeconds) && idleSeconds >= 0 ? idleSeconds * 1000 : 120000
 const services = { web: new Service("web"), capture: new Service("capture") }
 const labels = { web: "Web app", capture: "Capture agent" }
-let tray, win, node, idleTimer, readyTimer, layout, updates
+let tray, win, node, idleTimer, readyTimer, layout, updates, sourceUpdates
 let quitting = false, finishedQuit = false, shutdown = null, autoCapture = true
 let startupError = "", lastUrl = null, position = null
 let resolvingNode = false
@@ -250,7 +251,26 @@ async function forceQuit() {
   app.exit(0)
 }
 
+async function sourceUpdateDialog(check = false) {
+  if (!sourceUpdates || quitting) return
+  if (check) await sourceUpdates.check()
+  if (quitting) return
+  const { phase, behind, commits } = sourceUpdates
+  if (phase === "available") {
+    const list = commits.map(line => `• ${line}`).join("\n")
+    const more = behind > commits.length ? `\n…and ${behind - commits.length} more` : ""
+    const { response } = await dialog.showMessageBox({ type: "info", buttons: ["Update now", "Later"], defaultId: 0, cancelId: 1,
+      message: `${behind} new Snip ${behind === 1 ? "change" : "changes"} on GitHub`,
+      detail: `${list}${more}\n\nTerminal will open and run the update. Snip finishes any active capture, quits, updates, and reopens. Your library and settings stay in place.` })
+    if (response === 0) await sourceUpdates.launch({ directory: path.join(app.getPath("userData"), "updates"), node: node?.executable, open: file => shell.openPath(file) })
+  } else if (phase !== "checking") {
+    await dialog.showMessageBox({ type: phase === "current" ? "info" : "warning",
+      message: phase === "current" ? "Snip is up to date" : "Couldn’t check for updates",
+      detail: phase === "current" ? `Your checkout matches main (${sourceUpdates.local.slice(0, 7)}).` : sourceUpdates.error || "Try again later, or run npm run update in Terminal." })
+  }
+}
 async function updateDialog(check = false) {
+  if (sourceUpdates) return sourceUpdateDialog(check)
   if (!updates || quitting) return
   if (check) await updates.check()
   if (quitting) return
@@ -269,6 +289,11 @@ async function updateDialog(check = false) {
   }
 }
 function updateItems() {
+  if (sourceUpdates) {
+    const { phase, behind } = sourceUpdates
+    const label = phase === "available" ? `Update Snip (${behind} new)…` : phase === "checking" ? "Checking for updates…" : "Check for updates…"
+    return [{ id: "snip-update", label, enabled: !quitting && phase !== "checking", click: () => void sourceUpdateDialog(phase !== "available") }]
+  }
   if (!updates) return []
   const phase = updates.phase
   const label = phase === "available" ? `Download Snip ${updates.release.version}…` : phase === "downloading" ? "Downloading update…" : phase === "ready" ? "Restart and update Snip…" : phase === "installing" ? "Finishing capture before updating…" : phase === "checking" ? "Checking for updates…" : "Check for updates…"
@@ -291,7 +316,24 @@ async function drainForQuit() {
   } catch {}
   finishedQuit = true
 }
+// Local builds run the git checkout in place, so they update from main instead of releases.
+function configureSourceUpdates() {
+  sourceUpdates = new SourceUpdates({ root: ROOT })
+  let notified
+  sourceUpdates.on("change", () => {
+    refresh()
+    if (sourceUpdates.phase === "available" && sourceUpdates.head && notified !== sourceUpdates.head) {
+      notified = sourceUpdates.head
+      const note = new Notification({ title: "A Snip update is available", body: `${sourceUpdates.behind} new ${sourceUpdates.behind === 1 ? "change" : "changes"} on GitHub. Click to update.` })
+      note.on("click", () => void sourceUpdateDialog())
+      note.show()
+    }
+  })
+  powerMonitor.on("resume", () => sourceUpdates.resume())
+  sourceUpdates.start()
+}
 function configureUpdates() {
+  if (!releaseBuild && !development && fs.existsSync(path.join(ROOT, ".git"))) return configureSourceUpdates()
   let config
   if (releaseBuild) config = JSON.parse(fs.readFileSync(releaseFile, "utf8"))
   updates = new Updates({ native: autoUpdater, version: app.getVersion(), directory: path.join(app.getPath("userData"), "updates"),
@@ -349,7 +391,7 @@ function refresh() {
 app.on("second-instance", showApp)
 app.on("activate", () => { if (app.isReady()) showApp() })
 app.on("window-all-closed", () => {})
-app.on("will-quit", () => updates?.dispose())
+app.on("will-quit", () => { updates?.dispose(); sourceUpdates?.dispose() })
 app.on("before-quit", event => {
   if (finishedQuit) return
   event.preventDefault()

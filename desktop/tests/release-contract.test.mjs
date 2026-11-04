@@ -20,6 +20,14 @@ test('build environment and launcher allowlist exclude secrets and checkout poin
   assert.equal(APP_FILES.includes('updates.cjs'), true)
 })
 
+test('the release bundle includes every local module the launcher requires', () => {
+  const desktop = path.join(path.dirname(new URL(import.meta.url).pathname), '..')
+  for (const file of ['main.cjs', ...APP_FILES.filter(name => name.endsWith('.cjs'))]) {
+    const source = fs.readFileSync(path.join(desktop, file), 'utf8')
+    for (const [, local] of source.matchAll(/require\(["']\.\/([\w.-]+)["']\)/g)) assert.ok(APP_FILES.includes(local), `${file} requires ${local}, which APP_FILES omits`)
+  }
+})
+
 test('release requires unauthenticated public access to the expected repository', async () => {
   await requirePublicRepository(async () => ({ ok: true, json: async () => ({ private: false, full_name: 'MaxChen04/Snip' }) }))
   await assert.rejects(requirePublicRepository(async () => ({ ok: false, status: 404 })), /public/)
