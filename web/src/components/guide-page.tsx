@@ -388,6 +388,11 @@ function ConnectSection() {
     >
       <div className="flex max-w-[760px] flex-col gap-4">
         <CodeBlock label="Claude Code" lines={["claude mcp add --transport http snip https://snip.<your-subdomain>.workers.dev/mcp"]} />
+        <CodeBlock label="Codex" lines={["codex mcp add snip --url https://snip.<your-subdomain>.workers.dev/mcp", "codex mcp login snip"]} />
+        <CodeBlock
+          label="OpenCode · ~/.config/opencode/opencode.json, then opencode mcp auth snip"
+          lines={['{ "mcp": { "snip": { "type": "remote", "url": "https://snip.<your-subdomain>.workers.dev/mcp" } } }']}
+        />
         <p className="text-sm leading-[1.6] text-muted-foreground">For Claude.ai or Claude Desktop, add a custom connector with the same URL.</p>
       </div>
       <div className="grid max-w-[760px] grid-cols-1 items-start gap-6 md:grid-cols-2">

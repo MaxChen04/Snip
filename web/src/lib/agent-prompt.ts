@@ -6,6 +6,8 @@ export interface PromptSelection {
   animations: Animation[]
   /** Include the design tokens inline and point the agent at them. */
   tokens: boolean
+  /** Exact MCP endpoint of this Snip instance, so the agent connects to the right server. */
+  mcpUrl: string
 }
 
 const top = <T extends { count: number }>(xs: T[] | undefined, n: number) => (xs ?? []).slice(0, n)
@@ -32,11 +34,13 @@ export function tokenDigest(t: DesignTokens): string {
  * Prewritten prompt that tells an agent exactly which Snip items to pull over MCP and what to study.
  * Tool names and arguments match web/worker/mcp.ts.
  */
-export function buildAgentPrompt({ reference: r, pages, animations, tokens }: PromptSelection, allPages: Page[] = pages): string {
+export function buildAgentPrompt({ reference: r, pages, animations, tokens, mcpUrl }: PromptSelection, allPages: Page[] = pages): string {
   const name = r.title || r.domain
   const pagePath = (id: string | null) => allPages.find((p) => p.id === id)?.path ?? null
   const out: string[] = [
     `Use the Snip MCP server to pull these design references before you design or build anything.`,
+    `Make sure to use the Snip MCP: ${mcpUrl}`,
+    `If the Snip MCP isn't connected yet, ask me to add it as a remote HTTP MCP server with that URL before continuing.`,
     ``,
     `Reference: ${name} (${r.url})`,
     `Snip reference id: ${r.id}`,
