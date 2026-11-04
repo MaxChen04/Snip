@@ -1,6 +1,7 @@
 import { CheckIcon, SparklesIcon, XIcon } from "@/components/icons"
 import { notify } from "@/components/notify"
 import { buildAgentPrompt } from "@/lib/agent-prompt"
+import { mcpUrl } from "@/lib/mcp"
 import type { Animation, Page, Reference } from "@/lib/api"
 import { cn } from "@/lib/utils"
 
@@ -65,6 +66,7 @@ export function SelectionBar({
         pages: pages.filter((p) => selection.pages.includes(p.id)),
         animations: animations.filter((a) => selection.animations.includes(a.id)),
         tokens: selection.tokens,
+        mcpUrl: mcpUrl(),
       },
       pages,
     )
