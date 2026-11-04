@@ -31,13 +31,16 @@ export function SavePagesButton({
 
   const toggle = async (cid: string, member: boolean) => {
     const name = collections.find((c) => c.id === cid)?.name ?? "the new collection"
-    onChange(ids, cid, member)
+    // Only pages whose membership actually changes, so a failed save rolls back just those.
+    const changing = pages.filter((p) => p.collectionIds.includes(cid) !== member).map((p) => p.id)
+    onChange(changing, cid, member)
     try {
       await api.setPageMembership(cid, ids, member)
-      notify(member ? `Added ${pagesLabel(ids.length)} to ${name}` : `Removed ${pagesLabel(ids.length)} from ${name}`)
+      const n = changing.length || ids.length
+      notify(member ? `Added ${pagesLabel(n)} to ${name}` : `Removed ${pagesLabel(n)} from ${name}`)
       await refresh()
     } catch (err) {
-      onChange(ids, cid, !member)
+      onChange(changing, cid, !member)
       toast.error((err as Error).message)
     }
   }
