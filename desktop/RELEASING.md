@@ -6,7 +6,7 @@ Snip ships only for Apple Silicon on macOS 14 or later. The local `build.mjs` la
 
 1. Enroll in the Apple Developer Program and create a **Developer ID Application** certificate. Keep the same team and application identity (`dev.snip.desktop`) across releases.
 2. Arrange notarization using an Apple ID and app-specific password, or a local notary keychain profile.
-3. Explicitly approve publishing this repository and its releases. The repository is currently private. The updater does not embed a GitHub token and cannot read private releases. The release build fails when unauthenticated public access is unavailable; it never changes repository visibility.
+3. Explicitly approve publishing signed releases. The repository is public (v0.1.0 was a source-only release). The updater does not embed a GitHub token and cannot read private releases. The release build fails when unauthenticated public access is unavailable; it never changes repository visibility.
 4. Configure GitHub Actions secrets: `MACOS_CERTIFICATE_BASE64` (exported signing certificate and private key, base64 encoded), `MACOS_CERTIFICATE_PASSWORD`, `MACOS_SIGN_IDENTITY`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, and `APPLE_TEAM_ID`. Use GitHub's secrets UI, not source files or chat.
 
 ## Build and review a release
