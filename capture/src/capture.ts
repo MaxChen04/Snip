@@ -526,7 +526,8 @@ export async function captureJob(browser: Browser, api: SnipApi, job: Job) {
       title: meta?.title ?? null,
       description: meta?.description ?? null,
       favicon: meta?.favicon ?? null,
-      coverKey,
+      // A resumed crawl already has its cover from its first page; null keeps it.
+      coverKey: resume?.captured ? null : coverKey,
       tokens: mergeTokens(allTokens),
     })
     log(`[${job.id}] done: ${captured} page(s)`)

@@ -109,6 +109,19 @@ test("stop winds down a running crawl, a paused one and a queued one", async () 
     assert.equal(finished.reference.coverKey, `refs/${paused.id}/${pjob.attempt}/p0/desktop.jpg`)
     assert.equal(finished.pages.length, 1)
 
+    // Resumed but not picked up yet: still finishes with its pages.
+    const waiting = await db.createReference(database, { url: "https://waiting.example", mode: "crawl" })
+    const wjob = (await db.claimJob(database))!
+    assert.ok(await db.addPage(database, waiting.id, wjob.attempt, page(waiting.id, wjob.attempt, 0)))
+    await db.requestPause(database, waiting.id)
+    assert.equal(await db.pauseJob(database, waiting.id, wjob.attempt, state(1)), "paused")
+    await db.resumeReference(database, waiting.id)
+    assert.equal(await db.requestStop(database, waiting.id), true)
+    const kept = (await db.getReference(database, waiting.id))!
+    assert.equal(kept.reference.status, "ready")
+    assert.equal(kept.reference.title, "Example")
+    assert.equal(kept.pages.length, 1)
+
     // Queued: nothing was captured, so it ends as a failure Retry can restart.
     const queued = await db.createReference(database, { url: "https://queued.example", mode: "crawl" })
     assert.equal(await db.requestStop(database, queued.id), true)

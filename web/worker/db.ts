@@ -601,7 +601,7 @@ export async function resumeReference(db: D1Database, id: string) {
 
 /**
  * Stop a capture and keep the pages it has. A running one stops after its current page.
- * A paused one finishes here, from the metadata and tokens saved when it paused.
+ * A paused one (or one resumed but not picked up yet) finishes here, from the metadata and tokens saved when it paused.
  */
 export async function requestStop(db: D1Database, id: string) {
   const ts = now()
@@ -609,7 +609,7 @@ export async function requestStop(db: D1Database, id: string) {
     db.prepare(`UPDATE refs SET status = 'ready', progress = NULL, error = NULL, capture_control = NULL,
       title = coalesce(json_extract(crawl_state, '$.meta.title'), title), description = coalesce(json_extract(crawl_state, '$.meta.description'), description),
       favicon = coalesce(json_extract(crawl_state, '$.meta.favicon'), favicon), tokens_json = json_extract(crawl_state, '$.tokens'), crawl_state = NULL, updated_at = ?
-      WHERE id = ? AND status = 'queued' AND capture_control = 'paused' AND page_count > 0`).bind(ts, id),
+      WHERE id = ? AND status = 'queued' AND crawl_state IS NOT NULL AND page_count > 0`).bind(ts, id),
     db.prepare(`UPDATE refs SET status = 'failed', progress = NULL, error = ?, capture_control = NULL, crawl_state = NULL, updated_at = ?
       WHERE id = ? AND status = 'queued'`).bind(STOPPED_EMPTY, ts, id),
     db.prepare(`UPDATE refs SET capture_control = 'stop', updated_at = ? WHERE id = ? AND status = 'capturing'`).bind(ts, id),
