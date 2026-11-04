@@ -71,7 +71,7 @@ Requirements: Node 22, a GitHub account with access to this repository while it 
    ```
    claude mcp add --transport http snip https://snip.<your-subdomain>.workers.dev/mcp
    ```
-   Codex (CLI, IDE extension and ChatGPT desktop app share `~/.codex/config.toml`):
+   Codex (CLI, IDE extension and Codex desktop app share `~/.codex/config.toml`):
    ```
    codex mcp add snip --url https://snip.<your-subdomain>.workers.dev/mcp
    codex mcp login snip
