@@ -348,4 +348,3 @@ export function GifTile({ a, bare }: { a: Animation; bare?: boolean }) {
     </div>
   )
 }
-
