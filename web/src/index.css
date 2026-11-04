@@ -4,6 +4,12 @@
 @custom-variant dark (&:is(.dark *));
 
 /* SortUI theme tokens, generated from the @sortui/theme registry item. */
+@theme {
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-move: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
 @theme inline {
   --font-heading: var(--font-sans);
   --color-sidebar-ring: var(--sidebar-ring);
@@ -67,26 +73,35 @@
   --color-control-hover: var(--control-hover);
   --color-control-border: var(--control-border);
   --color-field-border: var(--field-border);
-  --shadow-2xs: 0 1px 1px -1px oklch(0.371 0 0 / 6%), 0 2px 2px -1px oklch(0.371 0 0 / 3%);
-  --shadow-xs: 0 1px 2px 0 oklch(0 0 0 / 4%);
-  --shadow-sm: 0 1px 3px 0 oklch(0 0 0 / 6%), 0 1px 2px -1px oklch(0 0 0 / 6%);
-  --shadow-md: 0 4px 6px -1px oklch(0 0 0 / 6%), 0 2px 4px -2px oklch(0 0 0 / 6%);
-  --shadow-lg: 0 10px 15px -3px oklch(0 0 0 / 7%), 0 4px 6px -4px oklch(0 0 0 / 7%);
-  --shadow-xl: 0 20px 25px -5px oklch(0 0 0 / 7%), 0 8px 10px -6px oklch(0 0 0 / 7%);
-  --shadow-2xl: 0 25px 50px -12px oklch(0 0 0 / 20%);
-  --shadow-secondary-control: inset 0 -1px 0 oklch(0 0 0 / 8%), 0 1px 2px -1px oklch(0 0 0 / 4%), 0 2px 3px -1px oklch(0 0 0 / 3%);
-  --shadow-card: 0 1px 1px -1px oklch(0.371 0 0 / 6%), 0 2px 2px -1px oklch(0.371 0 0 / 3%);
-  --shadow-dialog: 0 20px 25px -5px oklch(0 0 0 / 7%), 0 8px 10px -6px oklch(0 0 0 / 7%);
-  --shadow-popover: 0 10px 15px -3px oklch(0 0 0 / 7%), 0 4px 6px -4px oklch(0 0 0 / 7%);
-  --radius-xs: 0.25rem;
-  --radius-sm: 0.375rem;
-  --radius-md: 0.5rem;
-  --radius-lg: 0.625rem;
-  --radius-xl: 0.75rem;
-  --radius-14: 0.875rem;
-  --radius-2xl: 1rem;
-  --radius-3xl: 1.25rem;
-  --radius-4xl: 1.5rem;
+  /* Tactile shadows: a ring and a 1px drop, plus at most one short drop. Values live on :root/.dark. */
+  --shadow-2xs: var(--sh-table);
+  --shadow-xs: var(--sh-button);
+  --shadow-sm: var(--sh-button);
+  --shadow-md: var(--sh-card);
+  --shadow-lg: var(--sh-menu);
+  --shadow-xl: var(--sh-modal);
+  --shadow-2xl: var(--sh-modal);
+  --shadow-button: var(--sh-button);
+  --shadow-toggle: var(--sh-toggle);
+  --shadow-primary: var(--sh-primary);
+  --shadow-badge: var(--sh-badge);
+  --shadow-table: var(--sh-table);
+  --shadow-menu: var(--sh-menu);
+  --shadow-modal: var(--sh-modal);
+  --shadow-secondary-control: var(--sh-button);
+  --shadow-card: var(--sh-card);
+  --shadow-dialog: var(--sh-modal);
+  --shadow-popover: var(--sh-menu);
+  /* Radius ladder from one control radius: 6px controls, 8px containers, 12px feature cards. */
+  --radius-xs: 3px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 6px;
+  --radius-xl: 8px;
+  --radius-14: 8px;
+  --radius-2xl: 8px;
+  --radius-3xl: 12px;
+  --radius-4xl: 12px;
   --text-2xs: 0.75rem;
   --text-2xs--line-height: calc(1 / 0.75);
   --text-xs: 0.8125rem;
@@ -101,7 +116,27 @@
   --text-8xl--line-height: 1;
   --text-9xl: 6rem;
   --text-9xl--line-height: 1;
-  --font-weight-540: 540;
+  --font-weight-540: 500;
+  /* One weight: hierarchy comes from size and ink, not boldness. */
+  --font-weight-normal: 500;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 500;
+  --color-ink-1: var(--ink-1);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-ink-4: var(--ink-4);
+  --color-ink-5: var(--ink-5);
+  --color-ink-6: var(--ink-6);
+  --color-ink-7: var(--ink-7);
+  --color-ink-8: var(--ink-8);
+  --color-ink-9: var(--ink-9);
+  --color-ink-10: var(--ink-10);
+  --color-ink-11: var(--ink-11);
+  --color-ink-12: var(--ink-12);
+  --color-line: var(--line);
+  --color-focus-ring: var(--focus-ring);
+  --color-surface-top: var(--surface-top);
+  --color-overlay: var(--overlay);
   --text-2xs--letter-spacing: -0.005em;
   --text-xs--letter-spacing: -0.005em;
   --text-sm--letter-spacing: -0.005em;
@@ -118,25 +153,55 @@
 }
 
 :root {
-  --background: oklch(0.9925 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.585 0.233 277.117);
-  --primary-foreground: oklch(1 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.145 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.4975 0 0);
-  --accent: oklch(0.556 0 0 / 8%);
-  --accent-foreground: oklch(0.145 0 0);
-  --destructive: oklch(0.637 0.237 25.331);
-  --destructive-foreground: oklch(0.505 0.213 27.518);
-  --border: oklch(0.145 0 0 / 10%);
-  --input: oklch(0.145 0 0 / 10%);
-  --ring: oklch(0.708 0 0);
+  /* Tactile design (.agents/skills/tactile-design): a 12-step warm neutral (Radix sand). */
+  --root-ink-1: #fdfdfc; --root-ink-2: #f9f9f8; --root-ink-3: #f1f0ef; --root-ink-4: #e9e8e6;
+  --root-ink-5: #e2e1de; --root-ink-6: #dad9d6; --root-ink-7: #cfceca; --root-ink-8: #bcbbb5;
+  --root-ink-9: #8d8d86; --root-ink-10: #7a7a74; --root-ink-11: #63635e; --root-ink-12: #21201c;
+  --ink-1: var(--root-ink-1); --ink-2: var(--root-ink-2); --ink-3: var(--root-ink-3); --ink-4: var(--root-ink-4);
+  --ink-5: var(--root-ink-5); --ink-6: var(--root-ink-6); --ink-7: var(--root-ink-7); --ink-8: var(--root-ink-8);
+  --ink-9: var(--root-ink-9); --ink-10: var(--root-ink-10); --ink-11: var(--root-ink-11); --ink-12: var(--root-ink-12);
+  --red-3: #feebec; --red-4: #ffdbdc; --red-6: #fdbdbe; --red-9: #e5484d; --red-10: #dc3e42; --red-11: #ce2c31;
+  --green-3: #e9f6e9; --green-9: #30a46c; --green-11: #218358;
+  --surface-top: #ffffff;
+  --ground: var(--root-ink-2);
+  --overlay: var(--surface-top);
+  --line: var(--ink-6);
+  --focus-ring: var(--ink-10);
+  --primary-bg: var(--ink-12);
+  --primary-fg: var(--ink-1);
+  --primary-hover: color-mix(in oklab, var(--primary-bg) 90%, var(--primary-fg));
+
+  --shadow-ink: 33 32 28;
+  --sh-button: 0 1px 2px 0 rgb(var(--shadow-ink) / 0.12), 0 0 0 1px rgb(var(--shadow-ink) / 0.08);
+  --sh-toggle: var(--sh-button);
+  --sh-primary: 0 0 0 1px var(--ink-1);
+  --sh-card: 0 0 0 1px rgb(var(--shadow-ink) / 0.07), 0 1px 2px 0 rgb(var(--shadow-ink) / 0.12), 0 3px 4px -2px rgb(var(--shadow-ink) / 0.08);
+  --sh-table: 0 1px 2px 0 rgb(var(--shadow-ink) / 0.12);
+  --sh-menu: 0 0 0 1px rgb(var(--shadow-ink) / 0.08), 0 1px 2px 0 rgb(var(--shadow-ink) / 0.12), 0 4px 8px -4px rgb(var(--shadow-ink) / 0.16);
+  --sh-modal: 0 0 0 1px rgb(var(--shadow-ink) / 0.07), 0 1px 2px 0 rgb(var(--shadow-ink) / 0.14), 0 6px 8px -4px rgb(var(--shadow-ink) / 0.14);
+  --sh-badge: 0 1px 2px 0 color-mix(in srgb, currentColor 16%, transparent), 0 0 0 1px color-mix(in srgb, currentColor 14%, transparent);
+  --backdrop: rgb(0 0 0 / 0.3);
+
+  /* shadcn / SortUI roles mapped onto the tactile roles. */
+  --background: var(--ground);
+  --foreground: var(--ink-12);
+  --card: var(--surface-top);
+  --card-foreground: var(--ink-12);
+  --popover: var(--overlay);
+  --popover-foreground: var(--ink-12);
+  --primary: var(--primary-bg);
+  --primary-foreground: var(--primary-fg);
+  --secondary: var(--ink-3);
+  --secondary-foreground: var(--ink-12);
+  --muted: var(--ink-3);
+  --muted-foreground: var(--ink-11);
+  --accent: var(--ink-3);
+  --accent-foreground: var(--ink-12);
+  --destructive: var(--red-9);
+  --destructive-foreground: var(--red-11);
+  --border: var(--line);
+  --input: var(--line);
+  --ring: var(--focus-ring);
   --chart-1: oklch(0.865 0.127 207.078);
   --chart-2: oklch(0.673 0.182 276.935);
   --chart-3: oklch(0.837 0.128 66.29);
@@ -148,26 +213,26 @@
   --chart-9: oklch(0.841 0.238 128.85);
   --chart-10: oklch(0.5 0.134 242.749);
   --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.585 0.233 277.117);
-  --sidebar-primary-foreground: oklch(1 0 0);
+  --sidebar: var(--ground);
+  --sidebar-foreground: var(--ink-12);
+  --sidebar-primary: var(--primary-bg);
+  --sidebar-primary-foreground: var(--primary-fg);
   --sidebar-accent: oklch(0.556 0 0 / 8%);
   --sidebar-accent-foreground: oklch(0.145 0 0);
   --sidebar-border: oklch(0.145 0 0 / 10%);
   --sidebar-ring: oklch(0.708 0 0);
   --note: oklch(0.916 0.128 94.1);
   --note-ink: oklch(0.306 0.063 93.2);
-  --fill-1: oklch(0.556 0 0 / 5%);
-  --fill-2: oklch(0.556 0 0 / 8%);
-  --fill-3: oklch(0.556 0 0 / 12%);
-  --fill-4: oklch(0.556 0 0 / 16%);
-  --field: oklch(0.556 0 0 / 2.5%);
-  --raised: oklch(1 0 0);
-  --control: oklch(1 0 0);
-  --control-hover: oklch(0.9925 0 0);
-  --control-border: oklch(0.145 0 0 / 10%);
-  --field-border: oklch(0.145 0 0 / 10%);
+  --fill-1: rgb(var(--shadow-ink) / 4%);
+  --fill-2: rgb(var(--shadow-ink) / 6%);
+  --fill-3: rgb(var(--shadow-ink) / 10%);
+  --fill-4: rgb(var(--shadow-ink) / 14%);
+  --field: var(--ink-3);
+  --raised: var(--surface-top);
+  --control: var(--surface-top);
+  --control-hover: var(--root-ink-2);
+  --control-border: transparent;
+  --field-border: transparent;
   --syntax-foreground: oklch(0.145 0 0);
   --syntax-comment: oklch(0.4975 0 0);
   --syntax-keyword: oklch(0.577 0.245 27.325);
@@ -183,25 +248,44 @@
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.237 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.585 0.233 277.117);
-  --primary-foreground: oklch(1 0 0);
-  --secondary: oklch(0.182 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.205 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(1 0 0 / 10%);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.637 0.237 25.331);
-  --destructive-foreground: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 10%);
-  --ring: oklch(0.556 0 0);
+  /* Dark: colour and shadow only. Every edge is one solid 0.5px outline plus a tight black drop. */
+  --root-ink-1: #111110; --root-ink-2: #191918; --root-ink-3: #222221; --root-ink-4: #2a2a28;
+  --root-ink-5: #31312e; --root-ink-6: #3b3a37; --root-ink-7: #494844; --root-ink-8: #62605b;
+  --root-ink-9: #6f6d66; --root-ink-10: #8a8982; --root-ink-11: #b5b3ad; --root-ink-12: #eeeeec;
+  --red-3: #3b1219; --red-4: #500f1c; --red-6: #721d24; --red-9: #e5484d; --red-10: #ec5d5e; --red-11: #ff9592;
+  --green-3: #132d21; --green-9: #30a46c; --green-11: #3dd68c;
+  --ground: var(--root-ink-1);
+  --overlay: var(--root-ink-2);
+  --line: var(--ink-5);
+  --sh-button: 0 0 0 0.5px var(--ink-6), 0 1px 2px 0 rgb(0 0 0 / 0.5);
+  --sh-toggle: var(--sh-button);
+  --sh-primary: 0 0 0 0.5px var(--primary-bg), 0 1px 2px 0 rgb(0 0 0 / 0.5);
+  --sh-card: 0 0 0 0.5px var(--ink-6), 0 1px 2px 0 rgb(0 0 0 / 0.5), 0 3px 4px -2px rgb(0 0 0 / 0.4);
+  --sh-table: 0 1px 2px 0 rgb(0 0 0 / 0.5);
+  --sh-menu: 0 0 0 0.5px var(--ink-7), 0 1px 2px 0 rgb(0 0 0 / 0.5), 0 4px 8px -4px rgb(0 0 0 / 0.5);
+  --sh-modal: 0 0 0 0.5px var(--ink-7), 0 1px 2px 0 rgb(0 0 0 / 0.5), 0 6px 8px -4px rgb(0 0 0 / 0.5);
+  --sh-badge: 0 0 0 0.5px color-mix(in srgb, currentColor 34%, #000), 0 1px 2px 0 rgb(0 0 0 / 0.5);
+  --backdrop: rgb(0 0 0 / 0.75);
+
+  --background: var(--ground);
+  --foreground: var(--ink-12);
+  --card: var(--root-ink-2);
+  --card-foreground: var(--ink-12);
+  --popover: var(--overlay);
+  --popover-foreground: var(--ink-12);
+  --primary: var(--primary-bg);
+  --primary-foreground: var(--primary-fg);
+  --secondary: var(--ink-3);
+  --secondary-foreground: var(--ink-12);
+  --muted: var(--ink-3);
+  --muted-foreground: var(--ink-11);
+  --accent: var(--ink-4);
+  --accent-foreground: var(--ink-12);
+  --destructive: var(--red-9);
+  --destructive-foreground: var(--red-11);
+  --border: var(--line);
+  --input: var(--line);
+  --ring: var(--focus-ring);
   --chart-1: oklch(0.865 0.127 207.078);
   --chart-2: oklch(0.673 0.182 276.935);
   --chart-3: oklch(0.837 0.128 66.29);
@@ -212,26 +296,26 @@
   --chart-8: oklch(0.811 0.111 293.571);
   --chart-9: oklch(0.841 0.238 128.85);
   --chart-10: oklch(0.5 0.134 242.749);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.585 0.233 277.117);
-  --sidebar-primary-foreground: oklch(1 0 0);
+  --sidebar: var(--ground);
+  --sidebar-foreground: var(--ink-12);
+  --sidebar-primary: var(--primary-bg);
+  --sidebar-primary-foreground: var(--primary-fg);
   --sidebar-accent: oklch(1 0 0 / 10%);
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
   --note: oklch(0.916 0.128 94.1);
   --note-ink: oklch(0.306 0.063 93.2);
-  --fill-1: oklch(1 0 0 / 5%);
-  --fill-2: oklch(1 0 0 / 10%);
-  --fill-3: oklch(1 0 0 / 14%);
-  --fill-4: oklch(1 0 0 / 18%);
-  --field: oklch(1 0 0 / 2.5%);
-  --raised: oklch(1 0 0 / 10%);
-  --control: oklch(0.237 0 0);
-  --control-hover: oklch(0.269 0 0);
-  --control-border: oklch(1 0 0 / 10%);
-  --field-border: oklch(1 0 0 / 15%);
+  --fill-1: rgb(255 255 250 / 4%);
+  --fill-2: rgb(255 255 250 / 7%);
+  --fill-3: rgb(255 255 250 / 11%);
+  --fill-4: rgb(255 255 250 / 15%);
+  --field: var(--ink-3);
+  --raised: var(--root-ink-2);
+  --control: var(--ink-3);
+  --control-hover: var(--ink-4);
+  --control-border: transparent;
+  --field-border: transparent;
   --syntax-foreground: oklch(0.985 0 0);
   --syntax-comment: oklch(0.708 0 0);
   --syntax-keyword: oklch(0.704 0.191 22.216);
@@ -248,7 +332,11 @@
 
 @layer base {
   * {
-    @apply border-border outline-ring/50;
+    @apply border-border outline-ring;
+  }
+  :focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
   }
   html {
     font-family: "Inter Variable", Inter, ui-sans-serif, system-ui, sans-serif;
@@ -257,6 +345,114 @@
   body {
     @apply bg-background text-foreground antialiased;
   }
+}
+
+/* ---------- Tactile layer ----------
+   Surfaces redeclare what their children borrow, so a control reads equally raised on the page,
+   a card or an overlay. Light alpha rings adapt on their own; dark outlines are a fixed step,
+   three above the control's fill, so overlays and cards repaint them. */
+.dark :is([data-slot="dialog-content"], [data-slot="dropdown-menu-content"], [data-slot="popover-content"], [data-slot="card"], .surface-raised) {
+  --control: var(--ink-4);
+  --control-hover: var(--ink-5);
+  --field: var(--ink-3);
+  --sh-button: 0 0 0 0.5px var(--ink-7), 0 1px 2px 0 rgb(0 0 0 / 0.5);
+  --sh-toggle: var(--sh-button);
+  --accent: var(--ink-4);
+}
+:root:not(.dark) :is([data-slot="dialog-content"], [data-slot="dropdown-menu-content"], [data-slot="popover-content"]) {
+  --sh-primary: 0 0 0 1px var(--surface-top);
+}
+
+@layer components {
+  /* Anything you can press squeezes a little, then springs back. */
+  .press {
+    transition-property: transform, scale, background-color, color, box-shadow, opacity;
+    transition-duration: 150ms;
+    transition-timing-function: var(--ease-out);
+  }
+  .press:not(:disabled):not([aria-disabled="true"]):active {
+    scale: 0.97;
+  }
+  .press-sm:not(:disabled):active {
+    scale: 0.92;
+  }
+  /* A white raised control: fill from the surface, edge and drop from the shadow. No border. */
+  .tactile {
+    background-color: var(--control);
+    box-shadow: var(--sh-button);
+    color: var(--ink-12);
+  }
+  @media (hover: hover) {
+    .tactile:not(:disabled):hover {
+      background-color: var(--control-hover);
+    }
+  }
+  /* A track with a raised white pill for the chosen option (segmented control, filters). */
+  .tactile-track {
+    background-color: var(--ink-3);
+    border-radius: 9999px;
+    padding: 2px;
+  }
+  .tactile-chosen {
+    background-color: var(--control);
+    box-shadow: var(--sh-toggle);
+    color: var(--ink-12);
+  }
+  .dark .tactile-track {
+    background-color: color-mix(in oklab, var(--ink-3) 70%, transparent);
+  }
+  .well {
+    background-color: var(--field);
+    transition: background-color 150ms var(--ease-out);
+  }
+  .well:focus-within {
+    background-color: var(--ink-4);
+  }
+}
+
+/* Overlays grow out of their trigger and leave faster than they arrive. */
+@media (prefers-reduced-motion: no-preference) {
+  [data-slot="dropdown-menu-content"],
+  [data-slot="popover-content"] {
+    transition: opacity 150ms var(--ease-out), scale 150ms var(--ease-out);
+  }
+  :is([data-slot="dropdown-menu-content"], [data-slot="popover-content"])[data-starting-style] {
+    opacity: 0;
+    scale: 0.97;
+  }
+  :is([data-slot="dropdown-menu-content"], [data-slot="popover-content"])[data-ending-style] {
+    opacity: 0;
+    scale: 0.97;
+    transition-duration: 120ms;
+  }
+  [data-slot="dialog-content"] {
+    transition: opacity 240ms var(--ease-out), transform 240ms var(--ease-out), filter 240ms var(--ease-out);
+  }
+  [data-slot="dialog-content"][data-starting-style] {
+    opacity: 0;
+    transform: translateY(16px);
+    filter: blur(4px);
+  }
+  [data-slot="dialog-content"][data-ending-style] {
+    opacity: 0;
+    transform: translateY(8px);
+    transition-duration: 200ms;
+  }
+  [data-slot="dialog-overlay"] {
+    transition: opacity 200ms var(--ease-out);
+  }
+  [data-slot="dialog-overlay"]:is([data-starting-style], [data-ending-style]) {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  :is([data-slot="dropdown-menu-content"], [data-slot="popover-content"], [data-slot="dialog-content"], [data-slot="dialog-overlay"]) {
+    transition: opacity 150ms linear;
+  }
+  :is([data-slot="dropdown-menu-content"], [data-slot="popover-content"], [data-slot="dialog-content"], [data-slot="dialog-overlay"]):is([data-starting-style], [data-ending-style]) {
+    opacity: 0;
+  }
+  .press:active { scale: 1 !important; }
 }
 
 /* Landing page motion. Everything here is off for visitors who prefer reduced motion. */

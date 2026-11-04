@@ -1,4 +1,4 @@
-import { CheckIcon, SparklesIcon, XIcon } from "lucide-react"
+import { CheckIcon, SparklesIcon, XIcon } from "@/components/icons"
 import { notify } from "@/components/notify"
 import { buildAgentPrompt } from "@/lib/agent-prompt"
 import type { Animation, Page, Reference } from "@/lib/api"
@@ -27,8 +27,8 @@ export function SelectCheck({ on, active, onToggle, label }: { on: boolean; acti
         onToggle()
       }}
       className={cn(
-        "absolute top-2 left-2 z-10 grid size-6 place-items-center rounded-full bg-background/90 shadow-sm ring-1 ring-black/10 backdrop-blur transition-opacity",
-        on ? "bg-foreground text-background opacity-100 ring-foreground" : active ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+        "absolute top-2 left-2 z-10 grid size-6 place-items-center rounded-full bg-control shadow-button transition-[opacity,scale,background-color] duration-150 ease-out active:scale-[0.92]",
+        on ? "bg-primary text-primary-foreground opacity-100 shadow-primary" : active ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
       )}
     >
       {on && <CheckIcon className="size-3.5" strokeWidth={3} />}
@@ -78,8 +78,8 @@ export function SelectionBar({
   }
 
   return (
-    <div className="flex h-10 max-w-full items-center gap-0.5 rounded-full bg-neutral-900 p-1 text-xs text-white shadow-md ring-1 ring-white/10 dark:bg-neutral-100 dark:text-neutral-900 dark:ring-black/10">
-        <button onClick={onDone} aria-label="Done selecting" className="grid size-8 shrink-0 place-items-center rounded-full hover:bg-white/10 dark:hover:bg-black/10">
+    <div className="surface-raised flex h-10 max-w-full items-center gap-0.5 rounded-full bg-card p-1 text-xs shadow-card">
+        <button onClick={onDone} aria-label="Done selecting" className="press grid size-8 shrink-0 place-items-center rounded-full text-ink-10 hover:bg-ink-3 hover:text-foreground active:scale-[0.92]">
           <XIcon className="size-4" />
         </button>
         <span className="truncate px-1 font-medium whitespace-nowrap">{parts.length ? parts.join(" · ") : n ? "Tokens only" : "Pick items"}</span>
@@ -87,8 +87,8 @@ export function SelectionBar({
           onClick={() => onChange({ ...selection, tokens: !selection.tokens })}
           aria-pressed={selection.tokens}
           className={cn(
-            "flex h-8 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium",
-            selection.tokens ? "bg-white/20 dark:bg-black/15" : "text-white/60 hover:text-white dark:text-neutral-500 dark:hover:text-neutral-900",
+            "press flex h-8 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium",
+            selection.tokens ? "bg-ink-4 text-foreground" : "text-ink-11 hover:bg-ink-3 hover:text-foreground",
           )}
         >
           {selection.tokens ? <CheckIcon className="size-3.5" /> : <span className="size-3.5 rounded-full ring-1 ring-current" />}
@@ -97,7 +97,7 @@ export function SelectionBar({
         <button
           onClick={copy}
           disabled={!n}
-          className="flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-white px-3.5 text-xs font-medium text-neutral-900 hover:bg-white/90 disabled:opacity-40 dark:bg-neutral-900 dark:text-white"
+          className="press flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-primary pr-3.5 pl-3 text-xs font-medium text-primary-foreground shadow-primary hover:bg-(--primary-hover) disabled:opacity-60 dark:disabled:bg-ink-4 dark:disabled:text-ink-8 dark:disabled:opacity-100 dark:disabled:shadow-none"
         >
           <SparklesIcon className="size-3.5" /> Copy prompt
         </button>

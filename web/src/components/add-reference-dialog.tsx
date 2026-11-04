@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react"
 import { useLocation } from "wouter"
-import { ClipboardIcon, CornerDownLeftIcon, FileIcon, GlobeIcon, NetworkIcon, XIcon } from "lucide-react"
+import { ClipboardIcon, CornerDownLeftIcon, FileIcon, GlobeIcon, NetworkIcon, XIcon } from "@/components/icons"
 import { toast } from "sonner"
 import { CollectionPicker } from "@/components/collection-picker"
 import { notify } from "@/components/notify"
@@ -84,12 +84,12 @@ export function AddReferenceDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent showCloseButton={false} className="flex max-h-[calc(100svh-2rem)] flex-col gap-0 overflow-hidden rounded-3xl p-0 sm:max-w-[440px]">
+      <DialogContent showCloseButton={false} className="flex max-h-[calc(100svh-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[460px]">
         <form onSubmit={submit} className="flex min-h-0 flex-col">
-          <div className="flex items-center justify-between px-5 pt-4 pb-3">
-            <DialogTitle className="text-sm font-medium">New reference</DialogTitle>
+          <div className="flex items-center justify-between px-5 pt-5 pb-4">
+            <DialogTitle className="text-base font-medium">New reference</DialogTitle>
             <DialogDescription className="sr-only">Paste a website; your capture agent saves screenshots, styles and animations.</DialogDescription>
-            <DialogClose className="-mr-1.5 grid size-7 place-items-center rounded-full text-muted-foreground hover:bg-fill-2 hover:text-foreground" aria-label="Close">
+            <DialogClose className="press -mr-1.5 grid size-7 place-items-center rounded-md text-ink-10 hover:bg-ink-3 hover:text-foreground active:scale-[0.92]" aria-label="Close">
               <XIcon className="size-4" />
             </DialogClose>
           </div>
@@ -97,7 +97,7 @@ export function AddReferenceDialog({
           <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-5 pb-4">
             {/* URL */}
             <div>
-              <label className="flex h-14 items-center gap-3 rounded-2xl bg-fill-1 px-4 ring-1 ring-transparent transition-shadow focus-within:bg-background focus-within:ring-border focus-within:shadow-xs">
+              <label className="well flex h-12 items-center gap-3 rounded-lg px-3.5">
                 <Favicon host={parsed?.hostname} />
                 <input
                   autoFocus
@@ -108,19 +108,19 @@ export function AddReferenceDialog({
                   placeholder="Paste a website URL"
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
-                  className="h-full min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-muted-foreground"
+                  className="h-full min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-ink-10"
                 />
                 {url ? (
-                  <button type="button" onClick={() => setUrl("")} aria-label="Clear" className="grid size-6 place-items-center rounded-full bg-fill-3 text-muted-foreground">
+                  <button type="button" onClick={() => setUrl("")} aria-label="Clear" className="press grid size-6 place-items-center rounded-full bg-control text-ink-10 shadow-button hover:text-foreground active:scale-[0.92]">
                     <XIcon className="size-3" />
                   </button>
                 ) : (
-                  <button type="button" onClick={paste} className="flex h-7 items-center gap-1 rounded-full px-2.5 text-xs font-medium text-muted-foreground ring-1 ring-border hover:text-foreground">
-                    <ClipboardIcon className="size-3" /> Paste
+                  <button type="button" onClick={paste} className="tactile press flex h-7 items-center gap-1 rounded-full pr-2.75 pl-2.25 text-xs font-medium">
+                    <ClipboardIcon className="size-3.5 text-ink-9" /> Paste
                   </button>
                 )}
               </label>
-              <p className={cn("mt-1.5 h-4 px-1 text-2xs text-muted-foreground", url && !parsed && "text-destructive-foreground")}>
+              <p className={cn("mt-1.5 h-4 px-1 text-2xs text-ink-10", url && !parsed && "text-(--red-11)")}>
                 {url && !parsed
                   ? "Enter a full domain like linear.app"
                   : mode === "crawl"
@@ -139,42 +139,52 @@ export function AddReferenceDialog({
                   aria-checked={mode === m.value}
                   onClick={() => setMode(m.value)}
                   className={cn(
-                    "flex flex-col items-center gap-1.5 rounded-2xl bg-fill-1 px-3 py-4 text-center ring-1 ring-transparent transition-all hover:bg-fill-2",
-                    mode === m.value && "bg-background ring-2 ring-foreground hover:bg-background",
+                    "press relative flex flex-col items-start gap-0.5 rounded-lg bg-ink-2 p-3 text-left transition-colors hover:bg-ink-3 active:scale-[0.99] dark:bg-ink-3 dark:hover:bg-ink-4",
+                    mode === m.value && "bg-ink-3 dark:bg-ink-4 dark:shadow-[0_0_0_0.5px_var(--ink-8)]",
                   )}
                 >
-                  <m.icon className="size-4" />
-                  <span className="text-sm font-medium">{m.title}</span>
-                  <span className="text-2xs text-muted-foreground">{m.description}</span>
+                  <m.icon className="mb-2 size-4 text-ink-11" />
+                  <span className="text-xs font-medium">{m.title}</span>
+                  <span className="text-2xs text-ink-11">{m.description}</span>
+                  {/* The filled mark, not the fill, tells selected from hovered. */}
+                  <span
+                    aria-hidden
+                    className={cn(
+                      "absolute top-3 right-3 grid size-[18px] place-items-center rounded-full ring-[1.5px] ring-ink-6 ring-inset",
+                      mode === m.value && "bg-surface-top ring-0 shadow-button dark:bg-ink-6",
+                    )}
+                  >
+                    {mode === m.value && <span className="size-2 rounded-full bg-ink-12" />}
+                  </span>
                 </button>
               ))}
             </div>
 
             {mode === "crawl" && (
               <div className="flex items-center gap-2.5 px-1">
-                <span className="text-xs text-muted-foreground">Up to</span>
-                <div className="flex rounded-full bg-fill-1 p-0.5">
+                <span className="text-xs text-ink-11">Up to</span>
+                <div className="tactile-track flex">
                   {LIMITS.map((n) => (
                     <button
                       key={n}
                       type="button"
                       onClick={() => setMaxPages(n)}
                       className={cn(
-                        "h-7 min-w-11 rounded-full px-2.5 text-xs font-medium text-muted-foreground tabular-nums",
-                        maxPages === n && "bg-background text-foreground shadow-xs ring-1 ring-border",
+                        "press h-7 min-w-11 rounded-full px-2.5 text-xs font-medium text-ink-11 tabular-nums hover:text-foreground",
+                        maxPages === n && "tactile-chosen",
                       )}
                     >
                       {n}
                     </button>
                   ))}
                 </div>
-                <span className="text-xs text-muted-foreground">pages</span>
+                <span className="text-xs text-ink-11">pages</span>
               </div>
             )}
 
             {/* Collections */}
             <div className="flex min-h-0 flex-col gap-1.5">
-              <span className="px-1 text-2xs font-medium text-muted-foreground">Save to</span>
+              <span className="px-1 text-xs font-medium text-ink-11">Save to</span>
               <CollectionPicker
                 className="max-h-56"
                 selected={selected}
@@ -183,15 +193,19 @@ export function AddReferenceDialog({
             </div>
           </div>
 
-          <div className="border-t border-border p-3">
+          <div className="border-t-[0.5px] border-border p-3">
             <button
               type="submit"
               disabled={!parsed || submitting}
-              className="flex h-11 w-full items-center justify-center gap-2 rounded-full bg-foreground text-sm font-medium text-background transition-colors hover:bg-foreground/85 disabled:bg-fill-2 disabled:text-muted-foreground"
+              className="press flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-primary px-3.5 text-sm font-medium tracking-[-0.01em] text-primary-foreground shadow-primary hover:bg-(--primary-hover) disabled:opacity-60 disabled:active:scale-100 dark:disabled:bg-ink-4 dark:disabled:text-ink-8 dark:disabled:opacity-100 dark:disabled:shadow-none"
             >
-              {submitting ? <Spinner className="size-4" /> : null}
-              {mode === "crawl" ? "Crawl and save" : "Save reference"}
-              {!submitting && parsed && <CornerDownLeftIcon className="size-3.5 opacity-50" />}
+              {submitting ? <Spinner className="size-3.5" /> : null}
+              {submitting ? "Saving…" : mode === "crawl" ? "Crawl and save" : "Save reference"}
+              {!submitting && (
+                <kbd className="grid size-[18px] place-items-center rounded-xs bg-primary-foreground/15">
+                  <CornerDownLeftIcon className="size-3" />
+                </kbd>
+              )}
             </button>
           </div>
         </form>
