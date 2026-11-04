@@ -11,7 +11,7 @@ declare global {
 }
 
 // Only the desktop window stores this transient view state. It stays in the
-// launcher process while an idle renderer is released, never in shared storage.
+// launcher while an idle renderer is released, and in its private restart cache.
 export function useDesktopState<T>(key: string, initial: T): [T, Dispatch<SetStateAction<T>>] {
   const [value, setValue] = useState<T>(() => {
     if (window.snipDesktop) {
