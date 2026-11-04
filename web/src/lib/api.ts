@@ -54,6 +54,9 @@ export const api = {
   deleteReference: (id: string) => request<{ ok: true }>(`/api/references/${id}`, { method: "DELETE" }),
   setMembership: (id: string, cid: string, member: boolean) =>
     request<{ ok: true }>(`/api/references/${id}/collections/${cid}`, { method: member ? "PUT" : "DELETE" }),
+  /** Save pages to a collection (or take them out). They keep their files and stay in their website. */
+  setPageMembership: (cid: string, pageIds: string[], member: boolean) =>
+    request<{ ok: true; changed: number }>(`/api/collections/${cid}/pages`, { method: "POST", body: JSON.stringify({ pageIds, member }) }),
   collections: () => request<Collection[]>("/api/collections"),
   createCollection: (name: string, description?: string) =>
     request<{ id: string }>("/api/collections", { method: "POST", body: JSON.stringify({ name, description }) }),

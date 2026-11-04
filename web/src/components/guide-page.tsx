@@ -363,6 +363,7 @@ function ConnectSection() {
         ["get_page", "One page with an inline screenshot"],
         ["get_page_styles", "Computed styles filtered by element, text or section"],
         ["get_animation", "A contact sheet, sampled frame or original GIF"],
+        ["search_pages", "Pages across references, or every page in a collection"],
         ["search_animations", "Scroll and hover GIFs across references"],
         ["get_capture_status", "Capture progress and whether your capture agent is online"],
         ["list_collections", "Collections with counts"],
@@ -374,7 +375,8 @@ function ConnectSection() {
       tools: [
         ["add_reference", "Queue a URL for capture"],
         ["create_collection", "Start a new collection"],
-        ["set_collection_membership", "Add or remove a reference"],
+        ["set_collection_membership", "Add or remove a website"],
+        ["set_page_collection_membership", "Add or remove individual pages"],
       ],
     },
   ]

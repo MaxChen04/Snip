@@ -73,9 +73,13 @@ function toPage(r: Row): Page {
     snapshotKey: (r.snapshot_key as string) ?? null,
     stylesKey: (r.styles_key as string) ?? null,
     tokens: parse<DesignTokens>(r.tokens_json),
+    collectionIds: r.collection_ids ? String(r.collection_ids).split(",") : [],
     createdAt: r.created_at as string,
   }
 }
+
+/** Selects a page row plus the collections it was saved to individually. Alias the pages table as `t`. */
+const PAGE_COLLECTIONS = `(SELECT group_concat(pc.collection_id) FROM page_collections pc WHERE pc.reference_id = t.reference_id AND pc.page_path = t.path) AS collection_ids`
 
 function toAnimation(r: Row): Animation {
   return {
@@ -188,7 +192,7 @@ export async function getReference(db: D1Database, id: string) {
   const r = await getReferenceRecord(db, id)
   if (!r) return null
   const [pages, anims] = await Promise.all([
-    db.prepare(`SELECT * FROM pages WHERE reference_id = ? ORDER BY ord, created_at`).bind(id).all<Row>(),
+    db.prepare(`SELECT t.*, ${PAGE_COLLECTIONS} FROM pages t WHERE t.reference_id = ? ORDER BY t.ord, t.created_at`).bind(id).all<Row>(),
     db.prepare(`SELECT * FROM animations WHERE reference_id = ? ORDER BY created_at`).bind(id).all<Row>(),
   ])
   return {
@@ -204,7 +208,7 @@ export async function getAnimation(db: D1Database, id: string) {
 }
 
 export async function getPage(db: D1Database, id: string) {
-  const r = await db.prepare(`SELECT * FROM pages WHERE id = ?`).bind(id).first<Row>()
+  const r = await db.prepare(`SELECT t.*, ${PAGE_COLLECTIONS} FROM pages t WHERE t.id = ?`).bind(id).first<Row>()
   return r ? toPage(r) : null
 }
 
@@ -225,8 +229,14 @@ async function listChildren<T>(
     if (table === "pages") args.push(like)
   }
   if (f.collectionId) {
-    where.push(`EXISTS (SELECT 1 FROM reference_collections rc WHERE rc.reference_id = t.reference_id AND rc.collection_id = ?)`)
-    args.push(f.collectionId)
+    // In a collection: everything from websites saved whole, plus pages saved on their own
+    // (and, for animations, the motion captured on those pages).
+    const pinned =
+      table === "pages"
+        ? `EXISTS (SELECT 1 FROM page_collections pc WHERE pc.reference_id = t.reference_id AND pc.page_path = t.path AND pc.collection_id = ?)`
+        : `EXISTS (SELECT 1 FROM pages p JOIN page_collections pc ON pc.reference_id = p.reference_id AND pc.page_path = p.path WHERE p.id = t.page_id AND pc.collection_id = ?)`
+    where.push(`(EXISTS (SELECT 1 FROM reference_collections rc WHERE rc.reference_id = t.reference_id AND rc.collection_id = ?) OR ${pinned})`)
+    args.push(f.collectionId, f.collectionId)
   }
   const asc = f.sort === "oldest"
   const cur = decodeCursor(f.cursor)
@@ -235,7 +245,7 @@ async function listChildren<T>(
     args.push(cur[0], cur[0], cur[1])
   }
   const dir = asc ? "ASC" : "DESC"
-  const sql = `SELECT t.*, r.title AS ref_title, r.domain AS ref_domain FROM ${table} t JOIN refs r ON r.id = t.reference_id ${
+  const sql = `SELECT t.*, r.title AS ref_title, r.domain AS ref_domain${table === "pages" ? `, ${PAGE_COLLECTIONS}` : ""} FROM ${table} t JOIN refs r ON r.id = t.reference_id ${
     where.length ? "WHERE " + where.join(" AND ") : ""
   } ORDER BY t.created_at ${dir}, t.id ${dir} LIMIT ?`
   const { results } = await db.prepare(sql).bind(...args, limit + 1).all<Row>()
@@ -322,8 +332,17 @@ export async function listCollections(db: D1Database): Promise<Collection[]> {
   const { results } = await db
     .prepare(
       `SELECT c.*, (SELECT count(*) FROM reference_collections rc WHERE rc.collection_id = c.id) AS reference_count,
-        (SELECT group_concat(cover_key, '|') FROM (SELECT r.cover_key FROM reference_collections rc JOIN refs r ON r.id = rc.reference_id
-          WHERE rc.collection_id = c.id AND r.cover_key IS NOT NULL ORDER BY rc.added_at DESC LIMIT 3)) AS cover_keys
+        (SELECT count(*) FROM page_collections pc WHERE pc.collection_id = c.id
+          AND EXISTS (SELECT 1 FROM pages p WHERE p.reference_id = pc.reference_id AND p.path = pc.page_path)) AS page_count,
+        (SELECT group_concat(k, '|') FROM (
+          SELECT k FROM (
+            SELECT r.cover_key AS k, rc.added_at AS at FROM reference_collections rc JOIN refs r ON r.id = rc.reference_id
+              WHERE rc.collection_id = c.id AND r.cover_key IS NOT NULL
+            UNION ALL
+            SELECT coalesce(p.desktop_thumb_key, p.mobile_thumb_key) AS k, pc.added_at AS at FROM page_collections pc
+              JOIN pages p ON p.reference_id = pc.reference_id AND p.path = pc.page_path
+              WHERE pc.collection_id = c.id AND coalesce(p.desktop_thumb_key, p.mobile_thumb_key) IS NOT NULL
+          ) ORDER BY at DESC LIMIT 3)) AS cover_keys
       FROM collections c ORDER BY lower(c.name)`,
     )
     .all<Row>()
@@ -332,6 +351,7 @@ export async function listCollections(db: D1Database): Promise<Collection[]> {
     name: r.name as string,
     description: (r.description as string) ?? null,
     referenceCount: r.reference_count as number,
+    pageCount: r.page_count as number,
     coverKeys: r.cover_keys ? String(r.cover_keys).split("|") : [],
     createdAt: r.created_at as string,
   }))
@@ -360,6 +380,31 @@ export async function setReferenceCollection(db: D1Database, referenceId: string
   } else {
     await db.prepare(`DELETE FROM reference_collections WHERE reference_id = ? AND collection_id = ?`).bind(referenceId, collectionId).run()
   }
+}
+
+export const MAX_PAGES_PER_CHANGE = 200
+
+/**
+ * Save pages to a collection (member=true) or take them out. The collection points at each page
+ * in its website, so the page keeps its files and stays in every other collection.
+ * Returns how many pages changed, or null when the collection doesn't exist.
+ */
+export async function setPageCollection(db: D1Database, collectionId: string, pageIds: string[], member: boolean) {
+  const ids = JSON.stringify([...new Set(pageIds)].slice(0, MAX_PAGES_PER_CHANGE))
+  if (!(await db.prepare(`SELECT 1 FROM collections WHERE id = ?`).bind(collectionId).first())) return null
+  // json_each keeps this to one bound parameter per list (D1 caps bound parameters per query).
+  const result = member
+    ? await db
+        .prepare(`INSERT OR IGNORE INTO page_collections (collection_id, reference_id, page_path, added_at)
+          SELECT DISTINCT ?, reference_id, path, ? FROM pages WHERE id IN (SELECT value FROM json_each(?))`)
+        .bind(collectionId, now(), ids)
+        .run()
+    : await db
+        .prepare(`DELETE FROM page_collections WHERE collection_id = ?
+          AND (reference_id, page_path) IN (SELECT reference_id, path FROM pages WHERE id IN (SELECT value FROM json_each(?)))`)
+        .bind(collectionId, ids)
+        .run()
+  return result.meta.changes
 }
 
 // Capture queue

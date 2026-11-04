@@ -29,6 +29,8 @@ const LIMITS = {
 
 const INSTRUCTIONS = `Snip stores website design references captured by the user: per-page desktop/mobile screenshots, scroll and hover animations, design tokens, computed styles and HTML snapshots.
 
+Collections group work by project or theme. A collection holds whole websites and individually saved pages (e.g. "Pricing pages" gathering pricing pages from many sites). A saved page still belongs to its website and can sit in many collections. To read a collection: list_collections -> search_pages(collection_id) for its pages, search_references(collection_id) for the websites saved whole.
+
 Typical flow: search_references -> get_reference(id, part "overview") -> get_page(page_id) for a screenshot, get_animation(animation_id) for motion, get_reference(id, part "tokens") or get_page_styles(page_id) for CSS. When the user hands you specific page or animation ids, call those tools directly instead of reading the whole reference.
 
 The recommended parts and detail tools are bounded; the legacy full reference read may be large. When something is cut or unavailable the result says so under "omitted" or "unavailable" and gives the next call. Animated GIFs are often seen as a single frame; prefer get_animation's contact sheet or individual frames. Report what you observed versus inferred: captured styles are a sampled rendering, and scroll GIF timing is synthetic.
@@ -123,6 +125,7 @@ function buildServer(env: Env, origin: string) {
     },
     htmlSnapshotUrl: await url(p.snapshotKey),
     computedStylesUrl: await url(p.stylesKey),
+    collectionIds: p.collectionIds,
   })
 
   const representations = (a: Animation) => ({
@@ -147,14 +150,14 @@ function buildServer(env: Env, origin: string) {
 
   const listedAnimation = (a: Animation) => ({ id: a.id, pageId: a.pageId, kind: a.kind, label: a.label, representations: representations(a) })
 
-  const server = new McpServer({ name: "snip", version: "1.2.0" }, { instructions: INSTRUCTIONS })
+  const server = new McpServer({ name: "snip", version: "1.3.0" }, { instructions: INSTRUCTIONS })
 
   server.registerTool(
     "search_references",
     {
       title: "Search design references",
       description:
-        "Search saved website design references by text (title/URL), collection id or domain. Returns short summaries with ids. Next: get_reference(id, part \"overview\").",
+        "Search saved website design references by text (title/URL), collection id or domain. Returns short summaries with ids. With collection_id this lists websites saved to the collection as a whole; use search_pages(collection_id) for every page in it, including pages saved on their own. Next: get_reference(id, part \"overview\").",
       inputSchema: z.object({
         query: z.string().optional().describe("Text matched against title, URL and description"),
         collection_id: z.string().optional().describe("From list_collections"),
@@ -502,10 +505,47 @@ Scroll timing is synthetic playback; hover offsets are measured. Treat easing an
   )
 
   server.registerTool(
+    "search_pages",
+    {
+      title: "Search pages",
+      description:
+        "List captured pages across all references, newest first. With collection_id, returns the collection's pages: pages saved to it individually (savedTo \"page\") and pages of websites saved to it whole (savedTo \"website\"). Next: get_page(page_id).",
+      inputSchema: z.object({
+        query: z.string().optional().describe("Text matched against page title, path and the website's title and URL"),
+        collection_id: z.string().optional().describe("From list_collections"),
+        limit: z.number().int().min(1).max(50).optional().describe("Default 20"),
+        cursor: z.string().optional().describe("nextCursor from a previous call"),
+      }),
+      annotations: { readOnlyHint: true },
+    },
+    async (args) => {
+      const res = await db.listPages(env.DB, { q: args.query, collectionId: args.collection_id, limit: args.limit ?? 20, cursor: args.cursor })
+      return ok({
+        items: await Promise.all(
+          res.items.map(async (p) => ({
+            id: p.id,
+            referenceId: p.referenceId,
+            url: p.url,
+            path: p.path,
+            title: p.title,
+            thumbUrl: await url(p.desktopThumbKey ?? p.mobileThumbKey),
+            reference: p.reference,
+            collectionIds: p.collectionIds,
+            ...(args.collection_id ? { savedTo: p.collectionIds.includes(args.collection_id) ? "page" : "website" } : {}),
+          })),
+        ),
+        nextCursor: res.nextCursor,
+        ...(res.items.length ? {} : { hint: args.collection_id ? "This collection has no pages yet." : "No matches. Try a shorter query." }),
+      })
+    },
+  )
+
+  server.registerTool(
     "search_animations",
     {
       title: "Search animations",
-      description: "List captured scroll and hover animations across all references, newest first. Next: get_animation(animation_id).",
+      description:
+        "List captured scroll and hover animations across all references, newest first. With collection_id: animations of websites saved to the collection and of pages saved to it. Next: get_animation(animation_id).",
       inputSchema: z.object({
         query: z.string().optional(),
         collection_id: z.string().optional(),
@@ -543,7 +583,8 @@ Scroll timing is synthetic playback; hover offsets are measured. Treat easing an
     "list_collections",
     {
       title: "List collections",
-      description: "List collections with their reference counts. Use a collection id to filter search_references.",
+      description:
+        "List collections. referenceCount counts websites saved whole; pageCount counts pages saved individually. Pass a collection id to search_pages (all its pages), search_references (its websites) or search_animations.",
       inputSchema: z.object({}),
       annotations: { readOnlyHint: true },
     },
@@ -582,7 +623,7 @@ Scroll timing is synthetic playback; hover offsets are measured. Treat easing an
     "create_collection",
     {
       title: "Create a collection",
-      description: "Create a new collection to organize references. Returns its id for set_collection_membership.",
+      description: "Create a new collection to organize references. Returns its id for set_collection_membership or set_page_collection_membership.",
       inputSchema: z.object({ name: z.string().min(1), description: z.string().optional() }),
     },
     async ({ name, description }) => ok({ id: await db.createCollection(env.DB, name, description) }),
@@ -599,6 +640,26 @@ Scroll timing is synthetic playback; hover offsets are measured. Treat easing an
     async ({ reference_id, collection_id, member }) => {
       await db.setReferenceCollection(env.DB, reference_id, collection_id, member)
       return ok({ ok: true })
+    },
+  )
+
+  server.registerTool(
+    "set_page_collection_membership",
+    {
+      title: "Add or remove pages from a collection",
+      description:
+        "Save individual pages to a collection (member=true) or remove them (member=false), e.g. gather pricing pages from several sites into one collection. Pages stay in their website and in any other collections; no files are copied. Page ids come from get_reference(id, part \"pages\") or search_pages.",
+      inputSchema: z.object({
+        page_ids: z.array(z.string()).min(1).max(db.MAX_PAGES_PER_CHANGE),
+        collection_id: z.string(),
+        member: z.boolean(),
+      }),
+      annotations: { idempotentHint: true },
+    },
+    async ({ page_ids, collection_id, member }) => {
+      const changed = await db.setPageCollection(env.DB, collection_id, page_ids, member)
+      if (changed === null) return fail(`No collection with id "${collection_id}". Call list_collections, or create_collection first.`)
+      return ok({ ok: true, changed })
     },
   )
 

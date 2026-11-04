@@ -19,6 +19,14 @@ export function CollectionThumb({ c, className }: { c?: Collection; className?: 
   )
 }
 
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
+
+/** "2 websites · 5 pages", leaving out whichever is zero. */
+export function collectionCountLabel(c: Pick<Collection, "referenceCount" | "pageCount">) {
+  const parts = [c.referenceCount && plural(c.referenceCount, "website", "websites"), c.pageCount && plural(c.pageCount, "page", "pages")].filter(Boolean)
+  return parts.length ? parts.join(" · ") : "Empty"
+}
+
 export function CheckCircle({ on }: { on: boolean }) {
   return (
     <span
@@ -126,9 +134,7 @@ export function CollectionPicker({
               <CollectionThumb c={c} />
               <span className="grid min-w-0 flex-1">
                 <span className="truncate text-sm font-medium">{c.name}</span>
-                <span className="text-2xs text-muted-foreground">
-                  {c.referenceCount} {c.referenceCount === 1 ? "reference" : "references"}
-                </span>
+                <span className="text-2xs text-muted-foreground">{collectionCountLabel(c)}</span>
               </span>
               <CheckCircle on={on} />
             </button>

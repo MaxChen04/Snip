@@ -19,6 +19,7 @@ import { notify } from "@/components/notify"
 import { CollectionPicker } from "@/components/collection-picker"
 import { EMPTY_SELECTION, SelectCheck, SelectionBar, toggleIn, type Selection } from "@/components/prompt-selection"
 import { Masonry } from "@/components/gallery-page"
+import { SavePagesButton } from "@/components/save-pages"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { TokensPanel } from "@/components/tokens-panel"
 import { ActionCircle, Segmented, TopBar } from "@/components/top-bar"
@@ -91,6 +92,18 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
     setData({ ...data, reference: { ...r, collectionIds: member ? [...r.collectionIds, cid] : r.collectionIds.filter((x) => x !== cid) } })
     void refreshCollections()
   }
+  const setPageCollections = (pageIds: string[], cid: string, member: boolean) =>
+    setData((d) =>
+      d && {
+        ...d,
+        pages: d.pages.map((p) =>
+          pageIds.includes(p.id)
+            ? { ...p, collectionIds: member ? [...new Set([...p.collectionIds, cid])] : p.collectionIds.filter((x) => x !== cid) }
+            : p,
+        ),
+      },
+    )
+  const selectedPages = pages.filter((p) => sel.pages.includes(p.id))
   const current = pages.find((p) => p.id === openPage) ?? null
   const scrollGifs = animations.filter((a) => a.kind === "scroll")
   const hoverGifs = animations.filter((a) => a.kind === "hover")
@@ -184,7 +197,9 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
 
       <div className="px-4 pt-6 pb-24 sm:px-6">
         <div className="sticky top-16 z-20 -mx-4 mb-6 flex flex-col items-center gap-2 bg-background px-4 py-2 sm:-mx-6 sm:grid sm:grid-cols-[1fr_auto_1fr] sm:gap-3 sm:px-6">
-          <span className="hidden sm:block" />
+          <div className="flex min-w-0 justify-start empty:hidden sm:empty:block">
+            {selectedPages.length > 0 && <SavePagesButton pages={selectedPages} onChange={setPageCollections} />}
+          </div>
           <Segmented
             value={tab}
             onChange={setTab}
@@ -273,7 +288,7 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
         )}
       </div>
 
-      {current && <PageViewer page={current} onClose={() => setOpenPage(null)} />}
+      {current && <PageViewer page={current} onClose={() => setOpenPage(null)} onCollectionsChange={setPageCollections} />}
     </div>
   )
 }
@@ -355,7 +370,15 @@ export function GifTile({ a, bare }: { a: Animation; bare?: boolean }) {
   )
 }
 
-function PageViewer({ page, onClose }: { page: Page; onClose: () => void }) {
+function PageViewer({
+  page,
+  onClose,
+  onCollectionsChange,
+}: {
+  page: Page
+  onClose: () => void
+  onCollectionsChange: (pageIds: string[], collectionId: string, member: boolean) => void
+}) {
   const [device, setDevice] = useState<"desktop" | "mobile">("desktop")
   const key = device === "desktop" ? page.desktopKey : page.mobileKey
 
@@ -396,6 +419,7 @@ function PageViewer({ page, onClose }: { page: Page; onClose: () => void }) {
           </ToggleGroupItem>
         </ToggleGroup>
         <div className="flex items-center gap-2">
+          <SavePagesButton pages={[page]} onChange={onCollectionsChange} label={page.collectionIds.length ? "Saved" : "Save"} className="h-8 px-3" />
           {page.snapshotKey && (
             <Button variant="outline" size="sm" render={<a href={fileUrl(page.snapshotKey)} target="_blank" rel="noreferrer" />} nativeButton={false}>
               <CodeIcon data-icon="inline-start" /> HTML snapshot
