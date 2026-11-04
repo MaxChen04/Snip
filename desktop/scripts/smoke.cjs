@@ -49,6 +49,7 @@ async function main() {
     for (const name of ["package.json", "web/wrangler.jsonc"]) await fs.copyFile(path.join(ROOT, name), path.join(root, name))
     await fs.symlink(path.join(ROOT, "node_modules"), path.join(root, "node_modules"), "dir")
     for (const name of await fs.readdir(desktop)) if (name.endsWith(".cjs") || ["loading.html", "build.mjs", "install.mjs"].includes(name)) await fs.copyFile(path.join(desktop, name), path.join(appDir, name))
+    await fs.cp(path.join(desktop, "assets"), path.join(appDir, "assets"), { recursive: true })
     await fs.symlink(path.join(desktop, "node_modules"), path.join(appDir, "node_modules"), "dir")
     await fs.writeFile(path.join(appDir, "repo.json"), JSON.stringify({ root }))
     const manifest = JSON.parse(await fs.readFile(path.join(desktop, "package.json"), "utf8"))
@@ -75,8 +76,13 @@ async function main() {
     const bundle = path.join(packaged, "Snip-darwin-arm64/Snip.app")
     await run("codesign", ["--verify", "--deep", "--strict", bundle])
     application = await _electron.launch({ executablePath: path.join(bundle, "Contents/MacOS/Snip"), args: [], env, timeout: 30000 })
+    // Native macOS runners may leave a launched app behind another window.
+    // Exercise visible controls in the foreground without disabling the real
+    // background throttling that the idle checks below are meant to verify.
+    const foreground = () => application.evaluate(({ app }) => { app.emit("activate"); app.focus({ steal: true }) })
+    await foreground()
     let page = await application.firstWindow()
-    page.setDefaultTimeout(5000)
+    page.setDefaultTimeout(15000)
     page.on("pageerror", error => console.error("renderer:", error.message))
     await page.waitForURL(`${origin}/`, { timeout: 30000 })
     await until(async () => (await page.evaluate(() => fetch("/api/me").then(r => r.json()))).login === "reviewer", "local auth failed")
@@ -96,6 +102,7 @@ async function main() {
     const image = await page.evaluate(key => fetch(`/files/${key}`).then(async r => ({ status: r.status, bytes: (await r.arrayBuffer()).byteLength })), detail.pages[0].desktopKey)
     assert.equal(image.status, 200); assert.ok(image.bytes > 100)
     check("real Chromium capture stores retrievable screenshots in local R2")
+    await foreground()
     await page.goto(`${origin}/r/${added.id}`)
     await page.getByRole("button", { name: "Select", exact: true }).click()
     await page.getByRole("checkbox").first().click()
@@ -114,9 +121,9 @@ async function main() {
     evidence.hiddenMetrics = await application.evaluate(({ app }) => app.getAppMetrics().map(({ type, memory, cpu }) => ({ type, memory, cpu })))
     assert.equal(evidence.hiddenMetrics.some(item => item.type === "Tab"), false)
     check("hidden gallery renderer is released while the background worker remains available")
-    await application.evaluate(({ app }) => app.emit("activate"))
+    await foreground()
     page = await application.firstWindow()
-    page.setDefaultTimeout(5000)
+    page.setDefaultTimeout(15000)
     await page.waitForURL(`${origin}/r/${added.id}`)
     await until(async () => await page.getByRole("checkbox").first().getAttribute("aria-checked") === "true", "selection was lost")
     check("reopening restores the selected page and reference route")
@@ -136,6 +143,7 @@ async function main() {
     assert.equal(await viewer.evaluate(() => typeof window.snipDesktop), "undefined")
     assert.ok(page.url().includes(`/r/${added.id}`))
     await viewer.close()
+    await foreground()
     check("fresh page and animation links take precedence, and snapshots open separately without desktop privileges")
     const slow = await page.evaluate(async url => {
       const ref = await fetch("/api/references", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ url, mode: "single" }) }).then(r => r.json())
@@ -172,7 +180,12 @@ async function main() {
   } catch (error) {
     console.error(`Fixture retained for diagnosis: ${temp}`)
     await fs.writeFile(path.join(temp, "evidence.json"), JSON.stringify(evidence, null, 2))
-    if (application) for (const page of application.windows()) console.error("WINDOW", page.url(), await page.locator("body").innerText().catch(() => "unavailable"))
+    if (application) {
+      console.error("NATIVE WINDOWS", await application.evaluate(({ app, BrowserWindow }) => ({ hidden: app.isHidden(), windows: BrowserWindow.getAllWindows().map(window => ({ visible: window.isVisible(), minimized: window.isMinimized(), focused: window.isFocused() })) })).catch(() => "unavailable"))
+      for (const page of application.windows()) {
+        console.error("WINDOW", page.url(), await page.evaluate(() => ({ visibility: document.visibilityState, focused: document.hasFocus() })).catch(() => "unavailable"), await page.locator("body").innerText().catch(() => "unavailable"))
+      }
+    }
     for (const name of ["web", "capture"]) console.error(await fs.readFile(path.join(temp, "logs", `${name}.log`), "utf8").catch(() => ""))
     throw error
   } finally {
