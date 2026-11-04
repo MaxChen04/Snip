@@ -1,9 +1,12 @@
 import { useEffect, useState, type ReactNode } from "react"
 import { ArrowRight, Check, Link2 } from "@/components/icons"
 import { cn } from "@/lib/utils"
-import { Logo } from "@/App"
+import { Logo } from "@/components/brand"
+import { PUBLIC_SITE, REPO_URL, signInHref } from "@/lib/site"
 
-export const signInHref = () => `/auth/login?next=${encodeURIComponent(location.pathname)}`
+// Self-hosted instances sign in; the public site points to the source.
+const primaryHref = () => (PUBLIC_SITE ? REPO_URL : signInHref())
+const primaryLabel = PUBLIC_SITE ? "Get Snip on GitHub" : "Sign in with GitHub"
 
 const img = (name: string) => `/landing/${name}.jpg`
 
@@ -46,8 +49,8 @@ function Nav() {
           ))}
         </div>
         <span className="mx-1 h-5 w-px bg-border" />
-        <a href={signInHref()} className="flex h-8 items-center rounded-full bg-fill-2 px-3.5 text-xs font-medium transition-colors hover:bg-fill-3">
-          Sign in
+        <a href={primaryHref()} className="flex h-8 items-center rounded-full bg-fill-2 px-3.5 text-xs font-medium transition-colors hover:bg-fill-3">
+          {PUBLIC_SITE ? "GitHub" : "Sign in"}
         </a>
       </nav>
     </header>
@@ -66,8 +69,8 @@ function Hero() {
           Paste a URL. Snip captures every page, its styles and its motion, then keeps it all in a library only you can open.
         </p>
         <div className="mt-2 flex flex-wrap items-center justify-center gap-3">
-          <a href={signInHref()} className={cn(pill, "bg-foreground text-background hover:bg-foreground/90")}>
-            Sign in with GitHub
+          <a href={primaryHref()} className={cn(pill, "bg-foreground text-background hover:bg-foreground/90")}>
+            {primaryLabel}
           </a>
           <a href="#how-it-works" className={cn(pill, "ring-1 ring-border hover:bg-fill-1")}>
             See how it works
@@ -454,12 +457,16 @@ function FinalCta() {
       </div>
       <h2 className="reveal text-[40px] leading-[1.05] font-medium tracking-[-0.05em] md:text-[56px]">Start your shelf</h2>
       <p className="max-w-[460px] text-[17px] leading-[1.55] text-muted-foreground">
-        Sign in with GitHub, paste your first URL, and let the agent do the rest.
+        {PUBLIC_SITE
+          ? "Deploy your own copy on Cloudflare’s free plan, paste your first URL, and let the agent do the rest."
+          : "Sign in with GitHub, paste your first URL, and let the agent do the rest."}
       </p>
-      <a href={signInHref()} className={cn(pill, "bg-foreground text-background hover:bg-foreground/90")}>
-        Sign in with GitHub
+      <a href={primaryHref()} className={cn(pill, "bg-foreground text-background hover:bg-foreground/90")}>
+        {primaryLabel}
       </a>
-      <p className="text-xs text-muted-foreground">Private. Only GitHub logins you allow can sign in.</p>
+      <p className="text-xs text-muted-foreground">
+        {PUBLIC_SITE ? "Free and self-hosted. Your library lives in your own Cloudflare account." : "Private. Only GitHub logins you allow can sign in."}
+      </p>
     </section>
   )
 }
@@ -474,6 +481,7 @@ export function Footer() {
       <nav aria-label="Footer" className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-muted-foreground">
         <a href="/guide" className="transition-colors hover:text-foreground">Setup guide</a>
         <a href="/llms.txt" className="font-mono transition-colors hover:text-foreground">llms.txt</a>
+        {PUBLIC_SITE && <a href={REPO_URL} className="transition-colors hover:text-foreground">GitHub</a>}
         <span>Runs on Cloudflare Workers, D1 and R2.</span>
       </nav>
     </footer>

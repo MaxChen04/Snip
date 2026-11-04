@@ -4,7 +4,7 @@ import { motion, useReducedMotion } from "motion/react"
 import { FolderPlusIcon, GlobeIcon, LogOutIcon, MonitorIcon, MoonIcon, PlugIcon, PlusIcon, SearchIcon, SunIcon, TerminalIcon, XIcon } from "@/components/icons"
 import { useAddFlow } from "@/components/add-flow"
 import { useTheme } from "next-themes"
-import { Logo } from "@/App"
+import { Logo } from "@/components/brand"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
