@@ -1,6 +1,6 @@
 import { useId } from "react"
 import { Link } from "wouter"
-import { motion } from "motion/react"
+import { motion, useReducedMotion } from "motion/react"
 import { FolderPlusIcon, GlobeIcon, LogOutIcon, MonitorIcon, MoonIcon, PlusIcon, SearchIcon, SunIcon, TerminalIcon, XIcon } from "@/components/icons"
 import { useAddFlow } from "@/components/add-flow"
 import { notify } from "@/components/notify"
@@ -225,6 +225,8 @@ export function Segmented<T extends string>({
   className?: string
 }) {
   const id = useId()
+  // Reduced motion: the pill snaps to the chosen option instead of sliding.
+  const reduce = useReducedMotion()
   return (
     <div className={cn("tactile-track flex items-center", className)} role="radiogroup">
       {options.map((o) => (
@@ -243,7 +245,7 @@ export function Segmented<T extends string>({
           {value === o.value && (
             <motion.span
               layoutId={`seg-${id}`}
-              transition={{ type: "spring", bounce: 0.12, duration: 0.4 }}
+              transition={reduce ? { duration: 0 } : { type: "spring", bounce: 0.12, duration: 0.4 }}
               className="tactile-chosen absolute inset-0 rounded-full"
               aria-hidden
             />
