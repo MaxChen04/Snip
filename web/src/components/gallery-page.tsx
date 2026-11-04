@@ -3,6 +3,7 @@ import { Link, useLocation, useSearch } from "wouter"
 import { AlertCircleIcon, ArrowUpRightIcon, BookmarkIcon, ChevronDownIcon, CornerDownLeftIcon, FolderMinusIcon, GlobeIcon, PencilIcon, PlusIcon, Trash2Icon } from "@/components/icons"
 import { toast } from "sonner"
 import { useAddFlow } from "@/components/add-flow"
+import { diagnoseCaptureError, RetryCaptureButton } from "@/components/capture-retry"
 import { CollectionPicker, CollectionThumb, collectionCountLabel } from "@/components/collection-picker"
 import { GifTile } from "@/components/reference-page"
 import { SiteIcon } from "@/components/site-icon"
@@ -409,9 +410,10 @@ function FolderTile({ r }: { r: Reference }) {
 function FolderMeta({ r }: { r: Reference }) {
   if (r.status === "failed") {
     return (
-      <span className="mt-1 flex max-w-[90%] items-center gap-1 text-2xs text-(--red-11)" title={r.error ?? undefined}>
+      <span className="mt-1 flex max-w-[90%] items-center gap-1.5 text-2xs text-(--red-11)" title={diagnoseCaptureError(r.error)?.summary ?? r.error ?? undefined}>
         <AlertCircleIcon className="size-3 shrink-0" />
         <span className="truncate">{r.error ?? "Capture failed"}</span>
+        <RetryCaptureButton id={r.id} error={r.error} onRetried={() => window.dispatchEvent(new Event("rs:reload"))} />
       </span>
     )
   }
