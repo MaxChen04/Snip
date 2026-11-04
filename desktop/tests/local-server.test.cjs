@@ -24,6 +24,88 @@ async function runtimeSnapshot(root) {
 
 const launcher = path.join(__dirname, '..', 'local-server.cjs');
 
+test('the page-collection upgrade preserves an existing library with custom storage identities', { timeout: 90000 }, async () => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'snip-page-upgrade-'));
+  const oldRoot = path.join(temp, 'old-runtime');
+  const nextRoot = path.join(temp, 'new-runtime');
+  const dataRoot = path.join(temp, 'library');
+  const original = path.join(dataRoot, 'web/wrangler.jsonc');
+  const migrationSource = path.resolve(__dirname, '../../web/migrations');
+  const bindings = {
+    d1_databases: [{ binding: 'DB', database_name: 'runtime-default', database_id: 'runtime-default' }],
+    r2_buckets: [{ binding: 'FILES', bucket_name: 'runtime-default' }],
+  };
+  await fs.mkdir(path.join(oldRoot, 'web/dist/snip'), { recursive: true });
+  await fs.mkdir(path.join(oldRoot, 'web/migrations'));
+  await fs.mkdir(path.join(dataRoot, 'web'), { recursive: true });
+  await fs.writeFile(original, JSON.stringify({ name: 'old-library', compatibility_date: '2026-10-01',
+    d1_databases: [{ binding: 'DB', database_name: 'personal-library', database_id: 'custom-page-library' }],
+    r2_buckets: [{ binding: 'FILES', bucket_name: 'custom-page-files' }],
+  }));
+  await fs.writeFile(path.join(oldRoot, 'web/wrangler.jsonc'), JSON.stringify({ name: 'snip-test', compatibility_date: '2026-10-01', ...bindings }));
+  await fs.writeFile(path.join(oldRoot, 'web/dist/snip/wrangler.json'), JSON.stringify({
+    name: 'snip-test', main: 'index.js', compatibility_date: '2026-10-01', no_bundle: true, ...bindings,
+  }));
+  for (const name of (await fs.readdir(migrationSource)).filter(name => /^000[1-3]_.*\.sql$/.test(name))) {
+    await fs.copyFile(path.join(migrationSource, name), path.join(oldRoot, 'web/migrations', name));
+  }
+  await fs.writeFile(path.join(oldRoot, 'web/dist/snip/index.js'), `export default { async fetch(request, env) {
+    const route = new URL(request.url).pathname;
+    if (route === '/seed') {
+      await env.DB.batch([
+        env.DB.prepare("INSERT INTO refs (id,url,domain,mode,status,created_at,updated_at) VALUES ('r','https://example.test','example.test','single','ready','2026-01-01','2026-01-01')"),
+        env.DB.prepare("INSERT INTO pages (id,reference_id,url,path,desktop_key,created_at) VALUES ('p','r','https://example.test/pricing','/pricing','original-screenshot','2026-01-01')"),
+        env.DB.prepare("INSERT INTO collections (id,name,created_at) VALUES ('c','Existing collection','2026-01-01')"),
+        env.DB.prepare("INSERT INTO reference_collections VALUES ('r','c','2026-01-01')"),
+      ]);
+      await env.FILES.put('original-screenshot', 'original-file-canary');
+      return new Response('seeded');
+    }
+    if (route === '/save-page') {
+      await env.DB.prepare("INSERT INTO page_collections SELECT 'c',reference_id,path,'2026-01-02' FROM pages WHERE id='p'").run();
+      return Response.json(await env.DB.prepare('SELECT * FROM page_collections').all());
+    }
+    return Response.json({
+      reference: await env.DB.prepare("SELECT * FROM refs WHERE id='r'").first(),
+      page: await env.DB.prepare("SELECT * FROM pages WHERE id='p'").first(),
+      collection: await env.DB.prepare("SELECT * FROM collections WHERE id='c'").first(),
+      wholeWebsite: (await env.DB.prepare('SELECT * FROM reference_collections').all()).results,
+      file: await (await env.FILES.get('original-screenshot')).text(),
+    });
+  } }`);
+  await fs.symlink(path.resolve(__dirname, '../../node_modules'), path.join(oldRoot, 'node_modules'), 'dir');
+  let running;
+  try {
+    running = await launch(oldRoot, dataRoot, true);
+    assert.equal(await (await fetch(running.url + '/seed')).text(), 'seeded');
+    const before = await (await fetch(running.url)).json();
+    await stop(running.child); running = undefined;
+    const identityPath = path.join(dataRoot, '.snip/storage-identities.json');
+    const identities = await fs.readFile(identityPath, 'utf8');
+    assert.equal(JSON.parse(identities).d1_databases[0].database_id, 'custom-page-library');
+    await fs.rm(original);
+    await fs.cp(path.join(oldRoot, 'web'), path.join(nextRoot, 'web'), { recursive: true });
+    await fs.symlink(path.resolve(__dirname, '../../node_modules'), path.join(nextRoot, 'node_modules'), 'dir');
+    await fs.copyFile(path.join(migrationSource, '0004_page_collections.sql'), path.join(nextRoot, 'web/migrations/0004_page_collections.sql'));
+    const pristine = await runtimeSnapshot(path.join(nextRoot, 'web'));
+    running = await launch(nextRoot, dataRoot, true);
+    assert.deepEqual(await (await fetch(running.url)).json(), before, 'existing rows, website membership and R2 bytes survive the real migration');
+    const saved = await (await fetch(running.url + '/save-page')).json();
+    assert.deepEqual(saved.results, [{ collection_id: 'c', reference_id: 'r', page_path: '/pricing', added_at: '2026-01-02' }]);
+    await stop(running.child); running = undefined;
+    assert.equal(await fs.readFile(identityPath, 'utf8'), identities);
+    assert.deepEqual(await runtimeSnapshot(path.join(nextRoot, 'web')), pristine);
+    const backups = await fs.readdir(path.join(dataRoot, 'backups'));
+    assert.ok(backups.length > 0, 'existing D1 is backed up before migration 0004');
+    for (const backup of backups) {
+      assert.equal(JSON.parse(await fs.readFile(path.join(dataRoot, 'backups', backup, 'snip-backup.json'))).status, 'complete');
+    }
+  } finally {
+    if (running && running.child.exitCode === null) running.child.kill('SIGKILL');
+    await fs.rm(temp, { recursive: true, force: true });
+  }
+});
+
 async function launch(root, dataRoot = root, releaseManaged = false) {
   const child = fork(launcher, [root, '0', dataRoot, ...(releaseManaged ? ['release'] : [])], {
     cwd: path.join(root, 'web'),
