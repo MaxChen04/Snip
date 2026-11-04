@@ -52,7 +52,7 @@ export function CaptureControls({ r, onChange, compact, className }: { r: Refere
     }
   }
   return (
-    <span className={cn("inline-flex items-center gap-1", className)}>
+    <span className={cn("inline-flex items-center", compact ? "gap-1" : "gap-2", className)}>
       {actions.map((action) => {
         const { label, title, icon: Icon } = ACTIONS[action]
         return (
@@ -68,11 +68,12 @@ export function CaptureControls({ r, onChange, compact, className }: { r: Refere
               void run(action)
             }}
             className={cn(
-              "tactile press inline-flex h-6 shrink-0 items-center justify-center gap-1 rounded-full text-2xs font-medium text-foreground disabled:opacity-60",
-              compact ? "w-6" : "px-2.5",
+              "tactile press inline-flex shrink-0 items-center justify-center rounded-full font-medium text-foreground disabled:opacity-60",
+              // Full size matches the status pill beside it on the reference page.
+              compact ? "size-6 text-2xs" : "h-7 gap-1.5 px-3 text-xs",
             )}
           >
-            {busy === action ? <Spinner className="size-3" /> : <Icon className="size-3" />}
+            {busy === action ? <Spinner className={compact ? "size-3" : "size-3.5"} /> : <Icon className={compact ? "size-3" : "size-3.5"} />}
             {!compact && label}
           </button>
         )
