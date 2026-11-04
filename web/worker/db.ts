@@ -1,9 +1,11 @@
 import type {
   Animation,
   AnimationMeta,
+  CaptureControl,
   CaptureMode,
   CaptureStatus,
   Collection,
+  CrawlState,
   DesignTokens,
   Job,
   JobComplete,
@@ -12,6 +14,7 @@ import type {
   Paged,
   Reference,
 } from "../shared/types"
+import { STOPPED_EMPTY } from "../shared/capture-errors"
 
 // Data access shared by the HTTP API and the MCP server.
 
@@ -39,7 +42,8 @@ function toReference(r: Row): Reference {
     favicon: (r.favicon as string) ?? null,
     mode: r.mode as CaptureMode,
     maxPages: r.max_pages as number,
-    status: r.status as Reference["status"],
+    status: r.capture_control === "paused" ? "paused" : (r.status as Reference["status"]),
+    control: r.status === "capturing" && (r.capture_control === "pause" || r.capture_control === "stop") ? (r.capture_control as CaptureControl) : null,
     progress: (r.progress as string) ?? null,
     error: (r.error as string) ?? null,
     coverKey: (r.cover_key as string) ?? null,
@@ -146,8 +150,9 @@ export async function listReferences(db: D1Database, f: ListFilter): Promise<Pag
     where.push(`r.domain = ?`)
     args.push(f.domain)
   }
-  if (f.status) {
-    where.push(`r.status = ?`)
+  if (f.status === "paused") where.push(`r.capture_control = 'paused'`)
+  else if (f.status) {
+    where.push(`r.status = ? AND coalesce(r.capture_control, '') != 'paused'`)
     args.push(f.status)
   }
   const sort = f.sort ?? "newest"
@@ -302,7 +307,7 @@ export async function requeueReference(db: D1Database, id: string) {
     db.prepare(`DELETE FROM pages WHERE reference_id = ?`).bind(id), // animations cascade
     db
       .prepare(
-        `UPDATE refs SET status = 'queued', progress = 'Waiting for the capture agent', error = NULL, page_count = 0, animation_count = 0, cover_key = NULL, tokens_json = NULL, claimed_at = NULL, updated_at = ? WHERE id = ?`,
+        `UPDATE refs SET status = 'queued', progress = 'Waiting for the capture agent', error = NULL, page_count = 0, animation_count = 0, cover_key = NULL, tokens_json = NULL, claimed_at = NULL, capture_control = NULL, crawl_state = NULL, updated_at = ? WHERE id = ?`,
       )
       .bind(now(), id),
   ])
@@ -457,16 +462,31 @@ export async function claimJob(db: D1Database): Promise<Job | null> {
   const stale = new Date(Date.now() - STALE_MINUTES * 60_000).toISOString()
   const ts = now()
   const attempt = crypto.randomUUID().replace(/-/g, "")
-  const candidate = `SELECT id FROM refs WHERE status = 'queued' OR (status = 'capturing' AND claimed_at < ?) ORDER BY created_at LIMIT 1`
+  const candidate = `SELECT id FROM refs WHERE (status = 'queued' AND coalesce(capture_control, '') != 'paused') OR (status = 'capturing' AND claimed_at < ?) ORDER BY created_at LIMIT 1`
+  // A resumed crawl (crawl_state set) keeps its attempt, pages and files. Anything else starts over.
+  const fresh = (yes: string, no: string) => `CASE WHEN crawl_state IS NULL OR capture_attempt IS NULL THEN ${yes} ELSE ${no} END`
   // D1 batches are transactions. Record the old namespace before replacing the lease,
   // and remove old pages within the same transaction as the claim.
   const results = await db.batch([
-    db.prepare(`INSERT OR IGNORE INTO capture_cleanup (prefix) SELECT 'refs/' || id || '/' || coalesce(capture_attempt || '/', 'p') FROM refs WHERE id = (${candidate})`).bind(stale),
-    db.prepare(`UPDATE refs SET status = 'capturing', capture_attempt = ?, claimed_at = ?, updated_at = ?, progress = 'Starting capture', cover_key = NULL, page_count = 0, animation_count = 0, tokens_json = NULL WHERE id = (${candidate}) RETURNING id, url, mode, max_pages`).bind(attempt, ts, ts, stale),
+    db.prepare(`INSERT OR IGNORE INTO capture_cleanup (prefix) SELECT 'refs/' || id || '/' || coalesce(capture_attempt || '/', 'p') FROM refs WHERE id = (${candidate}) AND (crawl_state IS NULL OR capture_attempt IS NULL)`).bind(stale),
+    db.prepare(`SELECT crawl_state FROM refs WHERE id = (${candidate}) AND capture_attempt IS NOT NULL`).bind(stale),
+    db.prepare(`UPDATE refs SET status = 'capturing', capture_attempt = ${fresh("?1", "capture_attempt")}, claimed_at = ?2, updated_at = ?2,
+      progress = ${fresh("'Starting capture'", "'Resuming capture'")}, cover_key = ${fresh("NULL", "cover_key")}, page_count = ${fresh("0", "page_count")},
+      animation_count = ${fresh("0", "animation_count")}, tokens_json = NULL, capture_control = NULL, crawl_state = NULL
+      WHERE id = (${candidate.replace("?", "?3")}) RETURNING id, url, mode, max_pages, capture_attempt`).bind(attempt, ts, stale),
     db.prepare(`DELETE FROM pages WHERE reference_id IN (SELECT id FROM refs WHERE capture_attempt = ? AND status = 'capturing')`).bind(attempt),
   ])
-  const r = results[1]?.results[0] as Row | undefined
-  return r ? { id: r.id as string, url: r.url as string, mode: r.mode as CaptureMode, maxPages: r.max_pages as number, attempt } : null
+  const r = results[2]?.results[0] as Row | undefined
+  if (!r) return null
+  const state = (results[1]?.results[0] as Row | undefined)?.crawl_state
+  return {
+    id: r.id as string,
+    url: r.url as string,
+    mode: r.mode as CaptureMode,
+    maxPages: r.max_pages as number,
+    attempt: r.capture_attempt as string,
+    resume: parse<CrawlState>(state),
+  }
 }
 
 // Admission and reference state are checked atomically, before any R2 write.
@@ -542,7 +562,7 @@ export async function addPage(db: D1Database, referenceId: string, attempt: stri
 export async function completeJob(db: D1Database, id: string, attempt: string, c: JobComplete) {
   const result = await db
     .prepare(
-      `UPDATE refs SET status = 'ready', progress = NULL, error = NULL, title = coalesce(?, title), description = coalesce(?, description),
+      `UPDATE refs SET status = 'ready', progress = NULL, error = NULL, capture_control = NULL, title = coalesce(?, title), description = coalesce(?, description),
         favicon = coalesce(?, favicon), cover_key = coalesce(?, cover_key), tokens_json = ?, updated_at = ? WHERE id = ? AND status = 'capturing' AND capture_attempt = ?`,
     )
     .bind(c.title, c.description, c.favicon, c.coverKey, c.tokens ? JSON.stringify(c.tokens) : null, now(), id, attempt)
@@ -551,8 +571,68 @@ export async function completeJob(db: D1Database, id: string, attempt: string, c
 }
 
 export async function failJob(db: D1Database, id: string, attempt: string, error: string) {
-  const result = await db.prepare(`UPDATE refs SET status = 'failed', progress = NULL, error = ?, updated_at = ? WHERE id = ? AND status = 'capturing' AND capture_attempt = ?`).bind(error.slice(0, 1000), now(), id, attempt).run()
+  const result = await db.prepare(`UPDATE refs SET status = 'failed', progress = NULL, error = ?, capture_control = NULL, updated_at = ? WHERE id = ? AND status = 'capturing' AND capture_attempt = ?`).bind(error.slice(0, 1000), now(), id, attempt).run()
   return result.meta.changes > 0
+}
+
+// ---------- Pause, resume and stop ----------
+// The agent finishes the page it is on, then asks for its control before the next one.
+
+
+/** Pause a capture. A queued one pauses now; a running one pauses after its current page. */
+export async function requestPause(db: D1Database, id: string) {
+  const ts = now()
+  const [queued, running] = await db.batch([
+    db.prepare(`UPDATE refs SET capture_control = 'paused', progress = 'Paused', updated_at = ? WHERE id = ? AND status = 'queued' AND capture_control IS NULL`).bind(ts, id),
+    db.prepare(`UPDATE refs SET capture_control = 'pause', updated_at = ? WHERE id = ? AND status = 'capturing' AND capture_control IS NULL`).bind(ts, id),
+  ])
+  return !!(queued!.meta.changes || running!.meta.changes)
+}
+
+/** Resume a paused capture, or cancel a pause that has not taken effect yet. */
+export async function resumeReference(db: D1Database, id: string) {
+  const ts = now()
+  const [paused, pending] = await db.batch([
+    db.prepare(`UPDATE refs SET capture_control = NULL, progress = 'Waiting for the capture agent', updated_at = ? WHERE id = ? AND status = 'queued' AND capture_control = 'paused'`).bind(ts, id),
+    db.prepare(`UPDATE refs SET capture_control = NULL, updated_at = ? WHERE id = ? AND status = 'capturing' AND capture_control = 'pause'`).bind(ts, id),
+  ])
+  return !!(paused!.meta.changes || pending!.meta.changes)
+}
+
+/**
+ * Stop a capture and keep the pages it has. A running one stops after its current page.
+ * A paused one finishes here, from the metadata and tokens saved when it paused.
+ */
+export async function requestStop(db: D1Database, id: string) {
+  const ts = now()
+  const results = await db.batch([
+    db.prepare(`UPDATE refs SET status = 'ready', progress = NULL, error = NULL, capture_control = NULL,
+      title = coalesce(json_extract(crawl_state, '$.meta.title'), title), description = coalesce(json_extract(crawl_state, '$.meta.description'), description),
+      favicon = coalesce(json_extract(crawl_state, '$.meta.favicon'), favicon), tokens_json = json_extract(crawl_state, '$.tokens'), crawl_state = NULL, updated_at = ?
+      WHERE id = ? AND status = 'queued' AND capture_control = 'paused' AND page_count > 0`).bind(ts, id),
+    db.prepare(`UPDATE refs SET status = 'failed', progress = NULL, error = ?, capture_control = NULL, crawl_state = NULL, updated_at = ?
+      WHERE id = ? AND status = 'queued'`).bind(STOPPED_EMPTY, ts, id),
+    db.prepare(`UPDATE refs SET capture_control = 'stop', updated_at = ? WHERE id = ? AND status = 'capturing'`).bind(ts, id),
+  ])
+  return results.some((r) => r.meta.changes > 0)
+}
+
+/** What the agent should do before its next page. Null means the job is gone. */
+export async function getControl(db: D1Database, id: string, attempt: string): Promise<{ control: CaptureControl | null } | null> {
+  const r = await db.prepare(`SELECT capture_control FROM refs WHERE id = ? AND status = 'capturing' AND capture_attempt = ?`).bind(id, attempt).first<Row>()
+  if (!r) return null
+  return { control: r.capture_control === "pause" || r.capture_control === "stop" ? r.capture_control : null }
+}
+
+/**
+ * The agent pauses at a page boundary and hands back where it was. Only applies while a pause is
+ * still requested, so a stop or resume that arrived meanwhile wins: "changed" tells the agent to check again.
+ */
+export async function pauseJob(db: D1Database, id: string, attempt: string, state: CrawlState): Promise<"paused" | "changed" | "gone"> {
+  const result = await db.prepare(`UPDATE refs SET status = 'queued', capture_control = 'paused', crawl_state = ?, progress = 'Paused', claimed_at = NULL, updated_at = ?
+    WHERE id = ? AND status = 'capturing' AND capture_attempt = ? AND capture_control = 'pause'`).bind(JSON.stringify(state), now(), id, attempt).run()
+  if (result.meta.changes) return "paused"
+  return (await isCapturing(db, id, attempt)) ? "changed" : "gone"
 }
 
 // ---------- Capture worker presence ----------
@@ -588,6 +668,9 @@ export async function getCaptureStatus(db: D1Database, ref: Reference): Promise<
   switch (ref.status) {
     case "ready":
       advice = "Capture finished. Use get_reference with part \"overview\" to see what was captured."
+      break
+    case "paused":
+      advice = `The user paused this capture after ${ref.pageCount} ${ref.pageCount === 1 ? "page" : "pages"}. They can resume or stop it from the Snip app. Stop polling.`
       break
     case "failed":
       advice = `Capture failed${ref.error ? `: ${ref.error}` : ""}. Tell the user; they can recapture from the Snip app.`

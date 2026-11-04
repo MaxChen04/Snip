@@ -40,7 +40,9 @@ import {
   MinusSignIcon,
   Moon02Icon,
   MoreHorizontalIcon as HMoreHorizontal,
+  PauseIcon as HPause,
   PencilEdit02Icon,
+  PlayIcon as HPlay,
   PanelRightCloseIcon as HPanelRightClose,
   PanelRightOpenIcon as HPanelRightOpen,
   Plug01Icon,
@@ -49,6 +51,7 @@ import {
   SmartPhone01Icon,
   SparklesIcon as HSparkles,
   SquareArrowUpRightIcon,
+  StopIcon as HStop,
   SquareLock02Icon,
   Search01Icon,
   Sun03Icon,
@@ -107,6 +110,8 @@ export const MoonIcon = make(Moon02Icon, "MoonIcon")
 export const MoreHorizontalIcon = make(HMoreHorizontal, "MoreHorizontalIcon")
 export const NetworkIcon = make(HierarchyIcon, "NetworkIcon")
 export const OctagonXIcon = make(CancelCircleIcon, "OctagonXIcon")
+export const PauseIcon = make(HPause, "PauseIcon")
+export const PlayIcon = make(HPlay, "PlayIcon")
 export const PencilIcon = make(PencilEdit02Icon, "PencilIcon")
 export const PenLine = PencilIcon
 export const PanelRightCloseIcon = make(HPanelRightClose, "PanelRightCloseIcon")
@@ -119,6 +124,7 @@ export const Server = make(ServerStack01Icon, "Server")
 export const ShieldCheckIcon = make(ShieldKeyIcon, "ShieldCheckIcon")
 export const SmartphoneIcon = make(SmartPhone01Icon, "SmartphoneIcon")
 export const SparklesIcon = make(HSparkles, "SparklesIcon")
+export const StopIcon = make(HStop, "StopIcon")
 export const SunIcon = make(Sun03Icon, "SunIcon")
 export const TerminalIcon = make(CommandLineIcon, "TerminalIcon")
 export const Terminal = TerminalIcon

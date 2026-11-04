@@ -4,6 +4,7 @@ import { AlertCircleIcon, ArrowUpRightIcon, BookmarkIcon, ChevronDownIcon, Corne
 import { toast } from "sonner"
 import { useAddFlow } from "@/components/add-flow"
 import { diagnoseCaptureError, RetryCaptureButton } from "@/components/capture-retry"
+import { CaptureControls, captureLabel } from "@/components/capture-controls"
 import { CollectionPicker, CollectionThumb, collectionCountLabel } from "@/components/collection-picker"
 import { GifTile } from "@/components/reference-page"
 import { SiteIcon } from "@/components/site-icon"
@@ -418,14 +419,18 @@ function FolderMeta({ r }: { r: Reference }) {
     )
   }
   if (r.status !== "ready") {
-    const m = r.progress?.match(/(\d+)\/(\d+)/)
-    const pct = m ? Math.min(100, (Number(m[1]) / Number(m[2])) * 100) : r.status === "queued" ? 4 : 12
+    const paused = r.status === "paused"
+    const m = paused ? null : r.progress?.match(/(\d+)\/(\d+)/)
+    const pct = paused ? Math.max(4, Math.min(100, (r.pageCount / r.maxPages) * 100)) : m ? Math.min(100, (Number(m[1]) / Number(m[2])) * 100) : r.status === "queued" ? 4 : 12
     return (
       <div className="mt-1.5 flex flex-col items-center gap-1">
         <div className="h-1 w-28 overflow-hidden rounded-full bg-ink-4">
-          <div className="h-full rounded-full bg-ink-12 transition-[width] duration-300 ease-out" style={{ width: `${pct}%` }} />
+          <div className={cn("h-full rounded-full transition-[width] duration-300 ease-out", paused ? "bg-ink-9" : "bg-ink-12")} style={{ width: `${pct}%` }} />
         </div>
-        <span className="text-2xs text-ink-11">{r.status === "queued" ? "Waiting for capture agent" : m ? `${m[1]} of ${m[2]} pages` : "Capturing"}</span>
+        <span className="flex items-center gap-1.5 text-2xs whitespace-nowrap text-ink-11">
+          {captureLabel(r, true) ?? (r.status === "queued" ? "Waiting for capture agent" : m ? `${m[1]} of ${m[2]} pages` : "Capturing")}
+          <CaptureControls r={r} compact onChange={() => window.dispatchEvent(new Event("rs:reload"))} />
+        </span>
       </div>
     )
   }

@@ -1,4 +1,4 @@
-import type { Job, JobComplete, PageUpload } from "../../web/shared/types"
+import type { CaptureControl, CrawlState, Job, JobComplete, PageUpload } from "../../web/shared/types"
 
 export class CaptureAuthenticationError extends Error {
   constructor() { super("Snip rejected the capture token (401)") }
@@ -24,7 +24,7 @@ export class SnipApi {
     this.base = base.replace(/\/$/, "")
   }
 
-  private async call(path: string, init: RequestInit = {}) {
+  private async call(path: string, init: RequestInit = {}, { read = path === "/agent/jobs/claim", conflict = false } = {}) {
     const res = await fetch(`${this.base}${path}`, {
       ...init,
       signal: init.signal ?? AbortSignal.timeout(path === "/agent/jobs/claim" ? this.claimTimeoutMs : this.requestTimeoutMs),
@@ -42,16 +42,20 @@ export class SnipApi {
       await res.body?.cancel()
       throw new JobGoneError()
     }
+    if (conflict && res.status === 409) {
+      await res.body?.cancel()
+      return null
+    }
     if (!res.ok) throw new Error(`${init.method ?? "GET"} ${path} failed: ${res.status} ${await res.text()}`)
     // Mutations return small acknowledgements. Drain them so a long-lived
     // agent can reuse HTTP connections without relying on garbage collection.
-    if (path !== "/agent/jobs/claim") await res.arrayBuffer()
+    if (!read) await res.arrayBuffer()
     return res
   }
 
   async claim(): Promise<Job | null> {
     const res = await this.call("/agent/jobs/claim", { method: "POST" })
-    const job = res.status === 204 ? null : ((await res.json()) as Job)
+    const job = res!.status === 204 ? null : ((await res!.json()) as Job)
     this.attempt = job?.attempt ?? null
     return job
   }
@@ -75,6 +79,17 @@ export class SnipApi {
 
   async complete(jobId: string, c: JobComplete) {
     await this.call(`/agent/jobs/${jobId}/complete`, json(c))
+  }
+
+  /** A pause or stop the user asked for, checked between pages. */
+  async control(jobId: string): Promise<CaptureControl | null> {
+    const res = await this.call(`/agent/jobs/${jobId}/control`, {}, { read: true })
+    return ((await res!.json()) as { control: CaptureControl | null }).control
+  }
+
+  /** Hand back the crawl position and release the job. False when the pause was cancelled or replaced by a stop meanwhile. */
+  async pause(jobId: string, state: CrawlState) {
+    return (await this.call(`/agent/jobs/${jobId}/pause`, json(state), { conflict: true })) !== null
   }
 
   async fail(jobId: string, error: string) {
