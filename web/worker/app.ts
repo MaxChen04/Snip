@@ -181,8 +181,13 @@ api.post("/collections/:cid/pages", async (c) => {
   const pageIds = Array.isArray(body.pageIds) ? body.pageIds.filter((x): x is string => typeof x === "string") : []
   if (!pageIds.length) return c.json({ error: "pageIds is required" }, 400)
   if (pageIds.length > db.MAX_PAGES_PER_CHANGE) return c.json({ error: `At most ${db.MAX_PAGES_PER_CHANGE} pages at a time` }, 400)
-  const changed = await db.setPageCollection(c.env.DB, c.req.param("cid"), pageIds, body.member !== false)
-  return changed === null ? c.json({ error: "collection not found" }, 404) : c.json({ ok: true, changed })
+  const result = await db.setPageCollection(c.env.DB, c.req.param("cid"), pageIds, body.member !== false)
+  if (!result.ok) {
+    return result.reason === "collection-not-found"
+      ? c.json({ error: "collection not found" }, 404)
+      : c.json({ error: "Some pages changed or were removed. Reload this page and try again. No collection changes were saved." }, 409)
+  }
+  return c.json(result)
 })
 
 api.get("/collections", async (c) => c.json(await db.listCollections(c.env.DB)))

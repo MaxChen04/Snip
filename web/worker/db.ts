@@ -384,27 +384,42 @@ export async function setReferenceCollection(db: D1Database, referenceId: string
 
 export const MAX_PAGES_PER_CHANGE = 200
 
+type PageCollectionResult = { ok: true; changed: number } | { ok: false; reason: "collection-not-found" | "pages-changed" }
+
 /**
  * Save pages to a collection (member=true) or take them out. The collection points at each page
  * in its website, so the page keeps its files and stays in every other collection.
- * Returns how many pages changed, or null when the collection doesn't exist.
+ * Reject the entire change if the collection or any selected page no longer exists.
  */
-export async function setPageCollection(db: D1Database, collectionId: string, pageIds: string[], member: boolean) {
-  const ids = JSON.stringify([...new Set(pageIds)].slice(0, MAX_PAGES_PER_CHANGE))
-  if (!(await db.prepare(`SELECT 1 FROM collections WHERE id = ?`).bind(collectionId).first())) return null
+export async function setPageCollection(db: D1Database, collectionId: string, pageIds: string[], member: boolean): Promise<PageCollectionResult> {
+  const ids = JSON.stringify([...new Set(pageIds)])
   // json_each keeps this to one bound parameter per list (D1 caps bound parameters per query).
-  const result = member
-    ? await db
-        .prepare(`INSERT OR IGNORE INTO page_collections (collection_id, reference_id, page_path, added_at)
-          SELECT DISTINCT ?, reference_id, path, ? FROM pages WHERE id IN (SELECT value FROM json_each(?))`)
-        .bind(collectionId, now(), ids)
-        .run()
-    : await db
-        .prepare(`DELETE FROM page_collections WHERE collection_id = ?
-          AND (reference_id, page_path) IN (SELECT reference_id, path FROM pages WHERE id IN (SELECT value FROM json_each(?)))`)
-        .bind(collectionId, ids)
-        .run()
-  return result.meta.changes
+  const selection = `WITH selected AS (
+    SELECT reference_id, path FROM pages WHERE id IN (SELECT value FROM json_each(?1))
+  ), valid AS (
+    SELECT EXISTS (SELECT 1 FROM collections WHERE id = ?2) AS collection_exists,
+      (SELECT count(*) FROM selected) = json_array_length(?1) AS pages_exist
+  )`
+  const canWrite = `(SELECT collection_exists AND pages_exist FROM valid)`
+  const mutation = member
+    ? db
+        .prepare(`${selection} INSERT OR IGNORE INTO page_collections (collection_id, reference_id, page_path, added_at)
+          SELECT DISTINCT ?2, reference_id, path, ?3 FROM selected WHERE ${canWrite}`)
+        .bind(ids, collectionId, now())
+    : db
+        .prepare(`${selection} DELETE FROM page_collections WHERE collection_id = ?2
+          AND (reference_id, page_path) IN (SELECT reference_id, path FROM selected) AND ${canWrite}`)
+        .bind(ids, collectionId)
+  // Validation and the guarded write share one D1 transaction, so a recapture cannot replace
+  // pages between checking their IDs and changing membership. A stale batch changes nothing.
+  const [validation, result] = await db.batch<{ collection_exists: number; pages_exist: number }>([
+    db.prepare(`${selection} SELECT * FROM valid`).bind(ids, collectionId),
+    mutation,
+  ])
+  const valid = validation!.results[0]!
+  if (!valid.collection_exists) return { ok: false, reason: "collection-not-found" }
+  if (!valid.pages_exist) return { ok: false, reason: "pages-changed" }
+  return { ok: true, changed: result!.meta.changes }
 }
 
 // Capture queue

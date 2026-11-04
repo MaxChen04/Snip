@@ -18,7 +18,7 @@ const page = (referenceId: string, attempt: string, path: string, ord: number) =
 }
 
 // Real local D1 and R2 bindings; no deployed resources are used.
-test("pages can be saved to many collections without copying files, and survive a recapture", async () => {
+test("pages can be saved to many collections without copying files, and survive a recapture", async (t) => {
   const mf = new Miniflare(convertV4MiniflareOptions({ modules: true, script: 'export default {fetch(){return new Response("ok")}}', d1Databases: ["DB"], r2Buckets: ["FILES"] }))
   try {
     const database = (await mf.getD1Database("DB")) as unknown as D1Database
@@ -53,12 +53,11 @@ test("pages can be saved to many collections without copying files, and survive 
     await files.put(pricingPages[0]!.desktopKey!, "stored-screenshot-canary")
     const before = await objectCount()
 
-    // The web API saves pages by id. The session check is covered elsewhere; call the db layer the route uses.
-    assert.equal(await db.setPageCollection(database, pricing, pricingPages.map((p) => p.id), true), 2)
-    assert.equal(await db.setPageCollection(database, pricing, pricingPages.map((p) => p.id), true), 0, "saving twice is a no-op")
-    assert.equal(await db.setPageCollection(database, "missing", [pricingPages[0]!.id], true), null)
+    assert.deepEqual(await db.setPageCollection(database, pricing, pricingPages.map((p) => p.id), true), { ok: true, changed: 2 })
+    assert.deepEqual(await db.setPageCollection(database, pricing, pricingPages.map((p) => p.id), true), { ok: true, changed: 0 }, "saving twice is a no-op")
+    assert.deepEqual(await db.setPageCollection(database, "missing", [pricingPages[0]!.id], true), { ok: false, reason: "collection-not-found" })
     // The Mistral pricing page can also sit in a second collection.
-    assert.equal(await db.setPageCollection(database, llm, [mistral.pages[1]!.id], true), 1)
+    assert.deepEqual(await db.setPageCollection(database, llm, [mistral.pages[1]!.id], true), { ok: true, changed: 1 })
     assert.equal(await objectCount(), before, "collections reference the same stored files")
     assert.equal(await (await files.get(pricingPages[0]!.desktopKey!))!.text(), "stored-screenshot-canary")
 
@@ -115,6 +114,44 @@ test("pages can be saved to many collections without copying files, and survive 
     assert.equal((await request({ pageIds: [mistral.pages[1]!.id], member: true })).status, 200)
     assert.ok((await db.getPage(database, mistral.pages[1]!.id))!.collectionIds.includes(pricing))
     assert.equal((await request({ pageIds: [mistral.pages[1]!.id], member: false })).status, 200)
+
+    await t.test("stale page IDs reject entire add and remove batches through the database, HTTP and MCP", async () => {
+      const staleId = stripe.pages[0]!.id
+      const replacement = recaptured.items.find((p) => p.referenceId === stripe.reference.id)!
+      assert.notEqual(replacement.id, staleId)
+      assert.equal(await db.getPage(database, staleId), null)
+      await db.setPageCollection(database, pricing, [mistral.pages[1]!.id], true)
+
+      const unchanged = async () => {
+        assert.ok(!(await db.getPage(database, mistral.pages[0]!.id))!.collectionIds.includes(pricing), "a valid unsaved page must not be partly added")
+        assert.ok((await db.getPage(database, mistral.pages[1]!.id))!.collectionIds.includes(pricing), "a valid saved page must not be partly removed")
+        assert.ok((await db.getPage(database, replacement.id))!.collectionIds.includes(pricing), "stale removals must preserve path-based membership")
+      }
+      for (const member of [true, false]) {
+        const validId = mistral.pages[member ? 0 : 1]!.id
+        for (const pageIds of [[staleId], [validId, staleId]]) {
+          assert.deepEqual(await db.setPageCollection(database, pricing, pageIds, member), { ok: false, reason: "pages-changed" })
+          await unchanged()
+          const response = await request({ pageIds, member })
+          assert.equal(response.status, 409)
+          assert.match((await response.json() as { error: string }).error, /Reload this page/)
+          await unchanged()
+          const result = await rpc("set_page_collection_membership", { page_ids: pageIds, collection_id: pricing, member })
+          assert.equal(result.isError, true)
+          assert.match(result.content[0].text, /Refresh page IDs with search_pages/)
+          await unchanged()
+        }
+      }
+      // Retrying with fresh IDs succeeds, including duplicates and idempotent saves/removals.
+      assert.deepEqual(await db.setPageCollection(database, pricing, [replacement.id, replacement.id], true), { ok: true, changed: 0 })
+      const freshRemoval = await request({ pageIds: [replacement.id], member: false })
+      assert.equal(freshRemoval.status, 200)
+      assert.deepEqual(await freshRemoval.json(), { ok: true, changed: 1 })
+      assert.deepEqual(await db.setPageCollection(database, pricing, [replacement.id], false), { ok: true, changed: 0 })
+      const freshSave = await rpc("set_page_collection_membership", { page_ids: [replacement.id], collection_id: pricing, member: true })
+      assert.deepEqual(freshSave.structuredContent, { ok: true, changed: 1 })
+      await unchanged()
+    })
 
     // Deleting a collection or a website removes memberships, never the other side's pages.
     await db.deleteCollection(database, llm)
