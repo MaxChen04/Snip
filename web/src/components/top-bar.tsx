@@ -1,9 +1,8 @@
 import { useId } from "react"
 import { Link } from "wouter"
 import { motion, useReducedMotion } from "motion/react"
-import { FolderPlusIcon, GlobeIcon, LogOutIcon, MonitorIcon, MoonIcon, PlusIcon, SearchIcon, SunIcon, TerminalIcon, XIcon } from "@/components/icons"
+import { FolderPlusIcon, GlobeIcon, LogOutIcon, MonitorIcon, MoonIcon, PlugIcon, PlusIcon, SearchIcon, SunIcon, TerminalIcon, XIcon } from "@/components/icons"
 import { useAddFlow } from "@/components/add-flow"
-import { notify } from "@/components/notify"
 import { useTheme } from "next-themes"
 import { Logo } from "@/App"
 import { Button } from "@/components/ui/button"
@@ -99,6 +98,7 @@ export function TopBar({
       </div>
 
       <div className={cn(pill, "shrink-0 gap-1.5 p-1")}>
+        <ConnectButton />
         <CreateMenu collection={collection} />
         <AccountMenu login={login} />
       </div>
@@ -106,8 +106,18 @@ export function TopBar({
   )
 }
 
+function ConnectButton() {
+  const { connectMcp } = useAddFlow()
+  return (
+    <Button size="sm" variant="ghost" onClick={connectMcp} aria-label="Connect MCP" title="Connect your agent over MCP" className="rounded-full">
+      <PlugIcon data-icon="inline-start" />
+      <span className="hidden sm:inline">Connect MCP</span>
+    </Button>
+  )
+}
+
 function CreateMenu({ collection }: { collection?: string }) {
-  const { addReference, newCollection } = useAddFlow()
+  const { addReference, newCollection, connectMcp } = useAddFlow()
   const item = "flex items-start gap-3 px-2.5 py-2"
   return (
     <DropdownMenu>
@@ -133,15 +143,12 @@ function CreateMenu({ collection }: { collection?: string }) {
           </DropdownMenuItem>
           <DropdownMenuItem
             className={item}
-            onClick={() => {
-              void navigator.clipboard?.writeText(`${location.origin}/mcp`)
-              notify("Copied MCP server URL")
-            }}
+            onClick={connectMcp}
           >
             <TerminalIcon className="mt-0.5" />
             <span className="grid">
               <span className="font-medium">Connect an agent</span>
-              <span className="text-2xs text-muted-foreground">Copy the remote MCP URL</span>
+              <span className="text-2xs text-muted-foreground">MCP URL and setup steps</span>
             </span>
           </DropdownMenuItem>
         </DropdownMenuGroup>

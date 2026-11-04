@@ -3,6 +3,7 @@ import { useLocation } from "wouter"
 import { XIcon } from "@/components/icons"
 import { toast } from "sonner"
 import { AddReferenceDialog } from "@/components/add-reference-dialog"
+import { ConnectMcpDialog } from "@/components/connect-mcp-dialog"
 import { notify } from "@/components/notify"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
 import { api } from "@/lib/api"
@@ -11,15 +12,22 @@ import { useCollections } from "@/lib/collections"
 // One place that owns the "Create" dialogs so the top bar, collection header and empty
 // states on any page open the same flow.
 
-type Ctx = { addReference: (collectionId?: string, url?: string) => void; newCollection: () => void }
-const AddFlowCtx = createContext<Ctx>({ addReference: () => {}, newCollection: () => {} })
+type Ctx = { addReference: (collectionId?: string, url?: string) => void; newCollection: () => void; connectMcp: () => void }
+const AddFlowCtx = createContext<Ctx>({ addReference: () => {}, newCollection: () => {}, connectMcp: () => {} })
 export const useAddFlow = () => useContext(AddFlowCtx)
 
 export function AddFlowProvider({ children }: { children: ReactNode }) {
   const [adding, setAdding] = useState<{ collection?: string; url?: string; n: number } | null>(null)
   const [naming, setNaming] = useState(false)
+  const [connecting, setConnecting] = useState(false)
   return (
-    <AddFlowCtx.Provider value={{ addReference: (collection, url) => setAdding((a) => ({ collection, url, n: (a?.n ?? 0) + 1 })), newCollection: () => setNaming(true) }}>
+    <AddFlowCtx.Provider
+      value={{
+        addReference: (collection, url) => setAdding((a) => ({ collection, url, n: (a?.n ?? 0) + 1 })),
+        newCollection: () => setNaming(true),
+        connectMcp: () => setConnecting(true),
+      }}
+    >
       {children}
       <AddReferenceDialog
         key={adding ? `${adding.collection}-${adding.n}` : "closed"}
@@ -33,6 +41,7 @@ export function AddFlowProvider({ children }: { children: ReactNode }) {
         }}
       />
       <NewCollectionDialog open={naming} onOpenChange={setNaming} />
+      <ConnectMcpDialog open={connecting} onOpenChange={setConnecting} />
     </AddFlowCtx.Provider>
   )
 }
