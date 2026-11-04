@@ -82,14 +82,11 @@ function NewCollectionDialog({ open, onOpenChange }: { open: boolean; onOpenChan
               className="well h-10 w-full rounded-lg px-3 text-sm outline-none placeholder:text-ink-10 focus:bg-ink-4 pointer-coarse:text-base"
             />
           </div>
-          <div className="flex justify-between gap-3 border-t-[0.5px] border-border p-3">
-            <DialogClose type="button" className="tactile press h-8 rounded-lg px-3.5 text-xs font-medium tracking-[-0.01em]">
-              Cancel
-            </DialogClose>
+          <div className="border-t-[0.5px] border-border p-3">
             <button
               type="submit"
               disabled={!name.trim() || busy}
-              className="press h-8 rounded-lg bg-primary px-3.5 text-xs font-medium tracking-[-0.01em] text-primary-foreground shadow-primary hover:bg-(--primary-hover) disabled:opacity-60 disabled:active:scale-100 dark:disabled:bg-ink-4 dark:disabled:text-ink-8 dark:disabled:opacity-100 dark:disabled:shadow-none"
+              className="press h-10 w-full rounded-lg bg-primary px-3.5 text-sm font-medium tracking-[-0.01em] text-primary-foreground shadow-primary hover:bg-(--primary-hover) disabled:opacity-60 disabled:active:scale-100 dark:disabled:bg-ink-4 dark:disabled:text-ink-8 dark:disabled:opacity-100 dark:disabled:shadow-none"
             >
               {busy ? "Creating…" : "Create collection"}
             </button>

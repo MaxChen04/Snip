@@ -193,14 +193,11 @@ export function AddReferenceDialog({
             </div>
           </div>
 
-          <div className="flex justify-between gap-3 border-t-[0.5px] border-border p-3">
-            <DialogClose type="button" className="tactile press h-8 rounded-lg px-3.5 text-xs font-medium tracking-[-0.01em]">
-              Cancel
-            </DialogClose>
+          <div className="border-t-[0.5px] border-border p-3">
             <button
               type="submit"
               disabled={!parsed || submitting}
-              className="press flex h-8 items-center justify-center gap-2 rounded-lg bg-primary pr-2 pl-3.5 text-xs font-medium tracking-[-0.01em] text-primary-foreground shadow-primary hover:bg-(--primary-hover) disabled:opacity-60 disabled:active:scale-100 dark:disabled:bg-ink-4 dark:disabled:text-ink-8 dark:disabled:opacity-100 dark:disabled:shadow-none"
+              className="press flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-primary px-3.5 text-sm font-medium tracking-[-0.01em] text-primary-foreground shadow-primary hover:bg-(--primary-hover) disabled:opacity-60 disabled:active:scale-100 dark:disabled:bg-ink-4 dark:disabled:text-ink-8 dark:disabled:opacity-100 dark:disabled:shadow-none"
             >
               {submitting ? <Spinner className="size-3.5" /> : null}
               {submitting ? "Saving…" : mode === "crawl" ? "Crawl and save" : "Save reference"}
