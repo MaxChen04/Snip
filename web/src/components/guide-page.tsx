@@ -11,7 +11,7 @@ import {
   PenLine,
   Server,
   Terminal,
-} from "lucide-react"
+} from "@/components/icons"
 import { cn } from "@/lib/utils"
 import { GithubMark, Logo } from "@/App"
 import { Footer } from "@/components/landing-page"

@@ -1,5 +1,5 @@
 import { useRef, useState } from "react"
-import { FolderPlusIcon } from "lucide-react"
+import { FolderPlusIcon } from "@/components/icons"
 import { toast } from "sonner"
 import { CollectionPicker } from "@/components/collection-picker"
 import { notify } from "@/components/notify"
