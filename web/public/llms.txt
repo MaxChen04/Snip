@@ -71,6 +71,12 @@ Requirements: Node 22, a GitHub account with access to this repository while it 
    ```
    claude mcp add --transport http snip https://snip.<your-subdomain>.workers.dev/mcp
    ```
+   Codex (CLI, IDE extension and ChatGPT desktop app share `~/.codex/config.toml`):
+   ```
+   codex mcp add snip --url https://snip.<your-subdomain>.workers.dev/mcp
+   codex mcp login snip
+   ```
+   OpenCode: add `"mcp": { "snip": { "type": "remote", "url": "https://snip.<your-subdomain>.workers.dev/mcp" } }` to `~/.config/opencode/opencode.json`, then run `opencode mcp auth snip`.
    For Claude.ai or Claude Desktop, add a custom connector with the same URL.
 
 To try it locally first: copy `web/.dev.vars.example` to `web/.dev.vars`, run `npm run db:migrate:local -w web` and `npm run dev`, and open http://localhost:5173. `DEV_LOGIN` skips GitHub sign-in on localhost only; never set it in production.

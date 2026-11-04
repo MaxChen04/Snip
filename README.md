@@ -97,6 +97,19 @@ The MCP endpoint is `https://snip.<your-subdomain>.workers.dev/mcp`. Clients reg
 claude mcp add --transport http snip https://snip.<your-subdomain>.workers.dev/mcp
 ```
 
+Codex (the CLI, IDE extension and ChatGPT desktop app share `~/.codex/config.toml`):
+
+```bash
+codex mcp add snip --url https://snip.<your-subdomain>.workers.dev/mcp
+codex mcp login snip
+```
+
+OpenCode (`~/.config/opencode/opencode.json` or a project `opencode.json`; note the `mcp` key and `type: "remote"`), then `opencode mcp auth snip`:
+
+```json
+{ "mcp": { "snip": { "type": "remote", "url": "https://snip.<your-subdomain>.workers.dev/mcp" } } }
+```
+
 For Claude.ai or Claude Desktop, add it as a custom connector with the same URL.
 
 | Tool | What it does |

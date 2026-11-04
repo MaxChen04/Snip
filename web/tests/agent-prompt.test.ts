@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { buildAgentPrompt } from "../src/lib/agent-prompt"
-import { claudeCodeCommand, isLocalOrigin, mcpJsonConfig, mcpUrl } from "../src/lib/mcp"
+import { claudeCodeCommand, codexCommand, codexToml, isLocalOrigin, mcpJsonConfig, mcpUrl, opencodeJson } from "../src/lib/mcp"
 
 test("mcpUrl appends /mcp to the origin", () => {
   assert.equal(mcpUrl("http://localhost:5173"), "http://localhost:5173/mcp")
@@ -18,6 +18,9 @@ test("client snippets embed the exact URL", () => {
   const url = "https://snip.max.workers.dev/mcp"
   assert.equal(claudeCodeCommand(url), `claude mcp add --transport http snip ${url}`)
   assert.deepEqual(JSON.parse(mcpJsonConfig(url)), { mcpServers: { snip: { url } } })
+  assert.equal(codexCommand(url), `codex mcp add snip --url ${url}`)
+  assert.equal(codexToml(url), `[mcp_servers.snip]\nurl = "${url}"`)
+  assert.deepEqual(JSON.parse(opencodeJson(url)).mcp.snip, { type: "remote", url, enabled: true })
 })
 
 test("copied prompt names the exact Snip MCP URL", () => {

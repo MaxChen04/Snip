@@ -4,7 +4,7 @@ import { Logo } from "@/App"
 import { notify } from "@/components/notify"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { claudeCodeCommand, isLocalOrigin, mcpJsonConfig, mcpUrl } from "@/lib/mcp"
+import { claudeCodeCommand, codexCommand, codexToml, isLocalOrigin, mcpJsonConfig, mcpUrl, opencodeJson } from "@/lib/mcp"
 import { cn } from "@/lib/utils"
 
 // Pattern from MCP connect screens on Mobbin (Descript, Cursor, Perplexity): the server URL up
@@ -80,7 +80,7 @@ export function ConnectMcpDialog({ open, onOpenChange }: { open: boolean; onOpen
           <div className="flex min-w-0 flex-1 flex-col gap-1">
             <DialogTitle className="text-base font-medium">Connect Snip to your agent</DialogTitle>
             <DialogDescription className="text-sm text-muted-foreground">
-              Add Snip as a remote MCP server so Claude, Cursor or any MCP client can search and pull your references.
+              Add Snip as a remote MCP server so Claude, Codex, OpenCode, Cursor or any MCP client can search and pull your references.
             </DialogDescription>
           </div>
           <DialogClose className="-mt-1 -mr-1.5 grid size-7 shrink-0 place-items-center rounded-full text-muted-foreground hover:bg-fill-2 hover:text-foreground" aria-label="Close">
@@ -112,11 +112,19 @@ export function ConnectMcpDialog({ open, onOpenChange }: { open: boolean; onOpen
         </div>
 
         <Tabs defaultValue="claude-code" className="min-w-0 flex-col gap-4 border-t px-5 pt-4 pb-5">
-          <TabsList className="w-full">
-            <TabsTrigger value="claude-code" className="flex-1">Claude Code</TabsTrigger>
-            <TabsTrigger value="claude" className="flex-1">Claude app</TabsTrigger>
-            <TabsTrigger value="cursor" className="flex-1">Cursor</TabsTrigger>
-            <TabsTrigger value="other" className="flex-1">Other</TabsTrigger>
+          <TabsList className="h-auto! w-full flex-wrap justify-start">
+            {[
+              ["claude-code", "Claude Code"],
+              ["codex", "Codex"],
+              ["opencode", "OpenCode"],
+              ["cursor", "Cursor"],
+              ["claude", "Claude app"],
+              ["other", "Other"],
+            ].map(([value, label]) => (
+              <TabsTrigger key={value} value={value} className="flex-auto">
+                {label}
+              </TabsTrigger>
+            ))}
           </TabsList>
 
           <TabsContent value="claude-code">
@@ -129,6 +137,45 @@ export function ConnectMcpDialog({ open, onOpenChange }: { open: boolean; onOpen
                 <span>
                   Start Claude Code and run <code className={kbd}>/mcp</code>, pick <b className="font-medium">snip</b> and choose Authenticate.
                 </span>,
+              ]}
+            </Steps>
+          </TabsContent>
+
+          <TabsContent value="codex">
+            <Steps>
+              {[
+                <>
+                  <span>Run this in your terminal. The Codex CLI, IDE extension and ChatGPT desktop app share the same config:</span>
+                  <Code text={codexCommand(url)} label="Codex command" />
+                </>,
+                <>
+                  <span>
+                    Or add it to <code className={kbd}>~/.codex/config.toml</code> yourself:
+                  </span>
+                  <Code text={codexToml(url)} label="Codex config" />
+                </>,
+                <>
+                  <span>Sign in:</span>
+                  <Code text="codex mcp login snip" label="Codex login command" />
+                </>,
+              ]}
+            </Steps>
+          </TabsContent>
+
+          <TabsContent value="opencode">
+            <Steps>
+              {[
+                <>
+                  <span>
+                    Add this to <code className={kbd}>~/.config/opencode/opencode.json</code>, or <code className={kbd}>opencode.json</code> in a project. OpenCode uses an{" "}
+                    <code className={kbd}>mcp</code> block with <code className={kbd}>type: "remote"</code>:
+                  </span>
+                  <Code text={opencodeJson(url)} label="OpenCode config" />
+                </>,
+                <>
+                  <span>OpenCode starts sign-in on first use. To sign in now:</span>
+                  <Code text="opencode mcp auth snip" label="OpenCode auth command" />
+                </>,
               ]}
             </Steps>
           </TabsContent>
