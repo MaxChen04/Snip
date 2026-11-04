@@ -97,3 +97,13 @@ test("shutdown waits for a slow capture before stopping the backend", async () =
   await stopping
   assert.equal(complete, true)
 })
+
+test("migration recovery instructions survive the server exit and reach the log", async () => {
+  const f = fixture()
+  const message = "Library upgrade failed. A backup is at /library/backups/d1-test."
+  f.children[0].emit("message", { type: "snip:web-error", message })
+  f.children[0].emit("close", 1, null)
+  await f.service.closed
+  assert.equal(f.service.detail, message)
+  assert.ok(f.logs.join("").includes(message))
+})
