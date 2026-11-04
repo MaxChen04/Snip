@@ -130,9 +130,14 @@ async function main() {
     await page.goto(`${origin}/r/${added.id}?tab=animations`)
     await page.getByRole("heading", { name: /^Scroll/ }).waitFor()
     await page.goto(`${origin}/r/${added.id}?page=${detail.pages[0].id}`)
-    await page.getByText("HTML snapshot", { exact: true }).waitFor()
+    // The viewer sidebar starts hidden in narrow windows; the HTML tab holds the snapshot.
+    const showSidebar = page.getByRole("button", { name: "Show sidebar" })
+    await page.getByRole("button", { name: /^(Show|Hide) sidebar$/ }).waitFor()
+    if (await showSidebar.isVisible()) await showSidebar.click()
+    await page.getByRole("tab", { name: "HTML", exact: true }).click()
+    await page.getByText(/^Snapshot · /).waitFor()
     const snapshot = application.waitForEvent("window")
-    await page.getByText("HTML snapshot", { exact: true }).click()
+    await page.locator(`a[href="/files/${detail.pages[0].snapshotKey}"]`).click()
     const viewer = await snapshot
     await viewer.waitForURL(`${origin}/files/${detail.pages[0].snapshotKey}`)
     assert.equal(await viewer.evaluate(() => typeof window.snipDesktop), "undefined")
