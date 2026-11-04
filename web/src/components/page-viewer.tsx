@@ -387,16 +387,37 @@ const ELEMENT_STEP = 120
 
 const ruleText = (r: Rule) => `${r.note ? `/* ${r.note} */\n` : ""}${r.selector} {\n${r.decls.map(([k, v]) => `  ${k}: ${v};`).join("\n")}\n}`
 
-/** Rule text from the stylesheet is one line; break it into one declaration per line. */
-const prettyRule = (css: string) =>
-  css
-    .replace(/url\("data:[^"]{200,}"\)/g, 'url("data:…")')
-    .replace(/\s*\{\s*/g, " {\n  ")
-    .replace(/;\s*(?!$)/g, ";\n  ")
-    .replace(/\s*\}\s*/g, "\n}\n")
-    .replace(/\n {2}\n\}/g, "\n}")
-    .replace(/\n{2,}/g, "\n")
-    .trim()
+/**
+ * Rule text from the stylesheet is one line; break it into one declaration per line.
+ * Quoted strings (data: URLs, font names) are never reformatted, so the copy stays valid CSS.
+ * With `shorten`, long data: URLs are elided for display only.
+ */
+function prettyRule(css: string, shorten = false) {
+  let out = ""
+  let depth = 0
+  const pad = () => "  ".repeat(depth)
+  for (const [i, part] of css.split(/("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/g).entries()) {
+    if (i % 2) {
+      out += shorten && part.length > 200 && /^["']data:/.test(part) ? `${part.slice(0, 40)}…${part[0]}` : part
+      continue
+    }
+    for (const ch of part) {
+      if (ch === "{") {
+        depth++
+        out = out.trimEnd() + " {\n" + pad()
+      } else if (ch === ";") out = out.trimEnd() + ";\n" + pad()
+      else if (ch === "}") {
+        depth = Math.max(0, depth - 1)
+        out = out.trimEnd() + "\n" + pad() + "}\n" + pad()
+      } else if (/\s/.test(ch) && /\s$/.test(out)) continue
+      else out += ch
+    }
+  }
+  return out.replace(/[ \t]+\n/g, "\n").replace(/\n{2,}/g, "\n").trim()
+}
+
+type RawBlock = { display: string; copy: string }
+const rawBlock = (css: string): RawBlock => ({ display: prettyRule(css, true), copy: prettyRule(css) })
 
 function elementRules(e: StyleElement): Rule[] {
   const sel = e.sel || e.tag || "element"
@@ -446,15 +467,17 @@ function CssPanel({ fileKey }: { fileKey: string }) {
     const match = (x: string) => !q || x.toLowerCase().includes(q)
     if (section === "variables") {
       const decls = Object.entries(s.cssVariables ?? {}).filter(([k, v]) => match(k) || match(v))
-      return decls.length ? [ruleText({ selector: ":root", decls })] : []
+      if (!decls.length) return []
+      const text = ruleText({ selector: ":root", decls })
+      return [{ display: text, copy: text }]
     }
-    if (section === "keyframes") return (s.keyframes ?? []).filter((k) => match(k.css)).map((k) => prettyRule(k.css))
-    if (section === "hover") return (s.hoverRules ?? []).filter(match).map(prettyRule)
-    return (s.fontFaces ?? []).filter(match).map(prettyRule)
+    if (section === "keyframes") return (s.keyframes ?? []).filter((k) => match(k.css)).map((k) => rawBlock(k.css))
+    if (section === "hover") return (s.hoverRules ?? []).filter(match).map(rawBlock)
+    return (s.fontFaces ?? []).filter(match).map(rawBlock)
   }, [s, section, q])
 
   const total = section === "elements" ? elementRuleList.length : blocks.length
-  const allText = () => (section === "elements" ? elementRuleList.map(ruleText) : blocks).join("\n\n")
+  const allText = () => (section === "elements" ? elementRuleList.map(ruleText) : blocks.map((b) => b.copy)).join("\n\n")
 
   return (
     <>
@@ -504,7 +527,7 @@ function CssPanel({ fileKey }: { fileKey: string }) {
               )}
             </>
           ) : (
-            blocks.map((b, i) => <RawRule key={i} css={b} />)
+            blocks.map((b, i) => <RawRule key={i} block={b} />)
           )}
         </div>
       )}
@@ -530,11 +553,11 @@ function RuleView({ rule }: { rule: Rule }) {
   )
 }
 
-function RawRule({ css }: { css: string }) {
+function RawRule({ block }: { block: RawBlock }) {
   return (
     <pre className="group/rule relative mb-3 break-all whitespace-pre-wrap">
-      <CopyRuleButton text={css} />
-      {css}
+      <CopyRuleButton text={block.copy} />
+      {block.display}
     </pre>
   )
 }
