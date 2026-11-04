@@ -6,3 +6,4 @@ dist-site/
 .env
 *.tmp.mjs
 web/node_modules/.tmp/
+backups/
