@@ -49,6 +49,10 @@ export function GalleryPage({ login }: { login: string }) {
   const { collections } = useCollections()
   const opened = useRef<string | undefined>(undefined)
   useEffect(() => {
+    if (!collection) {
+      opened.current = undefined
+      return
+    }
     const c = collections.find((x) => x.id === collection)
     if (!c || opened.current === c.id) return
     opened.current = c.id

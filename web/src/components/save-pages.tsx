@@ -1,3 +1,4 @@
+import { useRef, useState } from "react"
 import { FolderPlusIcon } from "lucide-react"
 import { toast } from "sonner"
 import { CollectionPicker } from "@/components/collection-picker"
@@ -26,10 +27,15 @@ export function SavePagesButton({
   className?: string
 }) {
   const { collections, refresh } = useCollections()
+  const pending = useRef(false)
+  const [busy, setBusy] = useState(false)
   const ids = pages.map((p) => p.id)
   const selected = pages.length ? collections.filter((c) => pages.every((p) => p.collectionIds.includes(c.id))).map((c) => c.id) : []
 
   const toggle = async (cid: string, member: boolean) => {
+    if (pending.current) return
+    pending.current = true
+    setBusy(true)
     const name = collections.find((c) => c.id === cid)?.name ?? "the new collection"
     // Only pages whose membership actually changes, so a failed save rolls back just those.
     const changing = pages.filter((p) => p.collectionIds.includes(cid) !== member).map((p) => p.id)
@@ -38,11 +44,16 @@ export function SavePagesButton({
       await api.setPageMembership(cid, ids, member)
       const n = changing.length || ids.length
       notify(member ? `Added ${pagesLabel(n)} to ${name}` : `Removed ${pagesLabel(n)} from ${name}`)
-      await refresh()
     } catch (err) {
       onChange(changing, cid, !member)
       toast.error((err as Error).message)
+      return
+    } finally {
+      pending.current = false
+      setBusy(false)
     }
+    // A successful save must not be rolled back if refreshing counts fails.
+    await refresh().catch(() => toast.error("Pages saved, but collection counts could not refresh."))
   }
 
   return (
@@ -61,7 +72,9 @@ export function SavePagesButton({
         <p className="px-2 pb-2 text-2xs text-muted-foreground">
           {pages.length === 1 ? "This page stays in its website too." : `${pagesLabel(pages.length)}. They stay in their website too.`}
         </p>
-        <CollectionPicker className="max-h-72" selected={selected} onToggle={(cid, on) => void toggle(cid, on)} />
+        <fieldset disabled={busy} aria-busy={busy} className="min-w-0 border-0 p-0 disabled:opacity-60">
+          <CollectionPicker className="max-h-72" selected={selected} onToggle={(cid, on) => void toggle(cid, on)} />
+        </fieldset>
       </PopoverContent>
     </Popover>
   )

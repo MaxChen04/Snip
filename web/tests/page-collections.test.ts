@@ -50,6 +50,7 @@ test("pages can be saved to many collections without copying files, and survive 
     const ctx = { waitUntil(p: Promise<unknown>) { pending.push(p) }, passThroughOnException() {} } as ExecutionContext
     const env = { DB: database, FILES: files, SESSION_SECRET: "test-secret", DEV_LOGIN: "max" } as unknown as Env
     const objectCount = async () => (await files.list()).objects.length
+    await files.put(pricingPages[0]!.desktopKey!, "stored-screenshot-canary")
     const before = await objectCount()
 
     // The web API saves pages by id. The session check is covered elsewhere; call the db layer the route uses.
@@ -59,6 +60,7 @@ test("pages can be saved to many collections without copying files, and survive 
     // The Mistral pricing page can also sit in a second collection.
     assert.equal(await db.setPageCollection(database, llm, [mistral.pages[1]!.id], true), 1)
     assert.equal(await objectCount(), before, "collections reference the same stored files")
+    assert.equal(await (await files.get(pricingPages[0]!.desktopKey!))!.text(), "stored-screenshot-canary")
 
     const inPricing = await db.listPages(database, { collectionId: pricing })
     assert.deepEqual(inPricing.items.map((p) => p.desktopKey).sort(), pricingPages.map((p) => p.desktopKey).sort())
@@ -103,9 +105,16 @@ test("pages can be saved to many collections without copying files, and survive 
     assert.equal(removed.changed, 1)
     assert.ok((await rpc("set_page_collection_membership", { page_ids: ["x"], collection_id: "missing", member: true })).isError)
 
-    // The HTTP route validates its body.
-    const res = await app.request("https://snip.test/api/collections/" + pricing + "/pages", { method: "POST", body: "{}", headers: { "content-type": "application/json", host: "localhost" } }, env, ctx)
-    assert.ok(res.status === 400 || res.status === 401)
+    // Exercise the authenticated HTTP route, not an early unauthorized response.
+    const request = (body: unknown, cid = pricing) => app.request("http://localhost/api/collections/" + cid + "/pages", {
+      method: "POST", body: JSON.stringify(body), headers: { "content-type": "application/json" },
+    }, env, ctx)
+    assert.equal((await request({})).status, 400)
+    assert.equal((await request({ pageIds: Array(201).fill("x") })).status, 400)
+    assert.equal((await request({ pageIds: [mistral.pages[1]!.id] }, "missing")).status, 404)
+    assert.equal((await request({ pageIds: [mistral.pages[1]!.id], member: true })).status, 200)
+    assert.ok((await db.getPage(database, mistral.pages[1]!.id))!.collectionIds.includes(pricing))
+    assert.equal((await request({ pageIds: [mistral.pages[1]!.id], member: false })).status, 200)
 
     // Deleting a collection or a website removes memberships, never the other side's pages.
     await db.deleteCollection(database, llm)
