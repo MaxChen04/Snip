@@ -83,6 +83,10 @@ test("pages can be saved to many collections without copying files, and survive 
     const recaptured = await db.listPages(database, { collectionId: pricing })
     assert.equal(recaptured.items.length, 2)
     assert.ok(recaptured.items.some((p) => p.desktopKey?.includes(again.attempt)))
+    // Ids read before the recapture are stale: writes with them fail instead of reporting success.
+    const staleId = stripe.pages[0]!.id
+    await assert.rejects(db.setPageCollection(database, pricing, [staleId], false), (e) => e instanceof db.StalePagesError && e.missing[0] === staleId)
+    assert.equal((await db.listPages(database, { collectionId: pricing })).items.length, 2, "a rejected write changes nothing")
 
     // MCP: list collections, then fetch the collection's pages.
     const rpc = async (name: string, args: unknown) => {

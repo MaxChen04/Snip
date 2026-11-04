@@ -389,9 +389,22 @@ export const MAX_PAGES_PER_CHANGE = 200
  * in its website, so the page keeps its files and stays in every other collection.
  * Returns how many pages changed, or null when the collection doesn't exist.
  */
+export class StalePagesError extends Error {
+  constructor(readonly missing: string[]) {
+    super(`${missing.length === 1 ? "A page no longer exists" : `${missing.length} pages no longer exist`} (re-captured or deleted). Reload the page list and try again.`)
+  }
+}
+
 export async function setPageCollection(db: D1Database, collectionId: string, pageIds: string[], member: boolean) {
-  const ids = JSON.stringify([...new Set(pageIds)].slice(0, MAX_PAGES_PER_CHANGE))
+  const unique = [...new Set(pageIds)].slice(0, MAX_PAGES_PER_CHANGE)
+  const ids = JSON.stringify(unique)
   if (!(await db.prepare(`SELECT 1 FROM collections WHERE id = ?`).bind(collectionId).first())) return null
+  // A re-capture replaces page rows with new ids. Refuse ids that no longer resolve rather than
+  // report a write that silently skipped them.
+  const found = await db.prepare(`SELECT id FROM pages WHERE id IN (SELECT value FROM json_each(?))`).bind(ids).all<{ id: string }>()
+  const known = new Set(found.results.map((r) => r.id))
+  const missing = unique.filter((id) => !known.has(id))
+  if (missing.length) throw new StalePagesError(missing)
   // json_each keeps this to one bound parameter per list (D1 caps bound parameters per query).
   const result = member
     ? await db
