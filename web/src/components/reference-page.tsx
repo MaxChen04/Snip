@@ -1,18 +1,13 @@
 import { useCallback, useEffect, useState } from "react"
 import { Link, useLocation, useSearch } from "wouter"
 import {
-  CodeIcon,
   ExternalLinkIcon,
-  FileJsonIcon,
   FolderIcon,
   SparklesIcon,
-  MonitorIcon,
   MoreHorizontalIcon,
   RefreshCwIcon,
-  SmartphoneIcon,
   Trash2Icon,
   AlertCircleIcon,
-  XIcon,
 } from "@/components/icons"
 import { toast } from "sonner"
 import { notify } from "@/components/notify"
@@ -21,8 +16,8 @@ import { EMPTY_SELECTION, SelectCheck, SelectionBar, toggleIn, type Selection } 
 import { Masonry } from "@/components/gallery-page"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { TokensPanel } from "@/components/tokens-panel"
+import { PageViewer } from "@/components/page-viewer"
 import { ActionCircle, Segmented, TopBar } from "@/components/top-bar"
-import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -33,7 +28,6 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { cn } from "@/lib/utils"
 import { api, fileUrl, type Animation, type Page, type Reference } from "@/lib/api"
 import { useCollections } from "@/lib/collections"
@@ -351,81 +345,6 @@ export function GifTile({ a, bare }: { a: Animation; bare?: boolean }) {
         className={small ? "max-w-full rounded-md" : "w-full"}
         style={small ? { width: a.width } : { aspectRatio: `${a.width}/${a.height}` }}
       />
-    </div>
-  )
-}
-
-function PageViewer({ page, onClose }: { page: Page; onClose: () => void }) {
-  const [device, setDevice] = useState<"desktop" | "mobile">("desktop")
-  const key = device === "desktop" ? page.desktopKey : page.mobileKey
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose()
-    window.addEventListener("keydown", onKey)
-    document.body.style.overflow = "hidden"
-    return () => {
-      window.removeEventListener("keydown", onKey)
-      document.body.style.overflow = ""
-    }
-  }, [onClose])
-
-  return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-background" role="dialog" aria-modal="true">
-      <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2.5">
-        <Button variant="ghost" size="icon-sm" aria-label="Close" onClick={onClose}>
-          <XIcon />
-        </Button>
-        <div className="min-w-0">
-          <div className="truncate text-sm font-medium">{page.title || page.path}</div>
-          <a href={page.url} target="_blank" rel="noreferrer" className="truncate text-2xs text-muted-foreground hover:text-foreground">
-            {page.url}
-          </a>
-        </div>
-        <ToggleGroup
-          className="mx-auto"
-          variant="outline"
-          size="sm"
-          value={[device]}
-          onValueChange={(v) => v[0] && setDevice(v[0] as "desktop" | "mobile")}
-        >
-          <ToggleGroupItem value="desktop" aria-label="Desktop">
-            <MonitorIcon /> Desktop
-          </ToggleGroupItem>
-          <ToggleGroupItem value="mobile" aria-label="Mobile">
-            <SmartphoneIcon /> Mobile
-          </ToggleGroupItem>
-        </ToggleGroup>
-        <div className="flex items-center gap-2">
-          {page.snapshotKey && (
-            <Button variant="outline" size="sm" render={<a href={fileUrl(page.snapshotKey)} target="_blank" rel="noreferrer" />} nativeButton={false}>
-              <CodeIcon data-icon="inline-start" /> HTML snapshot
-            </Button>
-          )}
-          {page.stylesKey && (
-            <Button variant="outline" size="sm" render={<a href={`${fileUrl(page.stylesKey)}?download=1`} />} nativeButton={false}>
-              <FileJsonIcon data-icon="inline-start" /> Computed styles
-            </Button>
-          )}
-        </div>
-      </div>
-      <div className="flex min-h-0 flex-1">
-        <div className="min-w-0 flex-1 overflow-y-auto bg-fill-1 p-6">
-          {key ? (
-            <img
-              src={fileUrl(key)}
-              alt=""
-              className={device === "desktop" ? "mx-auto w-full max-w-6xl rounded-lg shadow-card" : "mx-auto w-[390px] max-w-full rounded-3xl shadow-card"}
-            />
-          ) : (
-            <p className="py-24 text-center text-sm text-muted-foreground">No {device} screenshot.</p>
-          )}
-        </div>
-        {page.tokens && (
-          <aside className="hidden w-80 shrink-0 overflow-y-auto border-l border-border p-4 lg:block">
-            <TokensPanel tokens={page.tokens} compact />
-          </aside>
-        )}
-      </div>
     </div>
   )
 }

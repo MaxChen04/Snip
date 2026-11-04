@@ -13,7 +13,7 @@ export function TokensPanel({ tokens, compact }: { tokens: DesignTokens; compact
   return (
     <div className={cn("grid gap-8", !compact && "lg:grid-cols-2")}>
       <Section title="Colors">
-        <div className={cn("grid gap-2", compact ? "grid-cols-4" : "grid-cols-4 sm:grid-cols-6 lg:grid-cols-8")}>
+        <div className={cn("grid gap-2", compact ? "grid-cols-[repeat(auto-fill,minmax(3.5rem,1fr))]" : "grid-cols-4 sm:grid-cols-6 lg:grid-cols-8")}>
           {tokens.colors.slice(0, n * 2).map((c) => (
             <button key={c.value} onClick={() => copy(c.value)} className="group min-w-0 text-left" title={`${c.value} (${c.count})`}>
               <div className="aspect-square rounded-lg shadow-button transition-[scale] duration-150 ease-out group-active:scale-[0.97]" style={{ background: c.value }} />
