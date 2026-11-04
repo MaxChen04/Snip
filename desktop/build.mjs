@@ -37,29 +37,13 @@ if (noInstall && installDir) throw new Error("Use either --no-install or --insta
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(here, "..")
-const buildDir = path.join(here, "build")
 const run = (cmd, args) => execFileSync(cmd, args, { stdio: "inherit" })
-
-fs.rmSync(buildDir, { recursive: true, force: true })
-fs.mkdirSync(buildDir, { recursive: true })
 
 // 1. Tell the app where the repo lives.
 fs.writeFileSync(path.join(here, "repo.json"), JSON.stringify({ root }, null, 2))
 
-// 2. App icon from the Snip logo.
-const iconset = path.join(buildDir, "Snip.iconset")
-fs.mkdirSync(iconset)
-const logo = path.join(root, "web/public/logo.png")
-for (const size of [16, 32, 128, 256, 512]) {
-  for (const scale of [1, 2]) {
-    const px = size * scale
-    if (px > 512) continue // the logo is 512px; skip the 1024px slot rather than upscale
-    const name = `icon_${size}x${size}${scale === 2 ? "@2x" : ""}.png`
-    execFileSync("sips", ["-z", String(px), String(px), logo, "--out", path.join(iconset, name)], { stdio: "ignore" })
-  }
-}
-const icon = path.join(buildDir, "Snip.icns")
-run("iconutil", ["-c", "icns", iconset, "-o", icon])
+// The approved app icon is a versioned input, shared by local and release builds.
+const icon = path.join(here, "assets/Snip.icns")
 
 // 3. Package.
 const [outDir] = await packager({
@@ -76,7 +60,7 @@ const [outDir] = await packager({
   appCategoryType: "public.app-category.developer-tools",
   extendInfo: { LSMinimumSystemVersion: "14.0" },
   // The launcher has no runtime dependencies, so ship only its own files.
-  ignore: [/^\/(dist|build|node_modules|tests|scripts)(\/|$)/, /^\/(build\.mjs|install\.mjs|package-lock\.json|\.gitignore|README[^/]*)$/i],
+  ignore: [/^\/(dist|build|assets|node_modules|tests|scripts)(\/|$)/, /^\/(build\.mjs|install\.mjs|package-lock\.json|\.gitignore|README[^/]*)$/i],
   prune: false,
 })
 const built = path.join(outDir, "Snip.app")
