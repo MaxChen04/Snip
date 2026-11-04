@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, type ReactNode } from "react"
 import { useLocation } from "wouter"
-import { XIcon } from "lucide-react"
+import { XIcon } from "@/components/icons"
 import { toast } from "sonner"
 import { AddReferenceDialog } from "@/components/add-reference-dialog"
 import { notify } from "@/components/notify"
@@ -63,12 +63,12 @@ function NewCollectionDialog({ open, onOpenChange }: { open: boolean; onOpenChan
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent showCloseButton={false} className="gap-0 rounded-3xl p-0 sm:max-w-[400px]">
+      <DialogContent showCloseButton={false} className="gap-0 p-0 sm:max-w-[400px]">
         <form onSubmit={submit}>
-          <div className="flex items-center justify-between px-5 pt-4 pb-3">
-            <DialogTitle className="text-sm font-medium">New collection</DialogTitle>
+          <div className="flex items-center justify-between px-5 pt-5 pb-4">
+            <DialogTitle className="text-base font-medium">New collection</DialogTitle>
             <DialogDescription className="sr-only">Name a collection to group references.</DialogDescription>
-            <DialogClose className="-mr-1.5 grid size-7 place-items-center rounded-full text-muted-foreground hover:bg-fill-2 hover:text-foreground" aria-label="Close">
+            <DialogClose className="press -mr-1.5 grid size-7 place-items-center rounded-md text-ink-10 hover:bg-ink-3 hover:text-foreground active:scale-[0.92]" aria-label="Close">
               <XIcon className="size-4" />
             </DialogClose>
           </div>
@@ -79,16 +79,19 @@ function NewCollectionDialog({ open, onOpenChange }: { open: boolean; onOpenChan
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. Pricing pages"
               aria-label="Collection name"
-              className="h-14 w-full rounded-2xl bg-fill-1 px-4 text-base outline-none ring-1 ring-transparent placeholder:text-muted-foreground focus:bg-background focus:ring-border focus:shadow-xs"
+              className="well h-10 w-full rounded-lg px-3 text-sm outline-none placeholder:text-ink-10 focus:bg-ink-4 pointer-coarse:text-base"
             />
           </div>
-          <div className="border-t border-border p-3">
+          <div className="flex justify-between gap-3 border-t-[0.5px] border-border p-3">
+            <DialogClose type="button" className="tactile press h-8 rounded-lg px-3.5 text-xs font-medium tracking-[-0.01em]">
+              Cancel
+            </DialogClose>
             <button
               type="submit"
               disabled={!name.trim() || busy}
-              className="h-11 w-full rounded-full bg-foreground text-sm font-medium text-background hover:bg-foreground/85 disabled:bg-fill-2 disabled:text-muted-foreground"
+              className="press h-8 rounded-lg bg-primary px-3.5 text-xs font-medium tracking-[-0.01em] text-primary-foreground shadow-primary hover:bg-(--primary-hover) disabled:opacity-60 disabled:active:scale-100 dark:disabled:bg-ink-4 dark:disabled:text-ink-8 dark:disabled:opacity-100 dark:disabled:shadow-none"
             >
-              Create collection
+              {busy ? "Creating…" : "Create collection"}
             </button>
           </div>
         </form>

@@ -28,7 +28,7 @@ const tabsListVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-fill-2",
+        default: "bg-ink-3",
         secondary: "bg-transparent",
         primary: "bg-transparent",
         line: "bg-transparent",
@@ -49,7 +49,7 @@ const tabsIndicatorVariants = cva("absolute -z-10", {
   variants: {
     variant: {
       default:
-        "top-(--active-tab-top) left-(--active-tab-left) h-(--active-tab-height) w-(--active-tab-width) rounded-md bg-raised shadow-xs transition-[top,left,width,height] duration-200 ease-out motion-reduce:transition-none",
+        "top-(--active-tab-top) left-(--active-tab-left) h-(--active-tab-height) w-(--active-tab-width) rounded-md bg-control shadow-toggle transition-[top,left,width,height] duration-300 ease-out motion-reduce:transition-none",
       secondary:
         "top-(--active-tab-top) left-(--active-tab-left) h-(--active-tab-height) w-(--active-tab-width) rounded-md bg-fill-2 transition-[top,left,width,height] duration-200 ease-out motion-reduce:transition-none",
       primary:
@@ -88,7 +88,7 @@ function TabsList({
 }
 
 const tabsTriggerVariants = cva(
-  "group/tabs-trigger relative inline-flex rounded-md border border-transparent! text-xs font-medium whitespace-nowrap text-muted-foreground transition-all hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/30 focus-visible:outline-1 focus-visible:outline-ring aria-disabled:pointer-events-none aria-disabled:opacity-50 data-vertical:w-full [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+  "group/tabs-trigger relative inline-flex rounded-md border border-transparent! text-xs font-medium whitespace-nowrap text-ink-11 transition-colors duration-150 ease-out hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring aria-disabled:pointer-events-none aria-disabled:opacity-50 data-vertical:w-full [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
   {
     variants: {
       layout: {

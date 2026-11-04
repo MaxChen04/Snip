@@ -49,7 +49,7 @@ function ToggleGroup({
           : { ...gap, ...style }
       }
       className={cn(
-        "group/toggle-group flex w-fit flex-row items-center gap-[--spacing(var(--gap))] data-[spacing=0]:data-[variant=outline]:data-horizontal:rounded-full data-vertical:flex-col data-vertical:items-stretch data-[spacing=0]:data-[variant=outline]:data-vertical:rounded-2xl",
+        "group/toggle-group flex w-fit flex-row items-center gap-[--spacing(var(--gap))] data-[variant=outline]:gap-0.5 data-[variant=outline]:rounded-lg data-[variant=outline]:bg-ink-3 data-[variant=outline]:p-0.5 data-[spacing=0]:data-[variant=outline]:data-horizontal:rounded-full data-vertical:flex-col data-vertical:items-stretch data-[spacing=0]:data-[variant=outline]:data-vertical:rounded-2xl",
         className
       )}
       {...props}
