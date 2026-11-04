@@ -3,7 +3,7 @@ import { SnipApi } from "./api"
 import { CaptureRuntime } from "./runtime"
 
 // Load capture settings before importing modules that read them at initialization.
-const envFile = new URL("../.env", import.meta.url)
+const envFile = process.env.SNIP_CAPTURE_ENV_FILE || new URL("../.env", import.meta.url)
 if (existsSync(envFile)) process.loadEnvFile(envFile)
 
 const base = process.env.SNIP_URL
