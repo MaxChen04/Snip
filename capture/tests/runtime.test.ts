@@ -79,10 +79,14 @@ test("claim request times out when a server never responds", async () => {
   globalThis.fetch = ((_url: string | URL | Request, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
     init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true })
   })) as typeof fetch
+  // AbortSignal.timeout uses an unref'd timer. With fetch mocked, nothing else keeps the
+  // event loop alive, so Node 22 would exit the test runner before the timeout fires.
+  const keepAlive = setInterval(() => {}, 1000)
   try {
     const api = new SnipApi("http://example.test", "test", 100, 30)
     await assert.rejects(api.claim())
   } finally {
+    clearInterval(keepAlive)
     globalThis.fetch = originalFetch
   }
 })
