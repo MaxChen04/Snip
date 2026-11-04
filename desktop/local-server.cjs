@@ -59,9 +59,9 @@ const identityFields = {
   r2_buckets: ['binding', 'bucket_name', 'preview_bucket_name', 'jurisdiction'],
   kv_namespaces: ['binding', 'id', 'preview_id'],
 };
-function storageError() {
+function storageError(message) {
   const error = new Error('Library storage identity is unavailable.');
-  error.userMessage = 'Snip could not determine which local database and files belong to this library. Restore its original web/wrangler.jsonc or storage identity record before retrying.';
+  error.userMessage = message || 'Snip could not determine which local database and files belong to this library. Restore its original web/wrangler.jsonc or storage identity record before retrying.';
   return error;
 }
 function selectIdentities(config, runtimeConfig) {
@@ -75,6 +75,7 @@ function selectIdentities(config, runtimeConfig) {
       const matches = entries.filter(entry => entry && entry.binding === target.binding);
       if (matches.length !== 1) throw storageError();
       const item = matches[0];
+      if (item.remote === true || target.remote === true) throw storageError('This project uses remote Cloudflare storage and cannot be imported as a local library. Choose a library whose data is stored locally.');
       const selected = {};
       for (const key of fields) {
         if (item[key] !== undefined) {
@@ -114,7 +115,7 @@ async function storageConfig(root, dataRoot, readConfig, runtimeConfig) {
       if (saved.version !== 1) throw storageError();
       identities = selectIdentities(saved, runtimeConfig);
       vars = selectLibraryVars(saved);
-    } catch { throw storageError(); }
+    } catch (error) { throw error.userMessage ? error : storageError(); }
   } else {
     let source;
     try {
@@ -125,7 +126,7 @@ async function storageConfig(root, dataRoot, readConfig, runtimeConfig) {
       }
       identities = selectIdentities(source, runtimeConfig);
       vars = selectLibraryVars(source);
-    } catch { throw storageError(); }
+    } catch (error) { throw error.userMessage ? error : storageError(); }
     await fs.mkdir(profile, { recursive: true, mode: 0o700 });
     const temp = path.join(profile, `.storage-${crypto.randomBytes(16).toString('hex')}`);
     try {

@@ -34,7 +34,7 @@ Before public rollout, install signed/notarized version A, create references, an
 
 An imported project folder remains the library location: retain its config and `web/.wrangler/state`, or move the folder and locate it again. Never run another local server/capture agent against it concurrently. Successful pre-upgrade backups retain the latest three; incomplete recovery backups are not automatically removed.
 
-Imported D1, R2 and KV storage identities are retained in the library's `.snip/storage-identities.json`, including local preview identities. Known `ALLOWED_GITHUB_LOGINS`, `PUBLIC_URL` and `DEV_LOGIN` settings are retained too, with `.dev.vars` taking precedence. New releases supply executable code and migrations without changing which existing storage they open. Keep `.snip` with the library's configuration and data when moving it.
+Imported D1, R2 and KV storage identities are retained in the library's `.snip/storage-identities.json`, including local preview identities. Projects with remote storage bindings are rejected: release imports support local libraries only. Known `ALLOWED_GITHUB_LOGINS`, `PUBLIC_URL` and `DEV_LOGIN` settings are retained too, with `.dev.vars` taking precedence. New releases supply executable code and migrations without changing which existing storage they open. Keep `.snip` with the library's configuration and data when moving it.
 
 Include disk-usage checks after failed signed installations in release acceptance. The native installer owns its pending app and recovery copies; do not delete those files while installation or recovery is in progress.
 

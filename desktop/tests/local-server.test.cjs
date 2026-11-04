@@ -303,3 +303,28 @@ test('existing state without a usable identity stops rather than opening empty s
     await assert.rejects(fs.access(path.join(dataRoot, '.snip/storage-identities.json')));
   } finally { await fs.rm(temp, { recursive: true, force: true }); }
 });
+
+test('remote bindings cannot be silently imported as local storage', { timeout: 30000 }, async () => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'snip-remote-identity-'));
+  const root = path.join(temp, 'runtime');
+  const dataRoot = path.join(temp, 'library');
+  await fs.mkdir(path.join(root, 'web/dist/snip'), { recursive: true });
+  await fs.mkdir(path.join(root, 'node_modules'));
+  await fs.symlink(path.resolve(__dirname, '../../node_modules/wrangler'), path.join(root, 'node_modules/wrangler'), 'dir');
+  await fs.mkdir(path.join(dataRoot, 'web'), { recursive: true });
+  const config = {
+    name: 'snip-test', main: 'index.js', compatibility_date: '2025-01-01',
+    d1_databases: [{ binding: 'DB', database_name: 'snip', database_id: 'custom-db' }],
+    r2_buckets: [{ binding: 'FILES', bucket_name: 'custom-files' }],
+    kv_namespaces: [{ binding: 'OAUTH_KV', id: 'custom-kv' }],
+  };
+  await fs.writeFile(path.join(root, 'web/dist/snip/wrangler.json'), JSON.stringify(config));
+  try {
+    for (const type of ['d1_databases', 'r2_buckets', 'kv_namespaces']) {
+      await fs.writeFile(path.join(dataRoot, 'web/wrangler.jsonc'), JSON.stringify({ ...config, [type]: [{ ...config[type][0], remote: true }] }));
+      await assert.rejects(launch(root, dataRoot, true), /remote Cloudflare storage.*cannot be imported/);
+      await assert.rejects(fs.access(path.join(dataRoot, '.snip/storage-identities.json')));
+      await assert.rejects(fs.access(path.join(dataRoot, 'web/.wrangler/state')));
+    }
+  } finally { await fs.rm(temp, { recursive: true, force: true }); }
+});
