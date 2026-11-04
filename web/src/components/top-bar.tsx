@@ -3,7 +3,7 @@ import { FolderPlusIcon, GlobeIcon, LogOutIcon, MonitorIcon, MoonIcon, PlusIcon,
 import { useAddFlow } from "@/components/add-flow"
 import { notify } from "@/components/notify"
 import { useTheme } from "next-themes"
-import { Logo } from "@/App"
+import { Logo } from "@/components/brand"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,

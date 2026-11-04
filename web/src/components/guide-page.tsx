@@ -13,7 +13,8 @@ import {
   Terminal,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { GithubMark, Logo } from "@/App"
+import { PUBLIC_SITE, REPO_URL } from "@/lib/site"
+import { GithubMark, Logo } from "@/components/brand"
 import { Footer } from "@/components/landing-page"
 import { HL } from "@/lib/hairline/kernel.js"
 import { LEADS, network } from "@/lib/hairline/network.js"
@@ -73,8 +74,8 @@ export function GuidePage({ signedIn }: { signedIn: boolean }) {
             <ArrowLeft className="size-3.5" />
             Back to home
           </a>
-          <a href={signedIn ? "/" : "/auth/login?next=%2F"} className="flex h-8 items-center rounded-full bg-fill-2 px-3.5 text-xs font-medium transition-colors hover:bg-fill-3">
-            {signedIn ? "Open library" : "Sign in"}
+          <a href={signedIn ? "/" : PUBLIC_SITE ? REPO_URL : "/auth/login?next=%2F"} className="flex h-8 items-center rounded-full bg-fill-2 px-3.5 text-xs font-medium transition-colors hover:bg-fill-3">
+            {signedIn ? "Open library" : PUBLIC_SITE ? "GitHub" : "Sign in"}
           </a>
         </div>
       </header>

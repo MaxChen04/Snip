@@ -7,6 +7,8 @@
     "build": "vite build",
     "preview": "npm run build && vite preview",
     "deploy": "npm run build && wrangler deploy",
+    "build:site": "vite build --config vite.site.config.ts",
+    "deploy:site": "npm run build:site && wrangler deploy --config site/wrangler.jsonc",
     "db:migrate:local": "wrangler d1 migrations apply snip --local",
     "db:migrate:remote": "wrangler d1 migrations apply snip --remote",
     "cf-typegen": "wrangler types worker/worker-configuration.d.ts",
