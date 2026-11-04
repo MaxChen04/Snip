@@ -1,11 +1,11 @@
 import { cn } from "cn"
-import { Loader2Icon } from "lucide-react"
+import { Loader2Icon } from "@/components/icons"
 
 function Spinner({
   className,
   variant = "default",
   ...props
-}: React.ComponentProps<"svg"> & {
+}: Omit<React.ComponentProps<"svg">, "strokeWidth"> & {
   /** `gradient`: a closed ring whose line fades around it, 1.5px at every size. */
   variant?: "default" | "gradient"
 }) {

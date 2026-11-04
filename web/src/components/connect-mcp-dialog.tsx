@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react"
-import { ArrowUpRightIcon, CheckIcon, CopyIcon, LaptopIcon, ShieldCheckIcon, XIcon } from "lucide-react"
+import { ArrowUpRightIcon, CheckIcon, CopyIcon, LaptopIcon, ShieldCheckIcon, XIcon } from "@/components/icons"
 import { Logo } from "@/App"
 import { notify } from "@/components/notify"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"

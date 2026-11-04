@@ -5,12 +5,12 @@ import { cva, type VariantProps } from "class-variance-authority"
 import { cn } from "cn"
 
 const toggleVariants = cva(
-  "group/toggle inline-flex items-center justify-center rounded-lg text-sm font-medium whitespace-nowrap transition-colors outline-none hover:bg-fill-1 hover:text-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/30 disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 aria-pressed:bg-fill-2 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+  "group/toggle inline-flex items-center justify-center rounded-lg text-sm font-medium whitespace-nowrap text-ink-11 transition-[scale,background-color,color,box-shadow] duration-150 ease-out outline-none active:scale-[0.97] hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 aria-pressed:bg-control aria-pressed:text-foreground aria-pressed:shadow-toggle data-[pressed]:bg-control data-[pressed]:text-foreground data-[pressed]:shadow-toggle dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
   {
     variants: {
       variant: {
         default: "bg-transparent",
-        outline: "border border-border bg-transparent",
+        outline: "bg-transparent",
       },
       size: {
         default: "h-8 min-w-8 gap-1.5 px-3",

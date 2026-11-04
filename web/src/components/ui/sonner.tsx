@@ -9,7 +9,7 @@ import {
   TriangleAlertIcon,
   OctagonXIcon,
   Loader2Icon,
-} from "lucide-react"
+} from "@/components/icons"
 
 const Toaster = ({
   className,
@@ -26,10 +26,10 @@ const Toaster = ({
       theme={theme as ToasterProps["theme"]}
       className={cn("toaster group font-sans!", className)}
       icons={{
-        success: <CircleCheckIcon className="size-4 text-blue-500" />,
+        success: <CircleCheckIcon className="size-4 text-(--green-11)" />,
         info: <InfoIcon className="size-4 text-muted-foreground" />,
-        warning: <TriangleAlertIcon className="size-4 text-orange-500" />,
-        error: <OctagonXIcon className="size-4 text-destructive-foreground" />,
+        warning: <TriangleAlertIcon className="size-4 text-(--note-ink)" />,
+        error: <OctagonXIcon className="size-4 text-(--red-11)" />,
         loading: (
           <Loader2Icon className="size-4 animate-spin text-muted-foreground" />
         ),
@@ -40,7 +40,7 @@ const Toaster = ({
           "--normal-bg": "var(--popover)",
           "--normal-text": "var(--popover-foreground)",
           "--normal-border": "var(--border)",
-          "--border-radius": "var(--radius-2xl)",
+          "--border-radius": "var(--radius-xl)",
           "--toast-icon-margin-start": "0px",
           "--toast-icon-margin-end": "0px",
           "--toast-svg-margin-start": "0px",
@@ -53,7 +53,7 @@ const Toaster = ({
         classNames: {
           ...classNames,
           toast: cn(
-            "cn-toast items-start! gap-3! text-sm! data-[styled=true]:border-0! data-[styled=true]:shadow-(--shadow-popover)! data-[styled=true]:ring-1 data-[styled=true]:ring-border data-[styled=true]:focus-visible:ring-2 data-[styled=true]:focus-visible:ring-ring/30 [&[data-styled=false]_[data-title]>*]:shadow-(--shadow-popover)",
+            "cn-toast items-start! gap-3! text-sm! data-[styled=true]:border-0! data-[styled=true]:shadow-menu! data-[styled=true]:focus-visible:outline-2 data-[styled=true]:focus-visible:outline-focus-ring [&[data-styled=false]_[data-title]>*]:shadow-menu",
             classNames?.toast
           ),
           title: cn("leading-5!", classNames?.title),
@@ -63,11 +63,11 @@ const Toaster = ({
           ),
           icon: cn("mt-0.5", classNames?.icon),
           actionButton: cn(
-            "h-6! rounded-md! bg-primary! px-2! text-xs! font-medium! text-primary-foreground! hover:bg-primary/90! focus-visible:ring-2 focus-visible:ring-ring/30 [[data-cancel]+&]:-ml-1.5!",
+            "h-6! rounded-md! bg-primary! px-2.5! text-xs! font-medium! text-primary-foreground! shadow-primary! transition-[scale,background-color] duration-150 ease-out active:scale-[0.97] hover:bg-(--primary-hover)! [[data-cancel]+&]:-ml-1.5!",
             classNames?.actionButton
           ),
           cancelButton: cn(
-            "h-6! rounded-md! bg-fill-2! px-2! text-xs! font-medium! text-foreground! hover:bg-fill-3!",
+            "h-6! rounded-md! bg-control! px-2.5! text-xs! font-medium! text-foreground! shadow-button! hover:bg-control-hover!",
             classNames?.cancelButton
           ),
         },
