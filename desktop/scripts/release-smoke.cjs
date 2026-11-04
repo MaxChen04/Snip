@@ -23,6 +23,15 @@ async function main() {
   await new Promise(resolve => reservation.close(resolve))
   const resourcesPath = path.join(bundle, 'Contents/Resources')
   const layout = prepareRuntimeLayout({ release: true, resourcesPath, userData: profile, port })
+  // Simulate a library whose deployment uses storage identities that differ
+  // from the release bundle. Later launches must use its retained identities.
+  const libraryConfig = path.join(layout.dataRoot, 'web/wrangler.jsonc')
+  await fs.writeFile(libraryConfig, JSON.stringify({
+    name: 'snip-smoke-library', compatibility_date: '2026-10-01',
+    d1_databases: [{ binding: 'DB', database_name: 'snip-smoke-db', database_id: '7c44c913-8643-41ac-82d9-f88906cff813' }],
+    r2_buckets: [{ binding: 'FILES', bucket_name: 'snip-smoke-files' }],
+    kv_namespaces: [{ binding: 'OAUTH_KV', id: '2138f85291c54dc2a8b1382ee45a7ac8' }],
+  }))
   await fs.appendFile(layout.captureEnvPath, 'POLL_SECONDS=1\nBROWSER_IDLE_SECONDS=2\nSCROLL_MAX_FRAMES=20\n')
   const originalSettings = await fs.readFile(layout.webEnvPath, 'utf8')
   const fixture = http.createServer((_req, res) => { res.setHeader('content-type', 'text/html'); res.end('<html><head><title>Release capture fixture</title></head><body style="height:1800px;background:linear-gradient(#fce8bb,#617cde)"><h1>Portable Snip runtime</h1></body></html>') })
@@ -36,6 +45,9 @@ async function main() {
     let page = await application.firstWindow()
     await page.waitForURL(`${origin}/`, { timeout: 120000 })
     assert.equal((await page.evaluate(() => fetch('/api/me').then(r => r.json()))).login, 'local')
+    const identityPath = path.join(layout.dataRoot, '.snip/storage-identities.json')
+    const identities = await fs.readFile(identityPath, 'utf8')
+    assert.equal(JSON.parse(identities).d1_databases[0].database_id, '7c44c913-8643-41ac-82d9-f88906cff813')
     assert.equal(await application.evaluate(({ Menu }) => Menu.getApplicationMenu().getMenuItemById('snip-update').label), 'Check for updates…')
     const ref = await page.evaluate(async url => fetch('/api/references', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url, mode: 'single' }) }).then(r => r.json()), `http://127.0.0.1:${fixturePort}`)
     let detail
@@ -54,6 +66,7 @@ async function main() {
     await application.evaluate(({ app }) => app.quit())
     await closed
     application = null
+    await fs.rm(libraryConfig) // A release must no longer need the old source config.
     // A replacement bundle location must use the same external library/settings.
     await fs.rename(bundle, movedBundle); moved = true
     application = await launch(movedBundle)
@@ -62,8 +75,9 @@ async function main() {
     assert.equal((await page.evaluate(id => fetch(`/api/references/${id}`).then(r => r.json()), ref.id)).pages[0].desktopKey, key)
     assert.equal(await page.evaluate(key => fetch(`/files/${key}`).then(r => r.status), key), 200)
     assert.equal(await fs.readFile(layout.webEnvPath, 'utf8'), originalSettings)
+    assert.equal(await fs.readFile(identityPath, 'utf8'), identities)
     assert.equal(JSON.parse(await fs.readFile(path.join(profile, 'library-location.json'), 'utf8')).path, layout.dataRoot)
-    console.log('PASS bundled Node/Chromium captures into external D1/R2; moving/restarting the bundle preserves library, credentials and reference route')
+    console.log('PASS bundled Node/Chromium captures into custom external storage; moving/restarting the bundle preserves library, identities, credentials and reference route')
     console.log(`Evidence profile: ${profile}`)
   } catch (error) {
     if (application) for (const page of application.windows()) console.error('WINDOW', page.url(), await page.locator('body').innerText().catch(() => 'unavailable'))

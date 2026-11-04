@@ -34,4 +34,8 @@ Before public rollout, install signed/notarized version A, create references, an
 
 An imported project folder remains the library location: retain its config and `web/.wrangler/state`, or move the folder and locate it again. Never run another local server/capture agent against it concurrently. Successful pre-upgrade backups retain the latest three; incomplete recovery backups are not automatically removed.
 
+Imported D1, R2 and KV storage identities are retained in the library's `.snip/storage-identities.json`, including local preview identities. Known `ALLOWED_GITHUB_LOGINS`, `PUBLIC_URL` and `DEV_LOGIN` settings are retained too, with `.dev.vars` taking precedence. New releases supply executable code and migrations without changing which existing storage they open. Keep `.snip` with the library's configuration and data when moving it.
+
+Include disk-usage checks after failed signed installations in release acceptance. The native installer owns its pending app and recovery copies; do not delete those files while installation or recovery is in progress.
+
 Automatic checks issue at most one metadata request every six hours and persist the cooldown across restarts. Downloads require user action. Once downloaded, Squirrel can install on the next normal quit/relaunch even after **Later**. Public updates and signed acceptance remain unavailable until the prerequisites and this check are completed.

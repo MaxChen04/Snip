@@ -186,6 +186,8 @@ for (const mode of ['graceful', 'forced']) {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'snip-cancel-'));
     await fs.mkdir(path.join(root, 'web'), { recursive: true });
     await fs.mkdir(path.join(root, 'node_modules/wrangler/bin'), { recursive: true });
+    await fs.mkdir(path.join(root, 'web/dist/snip'), { recursive: true });
+    await fs.writeFile(path.join(root, 'node_modules/wrangler/index.js'), `exports.unstable_readConfig = () => ({ compatibility_date: '2025-01-01', d1_databases: [], r2_buckets: [], kv_namespaces: [] });`);
     await fs.writeFile(path.join(root, 'node_modules/wrangler/bin/wrangler.js'), `
       const { spawn } = require('node:child_process');
       const fs = require('node:fs');
@@ -218,3 +220,86 @@ for (const mode of ['graceful', 'forced']) {
     }
   });
 }
+
+test('release imports custom local storage identities and keeps them across future runtimes', { timeout: 90000 }, async () => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'snip-custom-identity-'));
+  const root = path.join(temp, 'runtime');
+  const dataRoot = path.join(temp, 'library');
+  const web = path.join(root, 'web');
+  const dataWeb = path.join(dataRoot, 'web');
+  await fs.mkdir(path.join(web, 'dist/snip'), { recursive: true });
+  await fs.mkdir(path.join(web, 'migrations'), { recursive: true });
+  await fs.mkdir(dataWeb, { recursive: true });
+  await fs.mkdir(path.join(root, 'node_modules'));
+  await fs.symlink(path.resolve(__dirname, '../../node_modules/wrangler'), path.join(root, 'node_modules/wrangler'), 'dir');
+  const custom = {
+    d1_databases: [{ binding: 'DB', database_name: 'old-db', database_id: 'old-id', preview_database_id: 'old-preview-id' }],
+    r2_buckets: [{ binding: 'FILES', bucket_name: 'old-files' }],
+    kv_namespaces: [{ binding: 'OAUTH_KV', id: 'old-kv' }],
+  };
+  const bundled = {
+    d1_databases: [{ binding: 'DB', database_name: 'snip', database_id: 'new-id', preview_database_id: 'new-preview-id', migrations_dir: 'migrations' }],
+    r2_buckets: [{ binding: 'FILES', bucket_name: 'new-files', preview_bucket_name: 'new-preview-files' }],
+    kv_namespaces: [{ binding: 'OAUTH_KV', id: 'new-kv', preview_id: 'new-preview-kv' }],
+  };
+  const base = { name: 'snip-test', compatibility_date: '2025-01-01' };
+  // Preserve known settings, but never import arbitrary variables or secrets.
+  await fs.writeFile(path.join(dataWeb, 'wrangler.jsonc'), `// old checkout\n${JSON.stringify({ ...base, ...custom, vars: { PUBLIC_URL: 'https://library.example', ALLOWED_GITHUB_LOGINS: 'library-owner', DEV_LOGIN: 'from-config', SECRET_CANARY: 'must-not-copy' } })}`);
+  await fs.writeFile(path.join(dataWeb, '.dev.vars'), 'DEV_LOGIN=from-env\n');
+  await fs.writeFile(path.join(web, 'wrangler.jsonc'), JSON.stringify({ ...base, ...bundled }));
+  const workerConfig = { ...base, main: 'index.js', no_bundle: true, ...custom };
+  await fs.writeFile(path.join(web, 'dist/snip/wrangler.json'), JSON.stringify(workerConfig));
+  await fs.writeFile(path.join(web, 'dist/snip/index.js'), `export default { async fetch(request, env) {
+    if (new URL(request.url).pathname === '/write') {
+      await env.DB.exec("CREATE TABLE IF NOT EXISTS t (value TEXT); INSERT INTO t VALUES ('old-row');");
+      await env.FILES.put('key', 'old-file'); await env.OAUTH_KV.put('key', 'old-kv-value');
+      return new Response('written');
+    }
+    const row = await env.DB.prepare('SELECT value FROM t').first();
+    const migrated = await env.DB.prepare("SELECT name FROM sqlite_master WHERE name = 'new_table'").first();
+    return Response.json({ row: row.value, file: await (await env.FILES.get('key')).text(), kv: await env.OAUTH_KV.get('key'), migrated: !!migrated, publicUrl: env.PUBLIC_URL, allowed: env.ALLOWED_GITHUB_LOGINS, login: env.DEV_LOGIN });
+  } }`);
+  let running;
+  try {
+    running = await launch(root, dataRoot);
+    assert.equal(await (await fetch(`${running.url}/write`)).text(), 'written');
+    await stop(running.child); running = undefined;
+    await fs.writeFile(path.join(web, 'dist/snip/wrangler.json'), JSON.stringify({ ...workerConfig, ...bundled }));
+    await fs.writeFile(path.join(web, 'migrations/0001_upgrade.sql'), 'CREATE TABLE new_table (value TEXT);\n');
+    const pristine = await runtimeSnapshot(root);
+    running = await launch(root, dataRoot, true);
+    const expected = { row: 'old-row', file: 'old-file', kv: 'old-kv-value', migrated: true, publicUrl: 'https://library.example', allowed: 'library-owner', login: 'from-env' };
+    assert.deepEqual(await (await fetch(running.url)).json(), expected);
+    await stop(running.child); running = undefined;
+    const snapshotPath = path.join(dataRoot, '.snip/storage-identities.json');
+    const snapshot = await fs.readFile(snapshotPath, 'utf8');
+    assert.doesNotMatch(snapshot, /must-not-copy|SECRET_CANARY/);
+    assert.equal(JSON.parse(snapshot).d1_databases[0].preview_database_id, 'old-preview-id');
+    assert.deepEqual(JSON.parse(snapshot).vars, { PUBLIC_URL: 'https://library.example', ALLOWED_GITHUB_LOGINS: 'library-owner', DEV_LOGIN: 'from-config' });
+    assert.deepEqual(await runtimeSnapshot(root), pristine);
+    // Once recorded, identity survives loss of the old source configuration.
+    await fs.rm(path.join(dataWeb, 'wrangler.jsonc'));
+    running = await launch(root, dataRoot, true);
+    assert.deepEqual(await (await fetch(running.url)).json(), expected);
+    await stop(running.child); running = undefined;
+    assert.deepEqual(await runtimeSnapshot(root), pristine);
+  } finally {
+    if (running && running.child.exitCode === null) running.child.kill('SIGKILL');
+    await fs.rm(temp, { recursive: true, force: true });
+  }
+});
+
+test('existing state without a usable identity stops rather than opening empty storage', { timeout: 15000 }, async () => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'snip-missing-identity-'));
+  const root = path.join(temp, 'runtime');
+  const dataRoot = path.join(temp, 'library');
+  await fs.mkdir(path.join(root, 'web/dist/snip'), { recursive: true });
+  await fs.mkdir(path.join(root, 'node_modules'));
+  await fs.symlink(path.resolve(__dirname, '../../node_modules/wrangler'), path.join(root, 'node_modules/wrangler'), 'dir');
+  await fs.mkdir(path.join(dataRoot, 'web/.wrangler/state'), { recursive: true });
+  await fs.writeFile(path.join(root, 'web/dist/snip/wrangler.json'), JSON.stringify({ name: 'snip-test', main: 'index.js', compatibility_date: '2025-01-01', d1_databases: [{ binding: 'DB', database_name: 'snip', database_id: 'new-id' }] }));
+  try {
+    await assert.rejects(launch(root, dataRoot, true), /could not determine which local database and files/);
+    await assert.rejects(fs.access(path.join(dataRoot, '.snip/storage-identities.json')));
+  } finally { await fs.rm(temp, { recursive: true, force: true }); }
+});
