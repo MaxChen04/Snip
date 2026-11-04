@@ -14,6 +14,7 @@ import { notify } from "@/components/notify"
 import { CollectionPicker } from "@/components/collection-picker"
 import { EMPTY_SELECTION, SelectCheck, SelectionBar, toggleIn, type Selection } from "@/components/prompt-selection"
 import { Masonry } from "@/components/gallery-page"
+import { SavePagesButton } from "@/components/save-pages"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { TokensPanel } from "@/components/tokens-panel"
 import { PageViewer } from "@/components/page-viewer"
@@ -85,6 +86,18 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
     setData({ ...data, reference: { ...r, collectionIds: member ? [...r.collectionIds, cid] : r.collectionIds.filter((x) => x !== cid) } })
     void refreshCollections()
   }
+  const setPageCollections = (pageIds: string[], cid: string, member: boolean) =>
+    setData((d) =>
+      d && {
+        ...d,
+        pages: d.pages.map((p) =>
+          pageIds.includes(p.id)
+            ? { ...p, collectionIds: member ? [...new Set([...p.collectionIds, cid])] : p.collectionIds.filter((x) => x !== cid) }
+            : p,
+        ),
+      },
+    )
+  const selectedPages = pages.filter((p) => sel.pages.includes(p.id))
   const current = pages.find((p) => p.id === openPage) ?? null
   const scrollGifs = animations.filter((a) => a.kind === "scroll")
   const hoverGifs = animations.filter((a) => a.kind === "hover")
@@ -178,7 +191,9 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
 
       <div className="px-4 pt-6 pb-24 sm:px-6">
         <div className="sticky top-16 z-20 -mx-4 mb-6 flex flex-col items-center gap-2 bg-background px-4 py-2 sm:-mx-6 sm:grid sm:grid-cols-[1fr_auto_1fr] sm:gap-3 sm:px-6">
-          <span className="hidden sm:block" />
+          <div className="flex min-w-0 justify-start empty:hidden sm:empty:block">
+            {selectedPages.length > 0 && <SavePagesButton pages={selectedPages} onChange={setPageCollections} />}
+          </div>
           <Segmented
             value={tab}
             onChange={setTab}
@@ -267,7 +282,7 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
         )}
       </div>
 
-      {current && <PageViewer page={current} onClose={() => setOpenPage(null)} />}
+      {current && <PageViewer page={current} onClose={() => setOpenPage(null)} onCollectionsChange={setPageCollections} />}
     </div>
   )
 }

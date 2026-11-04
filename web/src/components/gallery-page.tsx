@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Link, useLocation, useSearch } from "wouter"
-import { AlertCircleIcon, ArrowUpRightIcon, BookmarkIcon, ChevronDownIcon, CornerDownLeftIcon, GlobeIcon, PencilIcon, PlusIcon, Trash2Icon } from "@/components/icons"
+import { AlertCircleIcon, ArrowUpRightIcon, BookmarkIcon, ChevronDownIcon, CornerDownLeftIcon, FolderMinusIcon, GlobeIcon, PencilIcon, PlusIcon, Trash2Icon } from "@/components/icons"
 import { toast } from "sonner"
 import { useAddFlow } from "@/components/add-flow"
-import { CollectionPicker, CollectionThumb } from "@/components/collection-picker"
+import { CollectionPicker, CollectionThumb, collectionCountLabel } from "@/components/collection-picker"
 import { GifTile } from "@/components/reference-page"
 import { SiteIcon } from "@/components/site-icon"
 import { ActionCircle, TopBar, type View } from "@/components/top-bar"
@@ -45,6 +45,20 @@ export function GalleryPage({ login }: { login: string }) {
     setView(v)
     writePref("rs.view", v)
   }
+  // A collection of hand-picked pages (no whole websites) opens on its pages.
+  const { collections } = useCollections()
+  const opened = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    if (!collection) {
+      opened.current = undefined
+      return
+    }
+    const c = collections.find((x) => x.id === collection)
+    if (!c || opened.current === c.id) return
+    opened.current = c.id
+    if (view === "websites" && c.referenceCount === 0 && c.pageCount > 0) setView("pages")
+  }, [collection, collections, view])
+
   const effectiveSort: Sort = view === "websites" ? sort : sort === "name" ? "newest" : sort
   const filters: Filters = { q, collection, sort: effectiveSort }
 
@@ -124,7 +138,7 @@ function CollectionStrip({ active, onSelect }: { active?: string; onSelect: (id?
         <button key={c.id} onClick={() => onSelect(c.id)} className={cn(chip, "pl-1", active === c.id ? on : off)}>
           <CollectionThumb c={c} className="size-7 rounded-full ring-0 [&>span]:rounded-full" />
           {c.name}
-          <span className="text-ink-10 tabular-nums">{c.referenceCount}</span>
+          <span className="text-ink-10 tabular-nums">{c.referenceCount + c.pageCount}</span>
         </button>
       ))}
       <button onClick={newCollection} className={cn(chip, "pl-3 text-ink-11 hover:bg-ink-3 hover:text-foreground")}>
@@ -178,9 +192,7 @@ function CollectionHeader({ id, onDeleted }: { id: string; onDeleted: () => void
         ) : (
           <h1 className="text-2xl font-medium tracking-tight">{c.name}</h1>
         )}
-        <p className="mt-1 text-xs text-ink-11">
-          {c.referenceCount} {c.referenceCount === 1 ? "reference" : "references"}
-        </p>
+        <p className="mt-1 text-xs text-ink-11">{collectionCountLabel(c)}</p>
       </div>
       <div className="flex items-start gap-6">
         <ActionCircle icon={<PlusIcon />} label="Add" onClick={() => addReference(c.id)} />
@@ -425,14 +437,42 @@ function FolderMeta({ r }: { r: Reference }) {
 
 function PagesGrid({ filters, onCount }: { filters: Filters; onCount: (n: number | null) => void }) {
   const list = useInfinite<PageWithRef>((cursor) => api.pages(filters, cursor), [filters.q, filters.collection, filters.sort])
+  const { refresh } = useCollections()
   useReloadEvent(list.reload)
+  const cid = filters.collection
+  const removeFromCollection = async (p: PageWithRef) => {
+    if (!cid) return
+    try {
+      await api.setPageMembership(cid, [p.id], false)
+      list.reload()
+      await refresh()
+    } catch (err) {
+      toast.error((err as Error).message)
+    }
+  }
   useCountReport(list.items.length, list.loading, onCount)
   if (list.loading && !list.items.length) return <SkeletonGrid />
   return (
     <>
       <Masonry>
         {list.items.map((p) => (
-          <Tile key={p.id} href={`/r/${p.referenceId}?page=${p.id}`} label={`${p.reference.domain}${p.path === "/" ? "" : p.path}`} domain={p.reference.domain} external={p.url}>
+          <Tile
+            key={p.id}
+            href={`/r/${p.referenceId}?page=${p.id}`}
+            label={`${p.reference.domain}${p.path === "/" ? "" : p.path}`}
+            domain={p.reference.domain}
+            external={p.url}
+            actions={
+              cid && p.collectionIds.includes(cid) ? (
+                <button
+                  onClick={() => void removeFromCollection(p)}
+                  className="flex h-8 items-center gap-1.5 rounded-full bg-background/95 px-3 text-xs font-medium text-foreground shadow-sm ring-1 ring-black/5 backdrop-blur hover:bg-background"
+                >
+                  <FolderMinusIcon className="size-3.5" /> Remove
+                </button>
+              ) : undefined
+            }
+          >
             <img src={fileUrl(p.desktopThumbKey)} alt={p.title ?? p.path} loading="lazy" className="aspect-[16/10] w-full object-cover object-top" />
           </Tile>
         ))}

@@ -175,6 +175,22 @@ api.delete("/references/:id/collections/:cid", async (c) => {
   return c.json({ ok: true })
 })
 
+// Save selected pages to a collection, or take them out. Pages keep their files and their website.
+api.post("/collections/:cid/pages", async (c) => {
+  const body = await c.req.json<{ pageIds?: unknown; member?: unknown }>().catch(() => ({}) as { pageIds?: unknown; member?: unknown })
+  const pageIds = Array.isArray(body.pageIds) ? body.pageIds.filter((x): x is string => typeof x === "string") : []
+  if (!pageIds.length) return c.json({ error: "pageIds is required" }, 400)
+  if (pageIds.length > db.MAX_PAGES_PER_CHANGE) return c.json({ error: `At most ${db.MAX_PAGES_PER_CHANGE} pages at a time` }, 400)
+  let changed: number | null
+  try {
+    changed = await db.setPageCollection(c.env.DB, c.req.param("cid"), pageIds, body.member !== false)
+  } catch (e) {
+    if (e instanceof db.StalePagesError) return c.json({ error: e.message, missingPageIds: e.missing }, 409)
+    throw e
+  }
+  return changed === null ? c.json({ error: "collection not found" }, 404) : c.json({ ok: true, changed })
+})
+
 api.get("/collections", async (c) => c.json(await db.listCollections(c.env.DB)))
 api.post("/collections", async (c) => {
   const { name, description } = await c.req.json<{ name: string; description?: string }>()

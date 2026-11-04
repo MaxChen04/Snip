@@ -93,7 +93,9 @@ Your library and credentials stay outside the app. On first launch, choose an ex
    ```
 5. Point `capture/.env` at the deployed URL with the same `CAPTURE_TOKEN`, then `npm run capture`.
 
-**Upgrading an existing installation:** Stop all existing capture agents gracefully and wait for their captures, uploads, and in-flight Worker requests to finish before deploying. Apply `web/migrations/0003_capture_attempts.sql`, deploy the updated Worker, then update and restart every capture agent, including rebuilding and restarting the desktop app. The updated Worker rejects older agents before they can claim jobs (HTTP 426). Existing saved assets remain readable. Retired-file cleanup retries on queue activity with backoff; in rare cases an interrupted upload leaves safety metadata retained because its final write status is uncertain.
+**Upgrading an existing hosted installation:** Stop all existing capture agents gracefully and wait for captures, uploads, and in-flight Worker requests to finish. Run `npm run db:migrate:remote -w web` **before deploying the updated Worker**; this includes `0003_capture_attempts.sql` and `0004_page_collections.sql`. Then deploy the Worker and update/restart every capture agent. The Worker rejects older agents before they can claim jobs (HTTP 426). Existing saved assets remain readable.
+
+Packaged release apps apply pending local migrations before starting and back up an existing local D1 database first. For a source-linked desktop app or local development checkout, run `npm run db:migrate:local -w web` before starting the updated app. Migration 0004 adds the page-membership table and two indexes; it does not copy or move saved files. Retired-file cleanup retries on queue activity with backoff; interrupted uploads can retain safety metadata when their final write status is uncertain.
 
 Free-tier headroom: R2 gives 10 GB (roughly 1,500 to 3,000 captured pages, depending on page length and GIFs), D1 5 GB, Workers 100k requests/day.
 
@@ -127,12 +129,14 @@ For Claude.ai or Claude Desktop, add it as a custom connector with the same URL.
 | `get_page` | One page: signed screenshot URLs with coverage, a token summary, an inline viewport screenshot and optional HTML in chunks |
 | `get_page_styles` | Valid, bounded computed styles: summary, filtered elements, keyframes, hover rules, font faces, CSS variables |
 | `get_animation` | One animation: a manifest (timing provenance, sampled frames, the element's observed styles) plus a contact sheet, a single frame or the GIF |
+| `search_pages` | Pages across all references; with a collection, its saved pages and the pages of its websites |
 | `search_animations` | Scroll and hover animations across all references |
 | `get_capture_status` | Job state, last progress and when the capture worker last checked in, with a suggested poll delay |
-| `list_collections` | Collections with counts |
+| `list_collections` | Collections with website and page counts |
 | `add_reference` | Queue a URL (`single` or `crawl`) for capture |
 | `create_collection` | New collection |
-| `set_collection_membership` | Add or remove a reference from a collection |
+| `set_collection_membership` | Add or remove a whole website from a collection |
+| `set_page_collection_membership` | Add or remove individual pages from a collection |
 
 Every result carries the same JSON as text and as `structuredContent`. Bounded lists are capped by item count and bytes and say what they left out and how to continue; the legacy full reference read can be larger. Many models only see the first frame of a GIF, so new captures also store sampled frames and a contact sheet per animation (animations captured earlier only have the GIF until you recapture).
 

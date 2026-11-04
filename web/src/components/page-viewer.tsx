@@ -11,6 +11,7 @@ import {
 } from "@/components/icons"
 import { notify } from "@/components/notify"
 import { TokensPanel } from "@/components/tokens-panel"
+import { SavePagesButton } from "@/components/save-pages"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
@@ -123,7 +124,11 @@ function ResizeHandle({ width, onDrag, onCommit }: { width: number; onDrag: (w: 
 
 type SideTab = "tokens" | "html" | "css"
 
-export function PageViewer({ page, onClose }: { page: Page; onClose: () => void }) {
+export function PageViewer({ page, onClose, onCollectionsChange }: {
+  page: Page
+  onClose: () => void
+  onCollectionsChange: (pageIds: string[], collectionId: string, member: boolean) => void
+}) {
   const [device, setDevice] = useState<"desktop" | "mobile">("desktop")
   const key = device === "desktop" ? page.desktopKey : page.mobileKey
   const [width, setWidth, commitWidth] = useSidebarWidth()
@@ -175,7 +180,8 @@ export function PageViewer({ page, onClose }: { page: Page; onClose: () => void 
             <SmartphoneIcon /> <span className="hidden sm:inline">Mobile</span>
           </ToggleGroupItem>
         </ToggleGroup>
-        <div className="flex flex-1 basis-0 justify-end">
+        <div className="flex flex-1 basis-0 justify-end gap-2">
+          <SavePagesButton pages={[page]} onChange={onCollectionsChange} label={page.collectionIds.length ? "Saved" : "Save"} className="h-8 px-3" />
           {tabs.length > 0 && (
             <Button
               variant="ghost"

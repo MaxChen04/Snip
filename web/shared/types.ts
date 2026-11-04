@@ -58,6 +58,8 @@ export interface Page {
   snapshotKey: string | null
   stylesKey: string | null
   tokens: DesignTokens | null
+  /** Collections this page was saved to on its own (not through its website). */
+  collectionIds: string[]
   createdAt: string
 }
 
@@ -116,8 +118,11 @@ export interface Collection {
   id: string
   name: string
   description: string | null
+  /** Websites saved whole. */
   referenceCount: number
-  /** Covers of the most recently added references, newest first (max 3). */
+  /** Pages saved individually. They point at the same stored files as the page in its website. */
+  pageCount: number
+  /** Covers of the most recently added websites and pages, newest first (max 3). */
   coverKeys: string[]
   createdAt: string
 }

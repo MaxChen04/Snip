@@ -27,6 +27,7 @@ import {
   File01Icon,
   Folder01Icon,
   FolderAddIcon,
+  FolderMinusIcon as HFolderMinus,
   Globe02Icon,
   HardDriveIcon as HHardDrive,
   HierarchyIcon,
@@ -89,6 +90,7 @@ export const Eye = make(EyeIcon, "Eye")
 export const FileIcon = make(File01Icon, "FileIcon")
 export const FolderIcon = make(Folder01Icon, "FolderIcon")
 export const FolderPlusIcon = make(FolderAddIcon, "FolderPlusIcon")
+export const FolderMinusIcon = make(HFolderMinus, "FolderMinusIcon")
 export const GlobeIcon = make(Globe02Icon, "GlobeIcon")
 export const HardDrive = make(HHardDrive, "HardDrive")
 export const InfoIcon = make(InformationCircleIcon, "InfoIcon")
