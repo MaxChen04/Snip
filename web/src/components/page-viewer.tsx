@@ -48,17 +48,25 @@ function useSidebarWidth() {
 }
 
 function ResizeHandle({ width, onDrag, onCommit }: { width: number; onDrag: (w: number) => void; onCommit: (w: number) => void }) {
-  const drag = useRef<{ x: number; w: number; last: number } | null>(null)
+  const drag = useRef<{ x: number; w: number; last: number; cursor: string; userSelect: string } | null>(null)
   const [active, setActive] = useState(false)
 
-  const end = (e: React.PointerEvent) => {
+  useEffect(() => () => {
     if (!drag.current) return
-    e.currentTarget.releasePointerCapture?.(e.pointerId)
-    onCommit(drag.current.last)
+    document.body.style.cursor = drag.current.cursor
+    document.body.style.userSelect = drag.current.userSelect
     drag.current = null
+  }, [])
+
+  const end = (e: React.PointerEvent) => {
+    const current = drag.current
+    if (!current) return
+    drag.current = null
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId)
+    onCommit(current.last)
     setActive(false)
-    document.body.style.cursor = ""
-    document.body.style.userSelect = ""
+    document.body.style.cursor = current.cursor
+    document.body.style.userSelect = current.userSelect
   }
 
   return (
@@ -75,7 +83,7 @@ function ResizeHandle({ width, onDrag, onCommit }: { width: number; onDrag: (w: 
       onPointerDown={(e) => {
         if (e.button !== 0) return
         e.currentTarget.setPointerCapture(e.pointerId)
-        drag.current = { x: e.clientX, w: width, last: width }
+        drag.current = { x: e.clientX, w: width, last: width, cursor: document.body.style.cursor, userSelect: document.body.style.userSelect }
         setActive(true)
         document.body.style.cursor = "col-resize"
         document.body.style.userSelect = "none"
@@ -89,6 +97,7 @@ function ResizeHandle({ width, onDrag, onCommit }: { width: number; onDrag: (w: 
       }}
       onPointerUp={end}
       onPointerCancel={end}
+      onLostPointerCapture={end}
       onDoubleClick={() => onCommit(DEFAULT_WIDTH)}
       onKeyDown={(e) => {
         const step = e.shiftKey ? 64 : 16
@@ -245,34 +254,21 @@ export function PageViewer({ page, onClose }: { page: Page; onClose: () => void 
 
 // ---------- Captured files ----------
 
-// Snapshots can be several MB, so keep only the last few in memory.
-const fileCache = new Map<string, Promise<string>>()
-function loadText(key: string) {
-  let p = fileCache.get(key)
-  if (!p) {
-    p = fetch(fileUrl(key)!, { credentials: "same-origin" }).then((r) => {
-      if (!r.ok) throw new Error(r.status === 404 ? "File missing from storage" : `Could not load (HTTP ${r.status})`)
-      return r.text()
-    })
-    p.catch(() => fileCache.delete(key))
-    fileCache.set(key, p)
-    while (fileCache.size > 4) fileCache.delete(fileCache.keys().next().value!)
-  }
-  return p
-}
-
 function useFileText(key: string) {
   const [state, setState] = useState<{ text?: string; error?: string }>({})
   useEffect(() => {
-    let live = true
+    const controller = new AbortController()
     setState({})
-    loadText(key).then(
-      (text) => live && setState({ text }),
-      (e: Error) => live && setState({ error: e.message }),
+    // Captures already use the browser's immutable HTTP cache. Keep the decoded
+    // text only while its panel is mounted, and cancel unfinished reads on close.
+    fetch(fileUrl(key)!, { credentials: "same-origin", signal: controller.signal }).then((r) => {
+      if (!r.ok) throw new Error(r.status === 404 ? "File missing from storage" : `Could not load (HTTP ${r.status})`)
+      return r.text()
+    }).then(
+      (text) => !controller.signal.aborted && setState({ text }),
+      (e: Error) => !controller.signal.aborted && setState({ error: e.message }),
     )
-    return () => {
-      live = false
-    }
+    return () => controller.abort()
   }, [key])
   return state
 }
@@ -389,7 +385,7 @@ const ruleText = (r: Rule) => `${r.note ? `/* ${r.note} */\n` : ""}${r.selector}
 
 /**
  * Rule text from the stylesheet is one line; break it into one declaration per line.
- * Quoted strings (data: URLs, font names) are never reformatted, so the copy stays valid CSS.
+ * Quoted strings (data: URLs, font names) are never reformatted.
  * With `shorten`, long data: URLs are elided for display only.
  */
 function prettyRule(css: string, shorten = false) {
@@ -417,7 +413,8 @@ function prettyRule(css: string, shorten = false) {
 }
 
 type RawBlock = { display: string; copy: string }
-const rawBlock = (css: string): RawBlock => ({ display: prettyRule(css, true), copy: prettyRule(css) })
+// Copy the captured rule verbatim; display formatting must never change its meaning.
+const rawBlock = (css: string): RawBlock => ({ display: prettyRule(css, true), copy: css })
 
 function elementRules(e: StyleElement): Rule[] {
   const sel = e.sel || e.tag || "element"
