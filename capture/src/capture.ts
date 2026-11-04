@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs"
 import type { Browser, BrowserContext, Page as PwPage } from "playwright"
 import type { DesignTokens, Job, PageUpload } from "../../web/shared/types"
-import type { SnipApi } from "./api"
+import { JobGoneError, type SnipApi } from "./api"
 import { encodeGif, type Frame } from "./gif"
 import { buildStills } from "./sheet"
 
@@ -318,7 +318,7 @@ function mergeTokens(list: DesignTokens[]): DesignTokens | null {
 
 export async function captureJob(browser: Browser, api: SnipApi, job: Job) {
   const root = new URL(job.url)
-  const prefix = `refs/${job.id}`
+  const prefix = `refs/${job.id}/${job.attempt}`
   const desktop = await browser.newContext({ viewport: DESKTOP, deviceScaleFactor: 1, colorScheme: "light", locale: "en-US" })
   const mobile = await browser.newContext({
     viewport: MOBILE,
@@ -465,6 +465,7 @@ export async function captureJob(browser: Browser, api: SnipApi, job: Job) {
         captured++
         log(`  ✓ ${path} (${animations.length} GIFs)`)
       } catch (e) {
+        if (e instanceof JobGoneError) throw e
         failures++
         log(`  ✗ ${url}: ${(e as Error).message.split("\n")[0]}`)
         if (captured === 0 && job.mode === "single") throw e

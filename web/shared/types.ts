@@ -36,6 +36,8 @@ export interface Reference {
   collectionIds: string[]
   createdAt: string
   updatedAt: string
+  /** Last claim or progress time while capturing. */
+  claimedAt: string | null
 }
 
 export interface Page {
@@ -125,6 +127,8 @@ export interface Job {
   url: string
   mode: CaptureMode
   maxPages: number
+  /** Server-issued capture lease and file namespace. */
+  attempt: string
 }
 
 export interface PageUpload {

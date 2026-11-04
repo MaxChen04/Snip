@@ -13,6 +13,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { useInfinite } from "@/hooks/use-infinite"
+import { usePoll } from "@/hooks/use-poll"
 import { useDesktopState } from "@/hooks/use-desktop-state"
 import { api, fileUrl, type AnimationWithRef, type Filters, type PageWithRef, type Reference, type Sort } from "@/lib/api"
 import { useCollections } from "@/lib/collections"
@@ -325,11 +326,7 @@ function WebsitesGrid({ filters, onCount }: { filters: Filters; onCount: (n: num
 
   // Poll while any capture is in flight.
   const busy = list.items.some((r) => r.status === "queued" || r.status === "capturing")
-  useEffect(() => {
-    if (!busy) return
-    const t = setInterval(() => void list.refreshHead(), 4000)
-    return () => clearInterval(t)
-  }, [busy, list.refreshHead])
+  usePoll(list.refreshHead, busy)
 
   if (list.loading && !list.items.length) return <SkeletonGrid />
   return (
