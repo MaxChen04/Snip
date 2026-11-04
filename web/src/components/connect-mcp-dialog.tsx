@@ -66,6 +66,18 @@ function Steps({ children }: { children: ReactNode[] }) {
   )
 }
 
+function ClientSection({ title, note, children }: { title: string; note?: string; children: ReactNode }) {
+  return (
+    <section className="flex flex-col gap-3">
+      <h3 className="flex items-baseline gap-2 text-xs font-medium">
+        {title}
+        {note && <span className="font-normal text-muted-foreground">{note}</span>}
+      </h3>
+      {children}
+    </section>
+  )
+}
+
 const kbd = "rounded bg-fill-2 px-1 py-px font-mono text-[0.85em]"
 
 export function ConnectMcpDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
@@ -111,14 +123,13 @@ export function ConnectMcpDialog({ open, onOpenChange }: { open: boolean; onOpen
           )}
         </div>
 
-        <Tabs defaultValue="claude-code" className="min-w-0 flex-col gap-4 border-t px-5 pt-4 pb-5">
+        <Tabs defaultValue="claude" className="min-w-0 flex-col gap-4 border-t px-5 pt-4 pb-5">
           <TabsList className="h-auto! w-full flex-wrap justify-start">
             {[
-              ["claude-code", "Claude Code"],
+              ["claude", "Claude"],
               ["codex", "Codex"],
               ["opencode", "OpenCode"],
               ["cursor", "Cursor"],
-              ["claude", "Claude app"],
               ["other", "Other"],
             ].map(([value, label]) => (
               <TabsTrigger key={value} value={value} className="flex-auto">
@@ -127,18 +138,31 @@ export function ConnectMcpDialog({ open, onOpenChange }: { open: boolean; onOpen
             ))}
           </TabsList>
 
-          <TabsContent value="claude-code">
-            <Steps>
-              {[
-                <>
-                  <span>Run this in your terminal:</span>
-                  <Code text={claudeCodeCommand(url)} label="Claude Code command" />
-                </>,
-                <span>
-                  Start Claude Code and run <code className={kbd}>/mcp</code>, pick <b className="font-medium">snip</b> and choose Authenticate.
-                </span>,
-              ]}
-            </Steps>
+          <TabsContent value="claude" className="flex flex-col gap-5">
+            <ClientSection title="Claude Code">
+              <Steps>
+                {[
+                  <>
+                    <span>Run this in your terminal:</span>
+                    <Code text={claudeCodeCommand(url)} label="Claude Code command" />
+                  </>,
+                  <span>
+                    Start Claude Code and run <code className={kbd}>/mcp</code>, pick <b className="font-medium">snip</b> and choose Authenticate.
+                  </span>,
+                ]}
+              </Steps>
+            </ClientSection>
+            <ClientSection title="Claude.ai and Claude Desktop" note="set up separately">
+              <Steps>
+                {[
+                  <span>
+                    Open <b className="font-medium">Settings → Connectors</b> and choose <b className="font-medium">Add custom connector</b>.
+                  </span>,
+                  <span>Name it Snip, paste the MCP URL above, then Connect and finish the sign-in.</span>,
+                ]}
+              </Steps>
+              {local && <p className="text-xs leading-[1.5] text-muted-foreground">Connectors reach Snip from Claude's servers, so they need your deployed URL, not localhost.</p>}
+            </ClientSection>
           </TabsContent>
 
           <TabsContent value="codex">
@@ -176,21 +200,6 @@ export function ConnectMcpDialog({ open, onOpenChange }: { open: boolean; onOpen
                   <span>OpenCode starts sign-in on first use. To sign in now:</span>
                   <Code text="opencode mcp auth snip" label="OpenCode auth command" />
                 </>,
-              ]}
-            </Steps>
-          </TabsContent>
-
-          <TabsContent value="claude">
-            <Steps>
-              {[
-                <span>
-                  In Claude.ai or Claude Desktop, open <b className="font-medium">Settings → Connectors</b> and choose <b className="font-medium">Add custom connector</b>.
-                </span>,
-                <>
-                  <span>Name it Snip and paste the URL:</span>
-                  <Code text={url} label="MCP URL" />
-                </>,
-                <span>Choose Connect and finish the sign-in.</span>,
               ]}
             </Steps>
           </TabsContent>
