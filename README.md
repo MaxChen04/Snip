@@ -178,3 +178,7 @@ Run `npm test` for the MCP response-budget and cursor regression checks.
 - Crawls stay on the same hostname (with or without `www.`) and ignore query strings.
 - Sites behind logins or bot walls capture whatever an anonymous browser sees. Cookie banners with an obvious "Accept" button are dismissed.
 - Hover GIFs pick up to 6 elements per page from `:hover` rules and transitions; shared nav/footer effects are recorded once per site.
+
+## License
+
+Snip is source-available under the [Apache License 2.0 with the Commons Clause](LICENSE). You can use, self-host, modify and fork it for free, including at work. You can't sell it: no paid product, hosted service or paid support whose value comes mainly from Snip.
