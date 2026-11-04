@@ -1,5 +1,7 @@
+import { useId } from "react"
 import { Link } from "wouter"
-import { FolderPlusIcon, GlobeIcon, LogOutIcon, MonitorIcon, MoonIcon, PlusIcon, SearchIcon, SunIcon, TerminalIcon, XIcon } from "lucide-react"
+import { motion, useReducedMotion } from "motion/react"
+import { FolderPlusIcon, GlobeIcon, LogOutIcon, MonitorIcon, MoonIcon, PlusIcon, SearchIcon, SunIcon, TerminalIcon, XIcon } from "@/components/icons"
 import { useAddFlow } from "@/components/add-flow"
 import { notify } from "@/components/notify"
 import { useTheme } from "next-themes"
@@ -26,7 +28,8 @@ const VIEWS: { value: View; label: string }[] = [
   { value: "animations", label: "Animations" },
 ]
 
-const pill = "flex h-10 items-center rounded-full bg-background/90 ring-1 ring-border shadow-xs backdrop-blur-md"
+// Raised white pills: a fine ring and a crisp drop instead of a border.
+const pill = "flex h-10 items-center rounded-full bg-control/90 shadow-button backdrop-blur-md"
 
 export function TopBar({
   login,
@@ -50,7 +53,7 @@ export function TopBar({
   return (
     <header className={cn("sticky top-0 z-30 flex items-center gap-3 px-4 py-3 sm:px-6", solid && "bg-background")}>
       <div className={cn(pill, "shrink-0 gap-1 p-1")}>
-        <Link href="/" className="grid size-8 place-items-center rounded-full hover:bg-fill-2" aria-label="Snip home">
+        <Link href="/" className="press grid size-8 place-items-center rounded-full hover:bg-ink-2 active:scale-[0.92]" aria-label="Snip home">
           <Logo className="size-7" />
         </Link>
         <nav className="hidden items-center sm:flex">
@@ -59,15 +62,16 @@ export function TopBar({
               <button
                 key={v.value}
                 onClick={() => onView(v.value)}
+                aria-current={view === v.value ? "page" : undefined}
                 className={cn(
-                  "h-8 rounded-full px-3 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground",
-                  view === v.value && "text-foreground",
+                  "press h-8 rounded-full px-3 text-xs font-medium text-ink-11 hover:bg-ink-2 hover:text-foreground",
+                  view === v.value && "bg-ink-3 text-foreground hover:bg-ink-3",
                 )}
               >
                 {v.label}
               </button>
             ) : (
-              <Link key={v.value} href={`/?view=${v.value}`} className="h-8 content-center rounded-full px-3 text-xs font-medium text-muted-foreground hover:text-foreground">
+              <Link key={v.value} href={`/?view=${v.value}`} className="press h-8 content-center rounded-full px-3 text-xs font-medium text-ink-11 hover:bg-ink-2 hover:text-foreground">
                 {v.label}
               </Link>
             ),
@@ -77,16 +81,16 @@ export function TopBar({
 
       <div className="mx-auto min-w-0 max-w-md flex-1">
         {onQuery ? (
-          <label className={cn(pill, "gap-2 px-3.5")}>
-            <SearchIcon className="size-4 shrink-0 text-muted-foreground" />
+          <label className="well flex h-10 items-center gap-2 rounded-full px-3.5">
+            <SearchIcon className="size-4 shrink-0 text-ink-9" />
             <input
               value={query}
               onChange={(e) => onQuery(e.target.value)}
               placeholder="Search Snip…"
-              className="h-full min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+              className="h-full min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-ink-10"
             />
             {query && (
-              <button onClick={() => onQuery("")} aria-label="Clear search" className="grid size-5 place-items-center rounded-full bg-fill-2 text-muted-foreground">
+              <button onClick={() => onQuery("")} aria-label="Clear search" className="press grid size-5 place-items-center rounded-full bg-control text-ink-10 shadow-button hover:text-foreground active:scale-[0.92]">
                 <XIcon className="size-3" />
               </button>
             )}
@@ -104,14 +108,14 @@ export function TopBar({
 
 function CreateMenu({ collection }: { collection?: string }) {
   const { addReference, newCollection } = useAddFlow()
-  const item = "flex items-start gap-3 rounded-xl px-2.5 py-2"
+  const item = "flex items-start gap-3 px-2.5 py-2"
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger aria-label="Create" render={<Button size="sm" className="rounded-full bg-foreground text-background hover:bg-foreground/85" />}>
+      <DropdownMenuTrigger aria-label="Create" render={<Button size="sm" className="rounded-full" />}>
         <PlusIcon data-icon="inline-start" />
         <span className="hidden sm:inline">Create</span>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" sideOffset={10} className="w-64 rounded-2xl p-1.5">
+      <DropdownMenuContent align="end" sideOffset={10} className="w-64 p-1.5">
         <DropdownMenuGroup>
           <DropdownMenuItem className={item} onClick={() => addReference(collection)}>
             <GlobeIcon className="mt-0.5" />
@@ -155,7 +159,7 @@ function AccountMenu({ login }: { login: string }) {
         render={
           <button
             aria-label="Account"
-            className="grid size-8 place-items-center rounded-full bg-gradient-to-br from-primary/70 to-fuchsia-400/70 text-[11px] font-semibold text-white uppercase"
+            className="press grid size-8 place-items-center rounded-full bg-ink-3 text-2xs font-medium text-ink-11 uppercase hover:bg-ink-4 active:scale-[0.92] aria-expanded:bg-ink-4"
           />
         }
       >
@@ -166,7 +170,7 @@ function AccountMenu({ login }: { login: string }) {
           <DropdownMenuLabel>@{login}</DropdownMenuLabel>
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
-        <div className="flex items-center justify-between px-2 py-1.5 text-sm">
+        <div className="flex items-center justify-between px-2 py-1.5 text-xs">
           Theme
           <Segmented
             value={theme ?? "system"}
@@ -178,7 +182,7 @@ function AccountMenu({ login }: { login: string }) {
             ]}
           />
         </div>
-        <div className="flex items-center justify-between px-2 py-1.5 text-sm">
+        <div className="flex items-center justify-between px-2 py-1.5 text-xs">
           Grid size
           <Segmented<GridSize>
             value={grid}
@@ -220,8 +224,11 @@ export function Segmented<T extends string>({
   options: { value: T; label: React.ReactNode; title?: string }[]
   className?: string
 }) {
+  const id = useId()
+  // Reduced motion: the pill snaps to the chosen option instead of sliding.
+  const reduce = useReducedMotion()
   return (
-    <div className={cn("flex items-center rounded-full bg-fill-2 p-0.5", className)} role="radiogroup">
+    <div className={cn("tactile-track flex items-center", className)} role="radiogroup">
       {options.map((o) => (
         <button
           key={o.value}
@@ -230,11 +237,20 @@ export function Segmented<T extends string>({
           title={o.title}
           onClick={() => onChange(o.value)}
           className={cn(
-            "grid h-6 min-w-7 place-items-center rounded-full px-2 text-xs font-medium text-muted-foreground transition-colors",
-            value === o.value && "bg-foreground text-background",
+            "press relative grid h-6 min-w-7 place-items-center rounded-full px-2 text-xs font-medium text-ink-11 hover:text-foreground",
+            value === o.value && "text-foreground",
           )}
         >
-          {o.label}
+          {/* The chosen option sits on a white pill that springs across. */}
+          {value === o.value && (
+            <motion.span
+              layoutId={`seg-${id}`}
+              transition={reduce ? { duration: 0 } : { type: "spring", bounce: 0.12, duration: 0.4 }}
+              className="tactile-chosen absolute inset-0 rounded-full"
+              aria-hidden
+            />
+          )}
+          <span className="relative">{o.label}</span>
         </button>
       ))}
     </div>
@@ -245,8 +261,8 @@ export function Segmented<T extends string>({
 export function ActionCircle({ icon, label, onClick, href }: { icon: React.ReactNode; label: string; onClick?: () => void; href?: string }) {
   const inner = (
     <>
-      <span className="grid size-9 place-items-center rounded-full ring-1 ring-border transition-colors group-hover:bg-fill-2 [&_svg]:size-4">{icon}</span>
-      <span className="text-2xs text-muted-foreground">{label}</span>
+      <span className="tactile press grid size-9 place-items-center rounded-full group-active:scale-[0.94] [&_svg]:size-4 [&_svg]:text-ink-11">{icon}</span>
+      <span className="text-2xs text-ink-11">{label}</span>
     </>
   )
   return href ? (

@@ -8,7 +8,7 @@ import {
   RefreshCwIcon,
   Trash2Icon,
   AlertCircleIcon,
-} from "lucide-react"
+} from "@/components/icons"
 import { toast } from "sonner"
 import { notify } from "@/components/notify"
 import { CollectionPicker } from "@/components/collection-picker"
@@ -72,7 +72,7 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
         <Skeleton className="h-8 w-64" />
         <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
           {Array.from({ length: 6 }, (_, i) => (
-            <Skeleton key={i} className="aspect-[16/10] rounded-xl" />
+            <Skeleton key={i} className="aspect-[16/10] rounded-lg" />
           ))}
         </div>
       </div>
@@ -96,9 +96,9 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
       <TopBar login={login} solid />
 
       <div className="flex flex-col items-center gap-3 px-4 pt-8 pb-2 text-center">
-        {r.favicon && <img src={r.favicon} alt="" className="size-8 rounded-lg ring-1 ring-border" onError={(e) => (e.currentTarget.style.display = "none")} />}
+        {r.favicon && <img src={r.favicon} alt="" className="size-8 rounded-md shadow-button" onError={(e) => (e.currentTarget.style.display = "none")} />}
         <div className="max-w-2xl">
-          <p className="text-xs text-muted-foreground">
+          <p className="text-xs text-ink-10">
             <Link href="/" className="hover:text-foreground">
               Everything
             </Link>
@@ -116,8 +116,8 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
               </>
             )}
           </p>
-          <h1 className="mt-1 text-2xl font-medium text-balance">{r.title || r.domain}</h1>
-          <a href={r.url} target="_blank" rel="noreferrer" className="mt-1 inline-block text-xs text-muted-foreground hover:text-foreground">
+          <h1 className="mt-1 text-xl font-medium tracking-tight text-balance">{r.title || r.domain}</h1>
+          <a href={r.url} target="_blank" rel="noreferrer" className="mt-1 inline-block text-xs text-ink-11 hover:text-foreground">
             {r.domain} · {r.pageCount} {r.pageCount === 1 ? "page" : "pages"}
             {r.animationCount > 0 && ` · ${r.animationCount} ${r.animationCount === 1 ? "GIF" : "GIFs"}`}
           </a>
@@ -127,12 +127,12 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
           <ActionCircle icon={<ExternalLinkIcon />} label="Visit" href={r.url} />
           <Popover>
             <PopoverTrigger className="group flex flex-col items-center gap-1.5">
-              <span className="grid size-9 place-items-center rounded-full ring-1 ring-border transition-colors group-hover:bg-fill-2 group-data-popup-open:bg-foreground group-data-popup-open:text-background [&_svg]:size-4">
+              <span className="tactile press grid size-9 place-items-center rounded-full group-active:scale-[0.94] group-data-popup-open:bg-control-hover [&_svg]:size-4 [&_svg]:text-ink-11">
                 <FolderIcon />
               </span>
-              <span className="text-2xs text-muted-foreground">Organize</span>
+              <span className="text-2xs text-ink-11">Organize</span>
             </PopoverTrigger>
-            <PopoverContent align="center" className="w-80 rounded-3xl p-3">
+            <PopoverContent align="center" className="w-80 p-2">
               <CollectionPicker className="max-h-72" selected={r.collectionIds} onToggle={(cid, on) => void toggleCollection(cid, on)} />
             </PopoverContent>
           </Popover>
@@ -147,10 +147,10 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
           />
           <DropdownMenu>
             <DropdownMenuTrigger render={<button className="group flex flex-col items-center gap-1.5" />}>
-              <span className="grid size-9 place-items-center rounded-full ring-1 ring-border transition-colors group-hover:bg-fill-2 [&_svg]:size-4">
+              <span className="tactile press grid size-9 place-items-center rounded-full group-active:scale-[0.94] group-data-popup-open:bg-control-hover [&_svg]:size-4 [&_svg]:text-ink-11">
                 <MoreHorizontalIcon />
               </span>
-              <span className="text-2xs text-muted-foreground">More</span>
+              <span className="text-2xs text-ink-11">More</span>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="center">
               <DropdownMenuItem
@@ -169,8 +169,8 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
         </div>
 
         {r.status !== "ready" && (
-          <div className="mt-3 flex items-center gap-2 rounded-full bg-fill-1 px-4 py-2 text-xs">
-            {r.status === "failed" ? <AlertCircleIcon className="size-4 text-destructive-foreground" /> : <Spinner className="text-muted-foreground" />}
+          <div className={cn("mt-3 flex items-center gap-2 rounded-full px-3 py-1.5 text-xs", r.status === "failed" ? "bg-(--red-3) text-(--red-11) shadow-badge" : "bg-control shadow-button")}>
+            {r.status === "failed" ? <AlertCircleIcon className="size-3.5" /> : <Spinner className="size-3.5 text-ink-10" />}
             <span>{r.status === "failed" ? `Capture failed: ${r.error ?? "unknown error"}` : (r.progress ?? "Waiting for the capture agent")}</span>
           </div>
         )}
@@ -187,7 +187,7 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
               { value: "animations", label: `Animations${animations.length ? ` ${animations.length}` : ""}` },
               { value: "tokens", label: "Design tokens" },
             ]}
-            className="[&_button]:h-8 [&_button]:px-3.5"
+            className="[&_button]:h-7 [&_button]:px-3"
           />
           <div className="flex min-w-0 justify-end">
             {selecting || sel.pages.length + sel.animations.length > 0 || sel.tokens ? (
@@ -229,7 +229,7 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
                 <div key={p.id} className="group relative">
                 <SelectCheck on={sel.pages.includes(p.id)} active={selecting} label={`Select ${p.path}`} onToggle={() => setSel((x) => ({ ...x, pages: toggleIn(x.pages, p.id) }))} />
                 <button
-                  className={cn("group relative block w-full overflow-hidden rounded-sm bg-fill-1 text-left", sel.pages.includes(p.id) && "ring-2 ring-foreground ring-offset-2 ring-offset-background")}
+                  className={cn("group relative block w-full overflow-hidden rounded-lg bg-surface-top text-left shadow-card transition-[scale,box-shadow] duration-150 ease-out active:scale-[0.99]", sel.pages.includes(p.id) && "ring-2 ring-ink-12 ring-offset-2 ring-offset-background")}
                   onClick={() => (selecting ? setSel((x) => ({ ...x, pages: toggleIn(x.pages, p.id) })) : setOpenPage(p.id))}
                 >                  <img src={fileUrl(p.desktopThumbKey)} alt={p.title ?? p.path} loading="lazy" className="aspect-[16/10] w-full object-cover object-top" />
                   {p.mobileThumbKey && (
@@ -237,7 +237,7 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
                       src={fileUrl(p.mobileThumbKey)}
                       alt=""
                       loading="lazy"
-                      className="absolute right-3 bottom-3 h-[55%] rounded-md object-cover object-top shadow-lg ring-1 ring-black/10 transition-transform duration-300 group-hover:-translate-y-1"
+                      className="absolute right-3 bottom-3 h-[55%] rounded-md object-cover object-top shadow-menu transition-transform duration-300 ease-out group-hover:-translate-y-1"
                     />
                   )}
                   <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/60 to-transparent px-3 pt-10 pb-2.5 opacity-0 transition-opacity group-hover:opacity-100">
@@ -278,11 +278,11 @@ function PromptPill({ on, onClick, children }: { on: boolean; onClick: () => voi
       onClick={onClick}
       aria-pressed={on}
       className={cn(
-        "flex h-9 shrink-0 items-center gap-1.5 rounded-full px-3.5 text-xs font-medium whitespace-nowrap ring-1 ring-border transition-colors hover:bg-fill-1",
-        on && "bg-foreground text-background ring-foreground hover:bg-foreground/85",
+        "tactile press flex h-7 shrink-0 items-center gap-1.5 rounded-full pr-3 pl-2.5 text-xs font-medium whitespace-nowrap",
+        on && "bg-primary text-primary-foreground shadow-primary hover:bg-(--primary-hover)",
       )}
     >
-      <SparklesIcon className="size-3.5" />
+      <SparklesIcon className="size-3.5 text-ink-9" />
       <span>{children}</span>
     </button>
   )
@@ -310,13 +310,13 @@ function AnimationSection({
   return (
     <section>
       <h2 className="mb-3 text-sm font-medium">
-        {title} <span className="text-muted-foreground">{items.length}</span>
+        {title} <span className="text-ink-10 tabular-nums">{items.length}</span>
       </h2>
       <Masonry>
         {items.map((a) => (
           <figure
             key={a.id}
-            className={cn("group relative rounded-sm", selecting && "cursor-pointer", selected.includes(a.id) && "ring-2 ring-foreground ring-offset-2 ring-offset-background")}
+            className={cn("group relative rounded-lg", selecting && "cursor-pointer", selected.includes(a.id) && "ring-2 ring-ink-12 ring-offset-2 ring-offset-background")}
             onClick={selecting ? () => onToggle(a.id) : undefined}
           >
             <SelectCheck on={selected.includes(a.id)} active={selecting} label={`Select ${a.label ?? a.kind} animation`} onToggle={() => onToggle(a.id)} />
@@ -335,7 +335,7 @@ function AnimationSection({
 export function GifTile({ a, bare }: { a: Animation; bare?: boolean }) {
   // Hover GIFs are small element crops: show them at natural size, centered, instead of upscaling.
   const small = a.kind === "hover" && a.width < 480
-  const frame = bare ? "rounded-sm bg-fill-1" : "rounded-xl bg-fill-1 ring-1 ring-border"
+  const frame = bare ? "rounded-lg bg-surface-top shadow-card" : "rounded-xl bg-surface-top shadow-card"
   return (
     <div className={small ? `grid place-items-center overflow-hidden p-8 ${frame}` : `overflow-hidden ${frame}`}>
       <img
@@ -348,3 +348,4 @@ export function GifTile({ a, bare }: { a: Animation; bare?: boolean }) {
     </div>
   )
 }
+

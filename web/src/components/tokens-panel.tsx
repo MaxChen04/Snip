@@ -16,8 +16,8 @@ export function TokensPanel({ tokens, compact }: { tokens: DesignTokens; compact
         <div className={cn("grid gap-2", compact ? "grid-cols-[repeat(auto-fill,minmax(3.5rem,1fr))]" : "grid-cols-4 sm:grid-cols-6 lg:grid-cols-8")}>
           {tokens.colors.slice(0, n * 2).map((c) => (
             <button key={c.value} onClick={() => copy(c.value)} className="group min-w-0 text-left" title={`${c.value} (${c.count})`}>
-              <div className="aspect-square rounded-lg ring-1 ring-border" style={{ background: c.value }} />
-              <div className="mt-1 truncate font-mono text-[10px] text-muted-foreground group-hover:text-foreground">{c.value}</div>
+              <div className="aspect-square rounded-lg shadow-button transition-[scale] duration-150 ease-out group-active:scale-[0.97]" style={{ background: c.value }} />
+              <div className="mt-1 truncate font-mono text-[10px] text-ink-10 group-hover:text-foreground">{c.value}</div>
             </button>
           ))}
         </div>
@@ -30,7 +30,7 @@ export function TokensPanel({ tokens, compact }: { tokens: DesignTokens; compact
               <div className="truncate text-lg" style={{ fontFamily: f.family }}>
                 {f.family.split(",")[0]?.replace(/["']/g, "")}
               </div>
-              <div className="truncate font-mono text-[10px] text-muted-foreground">{f.family}</div>
+              <div className="truncate font-mono text-[10px] text-ink-10">{f.family}</div>
             </button>
           ))}
           <ValueList items={tokens.fontSizes.slice(0, n)} />
@@ -41,8 +41,8 @@ export function TokensPanel({ tokens, compact }: { tokens: DesignTokens; compact
         <div className="space-y-1">
           {tokens.spacing.slice(0, n).map((s) => (
             <button key={s.value} onClick={() => copy(s.value)} className="flex w-full items-center gap-3 text-left">
-              <span className="w-14 shrink-0 font-mono text-[11px] text-muted-foreground">{s.value}</span>
-              <span className="h-2 rounded-xs bg-primary/60" style={{ width: `min(${s.value}, 100%)` }} />
+              <span className="w-14 shrink-0 font-mono text-[11px] text-ink-10">{s.value}</span>
+              <span className="h-2 rounded-xs bg-ink-7" style={{ width: `min(${s.value}, 100%)` }} />
             </button>
           ))}
         </div>
@@ -52,8 +52,8 @@ export function TokensPanel({ tokens, compact }: { tokens: DesignTokens; compact
         <div className="flex flex-wrap gap-3">
           {tokens.radii.slice(0, 10).map((r) => (
             <button key={r.value} onClick={() => copy(r.value)} className="text-center">
-              <div className="size-12 bg-fill-2 ring-1 ring-border" style={{ borderRadius: r.value }} />
-              <div className="mt-1 font-mono text-[10px] text-muted-foreground">{r.value}</div>
+              <div className="size-12 bg-control shadow-button" style={{ borderRadius: r.value }} />
+              <div className="mt-1 font-mono text-[10px] text-ink-10">{r.value}</div>
             </button>
           ))}
         </div>
@@ -61,7 +61,7 @@ export function TokensPanel({ tokens, compact }: { tokens: DesignTokens; compact
           {tokens.shadows.slice(0, compact ? 4 : 8).map((s) => (
             <button key={s.value} onClick={() => copy(s.value)} className="flex items-center gap-3 text-left">
               <div className="size-10 shrink-0 rounded-lg bg-card" style={{ boxShadow: s.value }} />
-              <span className="line-clamp-2 font-mono text-[10px] text-muted-foreground">{s.value}</span>
+              <span className="line-clamp-2 font-mono text-[10px] text-ink-10">{s.value}</span>
             </button>
           ))}
         </div>
@@ -72,7 +72,7 @@ export function TokensPanel({ tokens, compact }: { tokens: DesignTokens; compact
         {tokens.keyframes.length > 0 && (
           <div className="mt-3 flex flex-wrap gap-1.5">
             {tokens.keyframes.slice(0, 40).map((k) => (
-              <span key={k} className="rounded-md bg-fill-2 px-1.5 py-0.5 font-mono text-[10px]">
+              <span key={k} className="rounded-md bg-ink-3 px-1.5 py-0.5 font-mono text-[10px]">
                 @keyframes {k}
               </span>
             ))}
@@ -82,10 +82,10 @@ export function TokensPanel({ tokens, compact }: { tokens: DesignTokens; compact
 
       {vars.length > 0 && (
         <Section title={`CSS variables (${vars.length})`}>
-          <div className="max-h-80 overflow-y-auto rounded-lg bg-fill-1 p-3 font-mono text-[11px] leading-relaxed">
+          <div className="well max-h-80 overflow-y-auto rounded-lg p-3 font-mono text-[11px] leading-relaxed">
             {vars.slice(0, 300).map(([k, v]) => (
               <div key={k} className="truncate">
-                <span className="text-primary">{k}</span>: {v};
+                <span className="text-ink-11">{k}</span>: {v};
               </div>
             ))}
           </div>
@@ -98,7 +98,7 @@ export function TokensPanel({ tokens, compact }: { tokens: DesignTokens; compact
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section>
-      <h3 className="mb-3 text-xs font-medium text-muted-foreground uppercase">{title}</h3>
+      <h3 className="mb-3 text-sm font-medium">{title}</h3>
       {children}
     </section>
   )
@@ -111,7 +111,7 @@ function ValueList({ items, mono }: { items: { value: string; count: number }[];
         <button
           key={i.value}
           onClick={() => copy(i.value)}
-          className={cn("max-w-full truncate rounded-md bg-fill-2 px-1.5 py-0.5 text-[11px] hover:bg-fill-3", mono && "font-mono")}
+          className={cn("tactile press max-w-full truncate rounded-md px-1.5 py-0.5 text-[11px]", mono && "font-mono")}
           title={`${i.count} uses`}
         >
           {i.value}

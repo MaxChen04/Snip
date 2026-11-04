@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import { Link, useLocation, useSearch } from "wouter"
-import { AlertCircleIcon, ArrowUpRightIcon, BookmarkIcon, CheckIcon, ChevronDownIcon, CornerDownLeftIcon, GlobeIcon, PencilIcon, PlusIcon, Trash2Icon } from "lucide-react"
+import { AlertCircleIcon, ArrowUpRightIcon, BookmarkIcon, ChevronDownIcon, CornerDownLeftIcon, GlobeIcon, PencilIcon, PlusIcon, Trash2Icon } from "@/components/icons"
 import { toast } from "sonner"
 import { useAddFlow } from "@/components/add-flow"
 import { CollectionPicker, CollectionThumb } from "@/components/collection-picker"
@@ -60,33 +60,35 @@ export function GalleryPage({ login }: { login: string }) {
           {q ? <>Results for <span className="text-foreground">“{q}”</span></> : count !== null && `${count}${count >= 30 ? "+" : ""} ${NOUN[view][count === 1 ? 0 : 1]}`}
         </p>
         <div className="ml-auto flex items-center gap-2">
-          <div className="flex rounded-full bg-fill-1 p-0.5 sm:hidden">
+          <div className="tactile-track flex sm:hidden">
             {(["websites", "pages", "animations"] as View[]).map((v) => (
               <button
                 key={v}
                 onClick={() => changeView(v)}
-                className={cn("h-7 rounded-full px-2.5 text-2xs font-medium text-muted-foreground capitalize", view === v && "bg-background text-foreground shadow-xs ring-1 ring-border")}
+                className={cn("press h-7 rounded-full px-2.5 text-2xs font-medium text-ink-11 capitalize", view === v && "tactile-chosen")}
               >
                 {v}
               </button>
             ))}
           </div>
           <DropdownMenu>
-            <DropdownMenuTrigger className="flex h-8 items-center gap-1 rounded-full px-3 text-xs font-medium text-muted-foreground hover:bg-fill-1 hover:text-foreground data-popup-open:bg-fill-1">
-              {SORT_LABEL[effectiveSort]} <ChevronDownIcon className="size-3.5" />
+            <DropdownMenuTrigger className="tactile press group/sort flex h-7 items-center gap-1 rounded-full pr-2 pl-3 text-xs font-medium">
+              {SORT_LABEL[effectiveSort]} <ChevronDownIcon className="size-3.5 text-ink-10 transition-transform duration-150 ease-out group-data-popup-open/sort:rotate-180" />
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="rounded-2xl p-1.5">
+            <DropdownMenuContent align="end" className="min-w-36 p-1">
               <DropdownMenuGroup>
                 <DropdownMenuLabel>Sort by</DropdownMenuLabel>
                 {(["newest", "oldest", ...(view === "websites" ? ["name"] : [])] as Sort[]).map((s) => (
                   <DropdownMenuItem
                     key={s}
+                    aria-checked={effectiveSort === s}
+                    className={cn(effectiveSort === s && "bg-ink-4 focus:bg-ink-4")}
                     onClick={() => {
                       setSort(s)
                       writePref("rs.sort", s)
                     }}
                   >
-                    <CheckIcon className={cn(effectiveSort !== s && "invisible")} /> {SORT_LABEL[s]}
+                    {SORT_LABEL[s]}
                   </DropdownMenuItem>
                 ))}
               </DropdownMenuGroup>
@@ -109,11 +111,12 @@ export function GalleryPage({ login }: { login: string }) {
 function CollectionStrip({ active, onSelect }: { active?: string; onSelect: (id?: string) => void }) {
   const { collections } = useCollections()
   const { newCollection } = useAddFlow()
-  const chip = "flex h-9 shrink-0 items-center gap-2 rounded-full pr-3.5 text-xs font-medium transition-colors"
-  const on = "bg-foreground text-background"
-  const off = "bg-fill-1 text-foreground hover:bg-fill-2"
+  const chip = "press flex h-9 shrink-0 items-center gap-2 rounded-full pr-3.5 text-xs font-medium"
+  // The chosen collection is raised; the rest sit flat on the ground until hovered.
+  const on = "tactile-chosen"
+  const off = "text-ink-11 hover:bg-ink-3 hover:text-foreground"
   return (
-    <div className="flex gap-1.5 overflow-x-auto px-4 py-1 sm:px-6 [scrollbar-width:none]">
+    <div className="flex gap-1 overflow-x-auto px-4 py-1 sm:px-6 [scrollbar-width:none]">
       <button onClick={() => onSelect(undefined)} className={cn(chip, "pl-3.5", !active ? on : off)}>
         Everything
       </button>
@@ -121,11 +124,11 @@ function CollectionStrip({ active, onSelect }: { active?: string; onSelect: (id?
         <button key={c.id} onClick={() => onSelect(c.id)} className={cn(chip, "pl-1", active === c.id ? on : off)}>
           <CollectionThumb c={c} className="size-7 rounded-full ring-0 [&>span]:rounded-full" />
           {c.name}
-          <span className={cn("tabular-nums", active === c.id ? "text-background/55" : "text-muted-foreground")}>{c.referenceCount}</span>
+          <span className="text-ink-10 tabular-nums">{c.referenceCount}</span>
         </button>
       ))}
-      <button onClick={newCollection} className={cn(chip, "pl-3 text-muted-foreground ring-1 ring-border ring-inset hover:bg-fill-1 hover:text-foreground")}>
-        <PlusIcon className="size-3.5" /> New collection
+      <button onClick={newCollection} className={cn(chip, "pl-3 text-ink-11 hover:bg-ink-3 hover:text-foreground")}>
+        <PlusIcon className="size-3.5 text-ink-9" /> New collection
       </button>
     </div>
   )
@@ -154,7 +157,7 @@ function CollectionHeader({ id, onDeleted }: { id: string; onDeleted: () => void
               key={k}
               src={fileUrl(k)}
               alt=""
-              className="size-12 rounded-xl object-cover object-top shadow-sm ring-2 ring-background"
+              className="size-12 rounded-lg object-cover object-top shadow-card ring-2 ring-surface-top"
               style={{ transform: `rotate(${(i - (c.coverKeys.length - 1) / 2) * 6}deg)` }}
             />
           ))}
@@ -170,12 +173,12 @@ function CollectionHeader({ id, onDeleted }: { id: string; onDeleted: () => void
               if (e.key === "Enter") e.currentTarget.blur()
               if (e.key === "Escape") setEditing(false)
             }}
-            className="w-64 rounded-lg bg-fill-1 text-center text-2xl font-medium outline-none"
+            className="well w-64 rounded-lg text-center text-2xl font-medium outline-none"
           />
         ) : (
           <h1 className="text-2xl font-medium tracking-tight">{c.name}</h1>
         )}
-        <p className="mt-1 text-xs text-muted-foreground">
+        <p className="mt-1 text-xs text-ink-11">
           {c.referenceCount} {c.referenceCount === 1 ? "reference" : "references"}
         </p>
       </div>
@@ -216,7 +219,7 @@ function GridFooter({ loading, done, count, sentinel, empty }: { loading: boolea
   return (
     <div ref={sentinel} className="flex justify-center py-10">
       {loading && count > 0 && <Spinner className="text-muted-foreground" />}
-      {done && count > 0 && <span className="size-1.5 rounded-full bg-fill-3" aria-hidden />}
+      {done && count > 0 && <span className="size-1.5 rounded-full bg-ink-5" aria-hidden />}
     </div>
   )
 }
@@ -225,7 +228,7 @@ function SkeletonGrid() {
   return (
     <Masonry>
       {Array.from({ length: 12 }, (_, i) => (
-        <Skeleton key={i} className={cn("w-full rounded-md", ["aspect-[16/10]", "aspect-[4/5]", "aspect-[16/11]", "aspect-square"][i % 4])} />
+        <Skeleton key={i} className={cn("w-full rounded-lg", ["aspect-[16/10]", "aspect-[4/5]", "aspect-[16/11]", "aspect-square"][i % 4])} />
       ))}
     </Masonry>
   )
@@ -251,23 +254,23 @@ function Tile({
 }) {
   return (
     <div className="group relative">
-      <Link href={href} className="block overflow-hidden rounded-md bg-fill-1 ring-1 ring-black/5 transition-[box-shadow] group-hover:shadow-md dark:ring-white/5">
+      <Link href={href} className="block overflow-hidden rounded-lg bg-surface-top shadow-card transition-[scale] duration-150 ease-out active:scale-[0.99]">
         {children}
         {overlay}
-        <span className="pointer-events-none absolute inset-0 rounded-md bg-black/0 transition-colors group-hover:bg-black/[0.04]" />
+        <span className="pointer-events-none absolute inset-0 rounded-lg bg-black/0 transition-colors duration-150 ease-out group-hover:bg-black/[0.03]" />
       </Link>
-      <div className="pointer-events-none absolute inset-x-2 bottom-2 flex translate-y-1 justify-start opacity-0 transition-all duration-200 group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:translate-y-0 group-focus-within:opacity-100">
+      <div className="pointer-events-none absolute inset-x-2 bottom-2 flex translate-y-1 justify-start opacity-0 transition-[opacity,translate] duration-200 ease-out group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:translate-y-0 group-focus-within:opacity-100">
         <a
           href={external ?? `https://${domain}`}
           target="_blank"
           rel="noreferrer"
           onClick={(e) => e.stopPropagation()}
-          className="pointer-events-auto flex h-7 max-w-full items-center gap-1.5 rounded-full bg-background/95 pr-2.5 pl-1.5 text-2xs font-medium text-foreground shadow-sm ring-1 ring-black/5 backdrop-blur hover:bg-background"
+          className="tactile press pointer-events-auto flex h-7 max-w-full items-center gap-1.5 rounded-full pr-2.5 pl-1.5 text-2xs font-medium"
           title={label}
         >
           <SiteIcon domain={domain} />
           <span className="truncate">{label}</span>
-          <ArrowUpRightIcon className="size-3 shrink-0 text-muted-foreground" />
+          <ArrowUpRightIcon className="size-3 shrink-0 text-ink-10" />
         </a>
       </div>
       {actions && (
@@ -288,14 +291,14 @@ function SaveButton({ r }: { r: Reference }) {
     <Popover>
       <PopoverTrigger
         className={cn(
-          "flex h-8 items-center gap-1.5 rounded-full px-3 text-xs font-medium shadow-sm ring-1 ring-black/5 backdrop-blur",
-          saved ? "bg-foreground text-background" : "bg-background/95 text-foreground hover:bg-background",
+          "press flex h-7 items-center gap-1.5 rounded-full pr-3 pl-2.5 text-xs font-medium",
+          saved ? "bg-primary text-primary-foreground shadow-primary hover:bg-(--primary-hover)" : "tactile",
         )}
       >
         <BookmarkIcon className={cn("size-3.5", saved && "fill-current")} />
         {saved ? "Saved" : "Save"}
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-80 rounded-3xl p-3">
+      <PopoverContent align="end" className="w-80 p-2">
         <CollectionPicker
           className="max-h-72"
           selected={ids}
@@ -371,7 +374,7 @@ function FolderTile({ r }: { r: Reference }) {
         aria-label={r.title || r.domain}
         onFocus={() => setHovered(true)}
         onBlur={() => setHovered(false)}
-        className={cn("rounded-3xl outline-none focus-visible:ring-2 focus-visible:ring-ring/40", !ready && "opacity-70")}
+        className={cn("rounded-3xl transition-[scale] duration-150 ease-out active:scale-[0.99]", !ready && "opacity-70")}
       >
         <Folder images={images} hovered={hovered} size={FOLDER_SIZE[grid]} />
       </Link>
@@ -394,7 +397,7 @@ function FolderTile({ r }: { r: Reference }) {
 function FolderMeta({ r }: { r: Reference }) {
   if (r.status === "failed") {
     return (
-      <span className="mt-1 flex max-w-[90%] items-center gap-1 text-2xs text-destructive-foreground" title={r.error ?? undefined}>
+      <span className="mt-1 flex max-w-[90%] items-center gap-1 text-2xs text-(--red-11)" title={r.error ?? undefined}>
         <AlertCircleIcon className="size-3 shrink-0" />
         <span className="truncate">{r.error ?? "Capture failed"}</span>
       </span>
@@ -405,15 +408,15 @@ function FolderMeta({ r }: { r: Reference }) {
     const pct = m ? Math.min(100, (Number(m[1]) / Number(m[2])) * 100) : r.status === "queued" ? 4 : 12
     return (
       <div className="mt-1.5 flex flex-col items-center gap-1">
-        <div className="h-1 w-28 overflow-hidden rounded-full bg-fill-3">
-          <div className="h-full rounded-full bg-foreground transition-[width] duration-700" style={{ width: `${pct}%` }} />
+        <div className="h-1 w-28 overflow-hidden rounded-full bg-ink-4">
+          <div className="h-full rounded-full bg-ink-12 transition-[width] duration-300 ease-out" style={{ width: `${pct}%` }} />
         </div>
-        <span className="text-2xs text-muted-foreground">{r.status === "queued" ? "Waiting for capture agent" : m ? `${m[1]} of ${m[2]} pages` : "Capturing"}</span>
+        <span className="text-2xs text-ink-11">{r.status === "queued" ? "Waiting for capture agent" : m ? `${m[1]} of ${m[2]} pages` : "Capturing"}</span>
       </div>
     )
   }
   return (
-    <span className="mt-0.5 max-w-full truncate text-2xs text-muted-foreground">
+    <span className="mt-0.5 max-w-full truncate text-2xs text-ink-10">
       {r.domain} · {r.pageCount} {r.pageCount === 1 ? "page" : "pages"}
       {r.animationCount > 0 && ` · ${r.animationCount} ${r.animationCount === 1 ? "GIF" : "GIFs"}`}
     </span>
@@ -472,27 +475,27 @@ function Welcome() {
     <div className="mx-auto flex max-w-lg flex-col items-center gap-6 py-20 text-center sm:py-28">
       <div className="grid grid-cols-3 gap-1.5 opacity-80" aria-hidden>
         {["h-10", "h-14", "h-8", "h-12", "h-8", "h-14"].map((h, i) => (
-          <span key={i} className={cn("w-12 rounded-md bg-fill-2", h, i % 2 && "bg-fill-3")} />
+          <span key={i} className={cn("w-12 rounded-md bg-surface-top shadow-card", h)} />
         ))}
       </div>
       <div className="space-y-1.5">
-        <h2 className="text-2xl font-medium tracking-tight">Start your shelf</h2>
-        <p className="text-sm text-muted-foreground">Paste a website. Your capture agent saves screenshots, styles and motion.</p>
+        <h2 className="text-xl font-medium tracking-tight">Start your shelf</h2>
+        <p className="text-sm text-ink-11">Paste a website. Your capture agent saves screenshots, styles and motion.</p>
       </div>
       <button
         onClick={() => addReference()}
-        className="flex h-14 w-full items-center gap-3 rounded-2xl bg-fill-1 px-4 text-left text-base text-muted-foreground ring-1 ring-transparent transition-all hover:bg-background hover:shadow-sm hover:ring-border"
+        className="well press flex h-12 w-full items-center gap-3 rounded-xl px-4 text-left text-base text-ink-10 hover:bg-ink-4 active:scale-[0.99]"
       >
-        <GlobeIcon className="size-5" />
+        <GlobeIcon className="size-5 text-ink-9" />
         <span className="flex-1">Paste a website URL</span>
-        <kbd className="grid size-7 place-items-center rounded-lg bg-background ring-1 ring-border">
+        <kbd className="tactile grid size-7 place-items-center rounded-md">
           <CornerDownLeftIcon className="size-3.5" />
         </kbd>
       </button>
       <div className="flex flex-wrap justify-center gap-1.5">
-        <span className="h-7 content-center pr-1 text-2xs text-muted-foreground">Try</span>
+        <span className="h-7 content-center pr-1 text-2xs text-ink-10">Try</span>
         {EXAMPLES.map((d) => (
-          <button key={d} onClick={() => addReference(undefined, d)} className="flex h-7 items-center gap-1.5 rounded-full bg-fill-1 pr-2.5 pl-1 text-2xs font-medium hover:bg-fill-2">
+          <button key={d} onClick={() => addReference(undefined, d)} className="tactile press flex h-7 items-center gap-1.5 rounded-full pr-2.5 pl-1 text-2xs font-medium">
             <SiteIcon domain={d} className="size-5 rounded-full" />
             {d}
           </button>
@@ -507,9 +510,9 @@ function EmptyNote({ filtered, collection }: { filtered: boolean; collection?: s
   return (
     <div className="flex flex-col items-center gap-3 py-24 text-center">
       <p className="text-sm font-medium">{filtered ? "No matches" : "Nothing here yet"}</p>
-      <p className="max-w-xs text-xs text-muted-foreground">{filtered ? "Try a different word, or clear the search." : "Captured pages and animations show up here."}</p>
+      <p className="max-w-xs text-xs text-ink-11">{filtered ? "Try a different word, or clear the search." : "Captured pages and animations show up here."}</p>
       {!filtered && (
-        <button onClick={() => addReference(collection)} className="mt-1 flex h-9 items-center gap-1.5 rounded-full bg-foreground px-4 text-xs font-medium text-background hover:bg-foreground/85">
+        <button onClick={() => addReference(collection)} className="press mt-1 flex h-8 items-center gap-1.5 rounded-lg bg-primary pr-3 pl-2.5 text-xs font-medium text-primary-foreground shadow-primary hover:bg-(--primary-hover)">
           <PlusIcon className="size-3.5" /> Add reference
         </button>
       )}

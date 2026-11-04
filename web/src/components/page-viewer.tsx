@@ -8,7 +8,7 @@ import {
   PanelRightOpenIcon,
   SmartphoneIcon,
   XIcon,
-} from "lucide-react"
+} from "@/components/icons"
 import { notify } from "@/components/notify"
 import { TokensPanel } from "@/components/tokens-panel"
 import { Button } from "@/components/ui/button"
@@ -197,7 +197,7 @@ export function PageViewer({ page, onClose }: { page: Page; onClose: () => void 
             <img
               src={fileUrl(key)}
               alt=""
-              className={device === "desktop" ? "mx-auto w-full max-w-6xl rounded-lg shadow-lg ring-1 ring-border" : "mx-auto w-[390px] max-w-full rounded-2xl shadow-lg ring-1 ring-border"}
+              className={device === "desktop" ? "mx-auto w-full max-w-6xl rounded-lg shadow-card" : "mx-auto w-[390px] max-w-full rounded-3xl shadow-card"}
             />
           ) : (
             <p className="py-24 text-center text-sm text-muted-foreground">No {device} screenshot.</p>

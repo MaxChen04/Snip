@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react"
-import { ArrowRight, Check, Link2 } from "lucide-react"
+import { ArrowRight, Check, Link2 } from "@/components/icons"
 import { cn } from "@/lib/utils"
 import { Logo } from "@/App"
 
