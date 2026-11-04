@@ -20,7 +20,7 @@ export function isLocalOrigin(origin: string = location.origin): boolean {
 export const claudeCodeCommand = (url: string) => `claude mcp add --transport http snip ${url}`
 export const mcpJsonConfig = (url: string) => JSON.stringify({ mcpServers: { snip: { url } } }, null, 2)
 
-/** Codex CLI, IDE extension and ChatGPT desktop app share ~/.codex/config.toml. */
+/** Codex CLI, IDE extension and Codex desktop app share ~/.codex/config.toml. */
 export const codexCommand = (url: string) => `codex mcp add snip --url ${url}`
 export const codexToml = (url: string) => `[mcp_servers.snip]\nurl = ${JSON.stringify(url)}`
 

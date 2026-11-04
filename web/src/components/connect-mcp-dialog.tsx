@@ -169,7 +169,7 @@ export function ConnectMcpDialog({ open, onOpenChange }: { open: boolean; onOpen
             <Steps>
               {[
                 <>
-                  <span>Run this in your terminal. The Codex CLI, IDE extension and ChatGPT desktop app share the same config:</span>
+                  <span>Run this in your terminal. The Codex CLI, IDE extension and Codex desktop app share the same config:</span>
                   <Code text={codexCommand(url)} label="Codex command" />
                 </>,
                 <>
@@ -239,7 +239,7 @@ export function ConnectMcpDialog({ open, onOpenChange }: { open: boolean; onOpen
         <div className="flex flex-col gap-3 border-t bg-fill-1 px-5 py-4 sm:flex-row sm:items-center">
           <p className="flex flex-1 items-start gap-2 text-xs leading-[1.5] text-muted-foreground">
             <ShieldCheckIcon className="mt-px size-3.5 shrink-0" />
-            The first time, your client opens GitHub sign-in and a consent screen. Only allowed GitHub accounts get in.
+            {local ? "Your client opens a consent screen in this local Snip. Review the request before allowing access to your library." : "The first time, your client opens GitHub sign-in and a consent screen. Only allowed GitHub accounts get in."}
           </p>
           <a
             href="/guide#connect"

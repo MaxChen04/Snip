@@ -105,7 +105,7 @@ The MCP endpoint is `https://snip.<your-subdomain>.workers.dev/mcp`. Clients reg
 claude mcp add --transport http snip https://snip.<your-subdomain>.workers.dev/mcp
 ```
 
-Codex (the CLI, IDE extension and ChatGPT desktop app share `~/.codex/config.toml`):
+Codex (the CLI, IDE extension and Codex desktop app share `~/.codex/config.toml`):
 
 ```bash
 codex mcp add snip --url https://snip.<your-subdomain>.workers.dev/mcp
