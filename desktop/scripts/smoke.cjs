@@ -49,6 +49,7 @@ async function main() {
     for (const name of ["package.json", "web/wrangler.jsonc"]) await fs.copyFile(path.join(ROOT, name), path.join(root, name))
     await fs.symlink(path.join(ROOT, "node_modules"), path.join(root, "node_modules"), "dir")
     for (const name of await fs.readdir(desktop)) if (name.endsWith(".cjs") || ["loading.html", "build.mjs", "install.mjs"].includes(name)) await fs.copyFile(path.join(desktop, name), path.join(appDir, name))
+    await fs.cp(path.join(desktop, "assets"), path.join(appDir, "assets"), { recursive: true })
     await fs.symlink(path.join(desktop, "node_modules"), path.join(appDir, "node_modules"), "dir")
     await fs.writeFile(path.join(appDir, "repo.json"), JSON.stringify({ root }))
     const manifest = JSON.parse(await fs.readFile(path.join(desktop, "package.json"), "utf8"))

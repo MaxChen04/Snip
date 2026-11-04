@@ -32,6 +32,7 @@ class Service extends EventEmitter {
     this.stopWithIPC = !development
     let ended = false
     let spawnError = null
+    let startupFailure = null
     let swept = false
     const decoder = new StringDecoder("utf8")
     const sweep = () => {
@@ -49,7 +50,7 @@ class Service extends EventEmitter {
         this.proc = null
         this.url = null
         this.status = this.stopping ? "stopped" : "crashed"
-        this.detail = spawnError?.message ?? (this.stopping ? "" : this.tail.trim().split("\n").at(-1) || `Exited (${signal ?? code})`)
+        this.detail = this.stopping ? "" : spawnError?.message ?? startupFailure ?? (this.tail.trim().split("\n").at(-1) || `Exited (${signal ?? code})`)
         this.stopping = false
         this.changed()
       }
@@ -69,6 +70,10 @@ class Service extends EventEmitter {
     child.on("message", message => {
       if (ended || this.proc !== child || !message || typeof message !== "object") return
       if (message.type === "snip:web-ready" && typeof message.url === "string" && !this.stopping) this.ready(message.url)
+      if (message.type === "snip:web-error" && typeof message.message === "string") {
+        startupFailure = message.message.slice(0, 2000)
+        log.write(`${startupFailure}\n`)
+      }
       if (message.type === "snip:capture-status" && ["connecting", "idle", "busy", "disconnected", "stopping"].includes(message.state)) {
         if (!this.stopping) this.status = message.state
         this.detail = typeof message.error === "string" ? message.error.slice(0, 500) : message.state === "busy" ? "Capturing" : ""

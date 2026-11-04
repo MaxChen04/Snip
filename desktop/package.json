@@ -1,8 +1,8 @@
 {
   "name": "snip-desktop",
   "private": true,
-  "version": "0.1.0",
-  "description": "Mac launcher for Snip: starts the web app and capture agent from a menu bar icon",
+  "version": "0.2.0",
+  "description": "Snip design reference library for Apple Silicon Macs",
   "main": "main.cjs",
   "scripts": {
     "start": "electron .",

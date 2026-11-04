@@ -1,0 +1,86 @@
+name: Build draft macOS release
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Existing stable tag version (X.Y.Z, without v)'
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  release:
+    runs-on: macos-15
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    steps:
+      - name: Validate version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ inputs.version }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            desktop/package-lock.json
+      - name: Verify tag, version and native architecture
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$(git rev-list -n 1 "refs/tags/v$VERSION")"
+          node -e 'if (process.arch !== "arm64" || require("./desktop/package.json").version !== process.env.VERSION) process.exit(1)'
+      - name: Require public repository for updater
+        run: node --input-type=module -e "import { requirePublicRepository } from './desktop/release-contract.mjs'; await requirePublicRepository()"
+      - name: Require signing and notarization credentials
+        env:
+          CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          test -n "$CERTIFICATE" && test -n "$CERTIFICATE_PASSWORD" && test -n "$SIGN_IDENTITY" && test -n "$APPLE_ID" && test -n "$APPLE_APP_SPECIFIC_PASSWORD" && test -n "$APPLE_TEAM_ID" || { echo 'Missing Apple signing or notarization secrets.'; exit 1; }
+      - run: npm ci
+      - run: npm ci --prefix desktop
+      - run: npm run build -w web
+      - run: npm test
+      - run: npx --no-install playwright install chromium
+      - run: npm run test:desktop
+      - name: Import Developer ID certificate
+        env:
+          CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          echo "$CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$RUNNER_TEMP" snip-release.keychain
+          security set-keychain-settings -lut 7200 snip-release.keychain
+          security unlock-keychain -p "$RUNNER_TEMP" snip-release.keychain
+          security import "$RUNNER_TEMP/certificate.p12" -k snip-release.keychain -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$RUNNER_TEMP" snip-release.keychain
+          security list-keychains -d user -s snip-release.keychain
+          rm "$RUNNER_TEMP/certificate.p12"
+      - name: Build signed and notarized archive
+        env:
+          SNIP_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          export SNIP_NODE_DISTRIBUTION="$(dirname "$(dirname "$(command -v node)")")"
+          node desktop/release.mjs --release
+      - name: Verify standalone app and persistent library
+        run: node desktop/scripts/release-smoke.cjs
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: gh release create "v$VERSION" "desktop/dist/Snip-$VERSION-darwin-arm64.zip" --draft --verify-tag --title "Snip $VERSION"

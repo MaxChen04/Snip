@@ -23,7 +23,7 @@ permissions:
 jobs:
   apple-silicon:
     runs-on: macos-15
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -36,9 +36,14 @@ jobs:
       - run: node -e "if (process.arch !== 'arm64') process.exit(1)"
       - run: npm ci
       - run: npm ci --prefix desktop
-      - run: npm run test:app
       - run: npm run build -w web
+      - run: npm run test:app
       - run: npx --no-install playwright install chromium
       - run: npm run test:desktop
       - run: npm run build --prefix desktop -- --no-install
       - run: codesign --verify --deep --strict desktop/dist/Snip-darwin-arm64/Snip.app
+      - name: Build standalone release runtime (unsigned)
+        run: |
+          export SNIP_NODE_DISTRIBUTION="$(dirname "$(dirname "$(command -v node)")")"
+          node desktop/release.mjs --standalone
+      - run: node desktop/scripts/release-smoke.cjs

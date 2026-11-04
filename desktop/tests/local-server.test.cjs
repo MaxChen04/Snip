@@ -5,11 +5,27 @@ const os = require('node:os');
 const path = require('node:path');
 const { fork } = require('node:child_process');
 const { once } = require('node:events');
+const { createHash } = require('node:crypto');
+
+async function runtimeSnapshot(root) {
+  const files = [];
+  async function visit(directory, prefix = '') {
+    for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+      const relative = path.join(prefix, entry.name);
+      const absolute = path.join(directory, entry.name);
+      if (entry.isDirectory()) { files.push(`${relative}/`); await visit(absolute, relative); }
+      else if (entry.isSymbolicLink()) files.push(`${relative} -> ${await fs.readlink(absolute)}`);
+      else files.push(`${relative} ${createHash('sha256').update(await fs.readFile(absolute)).digest('hex')}`);
+    }
+  }
+  await visit(root);
+  return files.sort();
+}
 
 const launcher = path.join(__dirname, '..', 'local-server.cjs');
 
-async function launch(root) {
-  const child = fork(launcher, [root, '0'], {
+async function launch(root, dataRoot = root, releaseManaged = false) {
+  const child = fork(launcher, [root, '0', dataRoot, ...(releaseManaged ? ['release'] : [])], {
     cwd: path.join(root, 'web'),
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     env: { ...process.env, WRANGLER_SEND_METRICS: 'false' },
@@ -57,12 +73,15 @@ test('startup failure is reported and exits', { timeout: 15000 }, async () => {
 test('built assets and local bindings survive a restart', { timeout: 60000 }, async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'snip-local-server-'));
   const web = path.join(root, 'web');
+  const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'snip-local-data-'));
+  const nextRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'snip-next-runtime-'));
+  await fs.mkdir(path.join(dataRoot, 'web'));
   // The launcher also lives inside a packaged .app, outside this checkout.
   // Its dependencies must resolve from the supplied project root.
   await fs.symlink(path.resolve(__dirname, '../../node_modules'), path.join(root, 'node_modules'), 'dir');
   await fs.mkdir(path.join(web, 'dist/snip'), { recursive: true });
   await fs.mkdir(path.join(web, 'dist/client'), { recursive: true });
-  await fs.writeFile(path.join(web, '.dev.vars'), 'TEST_SECRET=local-secret-canary\n');
+  await fs.writeFile(path.join(dataRoot, 'web/.dev.vars'), 'TEST_SECRET=local-secret-canary\n');
   await fs.writeFile(path.join(web, 'dist/client/index.html'), '<h1>built asset</h1>');
   await fs.writeFile(path.join(web, 'dist/snip/wrangler.json'), JSON.stringify({
     name: 'snip-test', main: 'index.js', compatibility_date: '2025-01-01', no_bundle: true,
@@ -83,12 +102,14 @@ test('built assets and local bindings survive a restart', { timeout: 60000 }, as
   } }`);
   let running;
   try {
-    running = await launch(root);
+    running = await launch(root, dataRoot);
     assert.match(await (await fetch(running.url)).text(), /built asset/);
     assert.equal(await (await fetch(`${running.url}/api/write`)).text(), 'written');
     await stop(running.child);
     assert.doesNotMatch(running.output(), /local-secret-canary/);
-    running = await launch(root);
+    await fs.symlink(path.resolve(__dirname, '../../node_modules'), path.join(nextRoot, 'node_modules'), 'dir');
+    await fs.cp(web, path.join(nextRoot, 'web'), { recursive: true });
+    running = await launch(nextRoot, dataRoot);
     assert.deepEqual(await (await fetch(`${running.url}/api/read`)).json(), {
       secret: 'local-secret-canary', kv: 'kv-value', r2: 'r2-value', d1: 'd1-value',
     });
@@ -98,5 +119,102 @@ test('built assets and local bindings survive a restart', { timeout: 60000 }, as
   } finally {
     if (running && running.child.exitCode === null) running.child.kill('SIGKILL');
     await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(nextRoot, { recursive: true, force: true });
+    await fs.rm(dataRoot, { recursive: true, force: true });
   }
 });
+
+test('release migrations run before startup and back up an existing D1 database', { timeout: 90000 }, async () => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'snip-migrate-'));
+  const root = path.join(temp, 'runtime');
+  const dataRoot = path.join(temp, 'library');
+  const web = path.join(root, 'web');
+  await fs.mkdir(path.join(web, 'dist/snip'), { recursive: true });
+  await fs.mkdir(path.join(web, 'migrations'), { recursive: true });
+  await fs.mkdir(path.join(dataRoot, 'web'), { recursive: true });
+  await fs.mkdir(path.join(root, 'node_modules'));
+  await fs.symlink(path.resolve(__dirname, '../../node_modules/wrangler'), path.join(root, 'node_modules/wrangler'), 'dir');
+  const database = { binding: 'DB', database_name: 'snip', database_id: 'test-db', migrations_dir: 'migrations' };
+  await fs.writeFile(path.join(web, 'wrangler.jsonc'), JSON.stringify({ name: 'snip-test', compatibility_date: '2025-01-01', d1_databases: [database] }));
+  await fs.writeFile(path.join(web, 'dist/snip/wrangler.json'), JSON.stringify({ name: 'snip-test', main: 'index.js', compatibility_date: '2025-01-01', no_bundle: true, d1_databases: [database] }));
+  await fs.writeFile(path.join(web, 'dist/snip/index.js'), `export default { async fetch(request, env) { const row = await env.DB.prepare('SELECT value FROM t').first(); return new Response(row.value); } }`);
+  await fs.writeFile(path.join(web, 'migrations/0001_init.sql'), "CREATE TABLE t (value TEXT);\nINSERT INTO t VALUES ('preserved');\n");
+  let running;
+  try {
+    let pristine = await runtimeSnapshot(root);
+    running = await launch(root, dataRoot, true);
+    assert.equal(await (await fetch(running.url)).text(), 'preserved');
+    await stop(running.child);
+    running = undefined;
+    assert.deepEqual(await runtimeSnapshot(root), pristine, 'first release migration and startup must not write inside the runtime');
+    const backups = path.join(dataRoot, 'backups');
+    for (let i = 0; i < 4; i++) {
+      const folder = path.join(backups, `d1-old-${i}`);
+      await fs.mkdir(folder, { recursive: true });
+      await fs.writeFile(path.join(folder, 'snip-backup.json'), JSON.stringify({ owner: 'snip-d1-backup-v1', status: 'complete', time: i }));
+    }
+    for (const name of ['d1-foreign', 'd1-failed']) await fs.mkdir(path.join(backups, name));
+    await fs.writeFile(path.join(backups, 'd1-failed/snip-backup.json'), JSON.stringify({ owner: 'snip-d1-backup-v1', status: 'incomplete', time: 0 }));
+    await fs.writeFile(path.join(web, 'migrations/0002_upgrade.sql'), 'ALTER TABLE t ADD COLUMN extra TEXT;\n');
+    pristine = await runtimeSnapshot(root);
+    running = await launch(root, dataRoot, true);
+    assert.equal(await (await fetch(running.url)).text(), 'preserved');
+    await stop(running.child);
+    running = undefined;
+    assert.deepEqual(await runtimeSnapshot(root), pristine, 'release upgrade must not write inside the runtime');
+    const beforeNoop = (await fs.readdir(backups)).sort();
+    assert.equal(beforeNoop.length, 5); // Three complete, plus foreign and failed backups.
+    assert.ok(beforeNoop.includes('d1-foreign') && beforeNoop.includes('d1-failed'));
+    running = await launch(root, dataRoot, true);
+    assert.equal(await (await fetch(running.url)).text(), 'preserved');
+    await stop(running.child);
+    running = undefined;
+    assert.deepEqual((await fs.readdir(path.join(dataRoot, 'backups'))).sort(), beforeNoop);
+    assert.deepEqual(await runtimeSnapshot(root), pristine, 'release restart must not write inside the runtime');
+    await fs.writeFile(path.join(web, 'migrations/0003_bad.sql'), 'THIS IS NOT SQL;\n');
+    await assert.rejects(launch(root, dataRoot, true), /backup is at .*manual recovery/);
+    assert.equal((await fs.readdir(path.join(dataRoot, 'backups'))).length, beforeNoop.length + 1);
+  } finally {
+    if (running && running.child.exitCode === null) running.child.kill('SIGKILL');
+    await fs.rm(temp, { recursive: true, force: true });
+  }
+});
+
+for (const mode of ['graceful', 'forced']) {
+  test(`${mode} stop during migration terminates Wrangler and its child`, { timeout: 15000 }, async () => {
+    const { Service } = require('../service.cjs');
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'snip-cancel-'));
+    await fs.mkdir(path.join(root, 'web'), { recursive: true });
+    await fs.mkdir(path.join(root, 'node_modules/wrangler/bin'), { recursive: true });
+    await fs.writeFile(path.join(root, 'node_modules/wrangler/bin/wrangler.js'), `
+      const { spawn } = require('node:child_process');
+      const fs = require('node:fs');
+      const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+      fs.writeFileSync('child-pids', JSON.stringify([process.pid, child.pid]));
+      setInterval(() => {}, 1000);
+    `);
+    const service = new Service('web');
+    service.start({ executable: process.execPath, args: [launcher, root, '0', root, 'release'], cwd: root, env: process.env, log: { write() {}, end() {} } });
+    let descendants = [];
+    try {
+      for (let i = 0; i < 100; i++) {
+        try { descendants = JSON.parse(await fs.readFile(path.join(root, 'child-pids'), 'utf8')); break; }
+        catch { await new Promise(resolve => setTimeout(resolve, 30)); }
+      }
+      assert.equal(descendants.length, 2, 'migration subprocesses started');
+      await (mode === 'forced' ? service.forceStop() : service.stop());
+      for (const pid of descendants) {
+        let alive = true;
+        for (let i = 0; i < 100 && alive; i++) {
+          try { process.kill(pid, 0); await new Promise(resolve => setTimeout(resolve, 30)); }
+          catch (error) { if (error.code === 'ESRCH') alive = false; else throw error; }
+        }
+        assert.equal(alive, false, `migration process ${pid} must not outlive ${mode} shutdown`);
+      }
+    } finally {
+      await service.forceStop();
+      for (const pid of descendants) { try { process.kill(pid, 'SIGKILL'); } catch {} }
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+}
