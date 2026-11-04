@@ -25,7 +25,6 @@ import {
   Download01Icon,
   EyeIcon,
   File01Icon,
-  FileScriptIcon,
   Folder01Icon,
   FolderAddIcon,
   Globe02Icon,
@@ -47,7 +46,6 @@ import {
   ServerStack01Icon,
   ShieldKeyIcon,
   SmartPhone01Icon,
-  SourceCodeIcon,
   SparklesIcon as HSparkles,
   SquareArrowUpRightIcon,
   SquareLock02Icon,
@@ -82,7 +80,6 @@ export const ChevronRightIcon = make(ArrowRight01Icon, "ChevronRightIcon")
 export const CircleCheckIcon = make(CheckmarkCircle02Icon, "CircleCheckIcon")
 export const ClipboardIcon = make(HClipboard, "ClipboardIcon")
 export const Clock = make(Clock01Icon, "Clock")
-export const CodeIcon = make(SourceCodeIcon, "CodeIcon")
 export const CopyIcon = make(Copy01Icon, "CopyIcon")
 export const CornerDownLeftIcon = make(ArrowTurnBackwardIcon, "CornerDownLeftIcon")
 export const Database = make(DatabaseIcon, "Database")
@@ -90,7 +87,6 @@ export const DownloadIcon = make(Download01Icon, "DownloadIcon")
 export const ExternalLinkIcon = make(SquareArrowUpRightIcon, "ExternalLinkIcon")
 export const Eye = make(EyeIcon, "Eye")
 export const FileIcon = make(File01Icon, "FileIcon")
-export const FileJsonIcon = make(FileScriptIcon, "FileJsonIcon")
 export const FolderIcon = make(Folder01Icon, "FolderIcon")
 export const FolderPlusIcon = make(FolderAddIcon, "FolderPlusIcon")
 export const GlobeIcon = make(Globe02Icon, "GlobeIcon")

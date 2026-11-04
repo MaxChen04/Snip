@@ -381,7 +381,9 @@ type Rule = { selector: string; decls: [string, string][]; note?: string }
 
 const ELEMENT_STEP = 120
 
-const ruleText = (r: Rule) => `${r.note ? `/* ${r.note} */\n` : ""}${r.selector} {\n${r.decls.map(([k, v]) => `  ${k}: ${v};`).join("\n")}\n}`
+// Captured page text is useful on screen, but may contain CSS comment terminators.
+// Keep those annotations out of copied CSS so they cannot alter the rule.
+const ruleText = (r: Rule) => `${r.selector} {\n${r.decls.map(([k, v]) => `  ${k}: ${v};`).join("\n")}\n}`
 
 /**
  * Rule text from the stylesheet is one line; break it into one declaration per line.
