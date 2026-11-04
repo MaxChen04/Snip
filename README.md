@@ -1,6 +1,10 @@
 # Snip
 
-A private, Cosmos-style library of website design references. Paste a URL, choose **Static page** or **Crawl site**, and a capture agent on your machine records every page:
+A private, Cosmos-style library of website design references. Paste a URL, choose **Static page** or **Crawl site**, and a capture agent on your machine records every page.
+
+![Browsing a collection, opening a captured site and a page in Snip](docs/media/browse.gif)
+
+Each capture includes:
 
 - Desktop (1440px) and mobile (390px) full-page screenshots
 - **Computed styles** per element (only values that differ from browser defaults, plus `::before`/`::after`), keyframes, `:hover` rules and CSS variables
@@ -18,6 +22,26 @@ The app is an infinite gallery (Websites / Pages / Animations) with search and s
 A **remote MCP server** lets your agent search, read and add references.
 
 Website: [usesnip.dev](https://usesnip.dev). Latest release: [v0.1.0](https://github.com/MaxChen04/Snip/releases/tag/v0.1.0) (source only; Snip is self-hosted). License: [source-available](#license).
+
+## Tour
+
+**Page viewer.** Drag the sidebar to resize it, switch between Tokens, HTML and CSS, and flip between desktop and mobile captures.
+
+![Page viewer with resizable Tokens, HTML and CSS sidebar](docs/media/viewer.gif)
+
+**Design tokens.** Every website gets its colors, type, spacing, radii and shadows extracted.
+
+![Design tokens for a captured website](docs/media/tokens.png)
+
+**Select and Copy prompt.** Pick pages, animations and tokens, then copy a prompt that points your agent at exactly those references over MCP.
+
+![Selecting pages and copying an agent prompt](docs/media/select.gif)
+
+**Animations.** Scroll and hover GIFs from every capture, in one feed.
+
+![Animations gallery](docs/media/animations.gif)
+
+## How it works
 
 ```
 ┌──────────── Cloudflare (free plan) ─────────────┐        ┌──── Your machine ────┐
@@ -143,6 +167,8 @@ OpenCode (`~/.config/opencode/opencode.json` or a project `opencode.json`; note 
 ```
 
 For Claude.ai or Claude Desktop, add it as a custom connector with the same URL.
+
+<img src="docs/media/connect-mcp.png" alt="Connect MCP dialog" width="420">
 
 The **Connect MCP** button in the app's top bar shows these steps with your own URL filled in. In the local app or Snip.app the URL is `http://localhost:5173/mcp`, which only agents on the same Mac can reach while Snip is running; cloud agents such as Claude.ai need your deployed URL.
 
