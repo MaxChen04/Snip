@@ -50,6 +50,7 @@ function toReference(r: Row): Reference {
     collectionIds: r.collection_ids ? String(r.collection_ids).split(",") : [],
     createdAt: r.created_at as string,
     updatedAt: r.updated_at as string,
+    claimedAt: (r.claimed_at as string) ?? null,
   }
 }
 
@@ -287,24 +288,23 @@ export async function createReference(
 
 export async function requeueReference(db: D1Database, id: string) {
   await db.batch([
-    db.prepare(`DELETE FROM pages WHERE reference_id = ?`).bind(id),
-    db.prepare(`DELETE FROM animations WHERE reference_id = ?`).bind(id),
+    db.prepare(`INSERT OR IGNORE INTO capture_cleanup (prefix) SELECT 'refs/' || id || '/' || coalesce(capture_attempt || '/', 'p') FROM refs WHERE id = ?`).bind(id),
+    db.prepare(`DELETE FROM pages WHERE reference_id = ?`).bind(id), // animations cascade
     db
       .prepare(
-        `UPDATE refs SET status = 'queued', progress = 'Waiting for the capture agent', error = NULL, page_count = 0, animation_count = 0, claimed_at = NULL, updated_at = ? WHERE id = ?`,
+        `UPDATE refs SET status = 'queued', progress = 'Waiting for the capture agent', error = NULL, page_count = 0, animation_count = 0, cover_key = NULL, tokens_json = NULL, claimed_at = NULL, updated_at = ? WHERE id = ?`,
       )
       .bind(now(), id),
   ])
 }
 
-export async function deleteReference(db: D1Database, files: R2Bucket, id: string) {
+export async function deleteReference(db: D1Database, id: string) {
+  // Keep a retryable tombstone even if storage deletion fails after the database delete.
+  const prefix = `refs/${id}/`
   await db.batch([
-    db.prepare(`DELETE FROM animations WHERE reference_id = ?`).bind(id),
-    db.prepare(`DELETE FROM pages WHERE reference_id = ?`).bind(id),
-    db.prepare(`DELETE FROM reference_collections WHERE reference_id = ?`).bind(id),
+    db.prepare(`INSERT OR IGNORE INTO capture_cleanup (prefix) SELECT ? FROM refs WHERE id = ?`).bind(prefix, id),
     db.prepare(`DELETE FROM refs WHERE id = ?`).bind(id),
   ])
-  await deletePrefix(files, `refs/${id}/`)
 }
 
 export async function deletePrefix(files: R2Bucket, prefix: string) {
@@ -348,10 +348,7 @@ export async function updateCollection(db: D1Database, id: string, name: string,
 }
 
 export async function deleteCollection(db: D1Database, id: string) {
-  await db.batch([
-    db.prepare(`DELETE FROM reference_collections WHERE collection_id = ?`).bind(id),
-    db.prepare(`DELETE FROM collections WHERE id = ?`).bind(id),
-  ])
+  await db.prepare(`DELETE FROM collections WHERE id = ?`).bind(id).run() // memberships cascade
 }
 
 export async function setReferenceCollection(db: D1Database, referenceId: string, collectionId: string, member: boolean) {
@@ -369,35 +366,71 @@ export async function setReferenceCollection(db: D1Database, referenceId: string
 
 const STALE_MINUTES = 30
 
+export async function cleanupRetiredFiles(db: D1Database, files: R2Bucket) {
+  const tasks = await db.prepare(`SELECT prefix, attempts FROM capture_cleanup WHERE next_attempt IS NULL OR next_attempt <= ? LIMIT 20`)
+    .bind(now()).all<{ prefix: string; attempts: number }>()
+  for (const { prefix, attempts } of tasks.results) {
+    try {
+      // Sweep even with unresolved writers, but never discard the tombstone while
+      // one may still put an object after this listing.
+      await deletePrefix(files, prefix)
+      const deleted = await db.prepare(`DELETE FROM capture_cleanup WHERE prefix = ? AND NOT EXISTS
+        (SELECT 1 FROM capture_uploads WHERE substr(object_key, 1, length(?)) = ?)`)
+        .bind(prefix, prefix, prefix).run()
+      if (deleted.meta.changes) continue
+    } catch (error) {
+      console.error("capture cleanup failed", error)
+    }
+    const delay = Math.min(3600, 30 * 2 ** Math.min(attempts, 7))
+    await db.prepare(`UPDATE capture_cleanup SET attempts = attempts + 1, next_attempt = ? WHERE prefix = ?`)
+      .bind(new Date(Date.now() + delay * 1000).toISOString(), prefix).run()
+  }
+}
+
 export async function claimJob(db: D1Database): Promise<Job | null> {
   const stale = new Date(Date.now() - STALE_MINUTES * 60_000).toISOString()
   const ts = now()
-  const r = await db
-    .prepare(
-      `UPDATE refs SET status = 'capturing', claimed_at = ?, updated_at = ?, progress = 'Starting capture'
-       WHERE id = (
-         SELECT id FROM refs
-         WHERE status = 'queued' OR (status = 'capturing' AND claimed_at < ?)
-         ORDER BY created_at LIMIT 1
-       )
-       RETURNING id, url, mode, max_pages`,
-    )
-    .bind(ts, ts, stale)
-    .first<Row>()
-  if (!r) return null
-  // A reclaimed stale job starts over.
-  await db.batch([
-    db.prepare(`DELETE FROM animations WHERE reference_id = ?`).bind(r.id),
-    db.prepare(`DELETE FROM pages WHERE reference_id = ?`).bind(r.id),
+  const attempt = crypto.randomUUID().replace(/-/g, "")
+  const candidate = `SELECT id FROM refs WHERE status = 'queued' OR (status = 'capturing' AND claimed_at < ?) ORDER BY created_at LIMIT 1`
+  // D1 batches are transactions. Record the old namespace before replacing the lease,
+  // and remove old pages within the same transaction as the claim.
+  const results = await db.batch([
+    db.prepare(`INSERT OR IGNORE INTO capture_cleanup (prefix) SELECT 'refs/' || id || '/' || coalesce(capture_attempt || '/', 'p') FROM refs WHERE id = (${candidate})`).bind(stale),
+    db.prepare(`UPDATE refs SET status = 'capturing', capture_attempt = ?, claimed_at = ?, updated_at = ?, progress = 'Starting capture', cover_key = NULL, page_count = 0, animation_count = 0, tokens_json = NULL WHERE id = (${candidate}) RETURNING id, url, mode, max_pages`).bind(attempt, ts, ts, stale),
+    db.prepare(`DELETE FROM pages WHERE reference_id IN (SELECT id FROM refs WHERE capture_attempt = ? AND status = 'capturing')`).bind(attempt),
   ])
-  return { id: r.id as string, url: r.url as string, mode: r.mode as CaptureMode, maxPages: r.max_pages as number }
+  const r = results[1]?.results[0] as Row | undefined
+  return r ? { id: r.id as string, url: r.url as string, mode: r.mode as CaptureMode, maxPages: r.max_pages as number, attempt } : null
 }
 
-export async function setProgress(db: D1Database, id: string, progress: string) {
-  await db.prepare(`UPDATE refs SET progress = ?, claimed_at = ?, updated_at = ? WHERE id = ? AND status = 'capturing'`).bind(progress.slice(0, 300), now(), now(), id).run()
+// Admission and reference state are checked atomically, before any R2 write.
+export async function beginUpload(db: D1Database, id: string, attempt: string, key: string) {
+  const upload = crypto.randomUUID()
+  const result = await db.prepare(`INSERT INTO capture_uploads (id, object_key)
+    SELECT ?, ? WHERE EXISTS (SELECT 1 FROM refs WHERE id = ? AND status = 'capturing' AND capture_attempt = ?)`)
+    .bind(upload, key, id, attempt).run()
+  return result.meta.changes ? upload : null
 }
 
-export async function addPage(db: D1Database, referenceId: string, p: PageUpload) {
+export async function finishUpload(db: D1Database, upload: string) {
+  await db.prepare(`DELETE FROM capture_uploads WHERE id = ?`).bind(upload).run()
+}
+
+export async function isCapturing(db: D1Database, id: string, attempt: string) {
+  return !!(await db.prepare(`SELECT 1 FROM refs WHERE id = ? AND status = 'capturing' AND capture_attempt = ?`).bind(id, attempt).first())
+}
+
+export async function setProgress(db: D1Database, id: string, attempt: string, progress: string) {
+  const result = await db.prepare(`UPDATE refs SET progress = ?, claimed_at = ?, updated_at = ? WHERE id = ? AND status = 'capturing' AND capture_attempt = ?`).bind(progress.slice(0, 300), now(), now(), id, attempt).run()
+  return result.meta.changes > 0
+}
+
+export async function renewLease(db: D1Database, id: string, attempt: string) {
+  const result = await db.prepare(`UPDATE refs SET claimed_at = ? WHERE id = ? AND status = 'capturing' AND capture_attempt = ?`).bind(now(), id, attempt).run()
+  return result.meta.changes > 0
+}
+
+export async function addPage(db: D1Database, referenceId: string, attempt: string, p: PageUpload) {
   const pageId = newId()
   const ts = now()
   const stmts = [
@@ -405,13 +438,13 @@ export async function addPage(db: D1Database, referenceId: string, p: PageUpload
       .prepare(
         `INSERT INTO pages (id, reference_id, url, path, title, ord, desktop_key, desktop_thumb_key, desktop_width, desktop_height,
           mobile_key, mobile_thumb_key, mobile_width, mobile_height, snapshot_key, styles_key, tokens_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM refs WHERE id = ? AND status = 'capturing' AND capture_attempt = ?)`,
       )
       .bind(
         pageId, referenceId, p.url, p.path, p.title, p.ord,
         p.desktopKey, p.desktopThumbKey, p.desktopWidth, p.desktopHeight,
         p.mobileKey, p.mobileThumbKey, p.mobileWidth, p.mobileHeight,
-        p.snapshotKey, p.stylesKey, p.tokens ? JSON.stringify(p.tokens) : null, ts,
+        p.snapshotKey, p.stylesKey, p.tokens ? JSON.stringify(p.tokens) : null, ts, referenceId, attempt,
       ),
   ]
   for (const a of p.animations) {
@@ -419,11 +452,11 @@ export async function addPage(db: D1Database, referenceId: string, p: PageUpload
       db
         .prepare(
           `INSERT INTO animations (id, reference_id, page_id, kind, label, selector, viewport, gif_key, width, height, sheet_key, meta_json, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM pages WHERE id = ?)`,
         )
         .bind(
           newId(), referenceId, pageId, a.kind, a.label, a.selector, a.viewport, a.gifKey, a.width, a.height,
-          a.sheetKey ?? null, a.meta ? JSON.stringify(a.meta) : null, ts,
+          a.sheetKey ?? null, a.meta ? JSON.stringify(a.meta) : null, ts, pageId,
         ),
     )
   }
@@ -432,26 +465,28 @@ export async function addPage(db: D1Database, referenceId: string, p: PageUpload
       .prepare(
         `UPDATE refs SET page_count = (SELECT count(*) FROM pages WHERE reference_id = ?1),
           animation_count = (SELECT count(*) FROM animations WHERE reference_id = ?1),
-          cover_key = coalesce(cover_key, ?2), updated_at = ?3 WHERE id = ?1`,
+          cover_key = coalesce(cover_key, ?2), updated_at = ?3 WHERE id = ?1 AND status = 'capturing' AND capture_attempt = ?4`,
       )
-      .bind(referenceId, p.desktopThumbKey, ts),
+      .bind(referenceId, p.desktopThumbKey, ts, attempt),
   )
-  await db.batch(stmts)
-  return pageId
+  const results = await db.batch(stmts)
+  return results[0]?.meta.changes ? pageId : null
 }
 
-export async function completeJob(db: D1Database, id: string, c: JobComplete) {
-  await db
+export async function completeJob(db: D1Database, id: string, attempt: string, c: JobComplete) {
+  const result = await db
     .prepare(
       `UPDATE refs SET status = 'ready', progress = NULL, error = NULL, title = coalesce(?, title), description = coalesce(?, description),
-        favicon = coalesce(?, favicon), cover_key = coalesce(?, cover_key), tokens_json = ?, updated_at = ? WHERE id = ?`,
+        favicon = coalesce(?, favicon), cover_key = coalesce(?, cover_key), tokens_json = ?, updated_at = ? WHERE id = ? AND status = 'capturing' AND capture_attempt = ?`,
     )
-    .bind(c.title, c.description, c.favicon, c.coverKey, c.tokens ? JSON.stringify(c.tokens) : null, now(), id)
+    .bind(c.title, c.description, c.favicon, c.coverKey, c.tokens ? JSON.stringify(c.tokens) : null, now(), id, attempt)
     .run()
+  return result.meta.changes > 0
 }
 
-export async function failJob(db: D1Database, id: string, error: string) {
-  await db.prepare(`UPDATE refs SET status = 'failed', progress = NULL, error = ?, updated_at = ? WHERE id = ?`).bind(error.slice(0, 1000), now(), id).run()
+export async function failJob(db: D1Database, id: string, attempt: string, error: string) {
+  const result = await db.prepare(`UPDATE refs SET status = 'failed', progress = NULL, error = ?, updated_at = ? WHERE id = ? AND status = 'capturing' AND capture_attempt = ?`).bind(error.slice(0, 1000), now(), id, attempt).run()
+  return result.meta.changes > 0
 }
 
 // ---------- Capture worker presence ----------
@@ -475,16 +510,13 @@ export async function touchPresence(db: D1Database, activity: "idle" | "busy", j
 }
 
 export async function getCaptureStatus(db: D1Database, ref: Reference): Promise<CaptureStatus> {
-  const [w, row] = await Promise.all([
-    db.prepare(`SELECT * FROM worker_presence WHERE id = ?`).bind(PRESENCE_ID).first<Row>(),
-    db.prepare(`SELECT claimed_at FROM refs WHERE id = ?`).bind(ref.id).first<Row>(),
-  ])
+  const w = await db.prepare(`SELECT * FROM worker_presence WHERE id = ?`).bind(PRESENCE_ID).first<Row>()
   const lastSeenAt = (w?.last_seen_at as string) ?? null
   const secondsSinceSeen = lastSeenAt ? Math.max(0, Math.round((Date.now() - Date.parse(lastSeenAt)) / 1000)) : null
   const freshness = secondsSinceSeen == null ? "never" : secondsSinceSeen <= RECENT_SECONDS ? "recent" : "stale"
   const activity = (w?.activity as "idle" | "busy") ?? null
   const currentJobId = (w?.job_id as string) ?? null
-  const claimedAt = (row?.claimed_at as string) ?? null
+  const claimedAt = ref.claimedAt
   let advice: string
   let pollAfterSeconds: number | null = null
   switch (ref.status) {

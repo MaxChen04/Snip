@@ -21,8 +21,19 @@ function b64url(buf: ArrayBuffer | Uint8Array) {
   return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
 }
 
+// Imported once per isolate; signing a page of file URLs otherwise re-imports it for every URL.
+const keys = new Map<string, Promise<CryptoKey>>()
+const hmacKey = (secret: string) => {
+  let key = keys.get(secret)
+  if (!key) {
+    key = crypto.subtle.importKey("raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"])
+    keys.set(secret, key)
+  }
+  return key
+}
+
 async function hmac(secret: string, data: string) {
-  const key = await crypto.subtle.importKey("raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"])
+  const key = await hmacKey(secret)
   return b64url(await crypto.subtle.sign("HMAC", key, enc.encode(data)))
 }
 

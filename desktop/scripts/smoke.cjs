@@ -39,7 +39,7 @@ async function main() {
   assert.equal(process.platform, "darwin", "desktop smoke requires macOS")
   assert.equal(process.arch, "arm64", "desktop smoke requires Apple Silicon")
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), "snip-desktop-smoke-"))
-  const root = path.join(temp, "repo"), appDir = path.join(temp, "app")
+  const root = path.join(temp, "repo"), appDir = path.join(root, "desktop")
   let application, fixture
   const evidence = { checks: [], platform: `${os.release()}/${process.arch}`, node: process.version }
   const check = name => { evidence.checks.push(name); console.log("PASS", name) }
@@ -48,9 +48,11 @@ async function main() {
     for (const name of ["capture/src", "web/dist", "web/migrations", "web/public"]) await fs.cp(path.join(ROOT, name), path.join(root, name), { recursive: true })
     for (const name of ["package.json", "web/wrangler.jsonc"]) await fs.copyFile(path.join(ROOT, name), path.join(root, name))
     await fs.symlink(path.join(ROOT, "node_modules"), path.join(root, "node_modules"), "dir")
-    for (const name of await fs.readdir(desktop)) if (name.endsWith(".cjs") || name === "loading.html") await fs.copyFile(path.join(desktop, name), path.join(appDir, name))
+    for (const name of await fs.readdir(desktop)) if (name.endsWith(".cjs") || ["loading.html", "build.mjs", "install.mjs"].includes(name)) await fs.copyFile(path.join(desktop, name), path.join(appDir, name))
+    await fs.symlink(path.join(desktop, "node_modules"), path.join(appDir, "node_modules"), "dir")
     await fs.writeFile(path.join(appDir, "repo.json"), JSON.stringify({ root }))
-    await fs.writeFile(path.join(appDir, "package.json"), JSON.stringify({ name: "snip-smoke", version: "1.0.0", main: "bootstrap.cjs" }))
+    const manifest = JSON.parse(await fs.readFile(path.join(desktop, "package.json"), "utf8"))
+    await fs.writeFile(path.join(appDir, "package.json"), JSON.stringify({ ...manifest, main: "bootstrap.cjs" }))
     await fs.writeFile(path.join(appDir, "bootstrap.cjs"), `const {app}=require('electron');app.setPath('userData',${JSON.stringify(path.join(temp, "profile"))});app.setPath('logs',${JSON.stringify(path.join(temp, "logs"))});require('./main.cjs');`)
     const reservation = http.createServer()
     const port = await listen(reservation)
@@ -66,7 +68,13 @@ async function main() {
       if (req.url === "/slow") setTimeout(send, 6500); else send()
     })
     const fixturePort = await listen(fixture)
-    application = await _electron.launch({ executablePath: require(path.join(desktop, "node_modules/electron")), args: [appDir], env, timeout: 30000 })
+    // Exercise the actual packager/signing path. An unpackaged launch can hide
+    // failures when native Node tries to execute a helper inside app.asar.
+    const packaged = path.join(temp, "packaged")
+    await run(process.execPath, [path.join(appDir, "build.mjs"), "--no-install", "--out", packaged], { cwd: root, env })
+    const bundle = path.join(packaged, "Snip-darwin-arm64/Snip.app")
+    await run("codesign", ["--verify", "--deep", "--strict", bundle])
+    application = await _electron.launch({ executablePath: path.join(bundle, "Contents/MacOS/Snip"), args: [], env, timeout: 30000 })
     let page = await application.firstWindow()
     page.setDefaultTimeout(5000)
     page.on("pageerror", error => console.error("renderer:", error.message))

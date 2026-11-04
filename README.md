@@ -85,6 +85,8 @@ The app runs this repo in place. Rebuild web assets after web changes (`npm run 
    ```
 5. Point `capture/.env` at the deployed URL with the same `CAPTURE_TOKEN`, then `npm run capture`.
 
+**Upgrading an existing installation:** Stop all existing capture agents gracefully and wait for their captures, uploads, and in-flight Worker requests to finish before deploying. Apply `web/migrations/0003_capture_attempts.sql`, deploy the updated Worker, then update and restart every capture agent, including rebuilding and restarting the desktop app. The updated Worker rejects older agents before they can claim jobs (HTTP 426). Existing saved assets remain readable. Retired-file cleanup retries on queue activity with backoff; in rare cases an interrupted upload leaves safety metadata retained because its final write status is uncertain.
+
 Free-tier headroom: R2 gives 10 GB (roughly 1,500 to 3,000 captured pages, depending on page length and GIFs), D1 5 GB, Workers 100k requests/day.
 
 ## Connect your agent (remote MCP)
@@ -111,7 +113,7 @@ For Claude.ai or Claude Desktop, add it as a custom connector with the same URL.
 | `create_collection` | New collection |
 | `set_collection_membership` | Add or remove a reference from a collection |
 
-Every result carries the same JSON as text and as `structuredContent`. Lists are capped by item count and bytes and say what they left out and how to continue. Many models only see the first frame of a GIF, so new captures also store sampled frames and a contact sheet per animation (animations captured earlier only have the GIF until you recapture).
+Every result carries the same JSON as text and as `structuredContent`. Bounded lists are capped by item count and bytes and say what they left out and how to continue; the legacy full reference read can be larger. Many models only see the first frame of a GIF, so new captures also store sampled frames and a contact sheet per animation (animations captured earlier only have the GIF until you recapture).
 
 File URLs returned by the MCP are signed and expire after 24 hours.
 
