@@ -1,6 +1,10 @@
 # Snip
 
-A private, Cosmos-style library of website design references. Paste a URL, choose **Static page** or **Crawl site**, and a capture agent on your machine records every page:
+A private, Cosmos-style library of website design references. Paste a URL, choose **Static page** or **Crawl site**, and a capture agent on your machine records every page.
+
+![Browsing a collection, opening a captured site and a page in Snip](docs/media/browse.gif)
+
+Each capture includes:
 
 - Desktop (1440px) and mobile (390px) full-page screenshots
 - **Computed styles** per element (only values that differ from browser defaults, plus `::before`/`::after`), keyframes, `:hover` rules and CSS variables
@@ -8,7 +12,36 @@ A private, Cosmos-style library of website design references. Paste a URL, choos
 - **Scroll GIFs** per page and **hover GIFs** for elements with hover effects
 - Extracted **design tokens**: colors, fonts, type scale, spacing, radii, shadows, transitions
 
-The hosted app is an infinite gallery (Websites / Pages / Animations) with collections, search and sort. A **remote MCP server** lets your agent search, read and add references.
+The app is an infinite gallery (Websites / Pages / Animations) with search and sort. Inside it you can:
+
+- Save whole websites or **individual pages** to collections
+- Open any page in a **resizable viewer** with a sidebar of **Tokens**, **HTML** and **CSS** tabs
+- Use **Select** to pick pages, animations and tokens, then **Copy prompt** to hand them to an agent
+- Open **Connect MCP** in the top bar for copy-ready setup for Claude, Codex, OpenCode, Cursor and other clients
+
+A **remote MCP server** lets your agent search, read and add references.
+
+Website: [usesnip.dev](https://usesnip.dev). Latest release: [v0.1.0](https://github.com/MaxChen04/Snip/releases/tag/v0.1.0) (source only; Snip is self-hosted). License: [source-available](#license).
+
+## Tour
+
+**Page viewer.** Drag the sidebar to resize it, switch between Tokens, HTML and CSS, and flip between desktop and mobile captures.
+
+![Page viewer with resizable Tokens, HTML and CSS sidebar](docs/media/viewer.gif)
+
+**Design tokens.** Every website gets its colors, type, spacing, radii and shadows extracted.
+
+![Design tokens for a captured website](docs/media/tokens.png)
+
+**Select and Copy prompt.** Pick pages, animations and tokens, then copy a prompt that points your agent at exactly those references over MCP.
+
+![Selecting pages and copying an agent prompt](docs/media/select.gif)
+
+**Animations.** Scroll and hover GIFs from every capture, in one feed.
+
+![Animations gallery](docs/media/animations.gif)
+
+## How it works
 
 ```
 ┌──────────── Cloudflare (free plan) ─────────────┐        ┌──── Your machine ────┐
@@ -35,8 +68,9 @@ Self-hosted copies don't need any of this; `npm run deploy` is still the only de
 
 ## Stack
 
-- `web/`: Vite + React 19 + Tailwind v4, **shadcn** with the **SortUI** registry (`@sortui` theme and components in `src/components/ui`), Hono on Cloudflare Workers, D1, R2, `@cloudflare/workers-oauth-provider`, MCP via `agents/mcp/server` (stateless `createMcpHandler`).
-- `capture/`: Node 22 + Playwright, `gifenc` for GIF encoding.
+- `web/`: Vite + React 19 + Tailwind v4, **shadcn** with the **SortUI** registry (`@sortui` theme and components in `src/components/ui`, restyled with tactile surfaces), **Hugeicons**, Hono on Cloudflare Workers, D1, R2, `@cloudflare/workers-oauth-provider`, MCP via `agents/mcp/server` (stateless `createMcpHandler`).
+- `capture/`: Node 22+ + Playwright, `gifenc` for GIF encoding.
+- `desktop/`: Electron menu-bar app for Apple Silicon Macs (Snip.app, currently 0.2.0).
 
 Add more SortUI components with `cd web && npx shadcn@latest add @sortui/<name>`.
 
@@ -76,7 +110,7 @@ Signed release builds contain their own web app, capture engine, Node.js and Chr
 
 Your library and credentials stay outside the app. On first launch, choose an existing Snip project folder or create a new library in Snip's Application Support directory. Stop and drain any separate development server and capture agent before using an existing library; never run them concurrently against the same library. The chosen project folder remains the data location even though release code runs from the app: keep its configuration, `.snip` storage identity record and `web/.wrangler/state`. Imported database, file and OAuth-storage identities stay attached to that library across releases. If its folder moves, **Retry setup** offers to locate it again. Upgrades apply local D1 migrations before serving the app. The latest three successful pre-upgrade database backups are kept under the library's `backups/`; failed-upgrade backups remain for manual recovery. An upgrade failure stops startup and shows the backup location. A bounded private cache restores your reference route and selection after a graceful restart.
 
-**Release prerequisites are not configured yet:** the repository is private, no public release exists, and there is no Apple Developer signing identity. Local/ad-hoc builds keep in-app updates disabled. The first signed release must be installed manually; later signed releases can update it. Publishing does not happen on a merge. See [the release guide](desktop/RELEASING.md) for signing setup, draft release review and the two-version update acceptance check.
+**No signed app has been released yet.** The repository is public and v0.1.0 is a source-only release, but there is no Apple Developer signing identity, so build Snip.app yourself with `npm run app`. Local/ad-hoc builds keep in-app updates disabled. The first signed release must be installed manually; later signed releases can update it. Publishing does not happen on a merge. See [the release guide](desktop/RELEASING.md) for signing setup, draft release review and the two-version update acceptance check.
 
 ## Deploy to Cloudflare (free plan)
 
@@ -134,6 +168,10 @@ OpenCode (`~/.config/opencode/opencode.json` or a project `opencode.json`; note 
 
 For Claude.ai or Claude Desktop, add it as a custom connector with the same URL.
 
+<img src="docs/media/connect-mcp.png" alt="Connect MCP dialog" width="420">
+
+The **Connect MCP** button in the app's top bar shows these steps with your own URL filled in. In the local app or Snip.app the URL is `http://localhost:5173/mcp`, which only agents on the same Mac can reach while Snip is running; cloud agents such as Claude.ai need your deployed URL.
+
 | Tool | What it does |
 | --- | --- |
 | `search_references` | Search by text, collection or domain; returns summaries with ids |
@@ -156,8 +194,6 @@ File URLs returned by the MCP are signed and expire after 24 hours.
 
 `get_page(include_styles: true)` now returns guidance to `get_page_styles` instead of a truncated JSON fragment. Update client prompts to use the new tool for styles. Existing `get_reference` calls without `part` still return the full legacy result, and old animations still offer their GIFs.
 
-Run `npm test` for the MCP response-budget and cursor regression checks.
-
 ## Capture agent options (`capture/.env`)
 
 | Variable | Default | |
@@ -167,10 +203,27 @@ Run `npm test` for the MCP response-budget and cursor regression checks.
 | `CHROMIUM_PATH` | Playwright's Chromium | Use your installed Chrome instead |
 | `POLL_SECONDS` | `5` | Queue poll interval |
 | `HEADLESS` | `true` | `false` to watch the browser |
+| `DISMISS_POPUPS` | `true` | `false` keeps cookie banners and popups in captures |
+| `SCROLL_FPS` | `30` | Scroll GIF frames per second (5–50) |
+| `SCROLL_STEP` | `40` | Pixels scrolled per scroll GIF frame (min 8) |
+| `SCROLL_MAX_FRAMES` | `360` | Frame cap per scroll GIF; long pages take bigger steps |
 | `SHEET_FRAMES` | `9` | Frames sampled per animation for its contact sheet (2–16) |
 | `SHEET_WIDTH` | `1536` | Max contact sheet width in px |
+| `BROWSER_IDLE_SECONDS` | `120` | Seconds Chromium stays open after the last capture |
 
 `npm run once -w capture` drains the queue and exits.
+
+## Checks
+
+The same checks CI runs:
+
+```bash
+npm run typecheck
+npm run build -w web
+npm test               # web, capture (including MCP response budgets) and desktop unit tests
+```
+
+`npm run test:desktop` runs the Mac app smoke test.
 
 ## Known limits
 
