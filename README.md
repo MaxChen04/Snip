@@ -1,3 +1,5 @@
+![Snip: snip the web, keep the good bits](docs/media/banner.png)
+
 # Snip
 
 A private, Cosmos-style library of website design references. Paste a URL, choose **Static page** or **Crawl site**, and a capture agent on your machine records every page.
