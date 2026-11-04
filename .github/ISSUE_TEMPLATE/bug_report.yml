@@ -1,0 +1,40 @@
+name: Bug report
+description: Something in Snip doesn't work as expected
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: input
+    id: url
+    attributes:
+      label: URL you captured
+      description: Only if it's public. Leave blank otherwise.
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where does it happen?
+      options:
+        - Gallery or viewer (web app)
+        - Capture agent
+        - MCP server
+        - Snip.app (Mac)
+        - Setup or deploy
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Capture agent output, browser console errors or screenshots. Remove any tokens or secrets first.
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      description: OS, Node version, browser
+      placeholder: macOS 15.1, Node 24.11, Chrome 131

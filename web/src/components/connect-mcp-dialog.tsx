@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react"
 import { ArrowUpRightIcon, CheckIcon, CopyIcon, LaptopIcon, ShieldCheckIcon, XIcon } from "@/components/icons"
-import { Logo } from "@/App"
+import { Logo } from "@/components/brand"
 import { notify } from "@/components/notify"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
