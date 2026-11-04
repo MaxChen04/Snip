@@ -53,11 +53,11 @@ test("pages can be saved to many collections without copying files, and survive 
     await files.put(pricingPages[0]!.desktopKey!, "stored-screenshot-canary")
     const before = await objectCount()
 
-    assert.deepEqual(await db.setPageCollection(database, pricing, pricingPages.map((p) => p.id), true), { ok: true, changed: 2 })
-    assert.deepEqual(await db.setPageCollection(database, pricing, pricingPages.map((p) => p.id), true), { ok: true, changed: 0 }, "saving twice is a no-op")
-    assert.deepEqual(await db.setPageCollection(database, "missing", [pricingPages[0]!.id], true), { ok: false, reason: "collection-not-found" })
+    assert.equal(await db.setPageCollection(database, pricing, pricingPages.map((p) => p.id), true), 2)
+    assert.equal(await db.setPageCollection(database, pricing, pricingPages.map((p) => p.id), true), 0, "saving twice is a no-op")
+    assert.equal(await db.setPageCollection(database, "missing", [pricingPages[0]!.id], true), null)
     // The Mistral pricing page can also sit in a second collection.
-    assert.deepEqual(await db.setPageCollection(database, llm, [mistral.pages[1]!.id], true), { ok: true, changed: 1 })
+    assert.equal(await db.setPageCollection(database, llm, [mistral.pages[1]!.id], true), 1)
     assert.equal(await objectCount(), before, "collections reference the same stored files")
     assert.equal(await (await files.get(pricingPages[0]!.desktopKey!))!.text(), "stored-screenshot-canary")
 
@@ -82,6 +82,10 @@ test("pages can be saved to many collections without copying files, and survive 
     const recaptured = await db.listPages(database, { collectionId: pricing })
     assert.equal(recaptured.items.length, 2)
     assert.ok(recaptured.items.some((p) => p.desktopKey?.includes(again.attempt)))
+    // Ids read before the recapture are stale: writes with them fail instead of reporting success.
+    const staleId = stripe.pages[0]!.id
+    await assert.rejects(db.setPageCollection(database, pricing, [staleId], false), (e) => e instanceof db.StalePagesError && e.missing[0] === staleId)
+    assert.equal((await db.listPages(database, { collectionId: pricing })).items.length, 2, "a rejected write changes nothing")
 
     // MCP: list collections, then fetch the collection's pages.
     const rpc = async (name: string, args: unknown) => {
@@ -130,24 +134,27 @@ test("pages can be saved to many collections without copying files, and survive 
       for (const member of [true, false]) {
         const validId = mistral.pages[member ? 0 : 1]!.id
         for (const pageIds of [[staleId], [validId, staleId]]) {
-          assert.deepEqual(await db.setPageCollection(database, pricing, pageIds, member), { ok: false, reason: "pages-changed" })
+          await assert.rejects(db.setPageCollection(database, pricing, pageIds, member), (e) => e instanceof db.StalePagesError && e.missing.length === 1 && e.missing[0] === staleId)
           await unchanged()
           const response = await request({ pageIds, member })
           assert.equal(response.status, 409)
-          assert.match((await response.json() as { error: string }).error, /Reload this page/)
+          const error = await response.json() as { error: string; missingPageIds: string[] }
+          assert.match(error.error, /Reload this page/)
+          assert.deepEqual(error.missingPageIds, [staleId])
           await unchanged()
           const result = await rpc("set_page_collection_membership", { page_ids: pageIds, collection_id: pricing, member })
           assert.equal(result.isError, true)
-          assert.match(result.content[0].text, /Refresh page IDs with search_pages/)
+          assert.match(result.content[0].text, /Get current ids from search_pages/)
+          assert.ok(result.content[0].text.includes(staleId))
           await unchanged()
         }
       }
       // Retrying with fresh IDs succeeds, including duplicates and idempotent saves/removals.
-      assert.deepEqual(await db.setPageCollection(database, pricing, [replacement.id, replacement.id], true), { ok: true, changed: 0 })
+      assert.equal(await db.setPageCollection(database, pricing, [replacement.id, replacement.id], true), 0)
       const freshRemoval = await request({ pageIds: [replacement.id], member: false })
       assert.equal(freshRemoval.status, 200)
       assert.deepEqual(await freshRemoval.json(), { ok: true, changed: 1 })
-      assert.deepEqual(await db.setPageCollection(database, pricing, [replacement.id], false), { ok: true, changed: 0 })
+      assert.equal(await db.setPageCollection(database, pricing, [replacement.id], false), 0)
       const freshSave = await rpc("set_page_collection_membership", { page_ids: [replacement.id], collection_id: pricing, member: true })
       assert.deepEqual(freshSave.structuredContent, { ok: true, changed: 1 })
       await unchanged()

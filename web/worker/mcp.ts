@@ -657,13 +657,16 @@ Scroll timing is synthetic playback; hover offsets are measured. Treat easing an
       annotations: { idempotentHint: true },
     },
     async ({ page_ids, collection_id, member }) => {
-      const result = await db.setPageCollection(env.DB, collection_id, page_ids, member)
-      if (!result.ok) {
-        return result.reason === "collection-not-found"
-          ? fail(`No collection with id "${collection_id}". Call list_collections, or create_collection first.`)
-          : fail('Some pages changed or were removed. Refresh page IDs with search_pages or get_reference(part: "pages"), then retry. No memberships changed.')
+      let changed: number | null
+      try {
+        changed = await db.setPageCollection(env.DB, collection_id, page_ids, member)
+      } catch (e) {
+        if (e instanceof db.StalePagesError)
+          return fail(`Nothing was changed. These page ids no longer exist, usually because the website was re-captured: ${e.missing.join(", ")}. Get current ids from search_pages or get_reference(id, part "pages") and call again.`)
+        throw e
       }
-      return ok(result)
+      if (changed === null) return fail(`No collection with id "${collection_id}". Call list_collections, or create_collection first.`)
+      return ok({ ok: true, changed })
     },
   )
 

@@ -384,18 +384,22 @@ export async function setReferenceCollection(db: D1Database, referenceId: string
 
 export const MAX_PAGES_PER_CHANGE = 200
 
-type PageCollectionResult = { ok: true; changed: number } | { ok: false; reason: "collection-not-found" | "pages-changed" }
+export class StalePagesError extends Error {
+  constructor(readonly missing: string[]) {
+    super("Some pages changed or were removed. Reload this page and try again. No collection changes were saved.")
+  }
+}
 
 /**
  * Save pages to a collection (member=true) or take them out. The collection points at each page
  * in its website, so the page keeps its files and stays in every other collection.
- * Reject the entire change if the collection or any selected page no longer exists.
+ * Returns the changed count, or null for a missing collection. Stale page IDs reject the entire change.
  */
-export async function setPageCollection(db: D1Database, collectionId: string, pageIds: string[], member: boolean): Promise<PageCollectionResult> {
+export async function setPageCollection(db: D1Database, collectionId: string, pageIds: string[], member: boolean) {
   const ids = JSON.stringify([...new Set(pageIds)])
   // json_each keeps this to one bound parameter per list (D1 caps bound parameters per query).
   const selection = `WITH selected AS (
-    SELECT reference_id, path FROM pages WHERE id IN (SELECT value FROM json_each(?1))
+    SELECT id, reference_id, path FROM pages WHERE id IN (SELECT value FROM json_each(?1))
   ), valid AS (
     SELECT EXISTS (SELECT 1 FROM collections WHERE id = ?2) AS collection_exists,
       (SELECT count(*) FROM selected) = json_array_length(?1) AS pages_exist
@@ -412,14 +416,16 @@ export async function setPageCollection(db: D1Database, collectionId: string, pa
         .bind(ids, collectionId)
   // Validation and the guarded write share one D1 transaction, so a recapture cannot replace
   // pages between checking their IDs and changing membership. A stale batch changes nothing.
-  const [validation, result] = await db.batch<{ collection_exists: number; pages_exist: number }>([
-    db.prepare(`${selection} SELECT * FROM valid`).bind(ids, collectionId),
+  const [validation, result] = await db.batch<{ collection_exists: number; pages_exist: number; missing: string }>([
+    db.prepare(`${selection} SELECT *, (
+      SELECT json_group_array(value) FROM json_each(?1) WHERE value NOT IN (SELECT id FROM selected)
+    ) AS missing FROM valid`).bind(ids, collectionId),
     mutation,
   ])
   const valid = validation!.results[0]!
-  if (!valid.collection_exists) return { ok: false, reason: "collection-not-found" }
-  if (!valid.pages_exist) return { ok: false, reason: "pages-changed" }
-  return { ok: true, changed: result!.meta.changes }
+  if (!valid.collection_exists) return null
+  if (!valid.pages_exist) throw new StalePagesError(JSON.parse(valid.missing) as string[])
+  return result!.meta.changes
 }
 
 // Capture queue
