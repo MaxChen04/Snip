@@ -245,6 +245,9 @@ agent.use("*", async (c, next) => {
 const attemptFrom = (c: { req: { header(name: string): string | undefined } }) => c.req.header("x-snip-capture-attempt") ?? ""
 const validAttempt = (attempt: string) => /^[a-f0-9]{32}$/.test(attempt)
 
+// Lets `npm run doctor` check the URL and token without claiming a job or touching presence.
+agent.get("/ping", (c) => c.json({ ok: true }))
+
 agent.post("/jobs/claim", async (c) => {
   const job = await db.claimJob(c.env.DB)
   c.executionCtx.waitUntil(db.cleanupRetiredFiles(c.env.DB, c.env.FILES))
