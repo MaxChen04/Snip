@@ -417,7 +417,7 @@ const faqs: { q: string; a: ReactNode }[] = [
   },
   {
     q: "Can it capture pages behind a login?",
-    a: "No. Captures show what an anonymous browser sees. Cookie banners with an obvious Accept button are dismissed automatically.",
+    a: "Yes, with a saved sign-in. Sign in once in a Playwright browser, point the capture agent at that file, and tick “Use my saved sign-in” when you add the page. Otherwise captures show what an anonymous browser sees. Cookie banners with an obvious Accept button are dismissed automatically.",
   },
 ]
 
