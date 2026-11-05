@@ -8,8 +8,10 @@ import {
   RefreshCwIcon,
   Trash2Icon,
   AlertCircleIcon,
+  DownloadIcon,
   PauseIcon,
 } from "@/components/icons"
+import { exportReference } from "@/lib/export-reference"
 import { toast } from "sonner"
 import { notify } from "@/components/notify"
 import { CollectionPicker } from "@/components/collection-picker"
@@ -55,6 +57,44 @@ function CaptureFailure({ id, error, onRetried }: { id: string; error: string | 
 }
 
 type Detail = { reference: Reference; pages: Page[]; animations: Animation[] }
+
+/** The owner's note on a website. Saved when the field loses focus. */
+function NotesField({ r, onSaved }: { r: Reference; onSaved: (notes: string | null) => void }) {
+  const [value, setValue] = useState(r.notes ?? "")
+  useEffect(() => setValue(r.notes ?? ""), [r.notes])
+  const save = async () => {
+    const next = value.trim()
+    if (next === (r.notes ?? "")) return
+    try {
+      await api.setNotes(r.id, next)
+      onSaved(next || null)
+    } catch (e) {
+      toast.error((e as Error).message)
+    }
+  }
+  return (
+    <textarea
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      onBlur={save}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) e.currentTarget.blur()
+        if (e.key === "Escape") {
+          setValue(r.notes ?? "")
+          e.currentTarget.blur()
+        }
+      }}
+      maxLength={2000}
+      rows={1}
+      aria-label="Note"
+      placeholder="Add a note: what to borrow from it"
+      className="field-sizing-content mt-2 max-h-40 w-full max-w-md resize-none rounded-lg bg-transparent px-3 py-1.5 text-center text-sm text-ink-11 outline-none placeholder:text-ink-9 hover:bg-ink-2 focus:bg-ink-2 focus:text-foreground dark:hover:bg-ink-3 dark:focus:bg-ink-3"
+    />
+  )
+}
+
+const optionLabel = (r: Reference) =>
+  [r.options?.colorScheme === "dark" && "Dark mode", r.options?.desktopWidth && `${r.options.desktopWidth}px`, r.options?.signedIn && "Signed in"].filter(Boolean).join(" · ")
 
 export function ReferencePage({ id, login }: { id: string; login: string }) {
   const [location, navigate] = useLocation()
@@ -152,7 +192,11 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
           <a href={r.url} target="_blank" rel="noreferrer" className="mt-1 inline-block text-xs text-ink-11 hover:text-foreground">
             {r.domain} · {r.pageCount} {r.pageCount === 1 ? "page" : "pages"}
             {r.animationCount > 0 && ` · ${r.animationCount} ${r.animationCount === 1 ? "GIF" : "GIFs"}`}
+            {optionLabel(r) && ` · ${optionLabel(r)}`}
           </a>
+          <div className="flex justify-center">
+            <NotesField r={r} onSaved={(notes) => setData((d) => d && { ...d, reference: { ...d.reference, notes } })} />
+          </div>
         </div>
 
         <div className="mt-3 flex items-start gap-6">
@@ -185,6 +229,20 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
               <span className="text-2xs text-ink-11">More</span>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="center">
+              <DropdownMenuItem
+                disabled={!pages.length}
+                onClick={async () => {
+                  const id = toast.loading("Preparing export…")
+                  try {
+                    const n = await exportReference(r, pages, animations, (done, total) => toast.loading(`Preparing export… ${done}/${total}`, { id }))
+                    toast.success(`Exported ${n} files`, { id })
+                  } catch (e) {
+                    toast.error(`Export failed: ${(e as Error).message}`, { id })
+                  }
+                }}
+              >
+                <DownloadIcon /> Export as .zip
+              </DropdownMenuItem>
               <DropdownMenuItem
                 variant="destructive"
                 onClick={async () => {

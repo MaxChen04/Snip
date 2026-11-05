@@ -5,4 +5,4 @@ export const PUBLIC_SITE = import.meta.env.VITE_PUBLIC_SITE === "1"
 
 export const REPO_URL = "https://github.com/MaxChen04/Snip"
 
-export const signInHref = () => `/auth/login?next=${encodeURIComponent(location.pathname)}`
+export const signInHref = () => `/auth/login?next=${encodeURIComponent(location.pathname + location.search)}`

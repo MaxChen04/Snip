@@ -5,6 +5,18 @@ export type RefStatus = "queued" | "capturing" | "paused" | "ready" | "failed"
 /** A pause or stop the user asked for while capturing. The agent acts on it before its next page. */
 export type CaptureControl = "pause" | "stop"
 
+/** Per-capture options. Older capture agents ignore them. */
+export interface CaptureOptions {
+  /** Emulated prefers-color-scheme. Default light. */
+  colorScheme?: "light" | "dark"
+  /** Desktop viewport width in px. Default 1440. */
+  desktopWidth?: number
+  /** Use the capture agent's saved sign-in (STORAGE_STATE in capture/.env). */
+  signedIn?: boolean
+}
+
+export const DESKTOP_WIDTHS = [1280, 1440, 1920] as const
+
 export interface DesignTokens {
   colors: { value: string; count: number }[]
   fonts: { family: string; count: number }[]
@@ -38,6 +50,9 @@ export interface Reference {
   animationCount: number
   tokens: DesignTokens | null
   collectionIds: string[]
+  /** The owner's note: why this was saved. */
+  notes: string | null
+  options: CaptureOptions | null
   createdAt: string
   updatedAt: string
   /** Last claim or progress time while capturing. */
@@ -140,6 +155,7 @@ export interface Job {
   attempt: string
   /** Where a paused crawl left off. Pages already captured are kept; continue from here. */
   resume: CrawlState | null
+  options: CaptureOptions | null
 }
 
 /** Crawl position saved when a capture pauses. */
@@ -212,6 +228,22 @@ export interface CaptureStatus {
   }
   pollAfterSeconds: number | null
   advice: string
+}
+
+/** The capture agent's last check-in, for the gallery's offline banner. */
+export interface AgentPresence {
+  lastSeenAt: string | null
+  freshness: "recent" | "stale" | "never"
+  activity: "idle" | "busy" | null
+}
+
+export interface StorageUsage {
+  bytes: number
+  objects: number
+  /** True when the count stopped early; bytes is then a lower bound. */
+  partial: boolean
+  /** R2 free-tier storage. */
+  freeBytes: number
 }
 
 export interface Paged<T> {

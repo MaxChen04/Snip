@@ -96,6 +96,7 @@ function buildServer(env: Env, origin: string) {
     pageCount: r.pageCount,
     animationCount: r.animationCount,
     collectionIds: r.collectionIds,
+    notes: r.notes,
     coverUrl: await url(r.coverKey),
     appUrl: `${origin}/r/${r.id}`,
     createdAt: r.createdAt,
@@ -157,7 +158,7 @@ function buildServer(env: Env, origin: string) {
     {
       title: "Search design references",
       description:
-        "Search saved website design references by text (title/URL), collection id or domain. Returns short summaries with ids. With collection_id this lists websites saved to the collection as a whole; use search_pages(collection_id) for every page in it, including pages saved on their own. Next: get_reference(id, part \"overview\").",
+        "Search saved website design references by text (title, URL or notes), collection id or domain. Returns short summaries with ids. With collection_id this lists websites saved to the collection as a whole; use search_pages(collection_id) for every page in it, including pages saved on their own. Next: get_reference(id, part \"overview\").",
       inputSchema: z.object({
         query: z.string().optional().describe("Text matched against title, URL and description"),
         collection_id: z.string().optional().describe("From list_collections"),
@@ -602,21 +603,46 @@ Scroll timing is synthetic playback; hover offsets are measured. Treat easing an
         mode: z.enum(["single", "crawl"]).optional(),
         max_pages: z.number().int().min(1).max(200).optional(),
         collection_ids: z.array(z.string()).optional(),
+        notes: z.string().max(db.MAX_NOTES).optional().describe("Why this is being saved. Searchable, and shown to agents later."),
+        color_scheme: z.enum(["light", "dark"]).optional().describe("Emulated prefers-color-scheme. Default light."),
+        allow_duplicate: z.boolean().optional().describe("Queue a new capture even if this URL is already saved. Default false returns the saved reference."),
       }),
     },
     async (args) => {
       try {
+        if (!args.allow_duplicate) {
+          const existing = await db.findReferenceByUrl(env.DB, args.url)
+          if (existing)
+            return ok({
+              ...(await summarizeRef(existing)),
+              alreadySaved: true,
+              advice: "This URL is already saved, so nothing new was queued. Read it with get_reference, or pass allow_duplicate: true to capture it again.",
+            })
+        }
         const ref = await db.createReference(env.DB, {
           url: args.url,
           mode: args.mode ?? "single",
           maxPages: args.max_pages,
           collectionIds: args.collection_ids,
+          notes: args.notes,
+          options: args.color_scheme ? { colorScheme: args.color_scheme } : null,
         })
         return ok({ ...(await summarizeRef(ref)), capture: await db.getCaptureStatus(env.DB, ref) })
       } catch (e) {
         return fail(`${(e as Error).message}. Pass a full http(s) URL, e.g. https://linear.app.`)
       }
     },
+  )
+
+  server.registerTool(
+    "set_reference_notes",
+    {
+      title: "Set a reference's notes",
+      description: "Replace the owner's note on a saved website (why it was saved, what to borrow from it). An empty string clears it.",
+      inputSchema: z.object({ reference_id: z.string(), notes: z.string().max(db.MAX_NOTES) }),
+      annotations: { idempotentHint: true },
+    },
+    async ({ reference_id, notes }) => ((await db.setNotes(env.DB, reference_id, notes)) ? ok({ ok: true, notes: notes.trim() || null }) : fail(`No reference ${reference_id}. Use search_references to find ids.`)),
   )
 
   server.registerTool(

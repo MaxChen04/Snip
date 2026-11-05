@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import type { Browser, BrowserContext, Page as PwPage } from "playwright"
 import type { CrawlState, DesignTokens, Job, PageUpload } from "../../web/shared/types"
 import { JobGoneError, type SnipApi } from "./api"
@@ -322,19 +322,31 @@ function mergeTokens(list: DesignTokens[]): DesignTokens | null {
   }
 }
 
+/** The saved sign-in a capture asked for: a Playwright storage-state file named by STORAGE_STATE. */
+export function signedInState(env = process.env): string {
+  const file = env.STORAGE_STATE
+  if (!file) throw new Error("This capture uses your saved sign-in, but STORAGE_STATE isn't set in capture/.env. Create one with `npx playwright open --save-storage=auth.json <site>` and set STORAGE_STATE to its path.")
+  if (!existsSync(file)) throw new Error(`STORAGE_STATE points at ${file}, which doesn't exist.`)
+  return file
+}
+
 export async function captureJob(browser: Browser, api: SnipApi, job: Job) {
   const root = new URL(job.url)
   const prefix = `refs/${job.id}/${job.attempt}`
   await assertPublicUrl(root.href)
-  const desktop = await browser.newContext({ viewport: DESKTOP, deviceScaleFactor: 1, colorScheme: "light", locale: "en-US" })
+  const options = job.options ?? {}
+  const colorScheme = options.colorScheme === "dark" ? "dark" : "light"
+  const storageState = options.signedIn ? signedInState() : undefined
+  const desktop = await browser.newContext({ viewport: { ...DESKTOP, width: options.desktopWidth ?? DESKTOP.width }, deviceScaleFactor: 1, colorScheme, locale: "en-US", storageState })
   const mobile = await browser.newContext({
     viewport: MOBILE,
     deviceScaleFactor: MOBILE_DPR,
     isMobile: true,
     hasTouch: true,
     userAgent: MOBILE_UA,
-    colorScheme: "light",
+    colorScheme,
     locale: "en-US",
+    storageState,
   })
   const dPage = await desktop.newPage()
   const mPage = await mobile.newPage()

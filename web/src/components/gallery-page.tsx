@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react"
+import { AgentBanner } from "@/components/agent-banner"
 import { Link, useLocation, useSearch } from "wouter"
 import { AlertCircleIcon, ArrowUpRightIcon, BookmarkIcon, ChevronDownIcon, CornerDownLeftIcon, FolderMinusIcon, GlobeIcon, PencilIcon, PlusIcon, Trash2Icon } from "@/components/icons"
 import { toast } from "sonner"
@@ -67,6 +68,7 @@ export function GalleryPage({ login }: { login: string }) {
   return (
     <div className="min-h-svh">
       <TopBar login={login} view={view} onView={changeView} query={query} onQuery={setQuery} collection={collection} />
+      <AgentBanner />
 
       <CollectionStrip active={collection} onSelect={setCollection} />
       {collection ? <CollectionHeader id={collection} onDeleted={() => setCollection(undefined)} /> : null}

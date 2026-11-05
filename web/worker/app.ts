@@ -145,20 +145,36 @@ api.get("/pages", async (c) => c.json(await db.listPages(c.env.DB, listFilter(c.
 api.get("/animations", async (c) => c.json(await db.listAnimations(c.env.DB, listFilter(c.req.query()))))
 
 api.post("/references", async (c) => {
-  const body = await c.req.json<{ url: string; mode: CaptureMode; maxPages?: number; collectionIds?: string[] }>()
+  const body = await c.req.json<{ url: string; mode: CaptureMode; maxPages?: number; collectionIds?: string[]; notes?: string; options?: unknown; allowDuplicate?: boolean }>()
   if (!body.url) return c.json({ error: "url is required" }, 400)
   try {
+    if (!body.allowDuplicate) {
+      const existing = await db.findReferenceByUrl(c.env.DB, body.url)
+      if (existing) return c.json({ error: "This URL is already saved", existing }, 409)
+    }
     const ref = await db.createReference(c.env.DB, {
       url: body.url,
       mode: body.mode === "crawl" ? "crawl" : "single",
       maxPages: body.maxPages,
       collectionIds: body.collectionIds,
+      notes: body.notes,
+      options: db.cleanOptions(body.options),
     })
     return c.json(ref, 201)
   } catch (e) {
     return c.json({ error: (e as Error).message }, 400)
   }
 })
+
+api.patch("/references/:id", async (c) => {
+  const body = await c.req.json<{ notes?: unknown }>().catch(() => ({}) as { notes?: unknown })
+  if (!("notes" in body)) return c.json({ error: "notes is required" }, 400)
+  if (typeof body.notes === "string" && body.notes.length > db.MAX_NOTES) return c.json({ error: `Notes are limited to ${db.MAX_NOTES} characters` }, 400)
+  return (await db.setNotes(c.env.DB, c.req.param("id"), body.notes)) ? c.json({ ok: true }) : c.json({ error: "not found" }, 404)
+})
+
+api.get("/agent", async (c) => c.json(await db.getPresence(c.env.DB)))
+api.get("/storage", async (c) => c.json(await db.storageUsage(c.env.FILES)))
 
 api.get("/references/:id", async (c) => {
   const r = await db.getReference(c.env.DB, c.req.param("id"))

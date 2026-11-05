@@ -1,11 +1,18 @@
-import type { Animation, CaptureMode, Collection, Page, Paged, Reference } from "../../shared/types"
+import type { AgentPresence, Animation, CaptureMode, CaptureOptions, Collection, Page, Paged, Reference, StorageUsage } from "../../shared/types"
 
-export type { Animation, CaptureMode, Collection, Page, Paged, Reference }
+export type { AgentPresence, Animation, CaptureMode, CaptureOptions, Collection, Page, Paged, Reference, StorageUsage }
 export type RefSummary = { id: string; title: string | null; domain: string }
 export type PageWithRef = Page & { reference: RefSummary }
 export type AnimationWithRef = Animation & { reference: RefSummary }
 
 export class UnauthorizedError extends Error {}
+
+/** The URL is already in the library. */
+export class DuplicateError extends Error {
+  constructor(readonly existing: Reference) {
+    super("This URL is already saved")
+  }
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
@@ -14,7 +21,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   })
   if (res.status === 401) throw new UnauthorizedError("Not signed in")
   if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string }
+    const body = (await res.json().catch(() => ({}))) as { error?: string; existing?: Reference }
+    if (res.status === 409 && body.existing) throw new DuplicateError(body.existing)
     throw new Error(body.error ?? `Request failed (${res.status})`)
   }
   return res.json() as Promise<T>
@@ -25,6 +33,7 @@ export interface Filters {
   q?: string
   collection?: string
   sort?: Sort
+  status?: Reference["status"]
 }
 
 const qs = (o: Record<string, string | number | undefined | null>) => {
@@ -41,7 +50,16 @@ export const api = {
   animations: (f: Filters, cursor?: string | null) =>
     request<Paged<AnimationWithRef>>(`/api/animations?${qs({ ...f, cursor, limit: 30 })}`),
   reference: (id: string) => request<{ reference: Reference; pages: Page[]; animations: Animation[] }>(`/api/references/${id}`),
-  addReference: async (body: { url: string; mode: CaptureMode; maxPages?: number; collectionIds?: string[] }) => {
+  addReference: async (body: {
+    url: string
+    mode: CaptureMode
+    maxPages?: number
+    collectionIds?: string[]
+    notes?: string
+    options?: CaptureOptions | null
+    /** Capture again even if the URL is already saved. Otherwise a DuplicateError carries the saved one. */
+    allowDuplicate?: boolean
+  }) => {
     const result = await request<Reference>("/api/references", { method: "POST", body: JSON.stringify(body) })
     window.snipDesktop?.checkQueue()
     return result
@@ -57,6 +75,9 @@ export const api = {
     if (action === "resume") window.snipDesktop?.checkQueue()
     return result
   },
+  setNotes: (id: string, notes: string) => request<{ ok: true }>(`/api/references/${id}`, { method: "PATCH", body: JSON.stringify({ notes }) }),
+  agent: () => request<AgentPresence>("/api/agent"),
+  storage: () => request<StorageUsage>("/api/storage"),
   deleteReference: (id: string) => request<{ ok: true }>(`/api/references/${id}`, { method: "DELETE" }),
   setMembership: (id: string, cid: string, member: boolean) =>
     request<{ ok: true }>(`/api/references/${id}/collections/${cid}`, { method: member ? "PUT" : "DELETE" }),
