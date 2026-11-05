@@ -72,22 +72,31 @@ export function AddReferenceDialog({
   const submitBulk = async () => {
     let added = 0
     let saved = 0
-    const failed: string[] = []
+    const failed: URL[] = []
+    let lastError = ""
     for (const u of bulk) {
       try {
         await api.addReference(body(u))
         added++
       } catch (err) {
         if (err instanceof DuplicateError) saved++
-        else failed.push(u.hostname)
+        else {
+          failed.push(u)
+          lastError = (err as Error).message
+        }
       }
     }
-    if (failed.length) toast.error(`Couldn't add ${failed.join(", ")}`)
-    if (added || saved) {
-      setBulk([])
-      onAdded(null)
-      notify([added && `Added ${added} ${added === 1 ? "website" : "websites"}`, saved && `${saved} already saved`].filter(Boolean).join(", "))
+    const summary = [added && `Added ${added} ${added === 1 ? "website" : "websites"}`, saved && `${saved} already saved`].filter(Boolean).join(", ")
+    if (failed.length) {
+      // Keep the ones that failed in the dialog so they can be retried as they were.
+      setBulk(failed)
+      if (added) window.dispatchEvent(new Event("rs:reload"))
+      toast.error(`${summary ? `${summary}. ` : ""}${failed.length} couldn't be added: ${lastError}`)
+      return
     }
+    setBulk([])
+    onAdded(null)
+    notify(summary)
   }
 
   const submit = async (e?: React.FormEvent, allowDuplicate = false) => {

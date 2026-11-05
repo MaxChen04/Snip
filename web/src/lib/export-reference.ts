@@ -45,7 +45,9 @@ export async function exportReference(r: Reference, pages: Page[], animations: A
   let done = 0
   for (const f of plan.files) {
     const res = await fetch(`/files/${f.key}`)
-    if (res.ok) entries.push({ name: f.path, data: new Uint8Array(await res.arrayBuffer()) })
+    // A missing file would make an incomplete archive look complete, so stop instead.
+    if (!res.ok) throw new Error(`${f.path} couldn't be downloaded (${res.status === 401 ? "signed out" : `HTTP ${res.status}`})`)
+    entries.push({ name: f.path, data: new Uint8Array(await res.arrayBuffer()) })
     onProgress?.(++done, plan.files.length)
   }
   const url = URL.createObjectURL(new Blob([zip(entries)], { type: "application/zip" }))

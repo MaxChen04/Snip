@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { Link, useLocation, useSearch } from "wouter"
 import {
   ExternalLinkIcon,
@@ -61,8 +61,14 @@ type Detail = { reference: Reference; pages: Page[]; animations: Animation[] }
 /** The owner's note on a website. Saved when the field loses focus. */
 function NotesField({ r, onSaved }: { r: Reference; onSaved: (notes: string | null) => void }) {
   const [value, setValue] = useState(r.notes ?? "")
+  // Escape blurs the field; the blur must not save the edit being discarded.
+  const cancelling = useRef(false)
   useEffect(() => setValue(r.notes ?? ""), [r.notes])
   const save = async () => {
+    if (cancelling.current) {
+      cancelling.current = false
+      return
+    }
     const next = value.trim()
     if (next === (r.notes ?? "")) return
     try {
@@ -80,6 +86,7 @@ function NotesField({ r, onSaved }: { r: Reference; onSaved: (notes: string | nu
       onKeyDown={(e) => {
         if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) e.currentTarget.blur()
         if (e.key === "Escape") {
+          cancelling.current = true
           setValue(r.notes ?? "")
           e.currentTarget.blur()
         }
