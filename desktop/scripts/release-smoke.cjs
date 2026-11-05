@@ -32,7 +32,7 @@ async function main() {
     r2_buckets: [{ binding: 'FILES', bucket_name: 'snip-smoke-files' }],
     kv_namespaces: [{ binding: 'OAUTH_KV', id: '2138f85291c54dc2a8b1382ee45a7ac8' }],
   }))
-  await fs.appendFile(layout.captureEnvPath, 'POLL_SECONDS=1\nBROWSER_IDLE_SECONDS=2\nSCROLL_MAX_FRAMES=20\n')
+  await fs.appendFile(layout.captureEnvPath, 'POLL_SECONDS=1\nBROWSER_IDLE_SECONDS=2\nSCROLL_MAX_FRAMES=20\nALLOW_PRIVATE_URLS=true\n')
   const originalSettings = await fs.readFile(layout.webEnvPath, 'utf8')
   const fixture = http.createServer((_req, res) => { res.setHeader('content-type', 'text/html'); res.end('<html><head><title>Release capture fixture</title></head><body style="height:1800px;background:linear-gradient(#fce8bb,#617cde)"><h1>Portable Snip runtime</h1></body></html>') })
   const fixturePort = await listen(fixture)

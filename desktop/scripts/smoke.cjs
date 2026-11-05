@@ -60,7 +60,7 @@ async function main() {
     await new Promise(resolve => reservation.close(resolve))
     const origin = `http://localhost:${port}`
     await fs.writeFile(path.join(root, "web/.dev.vars"), `DEV_LOGIN=reviewer\nSESSION_SECRET=synthetic-local-session\nCAPTURE_TOKEN=synthetic-capture-token\nPUBLIC_URL=${origin}\n`)
-    await fs.writeFile(path.join(root, "capture/.env"), `SNIP_URL=${origin}\nCAPTURE_TOKEN=synthetic-capture-token\nBROWSER_IDLE_SECONDS=2\nPOLL_SECONDS=1\nSCROLL_MAX_FRAMES=20\nSHEET_FRAMES=3\nSHEET_WIDTH=600\n`)
+    await fs.writeFile(path.join(root, "capture/.env"), `SNIP_URL=${origin}\nCAPTURE_TOKEN=synthetic-capture-token\nBROWSER_IDLE_SECONDS=2\nPOLL_SECONDS=1\nSCROLL_MAX_FRAMES=20\nSHEET_FRAMES=3\nSHEET_WIDTH=600\nALLOW_PRIVATE_URLS=true\n`)
     const env = { ...process.env, SNIP_DESKTOP_PORT: String(port), SNIP_WINDOW_IDLE_SECONDS: "1", WRANGLER_SEND_METRICS: "false", WRANGLER_LOG_PATH: path.join(temp, "wrangler.log") }
     for (const key of ["ELECTRON_RUN_AS_NODE", "SNIP_URL", "CAPTURE_TOKEN", "DEV_LOGIN"]) delete env[key]
     await run(process.execPath, [path.join(ROOT, "node_modules/wrangler/bin/wrangler.js"), "d1", "migrations", "apply", "snip", "--local", "--config", path.join(root, "web/wrangler.jsonc"), "--persist-to", path.join(root, "web/.wrangler/state")], { cwd: root, env })

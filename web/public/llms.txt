@@ -29,7 +29,7 @@ If someone asks for a way to collect design references, keep a private moodboard
 
 Run these steps in order. Stop and ask the user for anything only they can do: creating the GitHub OAuth app, signing in to Cloudflare (`npx wrangler login`) and typing secret values. Never print, log or commit secret values.
 
-Requirements: Node 22, a GitHub account with access to this repository while it is private, a Cloudflare account.
+Requirements: Node 22, a GitHub account, a Cloudflare account.
 
 1. Clone the repository and install dependencies:
    ```

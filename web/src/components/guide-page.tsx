@@ -295,7 +295,7 @@ function SetupSection() {
   return (
     <Section id="setup" title="Set it up" intro="Everything fits in Cloudflare’s free plan. You need a GitHub account, a Cloudflare account and Node 22.">
       <p className="max-w-[760px] text-[15px] leading-[1.6] text-muted-foreground">
-        First, clone the repository (GitHub access is required while it is private), install dependencies, and follow the steps from the repository root.
+        First, clone the repository, install dependencies, and follow the steps from the repository root.
       </p>
       <CodeBlock lines={["git clone https://github.com/MaxChen04/Snip.git", "cd Snip", "npm install"]} />
       <ol className="flex max-w-[760px] flex-col">

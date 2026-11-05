@@ -6,7 +6,9 @@ import {
   getSessionLogin,
   logout,
   requireCaptureToken,
+  crossSiteWrite,
   requireSession,
+  sameOriginWrites,
   startLogin,
   verifyFileSig,
 } from "./auth"
@@ -59,10 +61,20 @@ app.get("/authorize", async (c) => {
 <input type="hidden" name="handle" value="${escapeHtml(handle)}">
 <div class="row"><button class="primary" name="decision" value="approve">Allow</button><button name="decision" value="deny">Deny</button></div>
 </form></body></html>`
-  return new Response(html, { headers: new Headers([...headers, ["content-type", "text/html; charset=utf-8"]]) })
+  return new Response(html, {
+    headers: new Headers([
+      ...headers,
+      ["content-type", "text/html; charset=utf-8"],
+      // The consent page must never be framed (clickjacking).
+      ["content-security-policy", "frame-ancestors 'none'"],
+      ["x-frame-options", "DENY"],
+    ]),
+  })
 })
 
 app.post("/authorize", async (c) => {
+  const refused = crossSiteWrite(c.req.raw, { json: false })
+  if (refused) return c.text(refused, 403)
   const login = await getSessionLogin(c)
   if (!login) return c.text("Not signed in", 401)
   const form = await c.req.formData()
@@ -113,6 +125,7 @@ app.get("/files/*", async (c) => {
 // ---------- Web API ----------
 
 const api = new Hono<AppEnv>()
+api.use("*", sameOriginWrites)
 api.use("*", requireSession)
 
 api.get("/me", (c) => c.json({ login: c.get("login") }))

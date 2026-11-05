@@ -57,12 +57,19 @@ export async function verify(secret: string, signed: string | undefined | null):
   return timingSafeEqual(sig, await hmac(secret, payload)) ? payload : null
 }
 
+/** Placeholder shipped in the example config. It never matches a real GitHub login. */
+export const LOGIN_PLACEHOLDER = "your-github-login"
+
+/** GitHub logins allowed to sign in. Empty (fail closed) until the owner sets their own. */
 export function allowedLogins(env: Env) {
   return String(env.ALLOWED_GITHUB_LOGINS ?? "")
     .split(",")
     .map((s) => s.trim().toLowerCase())
-    .filter(Boolean)
+    .filter((s) => s && s !== LOGIN_PLACEHOLDER)
 }
+
+const NO_LOGINS =
+  "This Snip instance has no allowed GitHub logins yet. Set ALLOWED_GITHUB_LOGINS to your GitHub login (see the README's deploy steps), then deploy again."
 
 function isLocal(url: string) {
   const h = new URL(url).hostname
@@ -97,9 +104,34 @@ export const requireCaptureToken: MiddlewareHandler<AppEnv> = async (c, next) =>
   await next()
 }
 
+/**
+ * Blocks cross-site writes. A local install signs in with DEV_LOGIN and needs no cookie, so any
+ * website open in the browser could otherwise send a simple (no-preflight) POST to localhost.
+ * Requiring JSON forces a CORS preflight, and a foreign Origin or Sec-Fetch-Site is refused.
+ */
+export function crossSiteWrite(req: Request, { json = true } = {}): string | null {
+  if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") return null
+  const origin = req.headers.get("origin")
+  if (origin && origin !== new URL(req.url).origin) return "cross-origin request refused"
+  const site = req.headers.get("sec-fetch-site")
+  if (site && site !== "same-origin" && site !== "none") return "cross-site request refused"
+  if (json && req.headers.get("content-length") !== "0" && req.body !== null) {
+    const type = (req.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase()
+    if (type !== "application/json") return "expected a JSON request body"
+  }
+  return null
+}
+
+export const sameOriginWrites: MiddlewareHandler<AppEnv> = async (c, next) => {
+  const refused = crossSiteWrite(c.req.raw)
+  if (refused) return c.json({ error: refused }, 403)
+  await next()
+}
+
 const safeNext = (next: string | undefined | null) => (next && next.startsWith("/") && !next.startsWith("//") ? next : "/")
 
 export async function startLogin(c: Context<AppEnv>) {
+  if (!allowedLogins(c.env).length) return c.text(NO_LOGINS, 503)
   const next = safeNext(c.req.query("next"))
   const state = b64url(crypto.getRandomValues(new Uint8Array(16)))
   setCookie(c, STATE_COOKIE, await sign(c.env.SESSION_SECRET, `${state}|${next}`), {
@@ -121,6 +153,7 @@ export async function startLogin(c: Context<AppEnv>) {
 }
 
 export async function finishLogin(c: Context<AppEnv>) {
+  if (!allowedLogins(c.env).length) return c.text(NO_LOGINS, 503)
   const payload = await verify(c.env.SESSION_SECRET, getCookie(c, STATE_COOKIE))
   deleteCookie(c, STATE_COOKIE, { path: "/auth" })
   const [state, next] = (payload ?? "").split("|")

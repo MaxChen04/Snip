@@ -3,6 +3,7 @@ import type { Browser, BrowserContext, Page as PwPage } from "playwright"
 import type { CrawlState, DesignTokens, Job, PageUpload } from "../../web/shared/types"
 import { JobGoneError, type SnipApi } from "./api"
 import { encodeGif, type Frame } from "./gif"
+import { assertPublicPage, assertPublicUrl, PrivateAddressError } from "./network-guard"
 import { buildStills } from "./sheet"
 
 // In-page scripts live in plain .js files so the TS toolchain can't inject helpers into them.
@@ -70,6 +71,7 @@ async function sitemapUrls(context: BrowserContext, root: URL): Promise<string[]
 
 async function load(page: PwPage, url: string) {
   await page.goto(url, { waitUntil: "load", timeout: 45_000 })
+  await assertPublicPage(page)
   await page.waitForLoadState("networkidle", { timeout: 8_000 }).catch(() => {})
   await dismissBanners(page)
   await page.evaluate(() => document.fonts?.ready).catch(() => {})
@@ -323,6 +325,7 @@ function mergeTokens(list: DesignTokens[]): DesignTokens | null {
 export async function captureJob(browser: Browser, api: SnipApi, job: Job) {
   const root = new URL(job.url)
   const prefix = `refs/${job.id}/${job.attempt}`
+  await assertPublicUrl(root.href)
   const desktop = await browser.newContext({ viewport: DESKTOP, deviceScaleFactor: 1, colorScheme: "light", locale: "en-US" })
   const mobile = await browser.newContext({
     viewport: MOBILE,
@@ -516,7 +519,7 @@ export async function captureJob(browser: Browser, api: SnipApi, job: Job) {
         if (e instanceof JobGoneError) throw e
         failures++
         log(`  ✗ ${url}: ${(e as Error).message.split("\n")[0]}`)
-        if (captured === 0 && job.mode === "single") throw e
+        if (captured === 0 && (job.mode === "single" || e instanceof PrivateAddressError)) throw e
         if (failures > Math.max(5, job.maxPages)) throw e
       }
     }

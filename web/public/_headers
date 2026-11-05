@@ -1,0 +1,6 @@
+# Static asset headers (Workers Static Assets). The app is never meant to be framed.
+/*
+  X-Frame-Options: DENY
+  Content-Security-Policy: frame-ancestors 'none'
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
