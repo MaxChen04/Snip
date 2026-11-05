@@ -1,7 +1,14 @@
 /** A plain-language reading of a capture error and what Retry will do about it. */
 export type CaptureDiagnosis = { summary: string; fix: string }
 
+/** Error recorded when a capture is stopped before its first page finished. */
+export const STOPPED_EMPTY = "Stopped before any pages were captured"
+
 const KNOWN: { match: RegExp; diagnosis: CaptureDiagnosis }[] = [
+  {
+    match: /^Stopped before any pages were captured$/,
+    diagnosis: { summary: "You stopped this capture before any pages were saved.", fix: "Retry starts it again from the first page." },
+  },
   {
     match: /Browser install failed/i,
     diagnosis: { summary: "Snip couldn't download the capture browser.", fix: "Check your internet connection, then retry." },

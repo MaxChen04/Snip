@@ -8,11 +8,13 @@ import {
   RefreshCwIcon,
   Trash2Icon,
   AlertCircleIcon,
+  PauseIcon,
 } from "@/components/icons"
 import { toast } from "sonner"
 import { notify } from "@/components/notify"
 import { CollectionPicker } from "@/components/collection-picker"
 import { diagnoseCaptureError, RetryCaptureButton } from "@/components/capture-retry"
+import { CaptureControls, captureLabel } from "@/components/capture-controls"
 import { EMPTY_SELECTION, SelectCheck, SelectionBar, toggleIn, type Selection } from "@/components/prompt-selection"
 import { Masonry } from "@/components/gallery-page"
 import { SavePagesButton } from "@/components/save-pages"
@@ -201,9 +203,12 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
         {r.status === "failed" ? (
           <CaptureFailure id={r.id} error={r.error} onRetried={load} />
         ) : r.status !== "ready" && (
-          <div className="mt-3 flex items-center gap-2 rounded-full bg-control px-3 py-1.5 text-xs shadow-button">
-            <Spinner className="size-3.5 text-ink-10" />
-            <span>{r.progress ?? "Waiting for the capture agent"}</span>
+          <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+            <div className="flex h-7 items-center gap-2 rounded-full bg-control px-3 text-xs shadow-button">
+              {r.status === "paused" ? <PauseIcon className="size-3.5 text-ink-10" /> : <Spinner className="size-3.5 text-ink-10" />}
+              <span>{captureLabel(r) ?? r.progress ?? "Waiting for the capture agent"}</span>
+            </div>
+            <CaptureControls r={r} onChange={load} />
           </div>
         )}
       </div>

@@ -51,6 +51,12 @@ export const api = {
     window.snipDesktop?.checkQueue()
     return result
   },
+  /** Pause, resume or stop a capture. Pause and stop let the page being captured finish first. */
+  captureControl: async (id: string, action: "pause" | "resume" | "stop") => {
+    const result = await request<Reference | null>(`/api/references/${id}/${action}`, { method: "POST" })
+    if (action === "resume") window.snipDesktop?.checkQueue()
+    return result
+  },
   deleteReference: (id: string) => request<{ ok: true }>(`/api/references/${id}`, { method: "DELETE" }),
   setMembership: (id: string, cid: string, member: boolean) =>
     request<{ ok: true }>(`/api/references/${id}/collections/${cid}`, { method: member ? "PUT" : "DELETE" }),

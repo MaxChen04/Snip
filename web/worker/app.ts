@@ -1,5 +1,5 @@
-import { Hono } from "hono"
-import type { CaptureMode, JobComplete, PageUpload } from "../shared/types"
+import { Hono, type Context } from "hono"
+import type { CaptureMode, CrawlState, JobComplete, PageUpload } from "../shared/types"
 import {
   type AppEnv,
   finishLogin,
@@ -160,6 +160,17 @@ api.post("/references/:id/recapture", async (c) => {
   return c.json({ ok: true })
 })
 
+// Pause, resume and stop take effect between pages: the page being captured always finishes.
+const control = (action: (database: D1Database, id: string) => Promise<boolean>) => async (c: Context<AppEnv>) => {
+  const id = c.req.param("id")!
+  if (!(await action(c.env.DB, id))) return c.json({ error: "This capture can't do that right now" }, 409)
+  const ref = await db.getReference(c.env.DB, id)
+  return c.json(ref?.reference ?? null)
+}
+api.post("/references/:id/pause", control(db.requestPause))
+api.post("/references/:id/resume", control(db.resumeReference))
+api.post("/references/:id/stop", control(db.requestStop))
+
 api.delete("/references/:id", async (c) => {
   await db.deleteReference(c.env.DB, c.req.param("id"))
   c.executionCtx.waitUntil(db.cleanupRetiredFiles(c.env.DB, c.env.FILES))
@@ -241,6 +252,23 @@ agent.post("/jobs/:id/progress", async (c) => {
   const { message } = await c.req.json<{ message: string }>()
   if (!validAttempt(attempt) || !(await db.setProgress(c.env.DB, c.req.param("id"), attempt, message))) return c.json({ error: "job is gone" }, 410)
   await db.touchPresence(c.env.DB, "busy", c.req.param("id"))
+  return c.json({ ok: true })
+})
+
+agent.get("/jobs/:id/control", async (c) => {
+  const attempt = attemptFrom(c)
+  const result = validAttempt(attempt) ? await db.getControl(c.env.DB, c.req.param("id"), attempt) : null
+  return result ? c.json(result) : c.json({ error: "job is gone" }, 410)
+})
+
+agent.post("/jobs/:id/pause", async (c) => {
+  const attempt = attemptFrom(c)
+  if (!validAttempt(attempt)) return c.json({ error: "job is gone" }, 410)
+  const state = await c.req.json<CrawlState>()
+  const result = await db.pauseJob(c.env.DB, c.req.param("id"), attempt, state)
+  if (result === "gone") return c.json({ error: "job is gone" }, 410)
+  if (result === "changed") return c.json({ error: "pause no longer requested" }, 409)
+  await db.touchPresence(c.env.DB, "idle", null)
   return c.json({ ok: true })
 })
 

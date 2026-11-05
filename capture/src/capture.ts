@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs"
 import type { Browser, BrowserContext, Page as PwPage } from "playwright"
-import type { DesignTokens, Job, PageUpload } from "../../web/shared/types"
+import type { CrawlState, DesignTokens, Job, PageUpload } from "../../web/shared/types"
 import { JobGoneError, type SnipApi } from "./api"
 import { encodeGif, type Frame } from "./gif"
 import { buildStills } from "./sheet"
@@ -25,6 +25,10 @@ const SCROLL_FPS = Math.min(50, Math.max(5, Number(process.env.SCROLL_FPS ?? 30)
 const SCROLL_STEP = Math.max(8, Number(process.env.SCROLL_STEP ?? 40)) // px per frame at 1440 wide
 const MAX_SCROLL_FRAMES = Math.max(20, Number(process.env.SCROLL_MAX_FRAMES ?? 360))
 const MAX_HOVER_GIFS = 6
+const MAX_SAVED_QUEUE = 2000 // URLs kept when a crawl pauses
+// Same text as STOPPED_EMPTY in web/shared/capture-errors.ts. Released apps ship capture/src without
+// web/shared, so the agent may only import types from there.
+const STOPPED_EMPTY = "Stopped before any pages were captured"
 const FONT_BUDGET = 4_000_000
 
 const MOBILE_UA =
@@ -332,9 +336,11 @@ export async function captureJob(browser: Browser, api: SnipApi, job: Job) {
   const dPage = await desktop.newPage()
   const mPage = await mobile.newPage()
 
-  const queue: string[] = [normalize(root.href, root) ?? root.href]
-  const seen = new Set(queue)
-  if (job.mode === "crawl") {
+  const resume = job.resume
+  const queue: string[] = resume ? [...resume.queue] : [normalize(root.href, root) ?? root.href]
+  const visited: string[] = resume ? [...resume.visited] : []
+  const seen = new Set([...visited, ...queue])
+  if (job.mode === "crawl" && !resume) {
     for (const u of await sitemapUrls(desktop, root)) {
       const n = normalize(u, root)
       if (n && !seen.has(n)) {
@@ -344,17 +350,59 @@ export async function captureJob(browser: Browser, api: SnipApi, job: Job) {
     }
   }
 
-  const allTokens: DesignTokens[] = []
-  let meta: { title: string | null; description: string | null; favicon: string | null } | null = null
+  // A resumed crawl picks up its counts and findings; its pages are already saved.
+  const allTokens: DesignTokens[] = resume?.tokens ? [resume.tokens] : []
+  let meta: CrawlState["meta"] = resume?.meta ?? null
   let coverKey: string | null = null
-  let captured = 0
-  let failures = 0
-  let navLinksQueued = false
-  const hoverSeen = new Set<string>()
+  let captured = resume?.captured ?? 0
+  let failures = resume?.failures ?? 0
+  let navLinksQueued = resume?.navLinksQueued ?? false
+  const hoverSeen = new Set<string>(resume?.hoverSeen)
+  if (resume) log(`[${job.id}] resuming after ${captured} page(s)`)
 
+  /** Between pages: honour a pause or stop the user asked for. A pause hands back where the crawl is. */
+  const windDown = async (): Promise<"stop" | "paused" | null> => {
+    try {
+      for (let checks = 0; checks < 5; checks++) {
+        const control = await api.control(job.id)
+        if (control !== "pause") return control
+        const state: CrawlState = {
+          version: 1,
+          queue: queue.slice(0, MAX_SAVED_QUEUE),
+          visited,
+          captured,
+          failures,
+          navLinksQueued,
+          hoverSeen: [...hoverSeen],
+          meta,
+          tokens: mergeTokens(allTokens),
+        }
+        if (await api.pause(job.id, state)) return "paused"
+        // The pause was cancelled or replaced by a stop meanwhile: check again.
+      }
+    } catch (e) {
+      if (e instanceof JobGoneError) throw e
+      // A missed check only delays the pause or stop until the next page.
+      log("  control check failed:", (e as Error).message.split("\n")[0])
+    }
+    return null
+  }
+
+  let stopped = false
   try {
     while (queue.length && captured < job.maxPages) {
+      const next = await windDown()
+      if (next === "paused") {
+        log(`[${job.id}] paused after ${captured} page(s)`)
+        return
+      }
+      if (next === "stop") {
+        stopped = true
+        log(`[${job.id}] stopped after ${captured} page(s)`)
+        break
+      }
       const url = queue.shift()!
+      visited.push(url)
       const ord = captured
       const path = new URL(url).pathname || "/"
       await api.progress(job.id, `Capturing ${captured + 1}/${job.mode === "crawl" ? `${Math.min(job.maxPages, captured + 1 + queue.length)}` : 1}: ${path}`)
@@ -473,12 +521,13 @@ export async function captureJob(browser: Browser, api: SnipApi, job: Job) {
       }
     }
 
-    if (!captured) throw new Error("No pages could be captured")
+    if (!captured) throw new Error(stopped ? STOPPED_EMPTY : "No pages could be captured")
     await api.complete(job.id, {
       title: meta?.title ?? null,
       description: meta?.description ?? null,
       favicon: meta?.favicon ?? null,
-      coverKey,
+      // A resumed crawl already has its cover from its first page; null keeps it.
+      coverKey: resume?.captured ? null : coverKey,
       tokens: mergeTokens(allTokens),
     })
     log(`[${job.id}] done: ${captured} page(s)`)

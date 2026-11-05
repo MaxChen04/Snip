@@ -1,7 +1,9 @@
 // Types shared by the Worker, the web app and the capture agent.
 
 export type CaptureMode = "single" | "crawl"
-export type RefStatus = "queued" | "capturing" | "ready" | "failed"
+export type RefStatus = "queued" | "capturing" | "paused" | "ready" | "failed"
+/** A pause or stop the user asked for while capturing. The agent acts on it before its next page. */
+export type CaptureControl = "pause" | "stop"
 
 export interface DesignTokens {
   colors: { value: string; count: number }[]
@@ -25,6 +27,8 @@ export interface Reference {
   mode: CaptureMode
   maxPages: number
   status: RefStatus
+  /** Set while capturing when a pause or stop is waiting for the current page to finish. */
+  control: CaptureControl | null
   progress: string | null
   error: string | null
   coverKey: string | null
@@ -134,6 +138,25 @@ export interface Job {
   maxPages: number
   /** Server-issued capture lease and file namespace. */
   attempt: string
+  /** Where a paused crawl left off. Pages already captured are kept; continue from here. */
+  resume: CrawlState | null
+}
+
+/** Crawl position saved when a capture pauses. */
+export interface CrawlState {
+  version: 1
+  /** URLs still to visit, in order. */
+  queue: string[]
+  /** URLs already visited (captured or failed), so they are not queued again. */
+  visited: string[]
+  captured: number
+  failures: number
+  navLinksQueued: boolean
+  /** Hover effects already recorded, as selector|label. */
+  hoverSeen: string[]
+  meta: { title: string | null; description: string | null; favicon: string | null } | null
+  /** Tokens merged from the pages captured so far. */
+  tokens: DesignTokens | null
 }
 
 export interface PageUpload {
