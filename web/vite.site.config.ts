@@ -1,6 +1,6 @@
 // Static build of the public site (usesnip.dev): the landing page and setup
-// guide only, with no Worker API. `npm run build:site` writes dist-site/,
-// which site/worker.ts serves. The app build (vite.config.ts) is unchanged.
+// guide only, with no Worker script. `npm run build:site` writes dist-site/,
+// which Cloudflare serves directly. The app build (vite.config.ts) is unchanged.
 import fs from "node:fs"
 import path from "node:path"
 import tailwindcss from "@tailwindcss/vite"
@@ -80,6 +80,7 @@ function publicSite(): Plugin {
       )
       // Social preview: the hero at 1200×630, captured at 2x.
       fs.copyFileSync(path.join(__dirname, "site/og.png"), path.join(outDir, "og.png"))
+      fs.copyFileSync(path.join(__dirname, "site/_headers"), path.join(outDir, "_headers"))
       fs.writeFileSync(path.join(outDir, "robots.txt"), `User-agent: *\nAllow: /\n\nSitemap: ${ORIGIN}/sitemap.xml\n`)
       const today = new Date().toISOString().slice(0, 10)
       fs.writeFileSync(
