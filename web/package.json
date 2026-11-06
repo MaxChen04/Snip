@@ -10,7 +10,7 @@
     "deploy": "node ../scripts/cloudflare.mjs deploy",
     "build:site": "vite build --config vite.site.config.ts",
     "deploy:site": "npm run build:site && wrangler deploy --config site/wrangler.jsonc",
-    "db:migrate:local": "wrangler d1 migrations apply snip --local",
+    "db:migrate:local": "node ../scripts/migrate-local.mjs",
     "db:migrate:remote": "node ../scripts/cloudflare.mjs migrate",
     "cf-typegen": "wrangler types worker/worker-configuration.d.ts",
     "typecheck": "tsc -b"

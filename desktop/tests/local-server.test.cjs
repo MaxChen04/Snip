@@ -303,7 +303,7 @@ for (const mode of ['graceful', 'forced']) {
   });
 }
 
-test('release imports custom local storage identities and keeps them across future runtimes', { timeout: 90000 }, async () => {
+test('release imports preserved local identities after tracked config reset and keeps them across runtimes', { timeout: 90000 }, async () => {
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'snip-custom-identity-'));
   const root = path.join(temp, 'runtime');
   const dataRoot = path.join(temp, 'library');
@@ -326,7 +326,8 @@ test('release imports custom local storage identities and keeps them across futu
   };
   const base = { name: 'snip-test', compatibility_date: '2025-01-01' };
   // Preserve known settings, but never import arbitrary variables or secrets.
-  await fs.writeFile(path.join(dataWeb, 'wrangler.jsonc'), `// old checkout\n${JSON.stringify({ ...base, ...custom, vars: { PUBLIC_URL: 'https://library.example', ALLOWED_GITHUB_LOGINS: 'library-owner', DEV_LOGIN: 'from-config', SECRET_CANARY: 'must-not-copy' } })}`);
+  await fs.writeFile(path.join(dataWeb, 'wrangler.local.jsonc'), `// old checkout\n${JSON.stringify({ ...base, ...custom, vars: { PUBLIC_URL: 'https://library.example', ALLOWED_GITHUB_LOGINS: 'library-owner', DEV_LOGIN: 'from-config', SECRET_CANARY: 'must-not-copy' } })}`);
+  await fs.writeFile(path.join(dataWeb, 'wrangler.jsonc'), JSON.stringify({ ...base, ...bundled }));
   await fs.writeFile(path.join(dataWeb, '.dev.vars'), 'DEV_LOGIN=from-env\n');
   await fs.writeFile(path.join(web, 'wrangler.jsonc'), JSON.stringify({ ...base, ...bundled }));
   const workerConfig = { ...base, main: 'index.js', no_bundle: true, ...custom };
@@ -360,6 +361,7 @@ test('release imports custom local storage identities and keeps them across futu
     assert.deepEqual(JSON.parse(snapshot).vars, { PUBLIC_URL: 'https://library.example', ALLOWED_GITHUB_LOGINS: 'library-owner', DEV_LOGIN: 'from-config' });
     assert.deepEqual(await runtimeSnapshot(root), pristine);
     // Once recorded, identity survives loss of the old source configuration.
+    await fs.rm(path.join(dataWeb, 'wrangler.local.jsonc'));
     await fs.rm(path.join(dataWeb, 'wrangler.jsonc'));
     running = await launch(root, dataRoot, true);
     assert.deepEqual(await (await fetch(running.url)).json(), expected);

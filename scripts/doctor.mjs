@@ -58,11 +58,12 @@ async function checks() {
 
     try {
       const res = await fetch(new URL("/agent/ping", capture.SNIP_URL), {
-        headers: { authorization: `Bearer ${capture.CAPTURE_TOKEN}`, "x-snip-capture-protocol": "2" },
+        headers: { authorization: `Bearer ${capture.CAPTURE_TOKEN}`, "x-snip-capture-protocol": "3" },
         signal: AbortSignal.timeout(5000),
       })
       if (res.ok) ok("The Worker accepts the capture token")
       else if (res.status === 401) bad("The Worker rejected CAPTURE_TOKEN", "Make capture/.env's CAPTURE_TOKEN match the Worker's (web/.dev.vars locally, `wrangler secret put CAPTURE_TOKEN` when deployed).")
+      else if (res.status === 426) bad("Capture agent and Worker versions do not match", "Update and restart every capture agent, and deploy the matching Worker (capture protocol 3).")
       else if (res.status === 404) warn(`The Worker at ${capture.SNIP_URL} is older than this checkout`, "Deploy (npm run deploy) or restart the local app to pick up the latest Worker.")
       else bad(`The Worker answered ${res.status}`, "Check the Worker's logs.")
     } catch {
@@ -94,7 +95,7 @@ async function checks() {
   }
 
   const status = spawnSync("git", ["status", "--porcelain", "--untracked-files=no", "web/wrangler.jsonc"], { cwd: ROOT, encoding: "utf8" })
-  if (status.stdout?.trim()) warn("web/wrangler.jsonc has local edits", "Run `npm run setup:cloudflare` (it copies your values into the gitignored web/wrangler.deploy.jsonc), then `git checkout web/wrangler.jsonc` so `npm run update` works.")
+  if (status.stdout?.trim()) warn("web/wrangler.jsonc has local edits", "Run `npm run setup:cloudflare` (it preserves local storage in web/wrangler.local.jsonc and copies hosted values into web/wrangler.deploy.jsonc), then `git checkout web/wrangler.jsonc` so `npm run update` works.")
 
   return results
 }

@@ -81,3 +81,25 @@ test("agent presence and storage usage for the gallery", async () => {
     await mf.dispose()
   }
 })
+
+test("protocol 2 agents cannot claim optioned jobs or mutate capture state", async () => {
+  const {mf,database,files,call} = await setup()
+  try {
+    const ref = await (await call('/api/references','POST',{url:'https://example.com',mode:'single',options:{colorScheme:'dark',desktopWidth:1920,signedIn:true}})).json() as {id:string}
+    const env = {DB:database,FILES:files,CAPTURE_TOKEN:'test-token'} as unknown as Env
+    const pending:Promise<unknown>[]=[]
+    const ctx = {waitUntil(p:Promise<unknown>){pending.push(p)},passThroughOnException(){}} as unknown as ExecutionContext
+    const agent = (protocol:string,path:string,method='POST') => app.request(`http://localhost/agent${path}`,{method,headers:{authorization:'Bearer test-token','x-snip-capture-protocol':protocol}},env,ctx)
+    for(const [path,method] of [['/jobs/claim','POST'],['/heartbeat','POST'],['/files/no-write','PUT'],['/ping','GET']]) {
+      const response=await agent('2',path!,method!)
+      assert.equal(response.status,426)
+      assert.match(await response.text(),/upgrade required/i)
+    }
+    assert.equal((await db.getReferenceRecord(database,ref.id))!.status,'queued')
+    assert.equal((await db.getPresence(database)).freshness,'never')
+    const claimed=await agent('3','/jobs/claim')
+    assert.equal(claimed.status,200)
+    assert.deepEqual((await claimed.json() as {options:unknown}).options,{colorScheme:'dark',desktopWidth:1920,signedIn:true})
+    await Promise.all(pending)
+  } finally { await mf.dispose() }
+})

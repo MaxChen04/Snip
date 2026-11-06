@@ -5,7 +5,7 @@ export type RefStatus = "queued" | "capturing" | "paused" | "ready" | "failed"
 /** A pause or stop the user asked for while capturing. The agent acts on it before its next page. */
 export type CaptureControl = "pause" | "stop"
 
-/** Per-capture options. Older capture agents ignore them. */
+/** Per-capture options. Capture protocol 3 requires agents to honor them. */
 export interface CaptureOptions {
   /** Emulated prefers-color-scheme. Default light. */
   colorScheme?: "light" | "dark"

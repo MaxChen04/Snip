@@ -23,6 +23,19 @@ const WEB = path.join(ROOT, "web")
 export const TRACKED_CONFIG = path.join(WEB, "wrangler.jsonc")
 export const DEPLOY_CONFIG = path.join(WEB, "wrangler.deploy.jsonc")
 
+/** Preserve local storage identities before the tracked config can be reset. Never overwrite a library's saved config. */
+export function preserveLocalConfig(root = ROOT) {
+  const web = path.join(root, "web")
+  const local = path.join(web, "wrangler.local.jsonc")
+  try {
+    fs.copyFileSync(path.join(web, "wrangler.jsonc"), local, fs.constants.COPYFILE_EXCL)
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error
+  }
+  return local
+}
+
+
 export const PLACEHOLDERS = {
   d1: "REPLACE_WITH_D1_DATABASE_ID",
   kv: "REPLACE_WITH_KV_NAMESPACE_ID",
@@ -217,6 +230,8 @@ function writeCaptureEnv(url, token) {
 
 async function setup() {
   console.log("\nSnip on Cloudflare\n")
+  preserveLocalConfig()
+  log("Preserved local library config in web/wrangler.local.jsonc (gitignored)")
   if (!wrangler(["whoami"], { capture: true }).out.match(/associated with the email|You are logged in/i)) {
     log("Signing in to Cloudflare")
     if (!wrangler(["login"]).ok) fail("Cloudflare sign-in didn't finish.")

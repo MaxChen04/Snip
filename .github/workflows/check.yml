@@ -18,4 +18,5 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build -w web
+      - run: npx --no-install playwright install --with-deps chromium
       - run: npm test

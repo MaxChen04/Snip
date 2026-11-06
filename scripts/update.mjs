@@ -16,6 +16,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
+import { localConfigPath } from "../web/local-config.mjs"
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const BRANCH = "main"
@@ -88,7 +89,8 @@ function migrate() {
   const wrangler = path.join(ROOT, "node_modules/wrangler/bin/wrangler.js")
   const env = { ...process.env, CI: "true", WRANGLER_SEND_METRICS: "false" }
   const web = path.join(ROOT, "web")
-  const list = spawnSync(process.execPath, [wrangler, "d1", "migrations", "list", "snip", "--local"], { cwd: web, env, encoding: "utf8" })
+  const localArgs = ["DB", "--local", "--config", localConfigPath(web), "--persist-to", path.join(web, ".wrangler/state")]
+  const list = spawnSync(process.execPath, [wrangler, "d1", "migrations", "list", ...localArgs], { cwd: web, env, encoding: "utf8" })
   if (list.status !== 0) { process.stderr.write(list.stderr || ""); fail("Could not read the local database's migration status. Nothing was migrated.") }
   if (list.stdout.includes("No migrations to apply")) { log("Local database is already up to date"); return }
   const d1 = path.join(web, ".wrangler/state/v3/d1")
@@ -98,7 +100,7 @@ function migrate() {
     fs.cpSync(d1, path.join(backup, "d1"), { recursive: true })
     log(`Backed up the local database to ${path.relative(ROOT, backup)}`)
   }
-  run("Migrating the local database", process.execPath, [wrangler, "d1", "migrations", "apply", "snip", "--local"], { cwd: web, env })
+  run("Migrating the local database", process.execPath, [wrangler, "d1", "migrations", "apply", ...localArgs], { cwd: web, env })
 }
 
 async function main(argv) {

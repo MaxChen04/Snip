@@ -39,6 +39,7 @@ jobs:
       - run: npm run build -w web
       - run: npm run test:app
       - run: npx --no-install playwright install chromium
+      - run: node --import tsx --test capture/tests/network.browser.test.ts
       - run: npm run test:desktop
       - run: npm run build --prefix desktop -- --no-install
       - run: codesign --verify --deep --strict desktop/dist/Snip-darwin-arm64/Snip.app

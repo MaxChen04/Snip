@@ -1,9 +1,9 @@
 import { existsSync, readFileSync } from "node:fs"
-import type { Browser, BrowserContext, Page as PwPage } from "playwright"
+import type { Browser, BrowserContext, BrowserContextOptions, Page as PwPage } from "playwright"
 import type { CrawlState, DesignTokens, Job, PageUpload } from "../../web/shared/types"
 import { JobGoneError, type SnipApi } from "./api"
 import { encodeGif, type Frame } from "./gif"
-import { assertPublicPage, assertPublicUrl, PrivateAddressError } from "./network-guard"
+import { allowPrivateUrls, assertPublicUrl, createCaptureNetwork, PrivateAddressError } from "./network-guard"
 import { buildStills } from "./sheet"
 
 // In-page scripts live in plain .js files so the TS toolchain can't inject helpers into them.
@@ -69,9 +69,16 @@ async function sitemapUrls(context: BrowserContext, root: URL): Promise<string[]
   }
 }
 
-async function load(page: PwPage, url: string) {
-  await page.goto(url, { waitUntil: "load", timeout: 45_000 })
-  await assertPublicPage(page)
+type CaptureNetwork = Awaited<ReturnType<typeof createCaptureNetwork>> | null
+
+async function load(page: PwPage, url: string, network: CaptureNetwork) {
+  try {
+    await page.goto(url, { waitUntil: "load", timeout: 45_000 })
+  } catch (error) {
+    network?.assertAllowed()
+    throw error
+  }
+  network?.assertAllowed()
   await page.waitForLoadState("networkidle", { timeout: 8_000 }).catch(() => {})
   await dismissBanners(page)
   await page.evaluate(() => document.fonts?.ready).catch(() => {})
@@ -331,23 +338,28 @@ export function signedInState(env = process.env): string {
 }
 
 export async function captureJob(browser: Browser, api: SnipApi, job: Job) {
-  const root = new URL(job.url)
-  const prefix = `refs/${job.id}/${job.attempt}`
-  await assertPublicUrl(root.href)
+  await assertPublicUrl(job.url)
   const options = job.options ?? {}
   const colorScheme = options.colorScheme === "dark" ? "dark" : "light"
   const storageState = options.signedIn ? signedInState() : undefined
-  const desktop = await browser.newContext({ viewport: { ...DESKTOP, width: options.desktopWidth ?? DESKTOP.width }, deviceScaleFactor: 1, colorScheme, locale: "en-US", storageState })
-  const mobile = await browser.newContext({
-    viewport: MOBILE,
-    deviceScaleFactor: MOBILE_DPR,
-    isMobile: true,
-    hasTouch: true,
-    userAgent: MOBILE_UA,
-    colorScheme,
-    locale: "en-US",
-    storageState,
-  })
+  const network = allowPrivateUrls() ? null : await createCaptureNetwork()
+  const contexts: BrowserContext[] = []
+  try {
+    const common: BrowserContextOptions = { colorScheme, storageState, locale: "en-US", proxy: network?.proxy, serviceWorkers: "block" as const }
+    const desktop = await browser.newContext({ ...common, viewport: { ...DESKTOP, width: options.desktopWidth ?? DESKTOP.width }, deviceScaleFactor: 1 })
+    contexts.push(desktop)
+    const mobile = await browser.newContext({ ...common, viewport: MOBILE, deviceScaleFactor: MOBILE_DPR, isMobile: true, hasTouch: true, userAgent: MOBILE_UA })
+    contexts.push(mobile)
+    await capturePages(browser, api, job, desktop, mobile, network)
+  } finally {
+    await Promise.allSettled(contexts.map(context => context.close()))
+    await network?.close()
+  }
+}
+
+async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: BrowserContext, mobile: BrowserContext, network: CaptureNetwork) {
+  const root = new URL(job.url)
+  const prefix = `refs/${job.id}/${job.attempt}`
   const dPage = await desktop.newPage()
   const mPage = await mobile.newPage()
 
@@ -404,150 +416,149 @@ export async function captureJob(browser: Browser, api: SnipApi, job: Job) {
   }
 
   let stopped = false
-  try {
-    while (queue.length && captured < job.maxPages) {
-      const next = await windDown()
-      if (next === "paused") {
-        log(`[${job.id}] paused after ${captured} page(s)`)
-        return
-      }
-      if (next === "stop") {
-        stopped = true
-        log(`[${job.id}] stopped after ${captured} page(s)`)
-        break
-      }
-      const url = queue.shift()!
-      visited.push(url)
-      const ord = captured
-      const path = new URL(url).pathname || "/"
-      await api.progress(job.id, `Capturing ${captured + 1}/${job.mode === "crawl" ? `${Math.min(job.maxPages, captured + 1 + queue.length)}` : 1}: ${path}`)
-      log(`[${job.id}] ${url}`)
-      const p = `${prefix}/p${ord}`
-      try {
-        // ---- Desktop ----
-        await load(dPage, url)
-        const pageMeta = await run<{ title: string | null; description: string | null; favicon: string | null; links: { href: string; nav: boolean }[] }>(dPage, META_JS)
-        if (!meta) meta = pageMeta
-
-        if (job.mode === "crawl") {
-          // Nav/header/footer links first (they are the site's main pages), then the rest.
-          const links = [...pageMeta.links].sort((a, b) => Number(b.nav) - Number(a.nav))
-          const fresh: string[] = []
-          for (const l of links) {
-            const n = normalize(l.href, root)
-            if (n && !seen.has(n)) {
-              seen.add(n)
-              fresh.push(n)
-            }
-          }
-          // Links from the first page outrank sitemap order.
-          if (!navLinksQueued) {
-            queue.unshift(...fresh)
-            navLinksQueued = true
-          } else queue.push(...fresh)
-        }
-
-        const scrollFrames = await recordScroll(dPage, true)
-        await dismissBanners(dPage) // popups that only appear after scrolling
-        const desktopShot = await fullPageShot(dPage, 1)
-        const desktopThumb = await dPage.screenshot({ type: "jpeg", quality: 75 })
-        const styles = await run<{ tokens: DesignTokens }>(dPage, STYLES_JS, { maxElements: 3000 })
-        const html = await buildSnapshot(dPage, desktop)
-        const hovers = await recordHovers(dPage, hoverSeen)
-
-        // ---- Mobile ----
-        let mobileShot: { buf: Buffer; width: number; height: number } | null = null
-        let mobileThumb: Buffer | null = null
-        try {
-          await load(mPage, url)
-          await recordScroll(mPage, false)
-          mobileShot = await fullPageShot(mPage, MOBILE_DPR)
-          mobileThumb = await mPage.screenshot({ type: "jpeg", quality: 75 })
-        } catch (e) {
-          log("  mobile capture failed:", (e as Error).message.split("\n")[0])
-        }
-
-        // ---- Upload ----
-        const animations: PageUpload["animations"] = []
-        const stills = async (key: string, frames: Frame[], timing: "synthetic" | "measured", observed: Record<string, string> | null) => {
-          try {
-            return await buildStills(browser, api, key, frames, timing, observed)
-          } catch (e) {
-            log("  contact sheet skipped:", (e as Error).message.split("\n")[0])
-            return { sheetKey: null, meta: null }
-          }
-        }
-        if (scrollFrames.length > 1) {
-          const gif = encodeGif(scrollFrames, { scale: 2 })
-          animations.push({
-            ...(await stills(`${p}/scroll`, scrollFrames, "synthetic", null)),
-            kind: "scroll",
-            label: path === "/" ? "Home" : path,
-            selector: null,
-            viewport: "desktop",
-            gifKey: await api.upload(`${p}/scroll.gif`, gif.bytes, "image/gif"),
-            width: gif.width,
-            height: gif.height,
-          })
-        }
-        for (let i = 0; i < hovers.length; i++) {
-          const h = hovers[i]!
-          animations.push({
-            ...(await stills(`${p}/hover-${i}`, h.frames, "measured", h.observedStyles)),
-            kind: "hover",
-            label: h.label,
-            selector: h.selector,
-            viewport: "desktop",
-            gifKey: await api.upload(`${p}/hover-${i}.gif`, h.gif, "image/gif"),
-            width: h.width,
-            height: h.height,
-          })
-        }
-
-        const upload: PageUpload = {
-          url,
-          path,
-          title: pageMeta.title,
-          ord,
-          desktopKey: await api.upload(`${p}/desktop.jpg`, desktopShot.buf, "image/jpeg"),
-          desktopThumbKey: await api.upload(`${p}/desktop-thumb.jpg`, desktopThumb, "image/jpeg"),
-          desktopWidth: desktopShot.width,
-          desktopHeight: desktopShot.height,
-          mobileKey: mobileShot ? await api.upload(`${p}/mobile.jpg`, mobileShot.buf, "image/jpeg") : null,
-          mobileThumbKey: mobileThumb ? await api.upload(`${p}/mobile-thumb.jpg`, mobileThumb, "image/jpeg") : null,
-          mobileWidth: mobileShot?.width ?? null,
-          mobileHeight: mobileShot?.height ?? null,
-          snapshotKey: await api.upload(`${p}/snapshot.html`, html, "text/html; charset=utf-8"),
-          stylesKey: await api.upload(`${p}/styles.json`, JSON.stringify(styles), "application/json"),
-          tokens: styles.tokens,
-          animations,
-        }
-        await api.addPage(job.id, upload)
-        coverKey ??= upload.desktopThumbKey
-        allTokens.push(styles.tokens)
-        captured++
-        log(`  ✓ ${path} (${animations.length} GIFs)`)
-      } catch (e) {
-        if (e instanceof JobGoneError) throw e
-        failures++
-        log(`  ✗ ${url}: ${(e as Error).message.split("\n")[0]}`)
-        if (captured === 0 && (job.mode === "single" || e instanceof PrivateAddressError)) throw e
-        if (failures > Math.max(5, job.maxPages)) throw e
-      }
+  while (queue.length && captured < job.maxPages) {
+    const next = await windDown()
+    if (next === "paused") {
+      log(`[${job.id}] paused after ${captured} page(s)`)
+      return
     }
+    if (next === "stop") {
+      stopped = true
+      log(`[${job.id}] stopped after ${captured} page(s)`)
+      break
+    }
+    const url = queue.shift()!
+    visited.push(url)
+    const ord = captured
+    const path = new URL(url).pathname || "/"
+    await api.progress(job.id, `Capturing ${captured + 1}/${job.mode === "crawl" ? `${Math.min(job.maxPages, captured + 1 + queue.length)}` : 1}: ${path}`)
+    log(`[${job.id}] ${url}`)
+    const p = `${prefix}/p${ord}`
+    try {
+      // ---- Desktop ----
+      await load(dPage, url, network)
+      const pageMeta = await run<{ title: string | null; description: string | null; favicon: string | null; links: { href: string; nav: boolean }[] }>(dPage, META_JS)
+      if (!meta) meta = pageMeta
 
-    if (!captured) throw new Error(stopped ? STOPPED_EMPTY : "No pages could be captured")
-    await api.complete(job.id, {
-      title: meta?.title ?? null,
-      description: meta?.description ?? null,
-      favicon: meta?.favicon ?? null,
-      // A resumed crawl already has its cover from its first page; null keeps it.
-      coverKey: resume?.captured ? null : coverKey,
-      tokens: mergeTokens(allTokens),
-    })
-    log(`[${job.id}] done: ${captured} page(s)`)
-  } finally {
-    await desktop.close().catch(() => {})
-    await mobile.close().catch(() => {})
+      if (job.mode === "crawl") {
+        // Nav/header/footer links first (they are the site's main pages), then the rest.
+        const links = [...pageMeta.links].sort((a, b) => Number(b.nav) - Number(a.nav))
+        const fresh: string[] = []
+        for (const l of links) {
+          const n = normalize(l.href, root)
+          if (n && !seen.has(n)) {
+            seen.add(n)
+            fresh.push(n)
+          }
+        }
+        // Links from the first page outrank sitemap order.
+        if (!navLinksQueued) {
+          queue.unshift(...fresh)
+          navLinksQueued = true
+        } else queue.push(...fresh)
+      }
+
+      const scrollFrames = await recordScroll(dPage, true)
+      await dismissBanners(dPage) // popups that only appear after scrolling
+      const desktopShot = await fullPageShot(dPage, 1)
+      const desktopThumb = await dPage.screenshot({ type: "jpeg", quality: 75 })
+      const styles = await run<{ tokens: DesignTokens }>(dPage, STYLES_JS, { maxElements: 3000 })
+      const html = await buildSnapshot(dPage, desktop)
+      const hovers = await recordHovers(dPage, hoverSeen)
+
+      // ---- Mobile ----
+      let mobileShot: { buf: Buffer; width: number; height: number } | null = null
+      let mobileThumb: Buffer | null = null
+      try {
+        await load(mPage, url, network)
+        await recordScroll(mPage, false)
+        mobileShot = await fullPageShot(mPage, MOBILE_DPR)
+        mobileThumb = await mPage.screenshot({ type: "jpeg", quality: 75 })
+      } catch (e) {
+        log("  mobile capture failed:", (e as Error).message.split("\n")[0])
+      }
+
+      network?.assertAllowed()
+
+      // ---- Upload ----
+      const animations: PageUpload["animations"] = []
+      const stills = async (key: string, frames: Frame[], timing: "synthetic" | "measured", observed: Record<string, string> | null) => {
+        try {
+          return await buildStills(browser, api, key, frames, timing, observed)
+        } catch (e) {
+          log("  contact sheet skipped:", (e as Error).message.split("\n")[0])
+          return { sheetKey: null, meta: null }
+        }
+      }
+      if (scrollFrames.length > 1) {
+        const gif = encodeGif(scrollFrames, { scale: 2 })
+        animations.push({
+          ...(await stills(`${p}/scroll`, scrollFrames, "synthetic", null)),
+          kind: "scroll",
+          label: path === "/" ? "Home" : path,
+          selector: null,
+          viewport: "desktop",
+          gifKey: await api.upload(`${p}/scroll.gif`, gif.bytes, "image/gif"),
+          width: gif.width,
+          height: gif.height,
+        })
+      }
+      for (let i = 0; i < hovers.length; i++) {
+        const h = hovers[i]!
+        animations.push({
+          ...(await stills(`${p}/hover-${i}`, h.frames, "measured", h.observedStyles)),
+          kind: "hover",
+          label: h.label,
+          selector: h.selector,
+          viewport: "desktop",
+          gifKey: await api.upload(`${p}/hover-${i}.gif`, h.gif, "image/gif"),
+          width: h.width,
+          height: h.height,
+        })
+      }
+
+      const upload: PageUpload = {
+        url,
+        path,
+        title: pageMeta.title,
+        ord,
+        desktopKey: await api.upload(`${p}/desktop.jpg`, desktopShot.buf, "image/jpeg"),
+        desktopThumbKey: await api.upload(`${p}/desktop-thumb.jpg`, desktopThumb, "image/jpeg"),
+        desktopWidth: desktopShot.width,
+        desktopHeight: desktopShot.height,
+        mobileKey: mobileShot ? await api.upload(`${p}/mobile.jpg`, mobileShot.buf, "image/jpeg") : null,
+        mobileThumbKey: mobileThumb ? await api.upload(`${p}/mobile-thumb.jpg`, mobileThumb, "image/jpeg") : null,
+        mobileWidth: mobileShot?.width ?? null,
+        mobileHeight: mobileShot?.height ?? null,
+        snapshotKey: await api.upload(`${p}/snapshot.html`, html, "text/html; charset=utf-8"),
+        stylesKey: await api.upload(`${p}/styles.json`, JSON.stringify(styles), "application/json"),
+        tokens: styles.tokens,
+        animations,
+      }
+      await api.addPage(job.id, upload)
+      coverKey ??= upload.desktopThumbKey
+      allTokens.push(styles.tokens)
+      captured++
+      log(`  ✓ ${path} (${animations.length} GIFs)`)
+    } catch (e) {
+      network?.assertAllowed()
+      if (e instanceof JobGoneError || e instanceof PrivateAddressError) throw e
+      failures++
+      log(`  ✗ ${url}: ${(e as Error).message.split("\n")[0]}`)
+      if (captured === 0 && job.mode === "single") throw e
+      if (failures > Math.max(5, job.maxPages)) throw e
+    }
   }
+
+  network?.assertAllowed()
+  if (!captured) throw new Error(stopped ? STOPPED_EMPTY : "No pages could be captured")
+  await api.complete(job.id, {
+    title: meta?.title ?? null,
+    description: meta?.description ?? null,
+    favicon: meta?.favicon ?? null,
+    // A resumed crawl already has its cover from its first page; null keeps it.
+    coverKey: resume?.captured ? null : coverKey,
+    tokens: mergeTokens(allTokens),
+  })
+  log(`[${job.id}] done: ${captured} page(s)`)
 }

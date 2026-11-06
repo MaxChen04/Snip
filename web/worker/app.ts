@@ -254,7 +254,7 @@ app.route("/api", api)
 const agent = new Hono<AppEnv>()
 agent.use("*", requireCaptureToken)
 agent.use("*", async (c, next) => {
-  if (c.req.header("x-snip-capture-protocol") !== "2") return c.json({ error: "Capture agent upgrade required. Install the latest Snip capture agent." }, 426)
+  if (c.req.header("x-snip-capture-protocol") !== "3") return c.json({ error: "Capture agent upgrade required. Install the latest Snip capture agent." }, 426)
   await next()
 })
 

@@ -10,3 +10,4 @@ web/node_modules/.tmp/
 backups/
 web/wrangler.deploy.jsonc
 capture/.env.cloudflare
+web/wrangler.local.jsonc

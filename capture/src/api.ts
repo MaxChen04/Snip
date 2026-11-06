@@ -28,7 +28,7 @@ export class SnipApi {
     const res = await fetch(`${this.base}${path}`, {
       ...init,
       signal: init.signal ?? AbortSignal.timeout(path === "/agent/jobs/claim" ? this.claimTimeoutMs : this.requestTimeoutMs),
-      headers: { authorization: `Bearer ${this.token}`, "x-snip-capture-protocol": "2", ...(this.attempt ? { "x-snip-capture-attempt": this.attempt } : {}), ...(init.headers ?? {}) },
+      headers: { authorization: `Bearer ${this.token}`, "x-snip-capture-protocol": "3", ...(this.attempt ? { "x-snip-capture-attempt": this.attempt } : {}), ...(init.headers ?? {}) },
     })
     if (res.status === 401) {
       await res.body?.cancel()

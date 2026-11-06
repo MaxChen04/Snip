@@ -21,3 +21,17 @@ test("private start URLs fail with instructions unless allowed", async () => {
     delete process.env.ALLOW_PRIVATE_URLS
   }
 })
+
+import { publicAddress } from "../src/network-guard"
+
+test("DNS failures fail closed and mixed or expanded private addresses are refused", async () => {
+  for (const ip of ["0:0:0:0:0:0:0:1", "0:0:0:0:0:ffff:7f00:1", "64:ff9b::7f00:1", "2002:7f00:1::", "2001::7f00:1"]) assert.equal(isPrivateIp(ip), true, ip)
+  assert.equal(isPrivateHostLiteral("localhost."), true)
+  await assert.rejects(publicAddress("example.com", async () => [{address:"1.1.1.1",family:4},{address:"127.0.0.1",family:4}]), PrivateAddressError)
+  await assert.rejects(publicAddress("example.com", async () => { throw new Error("DNS unavailable") }), /DNS unavailable/)
+  await assert.rejects(publicAddress("example.com", async () => []), /No addresses/)
+  let lookups = 0
+  const lookup = async () => [{address: ++lookups === 1 ? "1.1.1.1" : "127.0.0.1", family:4}]
+  assert.equal(await publicAddress("example.com", lookup), "1.1.1.1")
+  await assert.rejects(publicAddress("example.com", lookup), PrivateAddressError)
+})

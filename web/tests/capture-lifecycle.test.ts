@@ -63,7 +63,7 @@ test("capture leases fence stale workers and isolate cleanup", async () => {
     const auth = { authorization: "Bearer test-token" }
     const rejected = await req("/agent/jobs/claim", { method: "POST", headers: auth })
     assert.equal(rejected.status, 426)
-    const beat = (attempt: string) => req("/agent/heartbeat", { method: "POST", headers: { ...auth, "content-type": "application/json", "x-snip-capture-protocol": "2", "x-snip-capture-attempt": attempt }, body: JSON.stringify({ jobId: ref.id }) })
+    const beat = (attempt: string) => req("/agent/heartbeat", { method: "POST", headers: { ...auth, "content-type": "application/json", "x-snip-capture-protocol": "3", "x-snip-capture-attempt": attempt }, body: JSON.stringify({ jobId: ref.id }) })
     assert.equal((await beat(old.attempt)).status, 410)
     assert.equal((await beat(current.attempt)).status, 200)
 
@@ -77,7 +77,7 @@ test("capture leases fence stale workers and isolate cleanup", async () => {
       return typeof value === "function" ? value.bind(target) : value
     } })
     const uploadKey = `refs/${ref.id}/${current.attempt}/p0/late.jpg`
-    const upload = app.request(`https://snip.test/agent/files/${uploadKey}`, { method: "PUT", body: "late", headers: { ...auth, "x-snip-capture-protocol": "2", "x-snip-capture-attempt": current.attempt } }, { ...env, FILES: delayedFiles }, ctx)
+    const upload = app.request(`https://snip.test/agent/files/${uploadKey}`, { method: "PUT", body: "late", headers: { ...auth, "x-snip-capture-protocol": "3", "x-snip-capture-attempt": current.attempt } }, { ...env, FILES: delayedFiles }, ctx)
     await entered
     await db.deleteReference(database, ref.id)
     await db.cleanupRetiredFiles(database, files)
@@ -111,7 +111,7 @@ test("capture leases fence stale workers and isolate cleanup", async () => {
       return typeof value === "function" ? value.bind(target) : value
     } })
     const lateKey = `refs/${uncertainRef.id}/${uncertainJob.attempt}/p0/late.jpg`
-    const lateUpload = app.request(`https://snip.test/agent/files/${lateKey}`, { method: "PUT", body: "late", headers: { ...auth, "x-snip-capture-protocol": "2", "x-snip-capture-attempt": uncertainJob.attempt } }, { ...env, DB: failingDb, FILES: slowFiles }, ctx)
+    const lateUpload = app.request(`https://snip.test/agent/files/${lateKey}`, { method: "PUT", body: "late", headers: { ...auth, "x-snip-capture-protocol": "3", "x-snip-capture-attempt": uncertainJob.attempt } }, { ...env, DB: failingDb, FILES: slowFiles }, ctx)
     await enteredUncertain
     await db.deleteReference(database, uncertainRef.id)
     await db.cleanupRetiredFiles(database, files)

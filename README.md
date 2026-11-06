@@ -172,7 +172,7 @@ When new changes land on `main`, one command brings a local copy (and Snip.app) 
 npm run update
 ```
 
-It quits Snip.app gracefully (active captures finish first), fast-forwards `main`, runs `npm ci` when dependencies changed, installs the capture browser, backs up and migrates the local database, rebuilds the web app, rebuilds Snip.app when `desktop/` changed, and reopens the app. It never touches untracked files such as `.env` files, `web/wrangler.deploy.jsonc` or your library. npm lockfile churn is reset automatically; any other local edit, or a terminal `npm run dev` or `npm run capture` still using the database, stops the update before anything changes (`npm run update -- --stash` sets edits aside instead). If a step fails, fix the error and run `npm run update` again to finish. `--full` reruns every step even when you're already up to date.
+It quits Snip.app gracefully (active captures finish first), fast-forwards `main`, runs `npm ci` when dependencies changed, installs the capture browser, backs up and migrates the local database, rebuilds the web app, rebuilds Snip.app when `desktop/` changed, and reopens the app. It never touches untracked files such as `.env` files, `web/wrangler.deploy.jsonc`, `web/wrangler.local.jsonc` or your library. npm lockfile churn is reset automatically; any other local edit, or a terminal `npm run dev` or `npm run capture` still using the database, stops the update before anything changes (`npm run update -- --stash` sets edits aside instead). If a step fails, fix the error and run `npm run update` again to finish. `--full` reruns every step even when you're already up to date.
 
 To run it from any folder, add an alias to `~/.zshrc`:
 
@@ -189,6 +189,7 @@ The same checks CI runs:
 ```bash
 npm run typecheck
 npm run build -w web
+npx playwright install chromium # needed by the network regression tests
 npm test               # web, capture (including MCP response budgets) and desktop unit tests
 ```
 
