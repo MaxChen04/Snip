@@ -6,7 +6,9 @@ import {
   getSessionLogin,
   logout,
   requireCaptureToken,
+  crossSiteWrite,
   requireSession,
+  sameOriginWrites,
   startLogin,
   verifyFileSig,
 } from "./auth"
@@ -59,10 +61,20 @@ app.get("/authorize", async (c) => {
 <input type="hidden" name="handle" value="${escapeHtml(handle)}">
 <div class="row"><button class="primary" name="decision" value="approve">Allow</button><button name="decision" value="deny">Deny</button></div>
 </form></body></html>`
-  return new Response(html, { headers: new Headers([...headers, ["content-type", "text/html; charset=utf-8"]]) })
+  return new Response(html, {
+    headers: new Headers([
+      ...headers,
+      ["content-type", "text/html; charset=utf-8"],
+      // The consent page must never be framed (clickjacking).
+      ["content-security-policy", "frame-ancestors 'none'"],
+      ["x-frame-options", "DENY"],
+    ]),
+  })
 })
 
 app.post("/authorize", async (c) => {
+  const refused = crossSiteWrite(c.req.raw, { json: false })
+  if (refused) return c.text(refused, 403)
   const login = await getSessionLogin(c)
   if (!login) return c.text("Not signed in", 401)
   const form = await c.req.formData()
@@ -113,6 +125,7 @@ app.get("/files/*", async (c) => {
 // ---------- Web API ----------
 
 const api = new Hono<AppEnv>()
+api.use("*", sameOriginWrites)
 api.use("*", requireSession)
 
 api.get("/me", (c) => c.json({ login: c.get("login") }))
@@ -132,20 +145,36 @@ api.get("/pages", async (c) => c.json(await db.listPages(c.env.DB, listFilter(c.
 api.get("/animations", async (c) => c.json(await db.listAnimations(c.env.DB, listFilter(c.req.query()))))
 
 api.post("/references", async (c) => {
-  const body = await c.req.json<{ url: string; mode: CaptureMode; maxPages?: number; collectionIds?: string[] }>()
+  const body = await c.req.json<{ url: string; mode: CaptureMode; maxPages?: number; collectionIds?: string[]; notes?: string; options?: unknown; allowDuplicate?: boolean }>()
   if (!body.url) return c.json({ error: "url is required" }, 400)
   try {
+    if (!body.allowDuplicate) {
+      const existing = await db.findReferenceByUrl(c.env.DB, body.url)
+      if (existing) return c.json({ error: "This URL is already saved", existing }, 409)
+    }
     const ref = await db.createReference(c.env.DB, {
       url: body.url,
       mode: body.mode === "crawl" ? "crawl" : "single",
       maxPages: body.maxPages,
       collectionIds: body.collectionIds,
+      notes: body.notes,
+      options: db.cleanOptions(body.options),
     })
     return c.json(ref, 201)
   } catch (e) {
     return c.json({ error: (e as Error).message }, 400)
   }
 })
+
+api.patch("/references/:id", async (c) => {
+  const body = await c.req.json<{ notes?: unknown }>().catch(() => ({}) as { notes?: unknown })
+  if (!("notes" in body)) return c.json({ error: "notes is required" }, 400)
+  if (typeof body.notes === "string" && body.notes.length > db.MAX_NOTES) return c.json({ error: `Notes are limited to ${db.MAX_NOTES} characters` }, 400)
+  return (await db.setNotes(c.env.DB, c.req.param("id"), body.notes)) ? c.json({ ok: true }) : c.json({ error: "not found" }, 404)
+})
+
+api.get("/agent", async (c) => c.json(await db.getPresence(c.env.DB)))
+api.get("/storage", async (c) => c.json(await db.storageUsage(c.env.FILES)))
 
 api.get("/references/:id", async (c) => {
   const r = await db.getReference(c.env.DB, c.req.param("id"))
@@ -225,12 +254,15 @@ app.route("/api", api)
 const agent = new Hono<AppEnv>()
 agent.use("*", requireCaptureToken)
 agent.use("*", async (c, next) => {
-  if (c.req.header("x-snip-capture-protocol") !== "2") return c.json({ error: "Capture agent upgrade required. Install the latest Snip capture agent." }, 426)
+  if (c.req.header("x-snip-capture-protocol") !== "3") return c.json({ error: "Capture agent upgrade required. Install the latest Snip capture agent." }, 426)
   await next()
 })
 
 const attemptFrom = (c: { req: { header(name: string): string | undefined } }) => c.req.header("x-snip-capture-attempt") ?? ""
 const validAttempt = (attempt: string) => /^[a-f0-9]{32}$/.test(attempt)
+
+// Lets `npm run doctor` check the URL and token without claiming a job or touching presence.
+agent.get("/ping", (c) => c.json({ ok: true }))
 
 agent.post("/jobs/claim", async (c) => {
   const job = await db.claimJob(c.env.DB)

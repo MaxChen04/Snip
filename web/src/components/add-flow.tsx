@@ -1,8 +1,8 @@
-import { createContext, useContext, useState, type ReactNode } from "react"
+import { createContext, useContext, useEffect, useState, type ReactNode } from "react"
 import { useLocation } from "wouter"
 import { XIcon } from "@/components/icons"
 import { toast } from "sonner"
-import { AddReferenceDialog } from "@/components/add-reference-dialog"
+import { AddReferenceDialog, extractUrls } from "@/components/add-reference-dialog"
 import { ConnectMcpDialog } from "@/components/connect-mcp-dialog"
 import { notify } from "@/components/notify"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
@@ -16,14 +16,58 @@ type Ctx = { addReference: (collectionId?: string, url?: string) => void; newCol
 const AddFlowCtx = createContext<Ctx>({ addReference: () => {}, newCollection: () => {}, connectMcp: () => {} })
 export const useAddFlow = () => useContext(AddFlowCtx)
 
+/** True while the user is typing somewhere, so global shortcuts stay out of the way. */
+const typing = (target: EventTarget | null) => {
+  const el = target as HTMLElement | null
+  return !!el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))
+}
+const dialogOpen = () => !!document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"]')
+
 export function AddFlowProvider({ children }: { children: ReactNode }) {
   const [adding, setAdding] = useState<{ collection?: string; url?: string; n: number } | null>(null)
   const [naming, setNaming] = useState(false)
   const [connecting, setConnecting] = useState(false)
+  const [location, navigate] = useLocation()
+  const open = (collection?: string, url?: string) => setAdding((a) => ({ collection, url, n: (a?.n ?? 0) + 1 }))
+
+  // The bookmarklet sends the current tab to /add?url=…
+  useEffect(() => {
+    // Checks the real URL so a repeated effect (React strict mode) can't open it twice.
+    if (location !== "/add" || window.location.pathname !== "/add") return
+    const url = new URLSearchParams(window.location.search).get("url") ?? undefined
+    navigate("/", { replace: true })
+    open(undefined, url)
+  }, [location, navigate])
+
+  // Paste a URL anywhere in the app to add it; "/" jumps to search.
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      if (typing(e.target) || dialogOpen()) return
+      const text = e.clipboardData?.getData("text") ?? ""
+      if (!extractUrls(text).length) return
+      e.preventDefault()
+      open(new URLSearchParams(window.location.search).get("collection") ?? undefined, text)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey || typing(e.target) || dialogOpen()) return
+      const search = document.querySelector<HTMLInputElement>("[data-search]")
+      if (!search) return
+      e.preventDefault()
+      search.focus()
+      search.select()
+    }
+    window.addEventListener("paste", onPaste)
+    window.addEventListener("keydown", onKey)
+    return () => {
+      window.removeEventListener("paste", onPaste)
+      window.removeEventListener("keydown", onKey)
+    }
+  }, [])
+
   return (
     <AddFlowCtx.Provider
       value={{
-        addReference: (collection, url) => setAdding((a) => ({ collection, url, n: (a?.n ?? 0) + 1 })),
+        addReference: open,
         newCollection: () => setNaming(true),
         connectMcp: () => setConnecting(true),
       }}

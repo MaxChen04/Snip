@@ -3,5 +3,5 @@ GITHUB_CLIENT_SECRET=your-github-oauth-app-client-secret
 SESSION_SECRET=generate-with-openssl-rand-hex-32
 CAPTURE_TOKEN=generate-with-openssl-rand-hex-32
 # Local only: skip GitHub login and act as this user (never set in production)
-DEV_LOGIN=MaxChen04
+DEV_LOGIN=your-github-login
 PUBLIC_URL=http://localhost:5173

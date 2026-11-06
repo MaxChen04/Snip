@@ -262,40 +262,30 @@ function PrivacySection() {
 function SetupSection() {
   const steps = [
     {
-      t: "Create a GitHub OAuth app",
-      b: "In GitHub, open Settings → Developer settings → OAuth Apps and add a new one with these two URLs.",
+      t: "Run the setup",
+      b: "It signs you in to Cloudflare, asks for your GitHub login and workers.dev subdomain, creates the database, key-value store and storage bucket, then deploys. Your install’s settings go in web/wrangler.deploy.jsonc, which git ignores, so updates never conflict with it.",
+      c: ["npm run setup:cloudflare"],
+    },
+    {
+      t: "Create a GitHub OAuth app when asked",
+      b: "The setup prints both URLs. In GitHub, open Settings → Developer settings → OAuth Apps, add a new one, then paste its Client ID and a new Client secret into the setup. It generates the other secrets itself.",
       c: ["Homepage URL   https://snip.<your-subdomain>.workers.dev", "Callback URL   https://snip.<your-subdomain>.workers.dev/auth/callback"],
     },
     {
-      t: "Create the Cloudflare resources",
-      b: "Paste the printed ids into web/wrangler.jsonc, then set PUBLIC_URL and ALLOWED_GITHUB_LOGINS in the same file.",
-      c: ["cd web", "npx wrangler d1 create snip", "npx wrangler kv namespace create OAUTH_KV", "npx wrangler r2 bucket create snip-files"],
-    },
-    {
-      t: "Add your secrets",
-      b: "Generate SESSION_SECRET and CAPTURE_TOKEN with openssl rand -hex 32. Keep the capture token for step 5.",
-      c: [
-        "npx wrangler secret put GITHUB_CLIENT_ID",
-        "npx wrangler secret put GITHUB_CLIENT_SECRET",
-        "npx wrangler secret put SESSION_SECRET",
-        "npx wrangler secret put CAPTURE_TOKEN",
-      ],
-    },
-    {
-      t: "Migrate and deploy",
-      b: "This creates the database tables and publishes the gallery to your workers.dev subdomain.",
-      c: ["npm run db:migrate:remote", "npm run deploy"],
-    },
-    {
       t: "Start the capture agent",
-      b: "Point capture/.env at your Worker with the same CAPTURE_TOKEN, install Chromium once, then leave the agent running.",
-      c: ["cd ..", "cp capture/.env.example capture/.env", "npx playwright install chromium", "npm run capture"],
+      b: "The setup points capture/.env at your Worker. Leave the agent running; it installs Chromium on its first capture. If anything looks wrong, the doctor says what and how to fix it.",
+      c: ["npm run capture", "npm run doctor"],
+    },
+    {
+      t: "Update later",
+      b: "Pull the latest code, then apply new migrations before deploying. Restart the capture agent afterwards.",
+      c: ["git pull", "npm run db:migrate:remote", "npm run deploy"],
     },
   ]
   return (
     <Section id="setup" title="Set it up" intro="Everything fits in Cloudflare’s free plan. You need a GitHub account, a Cloudflare account and Node 22.">
       <p className="max-w-[760px] text-[15px] leading-[1.6] text-muted-foreground">
-        First, clone the repository (GitHub access is required while it is private), install dependencies, and follow the steps from the repository root.
+        First, clone the repository, install dependencies, and follow the steps from the repository root.
       </p>
       <CodeBlock lines={["git clone https://github.com/MaxChen04/Snip.git", "cd Snip", "npm install"]} />
       <ol className="flex max-w-[760px] flex-col">
@@ -425,7 +415,7 @@ function LimitsSection() {
   const limits = [
     ["Page height", "Full-page screenshots stop at 16,000 px, Chromium’s texture limit."],
     ["Crawl scope", "Crawls stay on one hostname, with or without www, and ignore query strings."],
-    ["Logins and bot walls", "Captures show what an anonymous browser sees. Obvious cookie banners are dismissed."],
+    ["Logins and bot walls", "Captures show what an anonymous browser sees, unless you tick “Use my saved sign-in” and point STORAGE_STATE at a Playwright sign-in file. Obvious cookie banners are dismissed."],
     ["Hover GIFs", "Up to 6 elements per page. Shared nav and footer effects are recorded once per site."],
   ]
   return (

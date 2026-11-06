@@ -1,16 +1,17 @@
 {
   "name": "@snip/web",
   "private": true,
+  "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "npm run build && vite preview",
-    "deploy": "npm run build && wrangler deploy",
+    "deploy": "node ../scripts/cloudflare.mjs deploy",
     "build:site": "vite build --config vite.site.config.ts",
     "deploy:site": "npm run build:site && wrangler deploy --config site/wrangler.jsonc",
-    "db:migrate:local": "wrangler d1 migrations apply snip --local",
-    "db:migrate:remote": "wrangler d1 migrations apply snip --remote",
+    "db:migrate:local": "node ../scripts/migrate-local.mjs",
+    "db:migrate:remote": "node ../scripts/cloudflare.mjs migrate",
     "cf-typegen": "wrangler types worker/worker-configuration.d.ts",
     "typecheck": "tsc -b"
   },

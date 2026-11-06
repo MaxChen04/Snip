@@ -2,30 +2,49 @@
 
 # Snip
 
-A private, Cosmos-style library of website design references. Paste a URL, choose **Static page** or **Crawl site**, and a capture agent on your machine records every page.
+A private library of website design references. Paste a URL, choose **Single page** or **Crawl site**, and a capture agent on your machine records every page. Your agent reads them back over MCP.
 
 ![Browsing a collection, opening a captured site and a page in Snip](docs/media/browse.gif)
 
-Each capture includes:
+Website: [usesnip.dev](https://usesnip.dev) · Latest release: [v0.1.0](https://github.com/MaxChen04/Snip/releases/tag/v0.1.0) (source only; Snip is self-hosted) · License: [source-available](#license)
 
-- Desktop (1440px) and mobile (390px) full-page screenshots
+## Quick start
+
+You need **Node 22.18+**, a free **Cloudflare** account and a **GitHub** account. The capture agent runs wherever Node and Playwright do (tested on macOS and Linux).
+
+```bash
+git clone https://github.com/MaxChen04/Snip && cd Snip
+npm install
+npm run setup:cloudflare   # creates the database and storage, deploys, sets secrets
+npm run capture            # keep it running: it does the captures
+```
+
+Open the URL the setup prints and sign in with GitHub. If something's off, `npm run doctor` says what and how to fix it. [Deploying to Cloudflare](docs/deploy.md) explains each step, how to do it by hand and how to upgrade.
+
+Prefer to try it on your laptop first? See [Local development](#local-development). On an Apple Silicon Mac you can also build [Snip.app](docs/mac-app.md), a menu-bar app that runs everything locally.
+
+## What it captures
+
+- Desktop (1440px, or 1280/1920) and mobile (390px) full-page screenshots, in light or dark mode
 - **Computed styles** per element (only values that differ from browser defaults, plus `::before`/`::after`), keyframes, `:hover` rules and CSS variables
 - A **self-contained HTML snapshot**: linked and cross-origin CSS inlined, CSS-in-JS / CSSOM rules materialized, web fonts embedded, scripts stripped
 - **Scroll GIFs** per page and **hover GIFs** for elements with hover effects
 - Extracted **design tokens**: colors, fonts, type scale, spacing, radii, shadows, transitions
 
-The app is an infinite gallery (Websites / Pages / Animations) with search and sort. Inside it you can:
+Pages behind a login can be captured with a saved sign-in (`STORAGE_STATE`, see [capture options](#capture-agent-options-captureenv)).
 
-- Save whole websites or **individual pages** to collections
-- Open any page in a **resizable viewer** with a sidebar of **Tokens**, **HTML** and **CSS** tabs
-- Use **Select** to pick pages, animations and tokens, then **Copy prompt** to hand them to an agent
-- Open **Connect MCP** in the top bar for copy-ready setup for Claude, Codex, OpenCode, Cursor and other clients
+## Using it
 
-A **remote MCP server** lets your agent search, read and add references.
+The app is an infinite gallery (Websites / Pages / Animations) with search and sort.
 
-Website: [usesnip.dev](https://usesnip.dev). Latest release: [v0.1.0](https://github.com/MaxChen04/Snip/releases/tag/v0.1.0) (source only; Snip is self-hosted). License: [source-available](#license).
-
-## Tour
+- **Add** from the Create menu, by pasting a URL anywhere in the app, or with the **bookmarklet** (account menu). Paste several URLs to add them all at once. Snip tells you when a URL is already saved.
+- **Notes**: say why you saved something. Notes are searchable and your agent sees them.
+- **Collections**: save whole websites or **individual pages**.
+- **Page viewer**: a resizable sidebar with **Tokens**, **HTML** and **CSS** tabs, desktop and mobile.
+- **Select** pages, animations and tokens, then **Copy prompt** to hand exactly those to an agent.
+- **Export** a website as a .zip (screenshots, HTML, styles, GIFs, tokens) from its **More** menu.
+- **Connect MCP** in the top bar shows copy-ready setup for Claude, Codex, OpenCode, Cursor and other clients.
+- Press <kbd>/</kbd> to search. A banner tells you when captures are waiting on an offline capture agent, and the account menu shows how much of R2's free 10 GB you've used.
 
 **Page viewer.** Drag the sidebar to resize it, switch between Tokens, HTML and CSS, and flip between desktop and mobile captures.
 
@@ -56,114 +75,7 @@ Website: [usesnip.dev](https://usesnip.dev). Latest release: [v0.1.0](https://gi
 
 Capture runs locally because the free plans can't crawl sites: Cloudflare's free Browser Rendering allows 10 browser-minutes a day, and Vercel Hobby functions stop after 5 minutes. Queued references wait until the agent is running.
 
-## Public site (usesnip.dev)
-
-`web/` also builds the public site: the landing page and setup guide as static files, with GitHub CTAs instead of sign-in and no API behind them. It deploys as its own Worker, `snip-site` (`web/site/`), separate from the app Worker, and binds the custom domains `usesnip.dev` and `www.usesnip.dev` (www redirects to the apex). The build adds per-page titles, descriptions, canonical URLs, Open Graph tags, `og.png`, `robots.txt`, `sitemap.xml` and a 404 page.
-
-```bash
-cd web
-npm run build:site      # writes dist-site/
-npm run deploy:site     # needs `npx wrangler login` on an account that owns the usesnip.dev zone
-```
-
-Self-hosted copies don't need any of this; `npm run deploy` is still the only deploy for your own gallery.
-
-## Stack
-
-- `web/`: Vite + React 19 + Tailwind v4, **shadcn** with the **SortUI** registry (`@sortui` theme and components in `src/components/ui`, restyled with tactile surfaces), **Hugeicons**, Hono on Cloudflare Workers, D1, R2, `@cloudflare/workers-oauth-provider`, MCP via `agents/mcp/server` (stateless `createMcpHandler`).
-- `capture/`: Node 22+ + Playwright, `gifenc` for GIF encoding.
-- `desktop/`: Electron menu-bar app for Apple Silicon Macs (Snip.app, currently 0.2.0).
-
-Add more SortUI components with `cd web && npx shadcn@latest add @sortui/<name>`.
-
-## Local development
-
-```bash
-npm install
-cp web/.dev.vars.example web/.dev.vars          # DEV_LOGIN skips GitHub login on localhost
-npm run db:migrate:local -w web
-npm run dev                                       # http://localhost:5173
-
-# second terminal
-cp capture/.env.example capture/.env              # SNIP_URL=http://localhost:5173, CAPTURE_TOKEN from .dev.vars
-npx playwright install chromium                   # once
-npm run capture
-```
-
-### Updating
-
-When new changes land on `main`, one command brings your copy up to date:
-
-```bash
-npm run update
-```
-
-It quits Snip.app gracefully (active captures finish first), fast-forwards `main`, runs `npm ci` when dependencies changed, installs the capture browser, backs up and migrates the local database, rebuilds the web app, rebuilds Snip.app when `desktop/` changed, and reopens the app. It never touches untracked files such as `.env` files, your library, `research/` or `output/`. npm lockfile churn is reset automatically; any other local edit, or a terminal `npm run dev` or `npm run capture` still using the database, stops the update before anything changes (`npm run update -- --stash` sets edits aside instead). If a step fails, fix the error and run `npm run update` again to finish. `--full` reruns every step even when you're already up to date.
-
-To run it from any folder, add an alias to `~/.zshrc`:
-
-```bash
-alias snip-update='npm --prefix ~/Desktop/Projects/Snip run update'
-```
-
-Snip.app also checks GitHub hourly (and after sleep). When `main` has new commits it shows a notification and an **Update Snip (N new)** menu item; **Update now** opens Terminal and runs the same command. Checks follow your checkout's `origin` remote, so forks update from their own `main`.
-
-### Mac app
-
-On **Apple Silicon with macOS 14 or later**, once local development works, build a clickable **Snip.app**. Use native arm64 Node.js 22.18+ or 24.11+; Intel and Rosetta are unsupported.
-
-```bash
-npm run app        # builds Snip.app and installs it in /Applications
-```
-
-The normal app serves the built gallery and the existing local Worker API with file watching and the inspector disabled. It uses the same `web/.dev.vars` and `web/.wrangler/state` as local development. Configure `capture/.env` with `SNIP_URL=http://localhost:5173` and the same `CAPTURE_TOKEN` as `web/.dev.vars`.
-
-The menu bar shows whether capture is ready, busy, or disconnected. **Quit Snip** and **Stop web app** let capture finish before stopping its local API. **Force quit** explicitly interrupts unfinished work. Closing the window keeps capture available; the hidden gallery is released after two minutes and restores its selection, search and scroll state when reopened. Chromium loads only for an actual capture and closes after two idle minutes. Healthy empty-queue polling backs off to 30 seconds; adding or re-capturing from the app wakes it immediately. References queued elsewhere may wait up to that interval. Failed connections use retry backoff capped at one minute.
-
-Service logs are capped at three 2 MiB files per service (12 MiB total), including backups; duplicate Wrangler debug-file logging is disabled. Electron's disposable HTTP disk cache has a 64 MiB budget. Captured library assets are retained until you delete them; idle cleanup does not delete your library. The hidden or minimized gallery is released after the grace period, unless a dialog has unfinished input. Minimized snapshot viewers unload their document and reload it when restored. Adjust `BROWSER_IDLE_SECONDS` in `capture/.env` for capture browser retention. Set `SNIP_WINDOW_IDLE_SECONDS` when launching Electron to change the window grace period (`0` disables window release).
-
-The app runs this repo in place; `npm run update` keeps its web build and the app itself current. Rebuild the app manually only after moving the repo. It is ad-hoc signed for your own Mac and is not notarized for distribution. `npm run app:dev` uses Vite with hot reload for development (install desktop dependencies first with `npm ci --prefix desktop`). The installer verifies an existing app's identity, stages and verifies the new copy, and restores the old app if replacement fails. For a build without installation: `npm run build --prefix desktop -- --no-install`; `--out DIR` and `--install-dir DIR` support isolated builds and tests.
-
-### Release app and updates
-
-Signed release builds contain their own web app, capture engine, Node.js and Chromium. They check for **published stable releases** at most once every six hours, including after sleep, and expose **Check for updates** in the Snip and menu-bar menus. Downloads begin only when you choose **Download update**. **Restart and update** lets an active capture finish before stopping its API and installing. A downloaded update can also apply on the next normal quit/relaunch. Failed downloads leave the running version intact; the native macOS updater verifies the archive digest, size and signing identity.
-
-Your library and credentials stay outside the app. On first launch, choose an existing Snip project folder or create a new library in Snip's Application Support directory. Stop and drain any separate development server and capture agent before using an existing library; never run them concurrently against the same library. The chosen project folder remains the data location even though release code runs from the app: keep its configuration, `.snip` storage identity record and `web/.wrangler/state`. Imported database, file and OAuth-storage identities stay attached to that library across releases. If its folder moves, **Retry setup** offers to locate it again. Upgrades apply local D1 migrations before serving the app. The latest three successful pre-upgrade database backups are kept under the library's `backups/`; failed-upgrade backups remain for manual recovery. An upgrade failure stops startup and shows the backup location. A bounded private cache restores your reference route and selection after a graceful restart.
-
-**No signed app has been released yet.** The repository is public and v0.1.0 is a source-only release, but there is no Apple Developer signing identity, so build Snip.app yourself with `npm run app`. Local/ad-hoc builds update from `main` with `npm run update` instead (see [Updating](#updating)). The first signed release must be installed manually; later signed releases can update it. Publishing does not happen on a merge. See [the release guide](desktop/RELEASING.md) for signing setup, draft release review and the two-version update acceptance check.
-
-## Deploy to Cloudflare (free plan)
-
-1. **GitHub OAuth app** (github.com → Settings → Developer settings → OAuth Apps → New):
-   - Homepage URL: `https://snip.<your-subdomain>.workers.dev`
-   - Callback URL: `https://snip.<your-subdomain>.workers.dev/auth/callback`
-2. **Create resources** and paste the printed ids into `web/wrangler.jsonc`:
-   ```bash
-   cd web
-   npx wrangler d1 create snip
-   npx wrangler kv namespace create OAUTH_KV
-   npx wrangler r2 bucket create snip-files
-   ```
-   Also set `PUBLIC_URL` and `ALLOWED_GITHUB_LOGINS` in `wrangler.jsonc`.
-3. **Secrets**:
-   ```bash
-   npx wrangler secret put GITHUB_CLIENT_ID
-   npx wrangler secret put GITHUB_CLIENT_SECRET
-   npx wrangler secret put SESSION_SECRET     # openssl rand -hex 32
-   npx wrangler secret put CAPTURE_TOKEN      # openssl rand -hex 32
-   ```
-4. **Migrate and deploy**:
-   ```bash
-   npm run db:migrate:remote
-   npm run deploy
-   ```
-5. Point `capture/.env` at the deployed URL with the same `CAPTURE_TOKEN`, then `npm run capture`.
-
-**Upgrading an existing hosted installation:** Stop all existing capture agents gracefully and wait for captures, uploads, and in-flight Worker requests to finish. Run `npm run db:migrate:remote -w web` **before deploying the updated Worker**; this includes `0003_capture_attempts.sql`, `0004_page_collections.sql` and `0005_capture_control.sql`. Then deploy the Worker and update/restart every capture agent. The Worker rejects older agents before they can claim jobs (HTTP 426). Existing saved assets remain readable.
-
-Packaged release apps apply pending local migrations before starting and back up an existing local D1 database first. For a source-linked desktop app or local development checkout, `npm run update` backs up and applies local migrations (or run `npm run db:migrate:local -w web` yourself). Migration 0004 adds the page-membership table and two indexes; it does not copy or move saved files. Migration 0005 adds two columns for pausing and stopping captures. Retired-file cleanup retries on queue activity with backoff; interrupted uploads can retain safety metadata when their final write status is uncertain.
-
-Free-tier headroom: R2 gives 10 GB (roughly 1,500 to 3,000 captured pages, depending on page length and GIFs), D1 5 GB, Workers 100k requests/day.
+Only the GitHub logins in `ALLOWED_GITHUB_LOGINS` can sign in. See [SECURITY.md](SECURITY.md) for the full trust model.
 
 ## Connect your agent (remote MCP)
 
@@ -194,7 +106,7 @@ The **Connect MCP** button in the app's top bar shows these steps with your own 
 
 | Tool | What it does |
 | --- | --- |
-| `search_references` | Search by text, collection or domain; returns summaries with ids |
+| `search_references` | Search by text (title, URL or notes), collection or domain; returns summaries with ids |
 | `get_reference` | One reference in bounded parts: `overview`, `pages`, `animations`, `tokens` (optionally one `token_group`, paginated). `full` is the legacy everything-at-once read |
 | `get_page` | One page: signed screenshot URLs with coverage, a token summary, an inline viewport screenshot and optional HTML in chunks |
 | `get_page_styles` | Valid, bounded computed styles: summary, filtered elements, keyframes, hover rules, font faces, CSS variables |
@@ -203,7 +115,8 @@ The **Connect MCP** button in the app's top bar shows these steps with your own 
 | `search_animations` | Scroll and hover animations across all references |
 | `get_capture_status` | Job state, last progress and when the capture worker last checked in, with a suggested poll delay |
 | `list_collections` | Collections with website and page counts |
-| `add_reference` | Queue a URL (`single` or `crawl`) for capture |
+| `add_reference` | Queue a URL (`single` or `crawl`) for capture, with optional notes and color scheme. A URL that's already saved returns the saved reference unless `allow_duplicate` |
+| `set_reference_notes` | Replace a website's note (why it was saved) |
 | `create_collection` | New collection |
 | `set_collection_membership` | Add or remove a whole website from a collection |
 | `set_page_collection_membership` | Add or remove individual pages from a collection |
@@ -230,8 +143,44 @@ File URLs returned by the MCP are signed and expire after 24 hours.
 | `SHEET_FRAMES` | `9` | Frames sampled per animation for its contact sheet (2–16) |
 | `SHEET_WIDTH` | `1536` | Max contact sheet width in px |
 | `BROWSER_IDLE_SECONDS` | `120` | Seconds Chromium stays open after the last capture |
+| `ALLOW_PRIVATE_URLS` | `false` | `true` lets the agent capture localhost and private-network sites (your own dev servers). Off so an agent connected over MCP can't make your machine capture internal pages |
+| `STORAGE_STATE` | | Path to a Playwright sign-in file, used by captures with "Use my saved sign-in". Create one with `npx playwright open --save-storage=auth.json https://example.com` |
 
 `npm run once -w capture` drains the queue and exits.
+
+## Local development
+
+```bash
+npm install
+cp web/.dev.vars.example web/.dev.vars          # set SESSION_SECRET and CAPTURE_TOKEN (openssl rand -hex 32)
+npm run db:migrate:local -w web
+npm run dev                                       # http://localhost:5173
+
+# second terminal
+cp capture/.env.example capture/.env              # SNIP_URL=http://localhost:5173, CAPTURE_TOKEN from .dev.vars
+npm run capture
+npm run doctor                                    # checks the setup
+```
+
+`DEV_LOGIN` in `web/.dev.vars` skips GitHub sign-in on localhost only. Never set it on a deployed Worker.
+
+## Updating
+
+When new changes land on `main`, one command brings a local copy (and Snip.app) up to date. For a deployed Worker, see [Upgrading](docs/deploy.md#upgrading).
+
+```bash
+npm run update
+```
+
+It quits Snip.app gracefully (active captures finish first), fast-forwards `main`, runs `npm ci` when dependencies changed, installs the capture browser, backs up and migrates the local database, rebuilds the web app, rebuilds Snip.app when `desktop/` changed, and reopens the app. It never touches untracked files such as `.env` files, `web/wrangler.deploy.jsonc`, `web/wrangler.local.jsonc` or your library. npm lockfile churn is reset automatically; any other local edit, or a terminal `npm run dev` or `npm run capture` still using the database, stops the update before anything changes (`npm run update -- --stash` sets edits aside instead). If a step fails, fix the error and run `npm run update` again to finish. `--full` reruns every step even when you're already up to date.
+
+To run it from any folder, add an alias to `~/.zshrc`:
+
+```bash
+alias snip-update='npm --prefix /path/to/Snip run update'
+```
+
+Snip.app also checks GitHub hourly (and after sleep). When `main` has new commits it shows a notification and an **Update Snip (N new)** menu item; **Update now** opens Terminal and runs the same command. Checks follow your checkout's `origin` remote, so forks update from their own `main`.
 
 ## Checks
 
@@ -240,22 +189,30 @@ The same checks CI runs:
 ```bash
 npm run typecheck
 npm run build -w web
+npx playwright install chromium # needed by the network regression tests
 npm test               # web, capture (including MCP response budgets) and desktop unit tests
 ```
 
 `npm run test:desktop` runs the Mac app smoke test.
 
+## Stack
+
+- `web/`: Vite + React 19 + Tailwind v4, **shadcn/ui** with the **SortUI** registry (`src/components/ui`, restyled with tactile surfaces), **Hugeicons**, Hono on Cloudflare Workers, D1, R2, `@cloudflare/workers-oauth-provider`, MCP via `@modelcontextprotocol/server`.
+- `capture/`: Node 22+ + Playwright, `gifenc` for GIF encoding.
+- `desktop/`: Electron menu-bar app for Apple Silicon Macs ([Snip.app](docs/mac-app.md)).
+- `web/site/`: the static [public site](docs/public-site.md) on usesnip.dev.
+
 ## Known limits
 
 - Full-page screenshots are capped at 16,000px tall (Chromium's texture limit).
 - Crawls stay on the same hostname (with or without `www.`) and ignore query strings.
-- Sites behind logins or bot walls capture whatever an anonymous browser sees. Cookie banners with an obvious "Accept" button are dismissed.
+- Sites behind bot walls capture whatever the browser is shown. Cookie banners with an obvious "Accept" button are dismissed.
 - Hover GIFs pick up to 6 elements per page from `:hover` rules and transitions; shared nav/footer effects are recorded once per site.
 
 ## Contributing
 
-Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md); first-time contributors sign a short [CLA](CLA.md) by commenting on their PR.
+Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md); first-time contributors sign a short [CLA](CLA.md) by commenting on their PR. Report security issues privately ([SECURITY.md](SECURITY.md)).
 
 ## License
 
-Snip is source-available under the [Apache License 2.0 with the Commons Clause](LICENSE). You can use, self-host, modify and fork it for free, including at work. You can't sell it: no paid product, hosted service or paid support whose value comes mainly from Snip.
+Snip is source-available under the [Apache License 2.0 with the Commons Clause](LICENSE). You can use, self-host, modify and fork it for free, including at work. You can't sell it: no paid product, hosted service or paid support whose value comes mainly from Snip. Third-party material keeps its own license; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

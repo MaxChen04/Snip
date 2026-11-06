@@ -27,7 +27,7 @@ const runtime = new CaptureRuntime({
     const { chromium } = await import("playwright")
     const headless = process.env.HEADLESS !== "false"
     return launchWithRepair({
-      launch: () => chromium.launch({ headless, executablePath: process.env.CHROMIUM_PATH || undefined }),
+      launch: () => chromium.launch({ headless, args: ["--force-webrtc-ip-handling-policy=disable_non_proxied_udp"], executablePath: process.env.CHROMIUM_PATH || undefined }),
       install: () => installBrowser(headless, (line) => console.log(`[browser install] ${line}`)),
       canInstall: !process.env.CHROMIUM_PATH && process.env.SNIP_BROWSER_AUTO_INSTALL !== "0",
       onInstall: () => api.progress(job.id, "Installing the capture browser (one-time, about a minute)"),

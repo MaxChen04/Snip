@@ -1,6 +1,7 @@
 {
   "name": "snip",
   "private": true,
+  "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "workspaces": ["web", "capture"],
   "devDependencies": { "miniflare": "5.20261101.0-beta" },
@@ -15,6 +16,9 @@
     "typecheck": "npm run typecheck -w web && npm run typecheck -w capture",
     "app": "npm ci --prefix desktop && npm run build -w web && npm run build --prefix desktop",
     "app:dev": "npm start --prefix desktop -- --dev",
-    "update": "node scripts/update.mjs"
+    "update": "node scripts/update.mjs",
+    "setup:cloudflare": "node scripts/cloudflare.mjs setup",
+    "db:migrate:remote": "node scripts/cloudflare.mjs migrate",
+    "doctor": "node scripts/doctor.mjs"
   }
 }

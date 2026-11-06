@@ -417,7 +417,7 @@ const faqs: { q: string; a: ReactNode }[] = [
   },
   {
     q: "Can it capture pages behind a login?",
-    a: "No. Captures show what an anonymous browser sees. Cookie banners with an obvious Accept button are dismissed automatically.",
+    a: "Yes, with a saved sign-in. Sign in once in a Playwright browser, point the capture agent at that file, and tick “Use my saved sign-in” when you add the page. Otherwise captures show what an anonymous browser sees. Cookie banners with an obvious Accept button are dismissed automatically.",
   },
 ]
 
@@ -482,8 +482,12 @@ export function Footer() {
         <a href="/guide" className="transition-colors hover:text-foreground">Setup guide</a>
         <a href="/llms.txt" className="font-mono transition-colors hover:text-foreground">llms.txt</a>
         {PUBLIC_SITE && <a href={REPO_URL} className="transition-colors hover:text-foreground">GitHub</a>}
+        <a href={`${REPO_URL}/blob/main/LICENSE`} className="transition-colors hover:text-foreground">Source-available (Apache 2.0 + Commons Clause)</a>
         <span>Runs on Cloudflare Workers, D1 and R2.</span>
       </nav>
+      <p className="w-full text-2xs text-muted-foreground">
+        Example captures show third-party websites for illustration only. Their designs and trademarks belong to their owners.
+      </p>
     </footer>
   )
 }

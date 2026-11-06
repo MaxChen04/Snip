@@ -1,18 +1,22 @@
-import type {
-  Animation,
-  AnimationMeta,
-  CaptureControl,
-  CaptureMode,
-  CaptureStatus,
-  Collection,
-  CrawlState,
-  DesignTokens,
-  Job,
-  JobComplete,
-  Page,
-  PageUpload,
-  Paged,
-  Reference,
+import {
+  type AgentPresence,
+  type Animation,
+  type AnimationMeta,
+  type CaptureControl,
+  type CaptureMode,
+  type CaptureOptions,
+  type CaptureStatus,
+  type Collection,
+  type CrawlState,
+  DESKTOP_WIDTHS,
+  type DesignTokens,
+  type Job,
+  type JobComplete,
+  type Page,
+  type PageUpload,
+  type Paged,
+  type Reference,
+  type StorageUsage,
 } from "../shared/types"
 import { STOPPED_EMPTY } from "../shared/capture-errors"
 
@@ -52,6 +56,8 @@ function toReference(r: Row): Reference {
     animationCount: r.animation_count as number,
     tokens: parse<DesignTokens>(r.tokens_json),
     collectionIds: r.collection_ids ? String(r.collection_ids).split(",") : [],
+    notes: (r.notes as string) ?? null,
+    options: parse<CaptureOptions>(r.capture_options),
     createdAt: r.created_at as string,
     updatedAt: r.updated_at as string,
     claimedAt: (r.claimed_at as string) ?? null,
@@ -138,9 +144,9 @@ export async function listReferences(db: D1Database, f: ListFilter): Promise<Pag
   const where: string[] = []
   const args: unknown[] = []
   if (f.q) {
-    where.push(`(r.title LIKE ? OR r.url LIKE ? OR r.description LIKE ?)`)
+    where.push(`(r.title LIKE ? OR r.url LIKE ? OR r.description LIKE ? OR r.notes LIKE ?)`)
     const like = `%${f.q}%`
-    args.push(like, like, like)
+    args.push(like, like, like, like)
   }
   if (f.collectionId) {
     where.push(`EXISTS (SELECT 1 FROM reference_collections rc WHERE rc.reference_id = r.id AND rc.collection_id = ?)`)
@@ -277,20 +283,48 @@ export function normalizeUrl(input: string): URL {
   return url
 }
 
+export const MAX_NOTES = 2000
+
+/** Keeps only known options with valid values; null when nothing differs from the defaults. */
+export function cleanOptions(input: unknown): CaptureOptions | null {
+  if (!input || typeof input !== "object") return null
+  const o = input as Record<string, unknown>
+  const out: CaptureOptions = {}
+  if (o.colorScheme === "dark") out.colorScheme = "dark"
+  if (typeof o.desktopWidth === "number" && (DESKTOP_WIDTHS as readonly number[]).includes(o.desktopWidth) && o.desktopWidth !== 1440) out.desktopWidth = o.desktopWidth
+  if (o.signedIn === true) out.signedIn = true
+  return Object.keys(out).length ? out : null
+}
+
+const cleanNotes = (notes: unknown) => (typeof notes === "string" && notes.trim() ? notes.trim().slice(0, MAX_NOTES) : null)
+
+/** The most recent reference already saved for this URL, if any. */
+export async function findReferenceByUrl(db: D1Database, input: string): Promise<Reference | null> {
+  const url = normalizeUrl(input).toString()
+  const r = await db.prepare(`${REF_SELECT} WHERE r.url = ? ORDER BY r.created_at DESC LIMIT 1`).bind(url).first<Row>()
+  return r ? toReference(r) : null
+}
+
+export async function setNotes(db: D1Database, id: string, notes: unknown) {
+  const result = await db.prepare(`UPDATE refs SET notes = ?, updated_at = ? WHERE id = ?`).bind(cleanNotes(notes), now(), id).run()
+  return result.meta.changes > 0
+}
+
 export async function createReference(
   db: D1Database,
-  input: { url: string; mode: CaptureMode; maxPages?: number; collectionIds?: string[] },
+  input: { url: string; mode: CaptureMode; maxPages?: number; collectionIds?: string[]; notes?: string | null; options?: CaptureOptions | null },
 ): Promise<Reference> {
   const url = normalizeUrl(input.url)
   const id = newId()
   const ts = now()
   const maxPages = input.mode === "single" ? 1 : Math.min(Math.max(input.maxPages ?? 25, 1), 200)
+  const options = cleanOptions(input.options)
   const stmts = [
     db
       .prepare(
-        `INSERT INTO refs (id, url, domain, mode, max_pages, status, progress, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'queued', 'Waiting for the capture agent', ?, ?)`,
+        `INSERT INTO refs (id, url, domain, mode, max_pages, status, progress, notes, capture_options, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'queued', 'Waiting for the capture agent', ?, ?, ?, ?)`,
       )
-      .bind(id, url.toString(), url.hostname.replace(/^www\./, ""), input.mode, maxPages, ts, ts),
+      .bind(id, url.toString(), url.hostname.replace(/^www\./, ""), input.mode, maxPages, cleanNotes(input.notes), options ? JSON.stringify(options) : null, ts, ts),
   ]
   for (const cid of input.collectionIds ?? []) {
     stmts.push(
@@ -473,7 +507,7 @@ export async function claimJob(db: D1Database): Promise<Job | null> {
     db.prepare(`UPDATE refs SET status = 'capturing', capture_attempt = ${fresh("?1", "capture_attempt")}, claimed_at = ?2, updated_at = ?2,
       progress = ${fresh("'Starting capture'", "'Resuming capture'")}, cover_key = ${fresh("NULL", "cover_key")}, page_count = ${fresh("0", "page_count")},
       animation_count = ${fresh("0", "animation_count")}, tokens_json = NULL, capture_control = NULL, crawl_state = NULL
-      WHERE id = (${candidate.replace("?", "?3")}) RETURNING id, url, mode, max_pages, capture_attempt`).bind(attempt, ts, stale),
+      WHERE id = (${candidate.replace("?", "?3")}) RETURNING id, url, mode, max_pages, capture_attempt, capture_options`).bind(attempt, ts, stale),
     db.prepare(`DELETE FROM pages WHERE reference_id IN (SELECT id FROM refs WHERE capture_attempt = ? AND status = 'capturing')`).bind(attempt),
   ])
   const r = results[2]?.results[0] as Row | undefined
@@ -486,6 +520,7 @@ export async function claimJob(db: D1Database): Promise<Job | null> {
     maxPages: r.max_pages as number,
     attempt: r.capture_attempt as string,
     resume: parse<CrawlState>(state),
+    options: parse<CaptureOptions>(r.capture_options),
   }
 }
 
@@ -653,6 +688,40 @@ export async function touchPresence(db: D1Database, activity: "idle" | "busy", j
     )
     .bind(PRESENCE_ID, ts, activity, jobId, before)
     .run()
+}
+
+export async function getPresence(db: D1Database): Promise<AgentPresence> {
+  const w = await db.prepare(`SELECT * FROM worker_presence WHERE id = ?`).bind(PRESENCE_ID).first<Row>()
+  const lastSeenAt = (w?.last_seen_at as string) ?? null
+  const seconds = lastSeenAt ? (Date.now() - Date.parse(lastSeenAt)) / 1000 : null
+  return {
+    lastSeenAt,
+    freshness: seconds == null ? "never" : seconds <= RECENT_SECONDS ? "recent" : "stale",
+    activity: (w?.activity as "idle" | "busy") ?? null,
+  }
+}
+
+// ---------- Storage ----------
+
+const R2_FREE_BYTES = 10 * 1024 ** 3
+// Free-plan Workers get 50 subrequests; a listing page holds up to 1,000 objects.
+const STORAGE_LIST_PAGES = 40
+
+/** Bytes stored in R2, counted from listings (cheap Class A operations, no downloads). */
+export async function storageUsage(files: R2Bucket): Promise<StorageUsage> {
+  let bytes = 0
+  let objects = 0
+  let cursor: string | undefined
+  for (let i = 0; i < STORAGE_LIST_PAGES; i++) {
+    const page = await files.list({ cursor, limit: 1000 })
+    for (const o of page.objects) {
+      bytes += o.size
+      objects++
+    }
+    if (!page.truncated) return { bytes, objects, partial: false, freeBytes: R2_FREE_BYTES }
+    cursor = page.cursor
+  }
+  return { bytes, objects, partial: true, freeBytes: R2_FREE_BYTES }
 }
 
 export async function getCaptureStatus(db: D1Database, ref: Reference): Promise<CaptureStatus> {

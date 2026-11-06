@@ -11,7 +11,7 @@ test("capture leases fence stale workers and isolate cleanup", async () => {
   try {
     const database = await mf.getD1Database("DB") as unknown as D1Database
     const files = await mf.getR2Bucket("FILES") as unknown as R2Bucket
-    for (const migration of ["0001_init.sql", "0002_mcp_media_status.sql", "0003_capture_attempts.sql", "0004_page_collections.sql", "0005_capture_control.sql"]) {
+    for (const migration of ["0001_init.sql", "0002_mcp_media_status.sql", "0003_capture_attempts.sql", "0004_page_collections.sql", "0005_capture_control.sql", "0006_notes_and_options.sql"]) {
       const sql = await readFile(new URL(`../migrations/${migration}`, import.meta.url), "utf8")
       // D1 exec accepts one statement per line; migration comments and multiline SQL need prepare/batch.
       const statements = sql.replace(/^--.*$/gm, "").split(";").map((s) => s.trim()).filter(Boolean)
@@ -63,7 +63,7 @@ test("capture leases fence stale workers and isolate cleanup", async () => {
     const auth = { authorization: "Bearer test-token" }
     const rejected = await req("/agent/jobs/claim", { method: "POST", headers: auth })
     assert.equal(rejected.status, 426)
-    const beat = (attempt: string) => req("/agent/heartbeat", { method: "POST", headers: { ...auth, "content-type": "application/json", "x-snip-capture-protocol": "2", "x-snip-capture-attempt": attempt }, body: JSON.stringify({ jobId: ref.id }) })
+    const beat = (attempt: string) => req("/agent/heartbeat", { method: "POST", headers: { ...auth, "content-type": "application/json", "x-snip-capture-protocol": "3", "x-snip-capture-attempt": attempt }, body: JSON.stringify({ jobId: ref.id }) })
     assert.equal((await beat(old.attempt)).status, 410)
     assert.equal((await beat(current.attempt)).status, 200)
 
@@ -77,7 +77,7 @@ test("capture leases fence stale workers and isolate cleanup", async () => {
       return typeof value === "function" ? value.bind(target) : value
     } })
     const uploadKey = `refs/${ref.id}/${current.attempt}/p0/late.jpg`
-    const upload = app.request(`https://snip.test/agent/files/${uploadKey}`, { method: "PUT", body: "late", headers: { ...auth, "x-snip-capture-protocol": "2", "x-snip-capture-attempt": current.attempt } }, { ...env, FILES: delayedFiles }, ctx)
+    const upload = app.request(`https://snip.test/agent/files/${uploadKey}`, { method: "PUT", body: "late", headers: { ...auth, "x-snip-capture-protocol": "3", "x-snip-capture-attempt": current.attempt } }, { ...env, FILES: delayedFiles }, ctx)
     await entered
     await db.deleteReference(database, ref.id)
     await db.cleanupRetiredFiles(database, files)
@@ -111,7 +111,7 @@ test("capture leases fence stale workers and isolate cleanup", async () => {
       return typeof value === "function" ? value.bind(target) : value
     } })
     const lateKey = `refs/${uncertainRef.id}/${uncertainJob.attempt}/p0/late.jpg`
-    const lateUpload = app.request(`https://snip.test/agent/files/${lateKey}`, { method: "PUT", body: "late", headers: { ...auth, "x-snip-capture-protocol": "2", "x-snip-capture-attempt": uncertainJob.attempt } }, { ...env, DB: failingDb, FILES: slowFiles }, ctx)
+    const lateUpload = app.request(`https://snip.test/agent/files/${lateKey}`, { method: "PUT", body: "late", headers: { ...auth, "x-snip-capture-protocol": "3", "x-snip-capture-attempt": uncertainJob.attempt } }, { ...env, DB: failingDb, FILES: slowFiles }, ctx)
     await enteredUncertain
     await db.deleteReference(database, uncertainRef.id)
     await db.cleanupRetiredFiles(database, files)

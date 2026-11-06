@@ -155,7 +155,7 @@ test("agent control and pause routes are fenced by the capture lease", async () 
     const job = (await db.claimJob(database))!
     const ctx = { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext
     const env = { DB: database, CAPTURE_TOKEN: "test-token" } as Env
-    const headers = (attempt: string) => ({ authorization: "Bearer test-token", "content-type": "application/json", "x-snip-capture-protocol": "2", "x-snip-capture-attempt": attempt })
+    const headers = (attempt: string) => ({ authorization: "Bearer test-token", "content-type": "application/json", "x-snip-capture-protocol": "3", "x-snip-capture-attempt": attempt })
     const req = (path: string, attempt: string, init: RequestInit = {}) => app.request(`https://snip.test${path}`, { ...init, headers: headers(attempt) }, env, ctx)
 
     assert.equal((await req(`/agent/jobs/${ref.id}/control`, "f".repeat(32))).status, 410)

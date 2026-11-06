@@ -107,7 +107,8 @@ async function exists(file) {
 async function storageConfig(root, dataRoot, readConfig, runtimeConfig) {
   const profile = path.join(dataRoot, '.snip');
   const snapshot = path.join(profile, 'storage-identities.json');
-  const original = path.join(dataRoot, 'web/wrangler.jsonc');
+  const local = path.join(dataRoot, 'web/wrangler.local.jsonc');
+  const original = await exists(local) ? local : path.join(dataRoot, 'web/wrangler.jsonc');
   let identities, vars;
   if (await exists(snapshot)) {
     try {

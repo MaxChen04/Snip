@@ -1,7 +1,9 @@
-import { useId } from "react"
+import { useId, useState } from "react"
 import { Link } from "wouter"
 import { motion, useReducedMotion } from "motion/react"
-import { FolderPlusIcon, GlobeIcon, LogOutIcon, MonitorIcon, MoonIcon, PlugIcon, PlusIcon, SearchIcon, SunIcon, TerminalIcon, XIcon } from "@/components/icons"
+import { BookmarkIcon, FolderPlusIcon, GlobeIcon, LogOutIcon, MonitorIcon, MoonIcon, PlugIcon, PlusIcon, SearchIcon, SunIcon, TerminalIcon, XIcon } from "@/components/icons"
+import { BookmarkletDialog } from "@/components/bookmarklet-dialog"
+import { api, type StorageUsage } from "@/lib/api"
 import { useAddFlow } from "@/components/add-flow"
 import { useTheme } from "next-themes"
 import { Logo } from "@/components/brand"
@@ -83,11 +85,19 @@ export function TopBar({
           <label className="well flex h-10 items-center gap-2 rounded-full px-3.5">
             <SearchIcon className="size-4 shrink-0 text-ink-9" />
             <input
+              data-search
               value={query}
               onChange={(e) => onQuery(e.target.value)}
+              onKeyDown={(e) => e.key === "Escape" && e.currentTarget.blur()}
               placeholder="Search Snip…"
-              className="h-full min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-ink-10"
+              aria-keyshortcuts="/"
+              className="peer h-full min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-ink-10"
             />
+            {!query && (
+              <kbd aria-hidden className="hidden h-5 min-w-5 place-items-center rounded-sm bg-ink-3 px-1 text-2xs text-ink-10 pointer-fine:grid pointer-fine:peer-focus:hidden">
+                /
+              </kbd>
+            )}
             {query && (
               <button onClick={() => onQuery("")} aria-label="Clear search" className="press grid size-5 place-items-center rounded-full bg-control text-ink-10 shadow-button hover:text-foreground active:scale-[0.92]">
                 <XIcon className="size-3" />
@@ -157,11 +167,39 @@ function CreateMenu({ collection }: { collection?: string }) {
   )
 }
 
+export function formatBytes(n: number) {
+  if (n < 1024 ** 2) return `${Math.max(0, Math.round(n / 1024))} KB`
+  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(n < 10 * 1024 ** 2 ? 1 : 0)} MB`
+  return `${+(n / 1024 ** 3).toFixed(1)} GB`
+}
+
+function StorageMeter({ usage }: { usage: StorageUsage | null | "error" }) {
+  if (usage === "error") return null
+  const share = usage ? Math.min(1, usage.bytes / usage.freeBytes) : 0
+  return (
+    <div className="flex flex-col gap-1.5 px-2 py-1.5 text-xs" title="Cloudflare R2's free tier includes 10 GB. Storage beyond it is billed.">
+      <div className="flex items-center justify-between">
+        Storage
+        <span className="text-ink-11 tabular-nums">
+          {usage ? `${usage.partial ? "over " : ""}${formatBytes(usage.bytes)} of ${formatBytes(usage.freeBytes)} free tier` : "…"}
+        </span>
+      </div>
+      <div className="h-1 overflow-hidden rounded-full bg-ink-3" role="meter" aria-label="Storage used" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(share * 100)}>
+        <div className={cn("h-full rounded-full bg-ink-11 transition-[width]", share > 0.8 && "bg-(--red-9)")} style={{ width: `${Math.max(share * 100, usage?.bytes ? 1 : 0)}%` }} />
+      </div>
+    </div>
+  )
+}
+
 function AccountMenu({ login }: { login: string }) {
   const { theme, setTheme } = useTheme()
   const [grid, setGrid] = useGridSize()
+  const [usage, setUsage] = useState<StorageUsage | null | "error">(null)
+  const [bookmarklet, setBookmarklet] = useState(false)
   return (
-    <DropdownMenu>
+    <>
+    <BookmarkletDialog open={bookmarklet} onOpenChange={setBookmarklet} />
+    <DropdownMenu onOpenChange={(open) => open && api.storage().then(setUsage, () => setUsage("error"))}>
       <DropdownMenuTrigger
         render={
           <button
@@ -202,11 +240,17 @@ function AccountMenu({ login }: { login: string }) {
           />
         </div>
         <DropdownMenuSeparator />
+        <StorageMeter usage={usage} />
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onClick={() => setBookmarklet(true)}>
+          <BookmarkIcon /> Browser bookmarklet
+        </DropdownMenuItem>
         <DropdownMenuItem render={<a href="/auth/logout" />}>
           <LogOutIcon /> Sign out
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+    </>
   )
 }
 
