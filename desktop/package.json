@@ -2,7 +2,7 @@
   "name": "snip-desktop",
   "private": true,
   "license": "SEE LICENSE IN LICENSE",
-  "version": "0.2.0",
+  "version": "0.1.1",
   "description": "Snip design reference library for Apple Silicon Macs",
   "main": "main.cjs",
   "scripts": {
