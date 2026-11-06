@@ -1,6 +1,7 @@
 import OAuthProvider from "@cloudflare/workers-oauth-provider"
 import { app } from "./app"
 import { mcpApiHandler } from "./mcp"
+import { guardOAuthRequest, type OAuthCostGuardBindings } from "./oauth-cost-guards"
 
 // /mcp is protected by OAuth (tokens issued after GitHub login + consent).
 // Everything else (web app API, capture agent API, files, auth) goes to Hono.
@@ -25,7 +26,9 @@ function getProvider(env: Env) {
 }
 
 export default {
-  fetch(request, env, ctx) {
+  async fetch(request, env, ctx) {
+    const blocked = await guardOAuthRequest(request, env)
+    if (blocked) return blocked
     return getProvider(env).fetch(request, env, ctx)
   },
-} satisfies ExportedHandler<Env>
+} satisfies ExportedHandler<Env & OAuthCostGuardBindings>
