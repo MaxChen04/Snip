@@ -380,7 +380,7 @@ function CloudSection() {
           { t: "Waiting for your Mac", b: "A capture started from another device waits in the cloud queue until this Mac's capture agent checks in. The card and every agent status say Waiting for your Mac, whether the agent is busy or the Mac is asleep." },
           { t: "One Snip per account", b: "An older Snip you already deployed is recognised, not refused: if it's empty the setup adopts it, and if it has references you choose Use that library or Stop. Your local library stays on disk either way, listed as This Mac's library with one action, Switch back to it. A Worker named snip that isn't a Snip is refused, with instructions to rename or delete it or pick another account." },
           { t: "workers.dev only", b: "The address is https://snip.<your-subdomain>.workers.dev. Custom domains aren't supported in this release, because the address is what your passkey and agent connections are bound to." },
-          { t: "One owner for now", b: "You sign in with a passkey on each device you use, and that's the only way in: no GitHub app to register, no allowlist to maintain. Sharing a library with a second person is planned for later, and installs that already configured GitHub keep working." },
+          { t: "One owner for now", b: "You sign in with a passkey on each device you use, and that's the only way in: no GitHub app to register, no allowlist to maintain. A browser with no passkey yet gets in through Settings → Cloud → Sign in another browser, which mints a link that works once and expires in 10 minutes. Sharing a library with a second person is planned for later." },
         ].map(({ t, b }) => (
           <div key={t} className="flex flex-col gap-1.5 rounded-2xl bg-card p-5 ring-1 ring-border">
             <p className="text-[15px] font-medium">{t}</p>
@@ -580,7 +580,7 @@ function LimitsSection() {
   ]
   const limits = [
     ["Local storage", "Only limited by your disk. Every capture is a file in the library folder, and the account menu shows the bytes used."],
-    ["Sign-in", "None locally: DEV_LOGIN names you. Cloud mode signs you in with a passkey at /sign-in. There is one owner in this version; sharing with a second person is planned for later."],
+    ["Sign-in", "None locally: DEV_LOGIN names you. Cloud mode signs you in with a passkey at /sign-in. A browser with no passkey yet uses the one-time link from Settings → Cloud → Sign in another browser. There is one owner in this version; sharing with a second person is planned for later."],
     ["Address", "Cloud mode uses https://snip.<your-subdomain>.workers.dev. Custom domains are not supported in this release."],
     ["Page height", "Full-page screenshots stop at 16,000 px, Chromium’s texture limit."],
     ["Crawl scope", "Crawls stay on one hostname, with or without www, and ignore query strings."],

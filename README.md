@@ -40,6 +40,8 @@ Snip creates the Worker, database, key-value store and bucket, deploys, copies t
 
 After that, every other browser or device signs in at **/sign-in** with its passkey; **Passkeys and devices** in the account menu adds or removes them.
 
+A browser with no passkey yet opens **Settings → Cloud → Sign in another browser** on the Mac that owns the library, which mints a one-time link to copy or open there. The link works once and expires in 10 minutes; the browser that opens it is signed in and can add its own passkey.
+
 **One owner in this version.** The person who enabled cloud is the only person who can sign in, on their own devices. Sharing a library with a second person is planned for later, so there is no invitation, no allowlist and no second account to set up. Nothing in the setup asks for GitHub.
 
 Capture stays on this Mac. A capture started from another device waits in the queue and shows **Waiting for your Mac** until this Mac's capture agent checks in. The gallery card and every agent status use those exact words, whether the agent is busy or the Mac is asleep.

@@ -39,13 +39,30 @@ When the Worker is up, Snip opens a **one-time owner link** in your browser. It 
 
 ### Signing in later
 
-At the cloud address, **/sign-in** is the everyday door: **Sign in with a passkey**, with nothing to type.
+At the cloud address, **/sign-in** is the everyday door: **Sign in with a passkey**, under **Use the passkey saved on this device. Nothing to type, nothing to remember.**
 
-A device with no passkey yet still gets in. **/sign-in** sends you to **Settings → Cloud → Sign in another browser** on a Mac that is already signed in. That button creates a one-time owner link you can copy or open: open it on the new device, register a passkey, and the device is signed in from then on. The link works once and expires after ten minutes, so create a fresh one if you leave it too long. From a terminal, `owner link --no-handoff` mints the same link.
+The page adapts to the device in front of it:
 
-A cloud MCP client that lands on **/sign-in** returns to its approval screen once you sign in with a passkey, so approving the client carries on where it stopped.
+| What it finds | What it says |
+| --- | --- |
+| A passkey on this device | The sentence above, the note that Snip only ever sees the public half of the passkey, and **Sign in with a passkey**. |
+| No passkey registered anywhere on the library | The button is replaced by **Reload once you've added one**, and the page explains: **This library has no passkey yet. Open Snip on the Mac that owns it and use the owner link under Settings → Cloud: it signs this browser in once, and you can add a passkey here.** |
+| A passkey elsewhere, but not here | **No passkey on this device? Open Snip on the Mac that owns this library and use the owner link under Settings → Cloud.** |
+| A legacy install that still has GitHub credentials | The footer becomes **No passkey on this device? Use GitHub if this library allows it, or add one from a signed-in device.** |
 
-A library that was set up by an earlier version and already had GitHub sign-in configured also offers **Use GitHub**; a new install never does.
+### Signing another browser in
+
+That owner link is a row in Settings: **Settings → Cloud → Sign in another browser**, with the body **Creates a one-time link that signs a browser in once. Use it before that browser has a passkey of its own.**, and a **Create link…** button.
+
+<img src="media/sign-in-another-browser.png" alt="Settings → Cloud → Sign in another browser: the sheet with a one-time link, Copy, Open in browser and Create a new link" width="620">
+
+The sheet is titled **Sign in another browser**, and says **Open this link in the browser you want to sign in, on this Mac or any other device.** Once a link exists it carries a **Link ready** badge, never "signed in", because this Mac cannot see the other browser. Under it is the exact sentence:
+
+> Works once and expires in 10 minutes. The browser that opens it is signed in and can add a passkey.
+
+Three buttons: **Copy** (which becomes **Copied**), **Open in browser**, and **Create a new link**. A failed mint shows the error and offers **Try again** instead. Nothing is claimed about the other device until it opens the link and registers a passkey.
+
+From a terminal, `owner link --no-handoff` mints the same link, which is the command that button runs.
 
 **/passkeys** (also **Passkeys and devices** in the account menu) lists every passkey that can open the library:
 
@@ -54,6 +71,8 @@ A library that was set up by an earlier version and already had GitHub sign-in c
 - **Add this device** names the device and asks for Touch ID, your device PIN or a security key. The passkey stays on the device; Snip keeps only the public half.
 - **Remove** retires one device, which is the recovery path for a lost laptop or phone. If it was your only passkey, you sign in again with the owner link.
 - **Sign out all devices** ends every browser session and the app's session. Passkeys stay registered, and agents connected over MCP keep their own tokens until those expire.
+
+**Connecting a cloud MCP client.** The client sends the browser to `/authorize`, which redirects to `/sign-in?next=<the authorize URL>`. Sign in with a passkey and you land back on that same URL, query included, so the client's authorization request survives the detour and its approval screen appears. Approve there and the client is connected; the grant is bound to the owner identity, not to the method that signed in.
 
 **One owner in this release.** The person who enabled cloud is the only person who can sign in, on their own devices. There is no invitation, no allowlist and no second account to set up; sharing a library with a second person is planned for later.
 
@@ -85,13 +104,19 @@ With `--json`, stdout carries one JSON object per line and human text goes to st
 
 Exit 4 means this machine or this library cannot be provisioned right now. It covers every preflight refusal, each with its own `result.code`: `NOT_A_LIBRARY`, `NO_NODE`, `NO_WRANGLER`, `NO_BUILD`, `BAD_CONFIG`, `NOT_AN_ACCOUNT`, `LOCAL_SERVER_RUNNING`, `UNSUPPORTED_PLATFORM` and `FOREIGN_SNIP`.
 
-**Every failure reported after a run starts carries `retryable`, not only exit 4.** Branch on that field instead of the code string. `true` means the same command can work: something outside Snip changes, or the failure was temporary. `false` means repeating it cannot help. Inside exit 4, `NOT_AN_ACCOUNT` and `LOCAL_SERVER_RUNNING` are the retryable ones and the other seven are final. A step failure says so for itself when it is worth repeating, for example an unreachable surface or a Cloudflare hiccup. The one exception is a usage error: an unknown flag or a flag missing its value reports `code: "USAGE"` with no `retryable`, and an unknown command prints the help and emits no `result` at all. Treat a missing `retryable` as final.
+**Every failed result carries `retryable`, not only exit 4.** Branch on that field instead of the code string. `true` means the same command can work: something outside Snip changes, or the failure was temporary. `false` means repeating it cannot help. Inside exit 4, `NOT_AN_ACCOUNT` and `LOCAL_SERVER_RUNNING` are the retryable ones and the other seven are final. A step failure says so for itself when it is worth repeating, for example an unreachable surface or a Cloudflare hiccup. A usage failure is always `retryable: false` with `code: "USAGE"` and the reason in `data.reason`: an unknown flag, a flag missing its value and an unknown command all report it, so an agent never has to guess what a missing field means.
 
 A Cloudflare hiccup gets its own code. Setup retries a transient failure on `deploy`, `d1 migrations apply` and the secret writes, up to four attempts with growing waits, and only then gives up:
 
 > Cloudflare had a temporary problem, try again.
 
 That result is `code: "CLOUDFLARE_TEMPORARY"` and `retryable: true`, and its `data` carries the reason, the attempt count and the last output. Only operations that are safe to repeat are retried: a `d1 create` never is, because repeating it could leave an orphan. A rate limit, a `5xx`, a dropped connection or one of Cloudflare's known transient API codes is retried; an authentication or permission failure is not, because waiting never grants access. Run the same command again in a minute.
+
+Cloudflare's `7403` is the one code that can mean two things: an edge hiccup that clears on its own, or a request made against the wrong account, which no retry fixes. Because it is reported only after the retries are spent, both readings are named:
+
+> Cloudflare refused the request. Try again; if it keeps happening, check that you're signed in to the Cloudflare account that owns this Snip.
+
+That result also carries `ambiguousAccount: true` in `data` and the hint **Run `npx wrangler whoami` to see which account you are signed in to; the database and bucket must be the ones this Snip was set up with.**
 
 | Flag | Meaning |
 | --- | --- |
@@ -107,7 +132,7 @@ That result is `code: "CLOUDFLARE_TEMPORARY"` and `retryable: true`, and its `da
 | `--managed` | The app's own mode: it replaces the capture environment and can use its loopback handoff. Not needed from a terminal. |
 | `--no-open` | Print URLs instead of opening a browser. |
 | `--no-handoff` | With `owner link`: mint the link for another browser or device. It carries port 0, no handoff is attempted, and the command ends as soon as the link is minted. `setup` always uses the handoff. |
-| `--root <path>` / `--data-root <path>` | Run against a different checkout or library. `--root` also sets `--data-root` when the latter is absent. |
+| `--root <path>` / `--data-root <path>` | Run against a different checkout or library. `--root` also sets `--data-root` when the latter is absent, and either works before the command: `--root <path> status` reads that install's record. |
 | `--confirm <name>` | The interlock the destructive commands check. See [Other commands](#other-commands). |
 
 Exit codes: `0` success, `1` failed, `2` missing input or an unanswered choice, `3` another run holds the lock, `4` this machine or library cannot be provisioned right now (see the `result.code` list above).
