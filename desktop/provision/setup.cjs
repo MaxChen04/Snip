@@ -911,12 +911,13 @@ function snapshotTables(snapshot, directory) {
 }
 
 /** Tables the Worker said are not part of a copy. */
+/** The tables the Worker said it copies as schema only, with its documented default. */
 function snapshotExcluded(directory) {
   try {
     const files = JSON.parse(fs.readFileSync(path.join(directory, 'files.json'), 'utf8'));
-    return new Set(Array.isArray(files.excluded) ? files.excluded : []);
+    return lib.excludedTables(files.excluded);
   } catch {
-    return new Set();
+    return lib.excludedTables(undefined);
   }
 }
 
@@ -957,11 +958,10 @@ function verifyStep() {
       const files = JSON.parse(fs.readFileSync(path.join(directory, 'files.json'), 'utf8')).keys || [];
       const dump = path.join(directory, 'dump.sql');
       const columns = columnsFromDump(fs.readFileSync(dump, 'utf8'));
-      const excluded = snapshotExcluded(directory);
-      const tables = Object.keys(snapshotTables(exported, directory))
-        .filter((table) => !excluded.has(table))
-        // Defensive: never compare SQLite internals, even with an old snapshot.
-        .filter((table) => !/^(sqlite_|_cf_|_mf_)/.test(table));
+      // Compare only what the manifest says holds rows: an excluded table is
+      // skipped by name, and nothing is required to be listed, so a newer Worker
+      // can add or drop an exclusion without an engine change.
+      const tables = lib.comparableTables(snapshotTables(exported, directory), snapshotExcluded(directory));
 
       const remotePerTable = {};
       const localPerTable = {};

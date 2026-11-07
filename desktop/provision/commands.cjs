@@ -217,9 +217,9 @@ function pullSteps({ stagedRoot, stagedState }) {
       // the cloud deploy config names a different database id, so importing with
       // it would leave the swapped-in data in a file the app never reads.
       const localConfig = (await ctx.libraryFacts()).localConfig || deploy.localConfigPath(ctx.dataRoot);
-      await deploy.applyMigrations(ctx.wrangler, { dataRoot: ctx.dataRoot, accountId: record.accountId, remote: false, local: true, persistTo: stagedState, config: localConfig });
+      await ctx.deps.deploy.applyMigrations(ctx.wrangler, { dataRoot: ctx.dataRoot, accountId: record.accountId, remote: false, local: true, persistTo: stagedState, config: localConfig });
       const { importLocal } = require('./deploy.cjs');
-      await importLocal(ctx.wrangler, { dataRoot: ctx.dataRoot, persistTo: stagedState, statements, tables, config: localConfig });
+      await ctx.deps.deploy.importLocal(ctx.wrangler, { dataRoot: ctx.dataRoot, persistTo: stagedState, statements, tables, config: localConfig });
       ctx.setWork({ pullStagedState: stagedState });
       return { message: 'Database loaded into a new library' };
     },
@@ -279,16 +279,24 @@ function pullVerifyStep({ stagedState, manifest }) {
     title: 'Checking the copy',
     async run(ctx) {
       const record = requireCloud(ctx);
-      const tables = (manifest.value && manifest.value.tables) || {};
+      // The manifest read by `pull-manifest`, from this run or an earlier one.
+      const source = ctx.work.pullManifest || manifest.value || {};
+      const reported = source.tables || {};
       const dump = path.join(path.dirname(stagedState), 'dump.sql');
       const columns = require('./lib.cjs').columnsFromDump(fs.readFileSync(dump, 'utf8'));
       const localConfig = (await ctx.libraryFacts()).localConfig || deploy.localConfigPath(ctx.dataRoot);
+      // The manifest's `excluded` is computed by the Worker from its own
+      // database, so it shrinks and grows with the Worker. Every name in it is
+      // skipped, and nothing is required to be listed: a table the manifest
+      // never mentions is simply not part of the copy to check. The default set
+      // covers an older Worker that sends no `excluded` at all (contracts §4.5).
+      const tables = require('./lib.cjs').comparableTables(reported, source.excluded);
       const remotePerTable = {};
       const localPerTable = {};
-      for (const table of Object.keys(tables)) {
+      for (const table of tables) {
         const sql = require('./lib.cjs').digestSql(table, columns[table] || []);
-        const remoteRow = (await deploy.remoteQuery(ctx.wrangler, { dataRoot: ctx.dataRoot, accountId: record.accountId, sql }))[0] || {};
-        const localRow = (await deploy.localQuery(ctx.wrangler, { dataRoot: ctx.dataRoot, sql, config: localConfig, persistTo: stagedState }))[0] || {};
+        const remoteRow = (await ctx.deps.deploy.remoteQuery(ctx.wrangler, { dataRoot: ctx.dataRoot, accountId: record.accountId, sql }))[0] || {};
+        const localRow = (await ctx.deps.deploy.localQuery(ctx.wrangler, { dataRoot: ctx.dataRoot, sql, config: localConfig, persistTo: stagedState }))[0] || {};
         remotePerTable[table] = { rows: Number(remoteRow.rows) || 0, sig: Number(remoteRow.sig) || 0 };
         localPerTable[table] = { rows: Number(localRow.rows) || 0, sig: Number(localRow.sig) || 0 };
         if (remotePerTable[table].rows !== localPerTable[table].rows) {
@@ -302,12 +310,12 @@ function pullVerifyStep({ stagedState, manifest }) {
       if (remoteDigest !== require('./lib.cjs').digestOf(localPerTable)) {
         throw new StepError('VERIFY_DIGEST_MISMATCH', 'The downloaded copy does not match the cloud library.', { hint: 'Run `pull` again.' });
       }
-      const keys = manifest.keys || [];
-      if (Number(tables.refs || 0) > 0 && keys.length === 0) {
+      const keys = Array.isArray(source.keys) ? source.keys : (manifest.keys || []);
+      if (Number(reported.refs || 0) > 0 && keys.length === 0) {
         throw new StepError('EXPORT_EMPTY', 'The cloud library reports references but no files.', { hint: 'Check the cloud library in a browser, then run `pull` again.' });
       }
       // One worker for the whole check: starting one per key would take minutes.
-      const present = await withLocalWorker({ root: ctx.root, dataRoot: ctx.dataRoot, token: randomSecret(), persist: stagedState, log: () => {} }, async (handle) => {
+      const present = await ctx.deps.library.withLocalWorker({ root: ctx.root, dataRoot: ctx.dataRoot, token: randomSecret(), persist: stagedState, log: () => {} }, async (handle) => {
         let seen = 0;
         for (const entry of keys) {
           ctx.checkCancel();
@@ -319,7 +327,7 @@ function pullVerifyStep({ stagedState, manifest }) {
         }
         return seen;
       });
-      ctx.setWork({ pullVerified: { digest: remoteDigest, keys: present, tables } });
+      ctx.setWork({ pullVerified: { digest: remoteDigest, keys: present, tables: reported } });
       return { message: `${present} file${present === 1 ? '' : 's'}, all verified`, detail: remoteDigest };
     },
     async verify(ctx) { return Boolean(ctx.work.pullVerified); },
@@ -456,7 +464,7 @@ async function commandDeploy(ctx) {
       id: 'deploy-schema',
       title: 'Applying database migrations',
       async run(ctx2) {
-        await deploy.applyMigrations(ctx2.wrangler, { dataRoot: ctx2.dataRoot, accountId: record.accountId, remote: true });
+        await ctx2.deps.deploy.applyMigrations(ctx2.wrangler, { dataRoot: ctx2.dataRoot, accountId: record.accountId, remote: true });
         return { message: 'Database is up to date' };
       },
       async verify() { return true; },
@@ -534,7 +542,7 @@ async function commandMigrate(ctx) {
       id: 'migrate-apply',
       title: 'Applying database migrations',
       async run(ctx2) {
-        await deploy.applyMigrations(ctx2.wrangler, { dataRoot: ctx2.dataRoot, accountId: record.accountId, remote: true });
+        await ctx2.deps.deploy.applyMigrations(ctx2.wrangler, { dataRoot: ctx2.dataRoot, accountId: record.accountId, remote: true });
         return { message: 'Database is up to date' };
       },
       async verify() { return true; },

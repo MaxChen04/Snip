@@ -1926,3 +1926,183 @@ test('delete-resources verifies every artifact and clears the install record', a
   await assert.rejects(() => commands.commandDeleteResources(survivor), (error) => error.code === 'DELETE_INCOMPLETE' && error.data.leftover.includes('database'));
   assert.equal(stateModule.readState(library2.root).cloud.url, PROVIDED, 'the record stays until everything is gone');
 });
+
+/** A pull-verify context that records which tables verify actually compares. */
+function pullVerifyContext({ library, stagedState, manifestValue, dump, counts, localCounts = counts }) {
+  const queried = [];
+  const tableOf = (sql) => (sql.match(/FROM "([A-Za-z0-9_]+)"/) || [])[1];
+  const emitter = collectedEmitter();
+  const ctx = createContext({
+    root: library.root,
+    dataRoot: library.root,
+    flags: {},
+    emit: emitter.emit,
+    api: {},
+    wrangler: { bin: '/x', run: async () => ({ ok: true }) },
+    deps: {
+      fetch: async () => { throw new Error('no network'); },
+      deploy: {
+        ...deploy,
+        // The quoted identifier only appears in a per-table digest, so the
+        // "is the library empty" count does not pollute the recording.
+        remoteQuery: async (_wrangler, options) => {
+          const table = tableOf(options.sql);
+          if (table) queried.push(`remote:${table}`);
+          return [{ rows: counts[table] || 0, sig: counts[table] || 0 }];
+        },
+        localQuery: async (_wrangler, options) => {
+          const table = tableOf(options.sql);
+          if (table) queried.push(`local:${table}`);
+          return [{ rows: localCounts[table] || 0, sig: localCounts[table] || 0 }];
+        },
+      },
+      library: {
+        async withLocalWorker(_options, fn) {
+          return fn({
+            transfer: { async head() { return 10; } },
+            async dispose() {},
+          });
+        },
+        libraryConfig: ({ dataRoot }) => path.join(dataRoot, 'web/wrangler.jsonc'),
+      },
+      local: { ...LOCAL_FAKE, localOrigin: () => 'http://localhost:5199' },
+    },
+  });
+  stateModule.updateState(library.root, (next) => {
+    next.mode = 'cloud';
+    next.cloud = { url: PROVIDED, accountId: 'acct' };
+    return next;
+  });
+  ctx.reload();
+  fs.mkdirSync(path.dirname(stagedState), { recursive: true });
+  fs.writeFileSync(path.join(path.dirname(stagedState), 'dump.sql'), dump);
+  ctx.setWork({ pullManifest: manifestValue });
+  const verify = commands.pullSteps({ stagedRoot: path.dirname(stagedState), stagedState }).find((step) => step.id === 'pull-verify');
+  return { ctx, verify, queried };
+}
+
+const DUMP_WITH_LEDGER = [
+  'INSERT INTO "refs" (id, url) VALUES (\'a\', \'https://a.test\');',
+  'INSERT INTO "pages" (id) VALUES (\'p\');',
+  'INSERT INTO "d1_migrations" (id, name) VALUES (1, \'0001_init.sql\'), (2, \'0002_x.sql\');',
+  'INSERT INTO "owner_nonces" (nonce) VALUES (\'n\');',
+].join('\n');
+
+test('pull-verify skips every table the manifest excludes', async () => {
+  const { root } = fakeLibrary();
+  const stagedState = path.join(root, 'backups/pull-test/state');
+  // The cloud ledger says 10 migrations, the staged copy has 12 after applying
+  // migrations locally. Comparing them would fail a correct pull.
+  const { ctx, verify, queried } = pullVerifyContext({
+    library: { root },
+    stagedState,
+    manifestValue: {
+      tables: { refs: 1, pages: 1, d1_migrations: 10, owner_nonces: 0 },
+      excluded: ['d1_migrations', 'owner_nonces'],
+      keys: [{ key: 'refs/a/b/shot.png', size: 10 }],
+    },
+    dump: DUMP_WITH_LEDGER,
+    counts: { refs: 1, pages: 1, d1_migrations: 10, owner_nonces: 1 },
+    localCounts: { refs: 1, pages: 1, d1_migrations: 12, owner_nonces: 1 },
+  });
+  await verify.run(ctx);
+  assert.deepEqual(queried, ['remote:refs', 'local:refs', 'remote:pages', 'local:pages'], 'excluded tables are never queried');
+});
+
+test('an older Worker with no excluded list still verifies with a shorter migrations ledger', async () => {
+  const { root } = fakeLibrary();
+  const stagedState = path.join(root, 'backups/pull-old/state');
+  // An older Worker reports no `excluded` and no d1_migrations row at all. The
+  // engine must not require either: it compares what the manifest says was
+  // copied, and nothing else.
+  const { ctx, verify, queried } = pullVerifyContext({
+    library: { root },
+    stagedState,
+    manifestValue: {
+      tables: { refs: 1, pages: 1 },
+      keys: [{ key: 'refs/a/b/shot.png', size: 10 }],
+    },
+    dump: DUMP_WITH_LEDGER,
+    counts: { refs: 1, pages: 1 },
+  });
+  await verify.run(ctx);
+  assert.deepEqual(queried, ['remote:refs', 'local:refs', 'remote:pages', 'local:pages']);
+  assert.equal(ctx.work.pullVerified.keys, 1);
+});
+
+test('a newer Worker that excludes a table the engine has never heard of still verifies', async () => {
+  const { root } = fakeLibrary();
+  const stagedState = path.join(root, 'backups/pull-new/state');
+  const { ctx, verify, queried } = pullVerifyContext({
+    library: { root },
+    stagedState,
+    manifestValue: {
+      tables: { refs: 1, future_table: 4 },
+      excluded: ['future_table'],
+      keys: [{ key: 'refs/a/b/shot.png', size: 10 }],
+    },
+    dump: DUMP_WITH_LEDGER,
+    counts: { refs: 1, future_table: 4 },
+  });
+  await verify.run(ctx);
+  assert.deepEqual(queried, ['remote:refs', 'local:refs']);
+});
+
+test('pull-verify fails when two zeros would otherwise pass for a copy', async () => {
+  const { root } = fakeLibrary();
+  const stagedState = path.join(root, 'backups/pull-empty/state');
+  const { ctx, verify } = pullVerifyContext({
+    library: { root },
+    stagedState,
+    manifestValue: { tables: { refs: 3 }, excluded: ['d1_migrations'], keys: [] },
+    dump: DUMP_WITH_LEDGER,
+    counts: { refs: 0 },
+    localCounts: { refs: 3 },
+  });
+  await assert.rejects(() => verify.run(ctx), (error) => error.code === 'VERIFY_COUNT_MISMATCH');
+});
+
+test('setup verify skips an excluded ledger and compares what the manifest copied', async () => {
+  const { root } = fakeLibrary();
+  const directory = path.join(root, 'backups/cloud-export-2026-11-06T10-12-00');
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, 'dump.sql'), DUMP_WITH_LEDGER);
+  // The cloud has 10 migrations, the local dump holds a longer ledger: an
+  // excluded table must not be compared, or a correct move fails.
+  fs.writeFileSync(path.join(directory, 'manifest.json'), JSON.stringify({ tables: { refs: 1, pages: 1, d1_migrations: 10 } }));
+  fs.writeFileSync(path.join(directory, 'files.json'), JSON.stringify({ keys: [{ key: 'refs/a/b/shot.png', size: 10, contentType: 'image/png' }], excluded: ['d1_migrations'] }));
+  stateModule.setMode(root, 'cloud');
+  stateModule.updateState(root, (next) => {
+    next.cloud = { url: PROVIDED, accountId: 'acct', lastVerifiedAt: 'x' };
+    next.snapshot = { kind: 'live', path: null, keptLocal: true, takenAt: new Date().toISOString(), refs: 1, export: { path: 'backups/cloud-export-2026-11-06T10-12-00', takenAt: new Date().toISOString(), refs: 1 } };
+    return next;
+  });
+  stateModule.writeSecrets(root, { version: 1, ownerLinkSecret: crypto.randomBytes(32).toString('hex'), captureToken: 'c', transferToken: crypto.randomBytes(32).toString('hex') });
+  const queried = [];
+  const tableOf = (sql) => (sql.match(/FROM "([A-Za-z0-9_]+)"/) || [])[1];
+  const emitter = collectedEmitter();
+  const ctx = createContext({
+    root, dataRoot: root, flags: {}, emit: emitter.emit, api: {},
+    wrangler: { bin: '/x', run: async () => ({ ok: true }) },
+    deps: {
+      // The only network call this step makes is the manifest, over the
+      // transfer client the context builds from deps.fetch.
+      fetch: async () => new Response(JSON.stringify({ tables: { refs: 1, pages: 1 }, keys: [{ key: 'refs/a/b/shot.png', size: 10 }] }), { status: 200, headers: { 'content-type': 'application/json' } }),
+      local: { ...LOCAL_FAKE, localOrigin: () => null },
+      library: { libraryConfig: ({ dataRoot }) => path.join(dataRoot, 'web/wrangler.jsonc'), async withLocalWorker() { throw new Error('not used'); } },
+      deploy: {
+        ...deploy,
+        remoteQuery: async (_w, options) => { const t = tableOf(options.sql); if (t) queried.push(t); return [{ rows: 1, sig: 1 }]; },
+        localQuery: async (_w, options) => {
+          const t = tableOf(options.sql);
+          if (!t) return [{ rows: 0 }];
+          return [{ rows: 1, sig: 1 }];
+        },
+      },
+    },
+  });
+  ctx.reload();
+  const verify = setup.setupSteps().find((step) => step.id === 'verify');
+  await verify.run(ctx);
+  assert.deepEqual(queried.sort(), ['pages', 'refs'], 'the migrations ledger is never compared');
+});
