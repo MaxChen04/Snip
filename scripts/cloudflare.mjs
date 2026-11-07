@@ -39,14 +39,10 @@ export function preserveLocalConfig(root = ROOT) {
 
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
 if (isMain) {
-  const args = process.argv.slice(2)
-  const known = new Set(["setup", "pull", "deploy", "migrate", "status", "detach", "delete-resources", "snapshot", "abort", "owner", "help"])
-  const command = args.find((arg) => !arg.startsWith("-"))
-  if (command && !known.has(command)) {
-    process.stderr.write(`Unknown command ${command}.\n\n${cli.helpText()}\n`)
-    process.exitCode = 4
-  } else {
-    const { code } = await cli.main(args)
-    process.exitCode = code
-  }
+  // Every argument goes straight to the engine, including an unknown command:
+  // it reports that itself, so `--json` still gets one `result` event. This file
+  // must not keep a second list of command names — the copy that used to live
+  // here also mistook an option's value (`--root <path>`) for the command.
+  const { code } = await cli.main(process.argv.slice(2))
+  process.exitCode = code
 }

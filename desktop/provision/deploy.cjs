@@ -188,15 +188,32 @@ async function runTransient(wrangler, args, options, retry = {}) {
   return result;
 }
 
-/** The failure after the last retry: plain, and explicitly worth trying again. */
+/**
+ * The failure after the last retry: plain, and explicitly worth trying again.
+ *
+ * 7403 is the one code that can mean two different things. It is usually the
+ * edge refusing a request it will accept a moment later, but Cloudflare also
+ * answers it for a request made against the wrong account, and no retry fixes
+ * that. Since this is the message the user sees after the retries are spent,
+ * it names both possibilities rather than blaming Cloudflare alone.
+ */
 function transientError(result, fallback) {
   const transient = result.transient || {};
-  return new StepError('CLOUDFLARE_TEMPORARY', 'Cloudflare had a temporary problem, try again.', {
-    hint: 'Nothing is wrong with this Mac or this library; run the same command again in a minute.',
+  const reason = transient.reason || 'a temporary Cloudflare error';
+  const ambiguousAccount = /\b7403\b/.test(reason);
+  const message = ambiguousAccount
+    ? 'Cloudflare refused the request. Try again; if it keeps happening, check that you\'re signed in to the Cloudflare account that owns this Snip.'
+    : 'Cloudflare had a temporary problem, try again.';
+  const hint = ambiguousAccount
+    ? 'Run `npx wrangler whoami` to see which account you are signed in to; the database and bucket must be the ones this Snip was set up with.'
+    : 'Nothing is wrong with this Mac or this library; run the same command again in a minute.';
+  return new StepError('CLOUDFLARE_TEMPORARY', message, {
+    hint,
     retryable: true,
     data: {
-      reason: transient.reason || 'a temporary Cloudflare error',
+      reason,
       attempts: transient.attempts || 1,
+      ...(ambiguousAccount ? { ambiguousAccount: true } : {}),
       output: failureMessage(result, fallback),
     },
   });

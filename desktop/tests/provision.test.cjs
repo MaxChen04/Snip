@@ -995,6 +995,79 @@ test('npm run setup:cloudflare forwards its arguments instead of forcing setup',
   const unknown = spawnSync(process.execPath, [path.join(__dirname, '../../scripts/cloudflare.mjs'), 'nonsense'], { encoding: 'utf8' });
   assert.equal(unknown.status, 4);
   assert.match(unknown.stderr, /Unknown command nonsense/);
+  assert.equal(unknown.stdout, '', 'human mode prints the help on stderr and nothing on stdout');
+
+  // The same failure in --json is still one NDJSON `result`, with the field an
+  // agent branches on present rather than missing.
+  const unknownJson = spawnSync(process.execPath, [path.join(__dirname, '../../scripts/cloudflare.mjs'), 'nonsense', '--json'], { encoding: 'utf8' });
+  assert.equal(unknownJson.status, 4);
+  assert.match(unknownJson.stderr, /Unknown command nonsense/);
+  const lines = unknownJson.stdout.trim().split('\n');
+  assert.equal(lines.length, 1, 'only the result event, no step noise');
+  const event = JSON.parse(lines[0]);
+  assert.equal(event.event, 'result');
+  assert.equal(event.code, 'USAGE');
+  assert.equal(event.retryable, false);
+  assert.equal(event.ok, false);
+
+  // An option's value is not the command: the wrapper used to keep its own list
+  // of command names and mistook `--root <path>` for one.
+  const withRoot = spawnSync(process.execPath, [path.join(__dirname, '../../scripts/cloudflare.mjs'), '--root', library.root, 'nonsense'], { encoding: 'utf8' });
+  assert.equal(withRoot.status, 4);
+  assert.match(withRoot.stderr, /Unknown command nonsense/);
+  assert.doesNotMatch(withRoot.stderr, new RegExp(library.root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+});
+
+test('a usage error is one result event with retryable false, never a missing field', async () => {
+  const run = async (argv) => {
+    const lines = [];
+    let stderr = '';
+    const io = {
+      stdout: { write: (line) => { lines.push(line); return true; } },
+      stderr: { write: (line) => { stderr += line; return true; } },
+    };
+    const result = await cli.main(argv, io);
+    const events = lines.map((line) => JSON.parse(line));
+    const last = events[events.length - 1];
+    assert.equal(last.event, 'result', 'the stream always ends in a result');
+    assert.equal(typeof last.retryable, 'boolean', `retryable must be present for ${argv.join(' ')}`);
+    return { result, last, stderr, events };
+  };
+
+  // An unknown flag.
+  const unknownFlag = await run(['setup', '--json', '--bogus']);
+  assert.equal(unknownFlag.result.code, 1);
+  assert.equal(unknownFlag.last.code, 'USAGE');
+  assert.equal(unknownFlag.last.retryable, false);
+  assert.match(unknownFlag.last.data.reason, /Unknown option --bogus/);
+
+  // A flag with no value.
+  const missingValue = await run(['setup', '--json', '--data-root']);
+  assert.equal(missingValue.result.code, 1);
+  assert.equal(missingValue.last.code, 'USAGE');
+  assert.equal(missingValue.last.retryable, false);
+  assert.match(missingValue.last.data.reason, /--data-root needs a value/);
+
+  // An invalid value for a value flag: this used to escape as a stack trace.
+  const badValue = await run(['setup', '--json', '--capture-env', 'sideways']);
+  assert.equal(badValue.result.code, 1);
+  assert.equal(badValue.last.code, 'USAGE');
+  assert.equal(badValue.last.retryable, false);
+  assert.match(badValue.last.data.reason, /--capture-env must be replace, separate or keep/);
+  assert.doesNotMatch(badValue.stderr, /at .*cli\.cjs/, 'no stack trace reaches the user');
+
+  // An unknown command keeps its historical exit 4 and still reports.
+  const unknownCommand = await run(['nonsense', '--json']);
+  assert.equal(unknownCommand.result.code, 4);
+  assert.equal(unknownCommand.last.code, 'USAGE');
+  assert.equal(unknownCommand.last.retryable, false);
+  assert.match(unknownCommand.last.data.reason, /Unknown command nonsense/);
+  assert.match(unknownCommand.stderr, /Usage: node desktop\/provision\/cli\.cjs/, 'the help goes to stderr');
+  assert.equal(unknownCommand.events.length, 1, 'stdout stays pure NDJSON');
+
+  // Without --json there is no stream to join, so the human path is unchanged.
+  const human = await cli.main(['nonsense'], { stdout: { write: () => true }, stderr: { write: () => true } });
+  assert.equal(human.code, 4);
 });
 
 /** A snapshot context whose Worker reads the state dir as it really is. */
@@ -2411,6 +2484,53 @@ test('a transient failure that outlasts the retries is retryable, with a plain m
   );
   assert.equal(attempts, 4, 'a few attempts, not an endless loop');
   assert.deepEqual(clock.delays, [800, 2500, 6000], 'backoff grows');
+});
+
+test('7403 names the wrong-account possibility, since no retry can fix that', async () => {
+  const library = fakeLibrary();
+  const clock = recordingSleep();
+  let attempts = 0;
+  await assert.rejects(
+    () => deploy.applyMigrations(
+      { bin: '/x', run: async () => { attempts++; return transientOutput(7403); } },
+      { dataRoot: library.root, accountId: 'acct', remote: true, retry: retryOf({ deps: { sleep: clock.sleep }, emit: { log: () => {} } }) },
+    ),
+    (error) => {
+      assert.equal(error.code, 'CLOUDFLARE_TEMPORARY');
+      assert.equal(error.message, 'Cloudflare refused the request. Try again; if it keeps happening, check that you\'re signed in to the Cloudflare account that owns this Snip.');
+      assert.equal(error.retryable, true, 'still worth one more try: it is usually the edge');
+      assert.equal(error.data.reason, 'Cloudflare code 7403');
+      assert.equal(error.data.ambiguousAccount, true);
+      assert.equal(error.data.attempts, 4);
+      assert.match(error.hint, /wrangler whoami/, 'the hint names the check that settles it');
+      return true;
+    },
+  );
+  assert.equal(attempts, 4);
+
+  // Every other transient reason keeps the plain wording: only 7403 has a
+  // second, non-transient meaning to warn about.
+  const others = [
+    ['a 5xx', serviceDown],
+    ['a 429', () => ({ ok: false, code: 1, stdout: '', stderr: '429 Too Many Requests' })],
+    ['a dropped connection', () => ({ ok: false, code: 1, stdout: '', stderr: 'read ECONNRESET' })],
+  ];
+  for (const [label, fail] of others) {
+    const slept = recordingSleep();
+    await assert.rejects(
+      () => deploy.deployWorker(
+        { bin: '/x', run: async () => fail() },
+        { dataRoot: library.root, accountId: 'acct', retry: retryOf({ deps: { sleep: slept.sleep }, emit: { log: () => {} } }) },
+      ),
+      (error) => {
+        assert.equal(error.message, 'Cloudflare had a temporary problem, try again.', `${label} keeps the plain message`);
+        assert.equal(error.data.ambiguousAccount, undefined, `${label} is not about the account`);
+        assert.equal(error.retryable, true);
+        return true;
+      },
+    );
+    assert.deepEqual(slept.delays, [800, 2500, 6000], `${label} still backs off`);
+  }
 });
 
 test('an auth or permission failure is never retried', async () => {
