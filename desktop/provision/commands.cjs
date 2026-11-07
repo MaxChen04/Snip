@@ -248,7 +248,7 @@ function pullFilesStep({ stagedState, manifest }) {
     title: 'Downloading files',
     async run(ctx) {
       const keys = manifest.keys || [];
-      if (!keys.length) return { message: 'No files to copy' };
+      if (!keys.length) { ctx.setWork({ pullFilesState: stagedState }); return { message: 'No files to copy' }; }
       let downloaded = 0;
       const queue = [...keys];
       const transfer = ctx.transfer();
@@ -268,10 +268,14 @@ function pullFilesStep({ stagedState, manifest }) {
         };
         await Promise.all(Array.from({ length: Math.min(6, Math.max(1, keys.length)) }, work));
       });
+      ctx.setWork({ pullFilesState: stagedState });
       return { message: `${downloaded} file${downloaded === 1 ? '' : 's'} downloaded` };
     },
+    // Satisfied only by a download into this invocation's staged library. A retry stages
+    // a fresh directory, so a journal entry from an earlier attempt must not skip the
+    // download; files already present at the right size are skipped above instead.
     async verify(ctx) {
-      return Boolean(ctx.work.pullStagedState);
+      return Boolean(ctx.work.pullStagedState) && ctx.work.pullFilesState === stagedState;
     },
   };
 }
@@ -421,13 +425,15 @@ function pullFinishStep() {
     async run(ctx) {
       const record = ctx.state().cloud || {};
       const origin = local.localOrigin(ctx.dataRoot);
-      const stored = ctx.secrets() || {};
-      if (origin && stored.captureToken) {
+      // The local Worker checks the CAPTURE_TOKEN in its own .dev.vars, not the one
+      // setup generated for the cloud Worker, so point capture back with that one.
+      const localToken = local.devVarsValue(ctx.dataRoot, 'CAPTURE_TOKEN')?.replace(/^["']|["']$/g, '');
+      if (origin && localToken) {
         const captureDir = path.join(ctx.dataRoot, 'capture');
         const target = path.join(captureDir, '.env');
         try {
           const existing = fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : '';
-          fs.writeFileSync(target, captureEnvText(existing, { url: origin, token: stored.captureToken }), { mode: 0o600 });
+          fs.writeFileSync(target, captureEnvText(existing, { url: origin, token: localToken }), { mode: 0o600 });
         } catch {}
       }
       ctx.save((next) => { next.mode = 'local'; next.error = null; return next; });

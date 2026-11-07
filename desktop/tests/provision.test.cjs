@@ -2141,6 +2141,62 @@ test('pull keeps the replaced library as a backup with real counts read through 
   assert.equal(fs.readFileSync(path.join(library.root, record.snapshot.path, 'v3/d1/marker'), 'utf8'), 'previous');
 });
 
+test('pull-finish points capture at the local Worker with the local capture token', async () => {
+  const library = fakeLibrary();
+  stateModule.setMode(library.root, 'cloud');
+  stateModule.writeSecrets(library.root, { version: 1, ownerLinkSecret: 'a'.repeat(64), captureToken: 'cloud-token' });
+  fs.mkdirSync(path.join(library.root, 'capture'), { recursive: true });
+  fs.writeFileSync(path.join(library.root, 'capture/.env'), 'SNIP_URL=https://snip.example.workers.dev\nCAPTURE_TOKEN=cloud-token\n');
+  const ctx = createContext({
+    root: library.root, dataRoot: library.root, flags: {}, emit: collectedEmitter().emit, api: {},
+    wrangler: { bin: '/x', run: async () => ({ ok: true }) },
+    deps: { fetch: async () => { throw new Error('no network'); }, deploy: { configExists: () => false } },
+  });
+  const finish = commands.pullSteps({ stagedRoot: '/unused', stagedState: '/unused' }).find((step) => step.id === 'pull-finish');
+  await finish.run(ctx);
+  const env = fs.readFileSync(path.join(library.root, 'capture/.env'), 'utf8');
+  assert.match(env, /^SNIP_URL=http:\/\/localhost:5199$/m);
+  assert.match(env, /^CAPTURE_TOKEN=y$/m, 'the local Worker checks its own .dev.vars token');
+  assert.equal(stateModule.readState(library.root).mode, 'local');
+});
+
+test('a retried pull downloads files again into its new staged library', async () => {
+  const steps = commands.pullSteps({ stagedRoot: '/b/pull-2', stagedState: '/b/pull-2/state' });
+  const files = steps.find((step) => step.id === 'pull-files');
+  const work = { pullStagedState: '/b/pull-2/state' };
+  const ctx = { work, setWork(patch) { Object.assign(work, patch); } };
+  assert.equal(await files.verify(ctx), false, 'a journal entry from an earlier staged library does not count');
+  work.pullFilesState = '/b/pull-1/state';
+  assert.equal(await files.verify(ctx), false);
+  work.pullFilesState = '/b/pull-2/state';
+  assert.equal(await files.verify(ctx), true);
+});
+
+test('quiesce does not need the local API when Snip is not running', async () => {
+  const quiesce = setup.setupSteps().find((step) => step.id === 'quiesce');
+  let saved = null;
+  const calls = [];
+  const ctx = {
+    libraryFacts: async () => ({ empty: false, localOrigin: 'http://localhost:5199' }),
+    state: () => ({}),
+    checkCancel() {},
+    setPausedForMove(ids) { saved = ids; },
+    deps: {
+      now: () => 0,
+      sleep: async () => {},
+      local: {
+        reachable: async () => false,
+        createLocalApi() { calls.push('api'); throw new Error('LOCAL_API_UNREACHABLE'); },
+      },
+    },
+  };
+  const result = await quiesce.run(ctx);
+  assert.deepEqual(calls, [], 'a stopped server is never called');
+  assert.deepEqual(saved, []);
+  assert.match(result.message, /Nothing was capturing/);
+  assert.equal(await quiesce.verify(ctx), true);
+});
+
 test('pull puts the previous library back when its counts cannot be read', async () => {
   const library = fakeLibrary();
   stateModule.setMode(library.root, 'cloud');

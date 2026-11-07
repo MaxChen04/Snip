@@ -499,14 +499,22 @@ function onCloudEvent(run, event) {
   if (event.event === "log") sendToSettings("snip:cloud-log", { level: ["info", "warn", "error"].includes(event.level) ? event.level : "info", message: String(event.message ?? "").slice(0, 2000) })
   sendToSettings("snip:cloud-progress", event)
 }
+// A running capture agent keeps the destination it started with, and start() is a
+// no-op while it runs, so switching libraries has to stop it first. stop() lets an
+// in-flight capture finish.
+async function restartCaptureForMode() {
+  if (services.capture.proc) await services.capture.stop().catch(() => {})
+}
 async function enterCloudMode() {
   if (!layout) return
   try { keepLocalCaptureEnv({ dataRoot: layout.dataRoot }) } catch {}
+  await restartCaptureForMode()
   autoCapture = true
   recreateWindow()
   start("capture")
 }
 async function enterLocalMode() {
+  await restartCaptureForMode()
   autoCapture = true
   localLibrary = { at: 0, value: null }
   // `pull` stopped the local Worker at pull-swap; wait for that to finish, or start()

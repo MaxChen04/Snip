@@ -640,7 +640,9 @@ function quiesceStep() {
     async run(ctx) {
       const { localOrigin: origin } = await ctx.libraryFacts();
       const paused = new Set(ctx.state().pausedForMove || []);
-      const api = origin ? ctx.deps.local.createLocalApi(origin) : null;
+      // With Snip quit (which an unmanaged run asks for) nothing can be capturing, and the
+      // queued references are copied as queued, so there is no API to pause through.
+      const api = origin && (await ctx.deps.local.reachable(origin)) ? ctx.deps.local.createLocalApi(origin) : null;
       if (api) {
         for (const status of ['queued', 'capturing']) {
           for (const reference of await api.listReferences(status)) {
@@ -663,7 +665,7 @@ function quiesceStep() {
     },
     async verify(ctx) {
       const { localOrigin: origin } = await ctx.libraryFacts();
-      if (!origin) return true;
+      if (!origin || !(await ctx.deps.local.reachable(origin))) return true;
       const agent = await ctx.deps.local.createLocalApi(origin).agent().catch(() => null);
       return !agent || agent.activity !== 'busy';
     },
