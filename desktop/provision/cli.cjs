@@ -5,7 +5,7 @@
 //   node desktop/provision/cli.cjs <command> [flags]
 //
 // Commands: setup | pull | deploy | migrate | status | detach |
-//           delete-resources | snapshot <restore|delete> | abort |
+//           delete-resources | snapshot <restore|delete|delete-export> | abort |
 //           owner <link|rotate>
 //
 // Flags: --root --data-root --json --yes --check --resume --login --domain
@@ -19,7 +19,7 @@ const path = require('node:path');
 
 const { createEmitter } = require('./emit.cjs');
 const state = require('./state.cjs');
-const { CancelledError, ChoiceRequired, NeedsInputError, StepError } = require('./engine.cjs');
+const { CancelledError, ChoiceRequired, ConfirmRequired, NeedsInputError, StepError } = require('./engine.cjs');
 const { createApi, createWrangler } = require('./deps.cjs');
 const { createContext } = require('./context.cjs');
 
@@ -97,14 +97,16 @@ function helpText() {
     '  detach               Go back to local; the cloud library stays live',
     '  delete-resources     Delete the cloud Worker, database, KV and bucket',
     '  snapshot restore     Restore this Mac’s pre-cloud snapshot',
-    '  snapshot delete      Delete the pre-cloud snapshot',
+    '  snapshot restore     Switch back to the previous library after a pull',
+    '  snapshot delete      Delete the previous library (needs --confirm <name>)',
+    '  snapshot delete-export  Delete setup\'s portable backup files (needs --confirm <name>)',
     '  abort                Clean up an interrupted setup',
     '  owner link           Mint and open a sign-in link',
     '  owner rotate         Replace the owner secret and mint a new sign-in link',
     '',
     'Flags: --root --data-root --json --yes --check --resume --login --domain',
     '       --account --capture-env <replace|separate|keep> --no-open --managed',
-    '       --adopt-existing --confirm <host>',
+    '       --adopt-existing --confirm <basename|host>',
   ].join('\n');
 }
 
@@ -123,7 +125,7 @@ const UNSUPPORTED_CODES = new Set(['NOT_A_LIBRARY', 'NO_NODE', 'NO_WRANGLER', 'N
 const RETRYABLE = new Set(['NOT_AN_ACCOUNT', 'LOCAL_SERVER_RUNNING']);
 
 function exitCodeFor(error) {
-  if (error instanceof NeedsInputError || error instanceof ChoiceRequired) return 2;
+  if (error instanceof NeedsInputError || error instanceof ChoiceRequired || error instanceof ConfirmRequired) return 2;
   if (error instanceof state.LockedError || error.code === 'LOCKED') return 3;
   if (error instanceof CancelledError || error.code === 'CANCELLED') return 1;
   if (UNSUPPORTED_CODES.has(error.code)) return 4;
@@ -213,7 +215,7 @@ async function main(argv, io = {}) {
       case 'snapshot': outcome = await commands.commandSnapshot(ctx); break;
       case 'abort': outcome = await commands.commandAbort(ctx); break;
       case 'owner': outcome = await commands.commandOwner(ctx); break;
-      case 'status': outcome = commands.commandStatus(ctx, { offline: !flags.check }); break;
+      case 'status': outcome = await commands.commandStatus(ctx, { check: Boolean(flags.check) }); break;
       default: throw new UsageError(`Unknown command ${command}.`);
     }
 
@@ -232,6 +234,19 @@ async function main(argv, io = {}) {
         code: 'NEEDS_INPUT',
         mode: null,
         data: { choice: error.choice.id, resumeWith: error.resumeWith },
+        message: error.message,
+        retryable: true,
+      });
+      return { code: 2 };
+    }
+    if (error instanceof ConfirmRequired) {
+      // A destructive command without its target name: exit 2 with the value
+      // and the exact command to run. Nothing was mutated.
+      emit.result({
+        ok: false,
+        code: 'NEEDS_INPUT',
+        mode: null,
+        data: { needs: 'confirm', expected: error.confirm.expected, command: error.confirm.command },
         message: error.message,
         retryable: true,
       });

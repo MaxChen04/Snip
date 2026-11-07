@@ -28,6 +28,7 @@ const {
   splitSqlStatements,
 } = require('./lib.cjs');
 const cloud = require('./cloud.cjs');
+const snapshotModule = require('./snapshot.cjs');
 const deploy = require('./deploy.cjs');
 const local = require('./local.cjs');
 const { mintOwnerLink, ownerSecretHash, startLoopback } = require('./transfer.cjs');
@@ -422,10 +423,7 @@ function guardStep() {
           adoptedLibrary: facts.counts,
           move: { status: 'skipped', reason: 'adopted-existing' },
         });
-        ctx.save((next) => {
-          next.snapshot = { ...(next.snapshot || {}), keptLocal: true };
-          return next;
-        });
+        await recordLiveSnapshot(ctx);
       } else if (facts.outcome === 'adopt-empty') {
         ctx.setWork({ adopted: 'empty' });
         ctx.setCloud({ adoptedAt: new Date().toISOString(), adoptedFrom: 'legacy', adoptedLibrary: facts.counts });
@@ -442,10 +440,7 @@ function guardStep() {
           adoptedLibrary: facts.counts,
           move: { status: 'skipped', reason: 'detached' },
         });
-        ctx.save((next) => {
-          next.snapshot = { ...(next.snapshot || {}), keptLocal: true };
-          return next;
-        });
+        await recordLiveSnapshot(ctx);
       }
 
       const record = ctx.state().cloud || {};
@@ -678,6 +673,35 @@ function quiesceStep() {
   };
 }
 
+/**
+ * This Mac's own library, kept exactly where it is. Nothing was copied, so it is
+ * `live` with no path: detach is the action, and restore or delete are refused.
+ * Only the reference count is read (a local D1 query); the bucket needs a Worker
+ * and the app may be running, so files and bytes stay unknown rather than 0.
+ */
+async function recordLiveSnapshot(ctx) {
+  let refs = null;
+  try {
+    const facts = await ctx.libraryFacts();
+    if (facts.localConfig) {
+      const rows = await ctx.deps.deploy.localQuery(ctx.wrangler, {
+        dataRoot: ctx.dataRoot,
+        sql: 'SELECT COUNT(*) AS rows FROM refs',
+        config: facts.localConfig,
+        persistTo: ctx.deps.local.localStatePath(ctx.dataRoot),
+      });
+      refs = Number((rows[0] && rows[0].rows) || 0);
+    }
+  } catch {
+    refs = null;
+  }
+  const takenAt = new Date().toISOString();
+  ctx.save((next) => {
+    next.snapshot = { kind: 'live', path: null, keptLocal: true, takenAt, ...(refs === null ? {} : { refs }) };
+    return next;
+  });
+}
+
 function exportStep() {
   return {
     id: 'export',
@@ -688,7 +712,7 @@ function exportStep() {
       // Export runs after release, so this Worker is the only one on the persist
       // directory. It reads the bucket through the real FILES binding; the D1
       // dump comes from wrangler against the same directory.
-      const directory = path.join(ctx.dataRoot, 'backups', `cloud-move-${new Date().toISOString().replace(/[:.]/g, '-')}`);
+      const directory = path.join(ctx.dataRoot, 'backups', `cloud-export-${new Date().toISOString().replace(/[:.]/g, '-')}`);
       fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
       const dump = path.join(directory, 'dump.sql');
       await ctx.deps.deploy.exportLocal(ctx.wrangler, {
@@ -699,7 +723,7 @@ function exportStep() {
 
       const token = ctx.transferToken() || randomSecret();
       ctx.setTransferToken(token);
-      const snapshot = await ctx.deps.library.withLocalWorker({ root: ctx.root, dataRoot: ctx.dataRoot, token, release: ctx.release === true, log: (line) => ctx.emit.log('info', line) }, async (handle) => {
+      const exported = await ctx.deps.library.withLocalWorker({ root: ctx.root, dataRoot: ctx.dataRoot, token, release: ctx.release === true, log: (line) => ctx.emit.log('info', line) }, async (handle) => {
         const manifest = await handle.transfer.manifest();
         const sql = fs.readFileSync(dump, 'utf8');
         const tables = { ...(manifest.tables || {}) };
@@ -730,28 +754,38 @@ function exportStep() {
         fs.writeFileSync(path.join(directory, 'files.json'), `${JSON.stringify({ keys, excluded })}\n`, { mode: 0o600 });
         return { tables, keys, columns, excluded, totalBytes: keys.reduce((sum, entry) => sum + entry.size, 0) };
       });
-      fs.writeFileSync(path.join(directory, 'manifest.json'), `${JSON.stringify({ takenAt: new Date().toISOString(), tables: snapshot.tables, keys: snapshot.keys.length, bytes: snapshot.totalBytes }, null, 2)}\n`, { mode: 0o600 });
-      ctx.setWork({ library: { ...snapshot, directory } });
+      fs.writeFileSync(path.join(directory, 'manifest.json'), `${JSON.stringify({ takenAt: new Date().toISOString(), tables: exported.tables, keys: exported.keys.length, bytes: exported.totalBytes }, null, 2)}\n`, { mode: 0o600 });
+      ctx.setWork({ library: { ...exported, directory } });
+      const at = new Date().toISOString();
+      const counts = {
+        refs: exported.tables.refs || 0,
+        files: exported.keys.length,
+        bytes: exported.totalBytes,
+      };
       ctx.save((next) => {
-        next.snapshot = {
-          path: path.relative(ctx.dataRoot, directory),
-          takenAt: new Date().toISOString(),
-          refs: snapshot.tables.refs || 0,
-          files: snapshot.keys.length,
-          bytes: snapshot.totalBytes,
-        };
+        // The local library never moved, so there is nothing to restore: it is
+        // `live`. The dump is a separate, delete-only export (contracts §1.11).
+        next.snapshot = { kind: 'live', path: null, keptLocal: true, takenAt: at, ...counts };
+        next.snapshot.export = { path: path.relative(ctx.dataRoot, directory), takenAt: at, ...counts };
         return next;
       });
       return {
-        message: `${snapshot.keys.length} file${snapshot.keys.length === 1 ? '' : 's'}, ${snapshot.tables.refs || 0} reference${(snapshot.tables.refs || 0) === 1 ? '' : 's'}`,
+        message: `${exported.keys.length} file${exported.keys.length === 1 ? '' : 's'}, ${exported.tables.refs || 0} reference${(exported.tables.refs || 0) === 1 ? '' : 's'}`,
         detail: path.relative(ctx.dataRoot, directory),
       };
     },
     async verify(ctx) {
-      const snapshot = ctx.state().snapshot || {};
-      return Boolean(snapshot.path && fs.existsSync(path.join(ctx.dataRoot, snapshot.path, 'dump.sql')) && fs.existsSync(path.join(ctx.dataRoot, snapshot.path, 'files.json')));
+      const exported = snapshotOf(ctx);
+      if (!exported) return false;
+      return fs.existsSync(path.join(ctx.dataRoot, exported.path, 'dump.sql')) && fs.existsSync(path.join(ctx.dataRoot, exported.path, 'files.json'));
     },
   };
+}
+
+/** The export directory of this install, or null. Never an export-shaped `path`. */
+function snapshotOf(ctx) {
+  const snapshot = ctx.state().snapshot;
+  return snapshotModule.exportOf(snapshot);
 }
 
 function releaseStep() {
@@ -789,13 +823,13 @@ function importStep() {
     skipMessage: (ctx) => ctx.isMoveSkipped() ? 'Using the existing cloud library; nothing is uploaded' : 'This library is empty, so there is nothing to upload',
     async run(ctx) {
       const record = ctx.state().cloud || {};
-      const snapshot = ctx.state().snapshot;
-      if (!snapshot) throw new StepError('IMPORT_FAILED', 'There is no snapshot to copy.', { hint: 'Run setup again; the snapshot step runs before this one.' });
-      const directory = path.join(ctx.dataRoot, snapshot.path);
+      const exported = snapshotOf(ctx);
+      if (!exported) throw new StepError('IMPORT_FAILED', 'There is no export to copy.', { hint: 'Run setup again; the export step runs before this one.' });
+      const directory = path.join(ctx.dataRoot, exported.path);
       const dump = path.join(directory, 'dump.sql');
       const files = JSON.parse(fs.readFileSync(path.join(directory, 'files.json'), 'utf8')).keys || [];
       const statements = splitSqlStatements(fs.readFileSync(dump, 'utf8'));
-      const tables = Object.keys(snapshotTables(snapshot, directory));
+      const tables = Object.keys(snapshotTables(exported, directory));
 
       // The remote is fresh (guard proved it). A resumed import truncates and
       // re-runs, so a half-applied dump is never left behind.
@@ -856,11 +890,12 @@ function importStep() {
       };
     },
     async verify(ctx) {
-      const snapshot = ctx.state().snapshot;
-      if (!snapshot) return false;
+      const exported = snapshotOf(ctx);
+      if (!exported) return false;
       const remote = await ctx.transfer().status().catch(() => null);
       if (!remote || !remote.counts) return false;
-      return Number(remote.counts.refs || 0) === Number(snapshot.refs || 0);
+      const local = snapshotTables(exported, path.join(ctx.dataRoot, exported.path));
+      return Number(remote.counts.refs || 0) === Number(local.refs || 0);
     },
   };
 }
@@ -916,12 +951,14 @@ function verifyStep() {
         };
       }
 
-      const directory = path.join(ctx.dataRoot, ctx.state().snapshot.path);
+      const exported = snapshotOf(ctx);
+      if (!exported) throw new StepError('EXPORT_MISSING', 'This install has no export to check.', { hint: 'Run setup again.' });
+      const directory = path.join(ctx.dataRoot, exported.path);
       const files = JSON.parse(fs.readFileSync(path.join(directory, 'files.json'), 'utf8')).keys || [];
       const dump = path.join(directory, 'dump.sql');
       const columns = columnsFromDump(fs.readFileSync(dump, 'utf8'));
       const excluded = snapshotExcluded(directory);
-      const tables = Object.keys(snapshotTables(ctx.state().snapshot, directory))
+      const tables = Object.keys(snapshotTables(exported, directory))
         .filter((table) => !excluded.has(table))
         // Defensive: never compare SQLite internals, even with an old snapshot.
         .filter((table) => !/^(sqlite_|_cf_|_mf_)/.test(table));
@@ -987,10 +1024,11 @@ function verifyStep() {
         });
       }
 
-      const entries = Object.values(snapshotTables(ctx.state().snapshot, directory)).reduce((sum, count) => sum + (Number(count) || 0), 0);
+      const counted = snapshotTables(exported, directory);
+      const entries = Object.values(counted).reduce((sum, count) => sum + (Number(count) || 0), 0);
       ctx.save((next) => {
         next.transfer = {
-          tables: snapshotTables(next.snapshot, directory),
+          tables: counted,
           keys: present,
           bytes: files.reduce((sum, entry) => sum + entry.size, 0),
           digest,
@@ -1002,7 +1040,7 @@ function verifyStep() {
       return {
         message: `${entries} row${entries === 1 ? '' : 's'}, ${present} file${present === 1 ? '' : 's'}, all verified`,
         detail: digest,
-        data: { digest, tables: snapshotTables(ctx.state().snapshot, directory), keys: present },
+        data: { digest, tables: counted, keys: present },
       };
     },
     async verify(ctx) {
@@ -1093,9 +1131,24 @@ function finishStep() {
 
       // Contract order: resume → clear pausedForMove → mode cloud → retarget
       // capture → finish ok → delete TRANSFER_TOKEN → result.
+      const transferRecord = ctx.state().transfer || null;
+      const previousMove = (ctx.state().cloud || {}).move || null;
       ctx.save((next) => {
         next.mode = 'cloud';
         next.cloud = { ...(next.cloud || {}), detachedAt: null, lastVerifiedAt: new Date().toISOString() };
+        // `move` says what actually happened, so Settings never has to infer it
+        // from a missing count. An adoption recorded its own reason earlier.
+        if (!previousMove || previousMove.status === 'completed') {
+          const empty = !transferRecord;
+          next.move = {
+            status: empty ? 'empty' : 'completed',
+            reason: null,
+            at: new Date().toISOString(),
+            refs: transferRecord ? Number((transferRecord.tables || {}).refs || 0) : 0,
+            files: transferRecord ? Number(transferRecord.keys || 0) : 0,
+            bytes: transferRecord ? Number(transferRecord.bytes || 0) : 0,
+          };
+        }
         next.error = null;
         return next;
       });
