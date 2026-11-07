@@ -27,12 +27,20 @@ function createTransfer({ url, token, fetchImpl = fetch, timeoutMs = 60_000 } = 
 
   async function request(pathname, options = {}) {
     let response;
+    // Node's fetch requires duplex: 'half' for any streamed request body. A
+    // Response body is a web ReadableStream (getReader), a file stream is a
+    // Node stream (pipe); both need it, so test for either.
+    const streamed = Boolean(options.body) && (
+      typeof options.body.getReader === 'function'
+      || typeof options.body.pipe === 'function'
+      || typeof options.body[Symbol.asyncIterator] === 'function'
+    );
     try {
       response = await fetchImpl(`${origin}${pathname}`, {
         method: options.method || 'GET',
         headers: { ...auth, ...(options.headers || {}) },
         body: options.body,
-        duplex: options.body && typeof options.body.pipe === 'function' ? 'half' : undefined,
+        ...(streamed ? { duplex: 'half' } : {}),
         signal: AbortSignal.timeout(options.timeoutMs || timeoutMs),
         redirect: 'error',
       });

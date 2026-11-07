@@ -64,7 +64,12 @@ function parseArgs(argv) {
 
 function normalizeFlags(flags) {
   if (flags['data-root'] === undefined && flags.root !== undefined) flags['data-root'] = flags.root;
-  if (flags['adopt-existing'] !== undefined) flags.adoptExisting = flags['adopt-existing'];
+  // Steps read camelCase; the flags arrive dashed. Keep both so the documented
+  // spelling works and nothing has to remember which one a step uses.
+  const camel = { 'data-root': 'dataRoot', 'no-open': 'noOpen', 'adopt-existing': 'adoptExisting', 'capture-env': 'captureEnv' };
+  for (const [dashed, name] of Object.entries(camel)) {
+    if (flags[dashed] !== undefined) flags[name] = flags[dashed];
+  }
   if (flags['capture-env'] && !['replace', 'separate', 'keep'].includes(flags['capture-env'])) {
     throw new UsageError('--capture-env must be replace, separate or keep.');
   }
@@ -158,7 +163,19 @@ async function main(argv, io = {}) {
   if (command === 'owner') flags.ownerAction = sub;
 
   const json = Boolean(flags.json);
-  const emit = createEmitter({ json, stdout: io.stdout, stderr: io.stderr, command });
+  // With --json, stdout belongs to the event stream and nothing else. Wrangler's
+  // own progress lines ("[wrangler:info] …", ANSI banners) are written straight
+  // to process.stdout by libraries, so in JSON mode they are routed to stderr;
+  // the emitter keeps the real stream.
+  const target = io.stdout || process.stdout;
+  const realStdoutWrite = target.write.bind(target);
+  const stdout = { write: (chunk) => realStdoutWrite(chunk) };
+  const originalStdoutWrite = process.stdout.write;
+  const redirectStdout = json && !io.stdout;
+  if (redirectStdout) {
+    process.stdout.write = (chunk, encoding, callback) => process.stderr.write(chunk, encoding, callback);
+  }
+  const emit = createEmitter({ json, stdout, stderr: io.stderr || process.stderr, command });
   const root = path.resolve(flags.root || defaultRoot());
   const dataRoot = path.resolve(flags['data-root'] || root);
 
@@ -259,6 +276,7 @@ async function main(argv, io = {}) {
     });
     return { code };
   } finally {
+    if (redirectStdout) process.stdout.write = originalStdoutWrite;
     process.removeListener('SIGINT', onSignal);
     process.removeListener('SIGTERM', onSignal);
     try { if (lock) lock.release(); } catch {}

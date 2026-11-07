@@ -217,28 +217,48 @@ async function exportLocal(wrangler, { dataRoot, output, config }) {
   return output;
 }
 
+/**
+ * Write one batch to a private file and return its path. `wrangler d1 execute`
+ * has no stdin form (`--file -` is rejected as an unknown argument), so every
+ * batch goes through a 0600 file under the library's profile that is always
+ * removed again.
+ */
+function stageBatch(dataRoot, index, sql) {
+  const dir = path.join(dataRoot, '.snip/sql');
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const file = path.join(dir, `batch-${process.pid}-${index}.sql`);
+  fs.writeFileSync(file, sql, { mode: 0o600 });
+  return file;
+}
+
 /** Load a dump into the remote database. Batched; each batch is one request. */
 async function importRemote(wrangler, { dataRoot, accountId, statements, batchBytes = 900_000, onBatch }) {
   const file = configPath(dataRoot);
   const { batchStatements } = require('./lib.cjs');
   const batches = batchStatements(statements, batchBytes);
-  for (let index = 0; index < batches.length; index++) {
-    const sql = batches[index].join(';\n') + ';';
-    const result = await wrangler.run(['d1', 'execute', 'DB', '--config', file, '--remote', '--file', '-'], {
-      cwd: path.dirname(file),
-      env: { CLOUDFLARE_ACCOUNT_ID: accountId },
-      input: sql,
-      timeoutMs: 10 * 60_000,
-    });
-    if (!result.ok) {
-      const known = classifyWranglerFailure(result);
-      if (known) throw known;
-      throw new StepError('IMPORT_FAILED', 'Loading the library into the cloud database failed.', {
-        hint: 'Run the same command again: the import restarts from a truncated database, so a partial import is never left behind.',
-        data: { batch: index + 1, batches: batches.length, output: failureMessage(result, 'wrangler d1 execute exited non-zero') },
+  const staged = [];
+  try {
+    for (let index = 0; index < batches.length; index++) {
+      const sql = `${batches[index].join(';\n')};`;
+      const batchFile = stageBatch(dataRoot, index, sql);
+      staged.push(batchFile);
+      const result = await wrangler.run(['d1', 'execute', 'DB', '--config', file, '--remote', '--file', batchFile], {
+        cwd: path.dirname(file),
+        env: { CLOUDFLARE_ACCOUNT_ID: accountId },
+        timeoutMs: 10 * 60_000,
       });
+      if (!result.ok) {
+        const known = classifyWranglerFailure(result);
+        if (known) throw known;
+        throw new StepError('IMPORT_FAILED', 'Loading the library into the cloud database failed.', {
+          hint: 'Run the same command again: the import restarts from a truncated database, so a partial import is never left behind.',
+          data: { batch: index + 1, batches: batches.length, output: failureMessage(result, 'wrangler d1 execute exited non-zero') },
+        });
+      }
+      if (onBatch) onBatch({ index: index + 1, total: batches.length });
     }
-    if (onBatch) onBatch({ index: index + 1, total: batches.length });
+  } finally {
+    for (const batchFile of staged) { try { fs.unlinkSync(batchFile); } catch {} }
   }
   return { batches: batches.length };
 }
@@ -252,9 +272,10 @@ async function importLocal(wrangler, { dataRoot, persistTo, statements, config }
   const batches = batchStatements(statements);
   const defaultConfig = config || configPath(dataRoot);
   for (let index = 0; index < batches.length; index++) {
-    const sql = batches[index].join(';\n') + ';';
-    const args = ['d1', 'execute', 'DB', '--local', '--config', defaultConfig, '--file', '-', '--persist-to', persistTo];
-    const result = await wrangler.run(args, { cwd: dataRoot, input: sql, timeoutMs: 10 * 60_000 });
+    const sql = `${batches[index].join(';\n')};`;
+    const batchFile = stageBatch(dataRoot, index, sql);
+    const args = ['d1', 'execute', 'DB', '--local', '--config', defaultConfig, '--file', batchFile, '--persist-to', persistTo];
+    const result = await wrangler.run(args, { cwd: dataRoot, timeoutMs: 10 * 60_000 }).finally(() => { try { fs.unlinkSync(batchFile); } catch {} });
     if (!result.ok) {
       throw new StepError('IMPORT_FAILED', 'Loading the library into the new local database failed.', {
         hint: 'Run `pull` again; the staged copy is replaced, never half-used.',
