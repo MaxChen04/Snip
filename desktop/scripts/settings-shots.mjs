@@ -16,6 +16,7 @@ const shots = [
   { name: "confirm-empty", query: "fake=local-empty&dialog=enable" },
   { name: "progress-auth", query: "fake=enabling&step=1" },
   { name: "progress-r2", query: "fake=enabling&step=4" },
+  { name: "progress-guard", query: "fake=enabling&step=5" },
   { name: "progress-import", query: "fake=enabling&step=14" },
   { name: "progress-owner", query: "fake=enabling&step=16" },
   { name: "progress-copy-back", query: "fake=pulling&step=4" },
@@ -23,13 +24,15 @@ const shots = [
   { name: "cloud", query: "fake=cloud" },
   { name: "cloud-empty", query: "fake=cloud-empty" },
   { name: "cloud-adopted", query: "fake=cloud-adopted" },
+  { name: "cloud-backup", query: "fake=cloud-backup" },
   { name: "choice-existing", query: "fake=choice" },
   { name: "undo-setup", query: "fake=enabling-error&step=14&dialog=abort" },
   { name: "detached", query: "fake=detached" },
   { name: "turn-off", query: "fake=cloud&dialog=turn-off" },
   { name: "sign-out", query: "fake=cloud&dialog=sign-out" },
   { name: "delete-resources", query: "fake=cloud&dialog=delete" },
-  { name: "delete-snapshot", query: "fake=cloud&dialog=snapshot-delete" },
+  { name: "delete-snapshot", query: "fake=cloud-backup&dialog=snapshot-delete" },
+  { name: "delete-export", query: "fake=cloud&dialog=export-delete" },
 ]
 
 fs.mkdirSync(out, { recursive: true })

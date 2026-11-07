@@ -1,7 +1,8 @@
 // Stable step ids from proposals/cloud-contracts.md §1.5, in the order the engine runs them.
 const ORDER: Record<string, string[]> = {
   setup: [
-    "preflight", "cloudflare-auth", "account", "url", "r2", "resources", "guard", "config",
+    // guard classifies the account before anything is created (contracts v3.10 §1.5).
+    "preflight", "cloudflare-auth", "account", "url", "r2", "guard", "resources", "config",
     "schema", "deploy", "secrets", "quiesce", "export", "release", "import", "verify", "owner", "finish",
   ],
   pull: [

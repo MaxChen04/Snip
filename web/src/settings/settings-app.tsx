@@ -10,6 +10,7 @@ import {
   CheckIcon,
   Clock,
   CopyIcon,
+  Database,
   GlobeIcon,
   HardDrive,
   InfoIcon,
@@ -24,14 +25,14 @@ import {
   TriangleAlertIcon,
 } from "@/components/icons"
 import { Meta, Panel, Row, references } from "./bits"
-import { AbortSetupDialog, DeleteResourcesDialog, EnableDialog, SignOutDialog, SnapshotDeleteDialog, TurnOffDialog, type TurnOffChoice } from "./dialogs"
-import { hostOf, shortDate, snapshotLabel, snapshotPhrase } from "./format"
+import { AbortSetupDialog, DeleteResourcesDialog, EnableDialog, ExportDeleteDialog, SignOutDialog, SnapshotDeleteDialog, TurnOffDialog, type TurnOffChoice } from "./dialogs"
+import { formatBytes, hostOf, shortDate, snapshotLabel, snapshotPhrase } from "./format"
 import { copyText, pullPrompt, setupPrompt } from "./prompts"
 import { commandFor, stepTitle, stepsFor } from "./steps"
 import type { CloudRecord } from "./types"
 import { useCloud, type LiveStep } from "./use-cloud"
 
-type DialogName = "enable" | "turn-off" | "sign-out" | "delete" | "snapshot-delete" | "abort" | null
+type DialogName = "enable" | "turn-off" | "sign-out" | "delete" | "snapshot-delete" | "export-delete" | "abort" | null
 
 export function SettingsApp() {
   const cloud = useCloud()
@@ -39,11 +40,21 @@ export function SettingsApp() {
   const [turnOffChoice, setTurnOffChoice] = useState<TurnOffChoice>("stay")
   const mode = cloud.mode
   const working = cloud.busy || mode === "enabling" || mode === "disabling"
+  const adopted = cloud.file?.move?.status === "skipped"
+  // Say where the library actually is, not where it started.
+  const intro =
+    mode === "cloud"
+      ? adopted
+        ? "Your library lives in your Cloudflare account, and this Mac keeps its own copy. Captures still run on this Mac."
+        : "Your library lives in your Cloudflare account. Captures still run on this Mac."
+      : cloud.cloud?.detachedAt
+        ? "Your library lives on this Mac. Your detached cloud copy is still live, so other devices and agents can still read it."
+        : "Your library lives on this Mac. Enabling cloud copies it to your own Cloudflare account, so other devices and agents can read it."
 
   // A screenshot or a support run may open a specific dialog; harmless in normal use.
   useEffect(() => {
     const requested = new URLSearchParams(location.search).get("dialog") as DialogName
-    if (requested && ["enable", "turn-off", "sign-out", "delete", "snapshot-delete", "abort"].includes(requested)) setDialog(requested)
+    if (requested && ["enable", "turn-off", "sign-out", "delete", "snapshot-delete", "export-delete", "abort"].includes(requested)) setDialog(requested)
   }, [])
 
   const copyPrompt = async (kind: "setup" | "pull") => {
@@ -75,6 +86,12 @@ export function SettingsApp() {
   const confirmSnapshotDelete = async () => {
     setDialog(null)
     await cloud.begin(() => cloud.bridge!.snapshot("delete"))
+  }
+
+  const confirmExportDelete = async () => {
+    setDialog(null)
+    // The export is delete-only; there is no restore path for it by design.
+    await cloud.begin(() => cloud.bridge!.snapshot("delete-export"))
   }
 
   const signOut = async () => {
@@ -115,9 +132,7 @@ export function SettingsApp() {
           <>
             <div>
               <h1 className="text-xl tracking-[-0.02em]">Cloud</h1>
-              <p className="mt-1.5 text-sm leading-[1.55] text-muted-foreground">
-                Your library lives on this Mac. Cloud puts a copy in your own Cloudflare account, so other devices and agents can read it. Captures keep running here.
-              </p>
+              <p className="mt-1.5 text-sm leading-[1.55] text-muted-foreground">{intro}</p>
             </div>
 
             {mode === "cloud" ? (
@@ -133,6 +148,7 @@ export function SettingsApp() {
                   setDialog("turn-off")
                 }}
                 onDeleteSnapshot={() => setDialog("snapshot-delete")}
+                onDeleteExport={() => setDialog("export-delete")}
                 onSignOut={() => setDialog("sign-out")}
                 onDeleteResources={() => setDialog("delete")}
                 onCopyPrompt={copyPrompt}
@@ -176,8 +192,13 @@ export function SettingsApp() {
       <SnapshotDeleteDialog
         open={dialog === "snapshot-delete"}
         onOpenChange={open => setDialog(open ? "snapshot-delete" : null)}
-        label={snapshotLabel(cloud.snapshotRecord) ?? "This snapshot"}
+        label={snapshotLabel(cloud.snapshotRecord) ?? "The previous library"}
         onConfirm={() => void confirmSnapshotDelete()}
+      />
+      <ExportDeleteDialog
+        open={dialog === "export-delete"}
+        onOpenChange={open => setDialog(open ? "export-delete" : null)}
+        onConfirm={() => void confirmExportDelete()}
       />
       <AbortSetupDialog open={dialog === "abort"} onOpenChange={open => setDialog(open ? "abort" : null)} onConfirm={() => void undoSetup()} />
     </div>
@@ -274,6 +295,7 @@ function CloudPanels({
   onTurnOff,
   onRestore,
   onDeleteSnapshot,
+  onDeleteExport,
   onSignOut,
   onDeleteResources,
   onCopyPrompt,
@@ -284,6 +306,7 @@ function CloudPanels({
   onTurnOff: () => void
   onRestore: () => void
   onDeleteSnapshot: () => void
+  onDeleteExport: () => void
   onSignOut: () => void
   onDeleteResources: () => void
   onCopyPrompt: (kind: "setup" | "pull") => Promise<void>
@@ -339,33 +362,51 @@ function CloudPanels({
             </Button>
           }
         />
-        {/* Adoption keeps this Mac's library in place: it is not a snapshot, so it gets
-            one action and no Restore/Delete. Those belong to a real copy only. */}
-        {snapshot?.keptLocal ? (
+        {/* This Mac's own library was never copied, so there is nothing to "restore":
+            detach is the way back. No Restore and no Delete on this row. */}
+        {snapshot?.kind === "live" || snapshot?.keptLocal ? (
           <Row
             icon={<HardDrive className="size-4" />}
-            title={`This Mac's library · ${references(snapshot.refs)}`}
-            body="Kept on this Mac. Not copied to the cloud."
+            title={`This Mac's library · ${references(snapshot?.refs ?? null)}`}
+            body={
+              adopted
+                ? "Kept on this Mac. Not copied to the cloud."
+                : "Kept on this Mac and not updated while you use your cloud library. Changes you make in the cloud stay in the cloud."
+            }
             action={
               <Button variant="outline" size="sm" onClick={onRestore}>
                 Switch back to it
               </Button>
             }
           />
-        ) : snapshot && label && (cloud.file?.move?.status === "completed" || !cloud.file?.move) ? (
+        ) : snapshot?.kind === "backup" && label ? (
+          // Only a pull leaves a real second library behind; that one can be swapped back.
           <Row
             icon={<HardDrive className="size-4" />}
-            title={label}
-            body={`${references(snapshot.refs)} stay on this Mac as the copy from before cloud.`}
+            title={`Previous library · ${references(snapshot.refs)}`}
+            body={`${label}. This Mac used it before the copy came back.`}
             action={
               <>
                 <Button variant="outline" size="sm" onClick={onRestore}>
-                  Restore
+                  Switch back to previous library
                 </Button>
-                <Button variant="ghost" size="sm" onClick={onDeleteSnapshot} aria-label="Delete snapshot">
+                <Button variant="ghost" size="sm" onClick={onDeleteSnapshot} aria-label="Delete previous library">
                   <Trash2Icon />
                 </Button>
               </>
+            }
+          />
+        ) : null}
+        {snapshot?.export ? (
+          // Insurance, not a restore point: the dump cannot rebuild the stored files.
+          <Row
+            icon={<Database className="size-4" />}
+            title={`Export from ${shortDate(snapshot.export.takenAt) ?? "before cloud"} — ${formatBytes(snapshot.export.bytes) ?? "database and file list"}`}
+            body="A copy of the database and file list made during setup. It can’t be restored on its own."
+            action={
+              <Button variant="ghost" size="sm" onClick={onDeleteExport} aria-label="Delete export">
+                <Trash2Icon />
+              </Button>
             }
           />
         ) : null}

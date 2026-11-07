@@ -42,10 +42,10 @@ export function EnableDialog({
         <ul className="flex flex-col gap-3.5">
           <Fact
             icon={<HardDrive className="size-4" />}
-            title={copies ? `${references(refs)} copy to Cloudflare` : "There’s nothing to copy"}
+            title={copies ? `${references(refs)} ${refs === 1 ? "is" : "are"} copied to Cloudflare` : "There’s nothing to copy"}
             body={
               copies
-                ? "Your screenshots and the database move to your account. Cloudflare, not Snip, stores them."
+                ? "Your screenshots and database are copied to your account. Cloudflare, not Snip, stores them."
                 : "This library is empty, so setup only creates the cloud copy and switches this app to it."
             }
           />
@@ -56,10 +56,10 @@ export function EnableDialog({
           />
           <Fact
             icon={<LaptopIcon className="size-4" />}
-            title={copies ? "This Mac keeps a snapshot" : "This Mac keeps working as it does now"}
+            title={copies ? "This Mac keeps its library" : "This Mac keeps working as it does now"}
             body={
               copies
-                ? "Today's library stays exactly where it is, frozen, and Settings offers Restore and Delete for it."
+                ? "It stays where it is and isn’t changed while you use cloud. Switching back is one click, and changes you make in the cloud stay in the cloud."
                 : "Captures still run on this Mac, and the cloud copy becomes the library you read everywhere."
             }
           />
@@ -124,13 +124,13 @@ export function TurnOffDialog({
             selected={choice === "detach"}
             onSelect={() => setChoice("detach")}
             title="Turn off and keep local"
-            body="This Mac goes back to its local copy. Nothing is deleted, on this Mac or on Cloudflare."
+            body="This Mac goes back to its own library. Nothing is deleted, on this Mac or on Cloudflare."
           />
           <Choice
             selected={choice === "pull"}
             onSelect={() => setChoice("pull")}
             title="Bring the cloud library back to this Mac"
-            body="Downloads the cloud library, checks every reference, then switches this Mac to it. The earlier snapshot is kept."
+            body="Downloads the cloud library, checks every reference, then switches this Mac to it. This Mac's current library is kept."
           >
             <div className="mt-1 flex flex-wrap items-center gap-1.5">
               <Badge variant="outline">Recommended if you made changes</Badge>
@@ -234,9 +234,9 @@ export function SnapshotDeleteDialog({ open, onOpenChange, label, onConfirm }: {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[440px]">
         <DialogHeader>
-          <DialogTitle>Delete this snapshot?</DialogTitle>
+          <DialogTitle>Delete the previous library?</DialogTitle>
           <DialogDescription>
-            {label} is removed from this Mac. Your cloud library is not affected, and this can't be undone.
+            {label} is removed from this Mac. Your cloud library is not affected, and this can’t be undone.
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
@@ -244,7 +244,31 @@ export function SnapshotDeleteDialog({ open, onOpenChange, label, onConfirm }: {
             Cancel
           </Button>
           <Button variant="destructive-confirm" onClick={onConfirm}>
-            Delete snapshot
+            Delete previous library
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+export function ExportDeleteDialog({ open, onOpenChange, onConfirm }: { open: boolean; onOpenChange: (open: boolean) => void; onConfirm: () => void }) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[440px]">
+        <DialogHeader>
+          <DialogTitle>Delete this export?</DialogTitle>
+          <DialogDescription>
+            The database dump and file list from setup are removed from this Mac. It can’t be used to restore anything, so deleting it does not affect either
+            library.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button variant="destructive-confirm" onClick={onConfirm}>
+            Delete export
           </Button>
         </DialogFooter>
       </DialogContent>

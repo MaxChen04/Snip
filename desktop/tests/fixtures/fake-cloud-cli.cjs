@@ -54,8 +54,9 @@ const SETUP_STEPS = [
   ["account", "Choose a Cloudflare account"],
   ["url", "Find your workers.dev address"],
   ["r2", "Check R2 storage"],
-  ["resources", "Create the database and bucket"],
+  // guard classifies before any mutation (contracts v3.10 §1.5).
   ["guard", "Check this account has no other Snip"],
+  ["resources", "Create the database and bucket"],
   ["config", "Write the cloud configuration"],
   ["schema", "Apply the database schema"],
   ["deploy", "Deploy your Snip"],
@@ -193,7 +194,11 @@ async function setup() {
       }
     }
     if (id === "verify" && !empty) {
-      state.snapshot = { path: "backups/cloud-move-2026-11-06T10-12-00", takenAt: now(), refs: 42, files: 311, bytes: 812000000 }
+      // The local library was never copied; it stays where it is (contracts §1.11).
+      state.snapshot = {
+        kind: "live", path: null, keptLocal: true, takenAt: now(), refs: 42, files: 311, bytes: 812000000,
+        export: { path: "backups/cloud-export-2026-11-06T10-12-00", takenAt: now(), refs: 42, files: 311, bytes: 812000000 },
+      }
       state.transfer = { tables: { refs: 42, pages: 311 }, keys: 311, bytes: 812000000, verifiedAt: now() }
     }
     writeState(state)
@@ -280,13 +285,30 @@ async function deleteResources() {
 }
 
 async function snapshot() {
-  const action = argv[1] === "delete" ? "delete" : "restore"
+  const action = ["delete", "delete-export"].includes(argv[1]) ? argv[1] : "restore"
   const state = readState()
-  const steps = [["snapshot-preflight", "Check the snapshot"], [`snapshot-${action}`, action === "delete" ? "Delete the snapshot" : "Restore the snapshot"], ["snapshot-finish", "Finish"]]
+  if (action === "restore" && state.snapshot?.kind !== "backup") {
+    emit({ event: "step", command, step: "snapshot-preflight", status: "failed", message: "Your library is still on this Mac. Use Switch back to it.", at: now() })
+    emit({ event: "result", ok: false, code: "FAILED", mode: state.mode, data: { code: "KEPT_LOCAL" } })
+    process.exitCode = 1
+    return
+  }
+  if (action === "delete" && state.snapshot?.kind !== "backup") {
+    emit({ event: "result", ok: false, code: "UNSUPPORTED", mode: state.mode, data: { code: "CANNOT_DELETE_LOCAL" } })
+    process.exitCode = 4
+    return
+  }
+  const steps = [
+    ["snapshot-preflight", "Check the snapshot"],
+    [`snapshot-${action === "delete-export" ? "delete-export" : action}`, action === "restore" ? "Switch back to the previous library" : action === "delete" ? "Delete the previous library" : "Delete the export"],
+    ["snapshot-finish", "Finish"],
+  ]
   for (const [id, title] of steps) {
-    if (!(await step(id, title, undefined))) break
+    if (!(await step(id, title))) break
   }
   if (action === "delete") state.snapshot = null
+  if (action === "delete-export" && state.snapshot) state.snapshot.export = null
+  if (action === "restore") state.snapshot = { kind: "backup", path: "backups/replaced-previous", takenAt: now(), refs: 42, files: 311, bytes: 812000000, keptLocal: false, export: null }
   state.mode = "local"
   state.error = null
   writeState(state)

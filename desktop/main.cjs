@@ -408,6 +408,9 @@ async function cloudSignInMethods() {
   }
 }
 async function cloudSnapshotState() {
+  // While the engine is writing, its own events are the freshest source; between runs
+  // re-read so a change made by the CLI shows the next time Settings opens.
+  if (!cloudRun && layout) cloudState = readCloudState(layout.dataRoot)
   return {
     cloudStatus: await cloudSignInMethods(),
     mode: mode(),
@@ -479,6 +482,9 @@ async function enterCloudMode() {
 async function enterLocalMode() {
   autoCapture = true
   localLibrary = { at: 0, value: null }
+  // `pull` stopped the local Worker at pull-swap; wait for that to finish, or start()
+  // would return early on the shutdown guard.
+  if (shutdown) await shutdown.catch(() => {})
   start("web")
   recreateWindow()
 }
@@ -604,8 +610,13 @@ function registerCloudIpc() {
     return startCloudRun("delete-resources", { confirm })
   }))
   ipcMain.handle("snip:cloud-snapshot", guard(payload => {
-    if (!["restore", "delete"].includes(payload.action)) return { error: "Unknown snapshot action." }
-    return startCloudRun("snapshot", {}, payload.action)
+    // `delete-export` is a separate action because setup's dump is not a backup: it can
+    // never be swapped in, so it is delete-only (contracts §1.11).
+    if (!["restore", "delete", "delete-export"].includes(payload.action)) return { error: "Unknown snapshot action." }
+    // A backup delete needs the directory name as its confirmation.
+    const confirm = payload.action === "delete" ? path.basename(String(cloudState?.snapshot?.path ?? "")) : undefined
+    if (payload.action === "delete" && !confirm) return { error: "There is no previous library to delete." }
+    return startCloudRun("snapshot", confirm ? { confirm } : {}, payload.action)
   }))
 }
 registerCloudIpc()
@@ -756,7 +767,7 @@ function refresh() {
   tray.setToolTip(quitting ? "Snip: finishing capture before quitting" : `Snip: ${STATUS[services.capture.status]}`)
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: mode() === "cloud" ? "Open cloud library" : "Open Snip", enabled: !quitting, click: showApp },
-    ...(mode() === "cloud" && cloudState?.cloud?.url ? [{ label: new URL(cloudState.cloud.url).host, enabled: false }] : []),
+    ...(mode() === "cloud" && cloudOrigin() ? [{ label: windowOrigin.parse(cloudState.cloud.url)?.host ?? "Cloud library", enabled: false }] : []),
     { id: "snip-settings-tray", label: "Settings…", enabled: !quitting, click: openSettings }, { type: "separator" },
     ...(!node ? [{ label: resolvingNode ? "Finding Node.js…" : "Retry setup", enabled: !resolvingNode && !quitting, click: () => void setup() }] : []),
     ...(mode() === "cloud" ? [] : serviceItems("web")), ...(mode() === "cloud" ? [] : [{ type: "separator" }]), ...serviceItems("capture"), { type: "separator" },

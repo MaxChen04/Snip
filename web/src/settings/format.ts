@@ -39,10 +39,17 @@ export function snapshotLabel(snapshot: SnapshotRecord | null): string | null {
   return size ? `Snapshot from ${day}, ${time} — ${size}` : `Snapshot from ${day}, ${time}`
 }
 
-/** "the snapshot from 6 Nov, 02:12 — 812 MB", for a sentence that needs an object. */
+/**
+ * "the snapshot from 6 Nov, 02:12 (812 MB)", for a sentence that needs an object.
+ * The row label keeps its own format; a sentence cannot carry an em dash cleanly.
+ */
 export function snapshotPhrase(snapshot: SnapshotRecord | null): string | null {
-  const label = snapshotLabel(snapshot)
-  return label ? `${label[0].toLowerCase()}${label.slice(1)}` : null
+  if (!snapshot?.takenAt) return null
+  const day = date(snapshot.takenAt, { day: "numeric", month: "short" })
+  const time = date(snapshot.takenAt, { hour: "2-digit", minute: "2-digit", hour12: false })
+  if (!day || !time) return null
+  const size = formatBytes(snapshot.bytes)
+  return `its library from ${day}, ${time}${size ? ` (${size})` : ""}`
 }
 
 /** A short date for the detached row: "6 Nov". */

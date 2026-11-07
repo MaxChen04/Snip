@@ -21,13 +21,17 @@ export interface CloudRecord {
 }
 
 export interface SnapshotRecord {
+  /** "live": this Mac's own library, untouched. "backup": the library a pull replaced. */
+  kind: "live" | "backup" | null
+  /** Non-null only for a backup: a state dir that can be swapped in. */
   path: string | null
   takenAt: string | null
   refs: number | null
   files: number | null
   bytes: number | null
-  /** Adopted installs keep the local library in place: there is no separate copy. */
   keptLocal?: boolean
+  /** Setup's portable dump. Delete-only: it cannot rebuild the R2 objects. */
+  export?: { path: string | null; takenAt: string | null; refs: number | null; files: number | null; bytes: number | null } | null
 }
 
 export interface MoveRecord {
@@ -184,7 +188,7 @@ export interface CloudBridge {
   openUrl(url: string): Promise<{ opened: boolean }>
   signOutAll(): Promise<{ ok?: true; epoch?: number; error?: string }>
   deleteResources(confirm: string): Promise<CloudReply>
-  snapshot(action: "restore" | "delete"): Promise<CloudReply>
+  snapshot(action: "restore" | "delete" | "delete-export"): Promise<CloudReply>
   onProgress(callback: (event: EngineEvent) => void): () => void
   onLog(callback: (entry: { level: "info" | "warn" | "error"; message: string }) => void): () => void
 }

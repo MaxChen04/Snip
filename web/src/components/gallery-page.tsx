@@ -429,9 +429,15 @@ function FolderMeta({ r }: { r: Reference }) {
         <div className="h-1 w-28 overflow-hidden rounded-full bg-ink-4">
           <div className={cn("h-full rounded-full transition-[width] duration-300 ease-out", paused ? "bg-ink-9" : "bg-ink-12")} style={{ width: `${pct}%` }} />
         </div>
-        <span className="flex items-center gap-1.5 text-2xs whitespace-nowrap text-ink-11">
-          {captureLabel(r, true) ?? (r.status === "queued" ? "Waiting for your Mac" : m ? `${m[1]} of ${m[2]} pages` : "Capturing")}
-          <CaptureControls r={r} compact onChange={() => window.dispatchEvent(new Event("rs:reload"))} />
+        {/* Narrow cards must not clip the status: the label wraps and the controls
+            drop to their own line rather than being pushed off the tile. */}
+        <span className="flex max-w-full min-w-0 flex-wrap items-center justify-center gap-x-1.5 gap-y-0.5 text-center text-2xs leading-[1.35] text-ink-11">
+          <span className="min-w-0 text-balance">
+            {captureLabel(r, true) ?? (r.status === "queued" ? "Waiting for your Mac" : m ? `${m[1]} of ${m[2]} pages` : "Capturing")}
+          </span>
+          <span className="flex shrink-0 items-center">
+            <CaptureControls r={r} compact onChange={() => window.dispatchEvent(new Event("rs:reload"))} />
+          </span>
         </span>
       </div>
     )

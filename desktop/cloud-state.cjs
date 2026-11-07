@@ -59,18 +59,29 @@ function head(raw) {
   return out
 }
 
+/**
+ * `kind: "live"` means this Mac's library itself: nothing was copied, so there is
+ * nothing to restore and detach is the way back. `kind: "backup"` only exists after a
+ * `pull` replaced a real local library, and that one can be switched back to.
+ * `export` is setup's portable dump: delete-only, never restorable (contracts §1.11).
+ */
 function normalizeSnapshot(raw) {
   if (!isObject(raw)) return null
   const takenAt = text(raw.takenAt, 40)
   const at = takenAt ? Date.parse(takenAt) : NaN
+  const kind = raw.kind === "backup" ? "backup" : raw.kind === "live" ? "live" : raw.keptLocal === true ? "live" : null
+  const exported = isObject(raw.export) ? raw.export : null
   return {
-    path: text(raw.path, 1024),
+    kind,
+    path: kind === "backup" ? text(raw.path, 1024) : null,
     takenAt: Number.isFinite(at) ? takenAt : null,
     refs: count(raw.refs),
     files: count(raw.files),
     bytes: count(raw.bytes),
-    // Adoption keeps the local library in place; there is no separate copy to restore.
-    keptLocal: raw.keptLocal === true,
+    keptLocal: kind === "live",
+    export: exported
+      ? { path: text(exported.path, 1024), takenAt: text(exported.takenAt, 40), refs: count(exported.refs), files: count(exported.files), bytes: count(exported.bytes) }
+      : null,
   }
 }
 

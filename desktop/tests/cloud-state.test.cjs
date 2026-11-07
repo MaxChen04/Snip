@@ -130,6 +130,35 @@ test("snapshot and size copy use the engine's numbers", () => {
   assert.equal(describeSnapshot(null), null)
 })
 
+test("a live snapshot is this Mac's library, a backup is a real second copy", () => {
+  // kind is explicit; path is only meaningful for a backup (contracts §1.11).
+  const live = normalizeCloudState({ mode: "cloud", cloud: { url: "https://snip.max.workers.dev" }, snapshot: { kind: "live", path: "backups/cloud-move-x", refs: 42 } }).snapshot
+  assert.equal(live.kind, "live")
+  assert.equal(live.path, null)
+  assert.equal(live.keptLocal, true)
+
+  const backup = normalizeCloudState({ mode: "cloud", snapshot: { kind: "backup", path: "backups/replaced-2026-11-06T10-12-00", refs: 42 } }).snapshot
+  assert.equal(backup.kind, "backup")
+  assert.equal(backup.path, "backups/replaced-2026-11-06T10-12-00")
+  assert.equal(backup.keptLocal, false)
+
+  // An older engine that only set keptLocal is read as live, never as a backup.
+  const legacy = normalizeCloudState({ snapshot: { path: null, keptLocal: true } }).snapshot
+  assert.equal(legacy.kind, "live")
+  // Unknown shapes cannot be restored or deleted from the UI.
+  assert.equal(normalizeCloudState({ snapshot: { refs: 3 } }).snapshot.kind, null)
+})
+
+test("the setup export is normalizeable and stays delete-only", () => {
+  const state = normalizeCloudState({
+    mode: "cloud",
+    snapshot: { kind: "live", path: null, refs: 42, export: { path: "backups/cloud-export-2026-11-06T10-12-00", takenAt: "2026-11-06T10:12:00Z", refs: 42, files: 311, bytes: 812000000 } },
+  })
+  assert.equal(state.snapshot.export.refs, 42)
+  assert.equal(state.snapshot.export.bytes, 812000000)
+  assert.equal(state.snapshot.path, null)
+})
+
 test("cloud paths stay inside .snip", t => {
   const root = library(t)
   const paths = cloudPaths(root)

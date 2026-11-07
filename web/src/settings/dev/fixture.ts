@@ -42,7 +42,28 @@ const cloud = {
   lastDeployedAt: "2026-11-06T10:12:00Z",
   lastVerifiedAt: "2026-11-06T10:12:00Z",
 }
-const snapshot = { path: "backups/cloud-move-2026-11-06T10-12-00", takenAt: "2026-11-06T10:12:00Z", refs: 42, files: 311, bytes: 812000000 }
+// kind "live": this Mac's own library, untouched. No directory was copied, so there is
+// nothing to restore; only the portable export has a directory of its own.
+const snapshot = {
+  kind: "live" as const,
+  path: null,
+  takenAt: "2026-11-06T10:12:00Z",
+  refs: 42,
+  files: 311,
+  bytes: 812000000,
+  keptLocal: true,
+  export: { path: "backups/cloud-export-2026-11-06T10-12-00", takenAt: "2026-11-06T10:12:00Z", refs: 42, files: 311, bytes: 812000000 },
+}
+const backup = {
+  kind: "backup" as const,
+  path: "backups/replaced-2026-11-06T10-12-00",
+  takenAt: "2026-11-06T10:12:00Z",
+  refs: 42,
+  files: 311,
+  bytes: 812000000,
+  keptLocal: false,
+  export: null,
+}
 
 function file(mode: CloudFile["mode"], extra: Partial<CloudFile> = {}): CloudFile {
   return { version: 1, mode, library, cloud: mode === "local" ? null : cloud, snapshot: null, transfer: null, steps: [], error: null, ...extra }
@@ -76,6 +97,15 @@ const STATES: Record<string, CloudSnapshotState> = {
     local: { reachable: false, empty: null, refs: null },
     app: { version: "0.2.0", dataRoot: "/Users/max/Snip", captureEnv: ".env.cloud" },
   },
+  "cloud-backup": {
+    mode: "cloud",
+    state: file("cloud", { snapshot: backup, move: { status: "completed", reason: null, at: "2026-11-06T10:12:00Z" } }),
+    busy: false,
+    running: null,
+    engine: { available: true },
+    local: { reachable: false, empty: null, refs: null },
+    app: { version: "0.2.0", dataRoot: "/Users/max/Snip", captureEnv: ".env.cloud" },
+  },
   "cloud-empty": {
     mode: "cloud",
     state: file("cloud"),
@@ -98,7 +128,7 @@ const STATES: Record<string, CloudSnapshotState> = {
     mode: "cloud",
     state: file("cloud", {
       cloud: { ...cloud, adoptedAt: "2026-11-06T12:40:00Z", adoptedFrom: "legacy", adoptedLibrary: { refs: 1284, pages: 9120, collections: 7 } },
-      snapshot: { path: null, takenAt: "2026-11-06T12:40:00Z", refs: 312, files: 1900, bytes: 240000000, keptLocal: true },
+      snapshot: { kind: "live", path: null, takenAt: "2026-11-06T12:40:00Z", refs: 312, files: 1900, bytes: 240000000, keptLocal: true, export: null },
       move: { status: "skipped", reason: "adopted-existing", at: "2026-11-06T12:40:00Z" },
     }),
     busy: false,
@@ -160,7 +190,7 @@ function initial(): { state: CloudSnapshotState; steps: Record<string, { id: str
   }
   if (scenario === "pulling") return seeded("pull", 4)
   // A terminal decision from guard, shown before anything is copied.
-  if (scenario === "choice") return seeded("setup", 6)
+  if (scenario === "choice") return seeded("setup", 5)
   return { state: STATES[scenario] ?? STATES.local, steps: {} }
 }
 
@@ -224,7 +254,7 @@ export function createFixtureBridge(): CloudBridge {
             mode: "cloud",
             state: file("cloud", {
               cloud: { ...cloud, adoptedAt: "2026-11-06T12:40:00Z", adoptedFrom: "legacy", adoptedLibrary: { refs: 1284, pages: 9120, collections: 7 } },
-              snapshot: { path: null, takenAt: "2026-11-06T12:40:00Z", refs: 312, files: 1900, bytes: 240000000, keptLocal: true },
+              snapshot: { kind: "live", path: null, takenAt: "2026-11-06T12:40:00Z", refs: 312, files: 1900, bytes: 240000000, keptLocal: true, export: null },
               move: { status: "skipped", reason: "adopted-existing", at: "2026-11-06T12:40:00Z" },
             }),
             busy: false,
@@ -340,7 +370,13 @@ export function createFixtureBridge(): CloudBridge {
     },
     onLog(callback) {
       logListeners.add(callback)
-      log("info", state.mode === "cloud" ? "Snip is now using your cloud library." : "Local library")
+      const opening = {
+        cloud: "Snip is now using your cloud library.",
+        enabling: "Setting up your cloud library.",
+        disabling: "Reading your cloud library.",
+        local: "Your library is on this Mac.",
+      }[state.mode]
+      log("info", opening)
       return () => logListeners.delete(callback)
     },
   }
