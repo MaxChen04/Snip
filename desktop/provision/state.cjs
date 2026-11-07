@@ -118,12 +118,27 @@ function setMode(dataRoot, mode) {
 /**
  * Record intent before the first mutation. Refuses to start over a healthy
  * cloud install; an interrupted `enabling` is resumed instead.
+ *
+ * A new run starts from a clean step journal: the previous run's `done` steps
+ * describe a different operation, and replaying them would skip provisioning
+ * this time. Only an interrupted run (already `enabling`) keeps its journal.
  */
 function beginEnabling(dataRoot) {
   return updateState(dataRoot, (state) => {
     if (state.mode === 'cloud') throw new StateError('ALREADY_CLOUD', 'This library is already using the cloud.', 'Run `status` to see it, or `pull` to copy it back.');
     if (state.mode === 'disabling') throw new StateError('BUSY_MODE', 'A copy-back is in progress.', 'Let it finish or run `abort` first.');
     if (!state.library.id) state.library.id = randomId();
+    if (state.mode !== 'enabling') {
+      state.steps = [];
+      state.pausedForMove = [];
+      state.transfer = null;
+      if (state.cloud) {
+        // Keep what the account already holds (ids, url, detachedAt) so guard
+        // can recognise this Mac's own install, but drop the last run's outcome.
+        const { outcome, move, ...kept } = state.cloud;
+        state.cloud = kept;
+      }
+    }
     state.mode = 'enabling';
     state.error = null;
     return state;

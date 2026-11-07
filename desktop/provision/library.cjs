@@ -14,6 +14,141 @@ const { createRequire } = require('node:module');
 const { StepError } = require('./engine.cjs');
 const { createTransfer } = require('./transfer.cjs');
 const { randomSecret } = require('./lib.cjs');
+const local = require('./local.cjs');
+
+// The fields that decide which local database, bucket and namespace a library
+// is. `local-server.cjs` overlays exactly these onto the runtime config so the
+// app always opens the same storage, and the engine must resolve them the same
+// way: the built bundle only carries placeholders, and a config edited after
+// first launch would otherwise send the engine to a different, empty database.
+const IDENTITY_FIELDS = {
+  d1_databases: ['binding', 'database_name', 'database_id', 'preview_database_id', 'migrations_table'],
+  r2_buckets: ['binding', 'bucket_name', 'preview_bucket_name', 'jurisdiction'],
+  kv_namespaces: ['binding', 'id', 'preview_id'],
+};
+
+function identityError(message) {
+  return new StepError('STORAGE_IDENTITY', 'Snip could not tell which local database and files belong to this library.', {
+    hint: message || 'Restore this library’s original web/wrangler.jsonc or its storage identity record, then try again.',
+  });
+}
+
+/** Same selection as `local-server.cjs`: one entry per binding, by binding name. */
+function selectIdentities(config, runtimeConfig) {
+  const result = {};
+  for (const [type, fields] of Object.entries(IDENTITY_FIELDS)) {
+    const required = runtimeConfig[type] || [];
+    const entries = config[type];
+    if (!Array.isArray(required) || !Array.isArray(entries)) throw identityError();
+    result[type] = required.map((target) => {
+      if (!target || typeof target.binding !== 'string') throw identityError();
+      const matches = entries.filter((entry) => entry && entry.binding === target.binding);
+      if (matches.length !== 1) throw identityError();
+      const item = matches[0];
+      if (item.remote === true || target.remote === true) {
+        throw identityError('This project uses remote Cloudflare storage, so its library cannot be read from this Mac.');
+      }
+      const selected = {};
+      for (const key of fields) {
+        if (item[key] === undefined) continue;
+        if (typeof item[key] !== 'string' || !item[key].trim()) throw identityError();
+        selected[key] = item[key];
+      }
+      return selected;
+    });
+  }
+  return result;
+}
+
+function libraryVars(config) {
+  const vars = {};
+  for (const key of ['ALLOWED_GITHUB_LOGINS', 'PUBLIC_URL', 'DEV_LOGIN']) {
+    const value = config.vars && config.vars[key];
+    if (typeof value === 'string') vars[key] = value;
+  }
+  return vars;
+}
+
+/**
+ * The storage identity this library actually uses. `local-server.cjs` snapshots
+ * it to `.snip/storage-identities.json` on first launch and overlays it onto the
+ * runtime config, so the app keeps opening the same database when the config on
+ * disk changes. The engine resolves it the same way: reading a config that no
+ * longer names the library's storage returns an empty database, and an empty
+ * read is the failure mode that makes a broken copy look verified.
+ */
+function storageIdentity(dataRoot, readConfig, runtimeConfig = null) {
+  const saved = path.join(dataRoot, '.snip/storage-identities.json');
+  let text = null;
+  try {
+    text = fs.readFileSync(saved, 'utf8');
+  } catch (error) {
+    if (!error || error.code !== 'ENOENT') throw identityError();
+  }
+  if (text !== null) {
+    let parsed;
+    try { parsed = JSON.parse(text); } catch { throw identityError(); }
+    if (!parsed || parsed.version !== 1) throw identityError();
+    return { identities: selectIdentities(parsed, runtimeConfig || parsed), vars: libraryVars(parsed), source: saved };
+  }
+  const config = local.localConfig(dataRoot);
+  if (!config) return null;
+  const parsed = readConfig({ config });
+  return { identities: selectIdentities(parsed, runtimeConfig || parsed), vars: libraryVars(parsed), source: config };
+}
+
+/** Overlay a library's storage identity onto the config the Worker will run with. */
+function withLibraryIdentity(config, dataRoot, readConfig) {
+  const identity = storageIdentity(dataRoot, readConfig, config);
+  if (!identity) return config;
+  for (const [type, entries] of Object.entries(identity.identities)) {
+    const byBinding = new Map(entries.map((item) => [item.binding, item]));
+    config[type] = (config[type] || []).map((item) => {
+      const updated = { ...item };
+      for (const field of IDENTITY_FIELDS[type]) delete updated[field];
+      return { ...updated, ...byBinding.get(item.binding) };
+    });
+  }
+  config.vars = { ...(config.vars || {}), ...identity.vars };
+  return config;
+}
+
+/**
+ * The config `wrangler d1` commands should use. They take a path, not a config
+ * object, so when the app's snapshot is the authority the resolved identity is
+ * written to a private derived file; otherwise the config on disk already names
+ * this library and is returned unchanged. `.snip/` holds engine state, never
+ * user data, so writing here changes nothing the user can see.
+ */
+function libraryConfig({ root, dataRoot }) {
+  const raw = local.localConfig(dataRoot);
+  let saved = null;
+  try {
+    saved = JSON.parse(fs.readFileSync(path.join(dataRoot, '.snip/storage-identities.json'), 'utf8'));
+  } catch (error) {
+    if (!error || error.code !== 'ENOENT') throw identityError();
+    // Not started through the app yet: the config on disk is the identity.
+    return raw;
+  }
+  if (!saved || saved.version !== 1) throw identityError();
+  const identity = selectIdentities(saved, saved);
+  const databases = (identity.d1_databases || []).map((entry) => ({ ...entry, migrations_dir: path.join(root, 'web/migrations') }));
+  const config = {
+    name: 'snip-local',
+    compatibility_date: '2026-10-01',
+    d1_databases: databases,
+    r2_buckets: identity.r2_buckets || [],
+    kv_namespaces: identity.kv_namespaces || [],
+    vars: libraryVars(saved),
+  };
+  const directory = path.join(dataRoot, '.snip');
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const target = path.join(directory, 'wrangler-library.json');
+  const temporary = `${target}.${process.pid}`;
+  fs.writeFileSync(temporary, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+  fs.renameSync(temporary, target);
+  return target;
+}
 
 function freePort() {
   const net = require('node:net');
@@ -96,6 +231,10 @@ async function localWorker({ root, dataRoot, token, release = false, log = () =>
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       const config = api.unstable_readConfig({ config: configPath });
+      // Same storage the app itself opens, even if the config on disk changed
+      // after first launch. Without this the Worker can read an empty database
+      // and report an empty library that then passes every count check.
+      withLibraryIdentity(config, dataRoot, api.unstable_readConfig);
       // The transfer surface needs its bearer and an owner hash, and PUBLIC_URL
       // must be a canonical lowercase origin (the built config still holds the
       // placeholder). All of it is in memory on a Worker that lives for seconds.
@@ -174,4 +313,4 @@ async function withLocalWorker(options, fn) {
   }
 }
 
-module.exports = { freePort, localWorker, persistDir, workerConfigPath, withLocalWorker, wranglerFromRoot };
+module.exports = { freePort, libraryConfig, libraryVars, localWorker, persistDir, selectIdentities, storageIdentity, withLibraryIdentity, workerConfigPath, withLocalWorker, wranglerFromRoot };

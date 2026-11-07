@@ -304,6 +304,8 @@ test("transfer status and manifest describe the library, and files round-trip", 
     assert.deepEqual(manifest.keys, [{ key, size: 5, contentType: "application/octet-stream" }])
     assert.equal(manifest.totalBytes, 5)
     assert.equal(manifest.tables.owner_nonces, undefined, "ephemeral tables are not counted")
+    // `excluded` is computed from the database, so it names the short-lived tables that exist in
+    // this fixture. d1_migrations has its own test, where the ledger is really there.
     assert.deepEqual(manifest.excluded, ["owner_nonces", "webauthn_challenges"], "and the omission is named, not silent")
     assert.ok("owners" in manifest.tables && "passkeys" in manifest.tables, "owner data is part of the library")
 
@@ -425,6 +427,40 @@ test("the manifest lists every bucket page, orphans included, and never reads D1
     // Tables still come from D1.
     assert.equal(manifest.tables.refs, 0)
     void database
+  }))
+
+test("the migration ledger is excluded from the copy, so a version skew cannot fail a correct pull", () =>
+  withWorker(async ({ database, env, call, local, localJson }) => {
+    const files = { list: async () => ({ objects: [], truncated: false, cursor: "" }) } as unknown as R2Bucket
+    const withFiles = { ...transfer, FILES: files }
+
+    await localJson("/api/references", { url: "https://linear.app", mode: "single" })
+
+    // A remote deployed by an older Snip: its ledger stops before the migrations this release
+    // applies, so its row count is legitimately smaller than the staged copy's.
+    await database.prepare(`CREATE TABLE d1_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL)`).run()
+    for (const name of ["0001_init.sql", "0002_mcp_media_status.sql", "0006_notes_and_options.sql"]) {
+      await database.prepare(`INSERT INTO d1_migrations (name) VALUES (?)`).bind(name).run()
+    }
+
+    const manifest = (await (await app.fetch(new Request("https://snip.test/transfer/manifest", { headers: bearer }), { ...env, ...withFiles } as Env, ctx0)).json()) as {
+      tables: Record<string, number>
+      excluded: string[]
+    }
+    assert.equal("d1_migrations" in manifest.tables, false, "a ledger row count must never reach pull-verify")
+    assert.ok(manifest.excluded.includes("d1_migrations"), "and the omission is named so the engine can skip it")
+
+    // The two credential tables must still travel: a move that dropped them would lock the owner out.
+    assert.equal("owners" in manifest.tables, true)
+    assert.equal("passkeys" in manifest.tables, true)
+    assert.equal(manifest.excluded.includes("owners") || manifest.excluded.includes("passkeys"), false)
+
+    // /transfer/status and /api/cloud-status read counts from libraryCounts, which names its four
+    // tables explicitly, so the ledger cannot disturb guard, verify or the Settings copy.
+    const status = (await (await call("/transfer/status", { headers: bearer }, withFiles)).json()) as { counts: Record<string, number> }
+    assert.deepEqual(status.counts, { refs: 1, pages: 0, animations: 0, collections: 0 })
+    const cloud = (await (await local("/api/cloud-status", {}, { DEV_LOGIN: "max" })).json()) as { counts: Record<string, number> }
+    assert.deepEqual(cloud.counts, { refs: 1, pages: 0, animations: 0, collections: 0 })
   }))
 
 test("the content-type fallback is batched, and costs nothing when the listing carries it", () =>

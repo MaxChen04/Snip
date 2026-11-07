@@ -245,6 +245,29 @@ function digestSql(table, columns) {
   return `SELECT COUNT(*) AS rows, coalesce(SUM(LENGTH(${expression})),0) AS sig FROM ${ident}`;
 }
 
+/**
+ * Tables a manifest says are copied as schema but not as rows. The Worker
+ * computes this from its own database, so the list changes with the Worker: an
+ * older one may name fewer tables, or none at all. When it is absent the
+ * documented default applies (contracts §4.5), which is exactly the set that
+ * differs on its own after any copy and would fail a correct move.
+ */
+const DEFAULT_EXCLUDED = ['owner_nonces', 'webauthn_challenges'];
+
+function excludedTables(excluded) {
+  const names = Array.isArray(excluded) ? excluded.filter((name) => typeof name === 'string' && name) : [];
+  return new Set(names.length ? names : DEFAULT_EXCLUDED);
+}
+
+/** Compare only tables the manifest actually copied: never require one to exist. */
+function comparableTables(tables, excluded) {
+  const skip = excluded instanceof Set ? excluded : excludedTables(excluded);
+  return Object.keys(tables || {})
+    .filter((table) => !skip.has(table))
+    // Defensive: SQLite internals are never part of a library.
+    .filter((table) => !/^(sqlite_|_cf_|_mf_)/.test(table));
+}
+
 function digestOf(perTable) {
   const hash = crypto.createHash('sha256');
   for (const table of Object.keys(perTable).sort()) {
@@ -257,6 +280,7 @@ function digestOf(perTable) {
 module.exports = {
   BUCKET_NAME,
   D1_NAME,
+  DEFAULT_EXCLUDED,
   EPHEMERAL_TABLES,
   KV_NAME,
   LIBRARY_TABLES,
@@ -266,9 +290,11 @@ module.exports = {
   canonicalOrigin,
   captureEnvText,
   columnsFromDump,
+  comparableTables,
   countsFromDump,
   digestOf,
   digestSql,
+  excludedTables,
   libraryTablesFrom,
   originHost,
   parseCreatedId,

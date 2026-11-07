@@ -816,10 +816,20 @@ export async function hasPasskeys(db: D1Database): Promise<boolean> {
   return !!(await db.prepare(`SELECT 1 AS present FROM passkeys LIMIT 1`).first<{ present: number }>())
 }
 
-// Challenges and link nonces are short-lived: they exist to be burned, and a pull that copied
-// them would compare numbers that legitimately move between the manifest and the dump. They are
-// named in the manifest rather than silently dropped, so the engine can see what was left out.
-const EPHEMERAL_TABLES = new Set(["owner_nonces", "webauthn_challenges"])
+// Tables a move copies as schema but never as rows, named in the manifest rather than silently
+// dropped, so the engine can skip them instead of inferring which numbers may differ.
+//
+// - owner_nonces, webauthn_challenges: short-lived and single-use. Copying them would carry live
+//   nonces across a trust boundary, and their counts move for reasons a copy cannot reproduce.
+// - d1_migrations: the destination writes its own ledger by applying migrations before the dump
+//   is loaded (contracts §4.5). Replaying the source's rows clashes on the primary key, and even
+//   when it does not, the ledger would not describe the schema actually applied. This one is also
+//   why a version skew breaks pulls: an older remote has fewer ledger rows than the freshly
+//   migrated staged copy, so comparing them fails a correct copy forever.
+//
+// `owners` and `passkeys` are deliberately absent: they are the owner's credentials and must
+// survive a move or a pull.
+const EPHEMERAL_TABLES = new Set(["owner_nonces", "webauthn_challenges", "d1_migrations"])
 
 export type TableCounts = { tables: Record<string, number>; excluded: string[] }
 
