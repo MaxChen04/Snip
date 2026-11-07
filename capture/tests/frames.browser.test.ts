@@ -53,6 +53,27 @@ test("screencast keeps the newest frame at a scroll offset, and stops between st
   assert.equal(sent.filter((m) => m === "Page.screencastFrameAck").length, 28, "every frame is acked")
 })
 
+test("screencast is given up after 3 misses in a row, so a browser that sends no frames doesn't wait out every frame", async () => {
+  const sent: string[] = []
+  const session = Object.assign(new EventEmitter(), { send: async (method: string) => { sent.push(method); return {} } })
+  const calls = () => sent.filter((m) => m !== "Page.screencastFrameAck")
+  const cast = await screencast(session as unknown as CDPSession, 720, 450, 100)
+  const step = async (y: number, painted = false) => {
+    await cast.scrolled()
+    if (painted) session.emit("Page.screencastFrame", { data: "AA==", metadata: { scrollOffsetY: y }, sessionId: 1 })
+    return (await cast.frameAt(y)) != null
+  }
+  assert.deepEqual([await step(0), await step(40), await step(80, true), await step(120), await step(160)], [false, false, true, false, false])
+  assert.deepEqual(calls(), ["Page.startScreencast"], "a frame resets the count")
+  assert.equal(await step(200), false)
+  assert.deepEqual(calls(), ["Page.startScreencast", "Page.stopScreencast"], "the third miss in a row stops it")
+  const start = performance.now()
+  assert.equal(await step(240, true), false, "after that, frames go straight to the fallback")
+  assert.ok(performance.now() - start < 50, "without waiting")
+  await cast.stop()
+  assert.deepEqual(calls(), ["Page.startScreencast", "Page.stopScreencast"], "and it never restarts")
+})
+
 test("stills converted together keep each frame's own image, in order", { timeout: 60_000 }, async () => {
   const browser = await chromium.launch({ headless: true })
   try {

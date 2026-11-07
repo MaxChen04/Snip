@@ -114,7 +114,8 @@ const docHeight = async (page: PwPage) => (await scrollState(page)).height
 /**
  * Chromium's screencast, scaled to fit `width` x `height` on the GPU as frames are composited. Call scrolled()
  * after each scroll step; frameAt(y) is then the newest frame painted at scroll offset y, else the next one to
- * arrive, or null if none comes within `waitMs`.
+ * arrive, or null if none comes within `waitMs`. After 3 misses in a row it gives up: the screencast stops and
+ * frameAt returns null at once, so a browser that never sends frames costs 3 waits, not one per frame.
  */
 export async function screencast(cdp: CDPSession, width: number, height: number, waitMs = 250) {
   let latest: { y: number; data: string } | null = null
@@ -123,6 +124,7 @@ export async function screencast(cdp: CDPSession, width: number, height: number,
   let perStep = false
   let received = 0
   let kept = 0
+  let misses = 0 // in a row
   const onFrame = ({ data, metadata, sessionId }: { data: string; metadata: { scrollOffsetY: number }; sessionId: number }) => {
     cdp.send("Page.screencastFrameAck", { sessionId }).catch(() => {})
     received++
@@ -137,17 +139,19 @@ export async function screencast(cdp: CDPSession, width: number, height: number,
     else await cdp.send("Page.stopScreencast").catch(() => {})
   }
   return {
-    scrolled: () => run(true),
+    scrolled: async () => { if (misses < 3) await run(true) },
     frameAt: async (y: number) => {
+      if (misses >= 3) return null
       const data = latest && Math.abs(latest.y - y) < 1 ? latest.data : await new Promise<string | null>((resolve) => {
         const timer = setTimeout(() => { waiting = null; resolve(null) }, waitMs)
         waiting = { y, done: (d) => { clearTimeout(timer); waiting = null; resolve(d) } }
       })
+      misses = data == null ? misses + 1 : 0
       // Left running, the screencast also captures every frame an animation paints between steps. Once those
       // outnumber the kept frames 3 to 1, stop it after each step: every restart costs one extra capture, which
       // is cheaper than a running animation but dearer than a still page.
       if (++kept >= 5 && received > kept * 3) perStep = true
-      if (perStep) await run(false)
+      if (perStep || misses >= 3) await run(false)
       return data == null ? null : Buffer.from(data, "base64")
     },
     stop: async () => {
