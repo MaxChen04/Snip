@@ -295,7 +295,10 @@ async function main(argv, io = {}) {
       // The specific code names the failure; `code` stays inside the contract's set.
       data: { code: specific, ...(error.data || {}) },
       message: error.message,
-      retryable: code === 4 ? retryableFor(error) : false,
+      // A failure says whether running the same command again can work: exit 4
+      // uses the contract's table, and a step failure only when it names itself
+      // retryable (a transient Cloudflare problem, an unreachable surface).
+      retryable: retryableFor(error),
     });
     return { code };
   } finally {

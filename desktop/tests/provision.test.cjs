@@ -15,6 +15,8 @@ const { runSteps, StepError, NeedsInputError } = require('../provision/engine.cj
 const stateModule = require('../provision/state.cjs');
 const lib = require('../provision/lib.cjs');
 const deploy = require('../provision/deploy.cjs');
+const cloudModule = require('../provision/cloud.cjs');
+const { retryOf } = require('../provision/context.cjs');
 const { createEmitter } = require('../provision/emit.cjs');
 const { createContext } = require('../provision/context.cjs');
 const realLocal = require('../provision/local.cjs');
@@ -2322,6 +2324,177 @@ test('every deploy uploads the bundle again instead of replaying a journaled run
   const started = emitter.events.filter((event) => event.event === 'step' && event.status === 'started').map((event) => event.step);
   assert.deepEqual(started, ['deploy-preflight', 'deploy-schema', 'deploy-worker', 'deploy-verify']);
   assert.equal(stateModule.readState(library.root).cloud.workerVersion, '1.1.3');
+});
+
+// ---------- transient Cloudflare failures ----------
+
+const transientOutput = (code) => ({ ok: false, code: 1, stdout: '', stderr: `✘ [ERROR] A request to the Cloudflare API failed. [code: ${code}]` });
+const serviceDown = () => ({ ok: false, code: 1, stdout: '', stderr: '✘ [ERROR] HTTP status 503: Service Unavailable' });
+
+function recordingSleep() {
+  const delays = [];
+  return { delays, sleep: async (ms) => { delays.push(ms); } };
+}
+
+test('an HTTP 5xx, a 429, an edge code and a network error are transient; auth and permission are not', () => {
+  const at = (text) => deploy.transientReason({ ok: false, stdout: '', stderr: text });
+  assert.match(at(transientOutput(7403).stderr), /7403/);
+  assert.match(at('[code: 10013] Could not route to /accounts/x/d1'), /10013/);
+  assert.equal(at('HTTP status 502: Bad Gateway'), 'HTTP 502');
+  assert.equal(at('✘ [ERROR] 503 Service Unavailable'), 'HTTP 503');
+  assert.equal(at('✘ [ERROR] 500 Internal Server Error'), 'HTTP 500');
+  assert.equal(at('429 Too Many Requests'), 'HTTP 429');
+  assert.equal(at('error: read ETIMEDOUT'), 'a network error');
+  // The user has to change something: never retried, never called temporary.
+  assert.equal(at('You are not authenticated. Please run `wrangler login`.'), null);
+  assert.equal(at('[code: 10000] Authentication error'), null);
+  assert.equal(at('HTTP 403 Forbidden'), null);
+  assert.equal(at('You do not have permission to edit this Worker'), null);
+  assert.equal(at('[code: 10042] R2 must be enabled'), null);
+  // 7403 reports itself as "not authorized" and is still transient; the same
+  // words without the code are a permission refusal.
+  assert.match(at('[code: 7403] account not valid or not authorized'), /7403/);
+  assert.equal(at('account not valid or not authorized'), null);
+});
+
+test('migrations, deploy and secret writes retry a transient failure, then succeed', async () => {
+  const library = fakeLibrary();
+  const configDir = path.join(library.root, 'cloud/snip');
+  fs.mkdirSync(configDir, { recursive: true });
+
+  const migrations = recordingSleep();
+  let migrationCalls = 0;
+  const migrationResult = await deploy.applyMigrations(
+    { bin: '/x', run: async () => (++migrationCalls <= 2 ? transientOutput(7403) : { ok: true, code: 0, stdout: 'No migrations to apply', stderr: '' }) },
+    { dataRoot: library.root, accountId: 'acct', remote: true, retry: retryOf({ deps: { sleep: migrations.sleep }, emit: { log: () => {} } }) },
+  );
+  assert.equal(migrationResult.ok, true);
+  assert.equal(migrationCalls, 3, 'two transient failures, then the real answer');
+  assert.deepEqual(migrations.delays, [800, 2500], 'backoff between attempts');
+
+  const upload = recordingSleep();
+  let deployCalls = 0;
+  await deploy.deployWorker(
+    { bin: '/x', run: async () => (++deployCalls <= 1 ? serviceDown() : { ok: true, code: 0, stdout: 'Deployed', stderr: '' }) },
+    { dataRoot: library.root, accountId: 'acct', retry: retryOf({ deps: { sleep: upload.sleep }, emit: { log: () => {} } }) },
+  );
+  assert.equal(deployCalls, 2);
+  assert.deepEqual(upload.delays, [800]);
+
+  const secretWrite = recordingSleep();
+  let secretCalls = 0;
+  const put = await cloudModule.putSecrets(
+    { bin: '/x', run: async () => (++secretCalls <= 1 ? transientOutput(10013) : { ok: true, code: 0, stdout: '', stderr: '' }) },
+    { dataRoot: library.root, accountId: 'acct', secrets: { SESSION_SECRET: 's' }, retry: retryOf({ deps: { sleep: secretWrite.sleep }, emit: { log: () => {} } }) },
+  );
+  assert.deepEqual(put.names, ['SESSION_SECRET']);
+  assert.equal(secretCalls, 2);
+});
+
+test('a transient failure that outlasts the retries is retryable, with a plain message', async () => {
+  const library = fakeLibrary();
+  const clock = recordingSleep();
+  let attempts = 0;
+  await assert.rejects(
+    () => deploy.applyMigrations(
+      { bin: '/x', run: async () => { attempts++; return serviceDown(); } },
+      { dataRoot: library.root, accountId: 'acct', remote: true, retry: retryOf({ deps: { sleep: clock.sleep }, emit: { log: () => {} } }) },
+    ),
+    (error) => {
+      assert.equal(error.code, 'CLOUDFLARE_TEMPORARY');
+      assert.equal(error.message, 'Cloudflare had a temporary problem, try again.');
+      assert.equal(error.retryable, true, 'an agent may run the same command again');
+      assert.equal(error.data.attempts, 4);
+      assert.equal(error.data.reason, 'HTTP 503');
+      return true;
+    },
+  );
+  assert.equal(attempts, 4, 'a few attempts, not an endless loop');
+  assert.deepEqual(clock.delays, [800, 2500, 6000], 'backoff grows');
+});
+
+test('an auth or permission failure is never retried', async () => {
+  const library = fakeLibrary();
+  const never = { sleep: async () => { throw new Error('a permanent failure must not wait'); } };
+  let authCalls = 0;
+  await assert.rejects(
+    () => deploy.deployWorker(
+      { bin: '/x', run: async () => { authCalls++; return { ok: false, code: 1, stdout: '', stderr: 'You are not authenticated. Please run `wrangler login`.' }; } },
+      { dataRoot: library.root, accountId: 'acct', retry: never },
+    ),
+    (error) => error.code === 'AUTH_REQUIRED' && error.retryable !== true,
+  );
+  assert.equal(authCalls, 1);
+
+  let permissionCalls = 0;
+  await assert.rejects(
+    () => cloudModule.putSecrets(
+      { bin: '/x', run: async () => { permissionCalls++; return { ok: false, code: 1, stdout: '', stderr: 'HTTP 403 Forbidden: you do not have permission' }; } },
+      { dataRoot: library.root, accountId: 'acct', secrets: { SESSION_SECRET: 's' }, retry: never },
+    ),
+    (error) => error.code === 'SECRET_PUT_FAILED' && error.retryable !== true,
+  );
+  assert.equal(permissionCalls, 1);
+});
+
+test('a create is never retried, because a second database cannot be undone', async () => {
+  let calls = 0;
+  await assert.rejects(
+    () => cloudModule.createD1({ bin: '/x', run: async () => { calls++; return serviceDown(); } }, { accountId: 'acct' }),
+    (error) => error.code === 'D1_CREATE_FAILED',
+  );
+  assert.equal(calls, 1, 'one attempt: a retried create could leave an orphan behind');
+});
+
+test('deploy rides out a Cloudflare hiccup and says so once', async () => {
+  const library = fakeLibrary();
+  stateModule.setMode(library.root, 'cloud');
+  stateModule.updateState(library.root, (next) => {
+    next.cloud = { url: PROVIDED, accountId: 'acct', d1: { name: 'snip', id: 'd1' }, kv: { name: 'OAUTH_KV', id: 'kv' }, bucket: 'snip-files', workerVersion: '1.1.3' };
+    return next;
+  });
+  const emitter = collectedEmitter();
+  const clock = recordingSleep();
+  let deploys = 0;
+  const ctx = createContext({
+    root: library.root, dataRoot: library.root, flags: {}, emit: emitter.emit, api: {},
+    wrangler: {
+      bin: '/x',
+      run: async (args) => {
+        if (args[0] === 'deploy' && ++deploys <= 1) return transientOutput(7403);
+        return { ok: true, code: 0, stdout: '', stderr: '' };
+      },
+    },
+    deps: {
+      fetch: async () => { throw new Error('no network'); },
+      sleep: clock.sleep,
+      cloud: cloudModule,
+      deploy: { ...deploy, configExists: () => true, runtimeProblem: () => null, prepareDeployLayout: () => ({}) },
+      transferOf: () => ({ status: async () => ({ version: '1.1.4' }) }),
+    },
+  });
+  ctx.reload();
+  const result = await commands.commandDeploy(ctx);
+  assert.equal(result.ok, true);
+  assert.equal(deploys, 2, 'the deploy was retried inside its step');
+  const warning = emitter.events.find((event) => event.event === 'log' && event.level === 'warn');
+  assert.match(warning.message, /Cloudflare had a temporary problem \(Cloudflare code 7403\)/);
+  assert.match(warning.message, /retrying in 1s \(attempt 2 of 4\)/);
+});
+
+test('a deploy that stays broken reports retryable in the CLI result', async () => {
+  const library = fakeLibrary();
+  const vars = path.join(library.root, 'web/.dev.vars');
+  fs.writeFileSync(vars, 'PUBLIC_URL=http://127.0.0.1:1\n');
+  const lines = [];
+  const io = { stdout: { write: (line) => { lines.push(line); return true; } }, stderr: { write: () => true } };
+  const result = await cli.main(['status', '--check', '--root', library.root, '--data-root', library.root, '--json'], io);
+  assert.equal(result.code, 1);
+  const last = JSON.parse(lines[lines.length - 1]);
+  assert.equal(last.event, 'result');
+  assert.equal(last.ok, false);
+  assert.equal(last.data.code, 'LOCAL_UNREACHABLE');
+  assert.equal(last.retryable, true, 'a step failure that names itself retryable now says so');
 });
 
 test('setup --resume behaves exactly like setup', async () => {

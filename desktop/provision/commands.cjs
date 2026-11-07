@@ -13,7 +13,7 @@ const local = require('./local.cjs');
 const { localWorker, withLocalWorker } = require('./library.cjs');
 const { randomSecret, splitSqlStatements, canonicalOrigin, captureEnvText } = require('./lib.cjs');
 const { mintOwnerLink, ownerSecretHash, startLoopback } = require('./transfer.cjs');
-const { createContext } = require('./context.cjs');
+const { createContext, retryOf } = require('./context.cjs');
 const setupSteps = require('./setup.cjs');
 const snapshotModule = require('./snapshot.cjs');
 
@@ -99,7 +99,7 @@ async function commandPull(ctx) {
       });
     }
     const minted = randomSecret();
-    await cloud.putSecrets(ctx.wrangler, { dataRoot: ctx.dataRoot, accountId: record.accountId, secrets: { TRANSFER_TOKEN: minted } });
+    await cloud.putSecrets(ctx.wrangler, { dataRoot: ctx.dataRoot, accountId: record.accountId, secrets: { TRANSFER_TOKEN: minted }, retry: retryOf(ctx) });
     ctx.setTransferToken(minted);
     // A secret write is not instantly live at the edge; wait for the new token
     // to answer instead of reporting the library as closed.
@@ -467,7 +467,7 @@ async function commandDeploy(ctx) {
       id: 'deploy-schema',
       title: 'Applying database migrations',
       async run(ctx2) {
-        await ctx2.deps.deploy.applyMigrations(ctx2.wrangler, { dataRoot: ctx2.dataRoot, accountId: record.accountId, remote: true });
+        await ctx2.deps.deploy.applyMigrations(ctx2.wrangler, { dataRoot: ctx2.dataRoot, accountId: record.accountId, remote: true, retry: retryOf(ctx2) });
         return { message: 'Database is up to date' };
       },
       async verify() { return true; },
@@ -488,7 +488,7 @@ async function commandDeploy(ctx) {
         });
         void stored;
         void layout;
-        await ctx2.deps.deploy.deployWorker(ctx2.wrangler, { dataRoot: ctx2.dataRoot, accountId: record.accountId });
+        await ctx2.deps.deploy.deployWorker(ctx2.wrangler, { dataRoot: ctx2.dataRoot, accountId: record.accountId, retry: retryOf(ctx2) });
         ctx2.setCloud({ lastDeployedAt: NOW(), bundleHash: setupSteps.bundleHash(ctx2.dataRoot) });
         return { message: `Live at ${record.url}` };
       },
@@ -499,7 +499,7 @@ async function commandDeploy(ctx) {
       title: 'Checking the deployment',
       async run(ctx2) {
         const token = randomSecret();
-        await cloud.putSecrets(ctx2.wrangler, { dataRoot: ctx2.dataRoot, accountId: record.accountId, secrets: { TRANSFER_TOKEN: token } });
+        await cloud.putSecrets(ctx2.wrangler, { dataRoot: ctx2.dataRoot, accountId: record.accountId, secrets: { TRANSFER_TOKEN: token }, retry: retryOf(ctx2) });
         ctx2.setTransferToken(token);
         // A secret write is not live at the edge instantly: the Worker answers
         // its status route a moment after the deploy, not during it.
@@ -551,7 +551,7 @@ async function commandMigrate(ctx) {
       id: 'migrate-apply',
       title: 'Applying database migrations',
       async run(ctx2) {
-        await ctx2.deps.deploy.applyMigrations(ctx2.wrangler, { dataRoot: ctx2.dataRoot, accountId: record.accountId, remote: true });
+        await ctx2.deps.deploy.applyMigrations(ctx2.wrangler, { dataRoot: ctx2.dataRoot, accountId: record.accountId, remote: true, retry: retryOf(ctx2) });
         return { message: 'Database is up to date' };
       },
       async verify() { return true; },
@@ -984,6 +984,7 @@ async function commandOwner(ctx) {
           dataRoot: ctx2.dataRoot,
           accountId: record.accountId,
           secrets: { OWNER_LINK_SECRET: secret },
+          retry: retryOf(ctx2),
         });
         ctx2.saveSecrets({ ...stored, ownerLinkSecret: secret });
         ctx2.setCloud({ ownerSecretRotatedAt: NOW() });

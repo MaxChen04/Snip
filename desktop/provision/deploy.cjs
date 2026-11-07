@@ -121,17 +121,99 @@ function classifyWranglerFailure(result, { authHint = true } = {}) {
   return null;
 }
 
-async function deployWorker(wrangler, { dataRoot, accountId, onOutput }) {
+// ---------- transient Cloudflare failures ----------
+//
+// Load, replication lag and edge-level hiccups answer with a 5xx, a 429 or one of
+// these API codes, and the identical request works seconds later. They say
+// nothing about this install, so retrying is right; a sign-in or permission
+// failure is not, because no amount of waiting grants access.
+
+/** Codes proven transient on a live account; 7403 reports itself as "not authorized". */
+const TRANSIENT_API_CODES = [7403, 10013];
+const AUTH_OR_PERMISSION = /authentication error|not authenticated|not logged in|wrangler login|permission|not authorized|unauthorized|forbidden|access denied|\b10000\b|\b40[13]\b/i;
+const NETWORK_FAILURE = /\b(?:ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|EPIPE)\b|socket hang up|fetch failed|network is unreachable|timed out/i;
+// "HTTP status 502", "status code 500", "HTTP 503": a status number after the
+// word that introduces it, never a bare number that could be part of a filename.
+const HTTP_STATUS = /\b(?:http|status)(?:\s+(?:status|code))?\s*[:=]?\s*(429|5\d\d)\b/i;
+const HTTP_REASON = /\b(429|5\d\d)\b\s*(?:too many requests|internal server error|bad gateway|service unavailable|gateway time-?out)\b/i;
+
+/** Why a failed wrangler run is worth retrying, or null when it is not. */
+function transientReason(result) {
+  const text = `${result.stdout || ''}${result.stderr || ''}`;
+  if (!text) return null;
+  for (const code of TRANSIENT_API_CODES) {
+    if (new RegExp(`\\b${code}\\b`).test(text)) return `Cloudflare code ${code}`;
+  }
+  // Auth and permission failures are final, and they are checked before the
+  // HTTP status because a 5xx response can still carry a permission message.
+  if (classifyWranglerFailure(result)) return null;
+  if (AUTH_OR_PERMISSION.test(text)) return null;
+  const status = text.match(HTTP_STATUS) || text.match(HTTP_REASON);
+  if (status) return `HTTP ${status[1]}`;
+  if (/\b429\b|too many requests|rate limit/i.test(text)) return 'HTTP 429';
+  if (/internal server error|service unavailable|bad gateway|gateway time-?out/i.test(text)) return 'a Cloudflare 5xx';
+  if (NETWORK_FAILURE.test(text)) return 'a network error';
+  return null;
+}
+
+const RETRY_ATTEMPTS = 4;
+const RETRY_DELAYS_MS = [800, 2500, 6000];
+
+const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Run one wrangler command, retrying only a transient Cloudflare failure.
+ * Only idempotent operations use this: `deploy`, `d1 migrations apply` and
+ * `secret bulk`. A repeated `d1 create` could leave an orphan, so it never is.
+ * A permanent failure is returned untouched, so the caller's classifier still
+ * names it.
+ */
+async function runTransient(wrangler, args, options, retry = {}) {
+  const attempts = retry.attempts || RETRY_ATTEMPTS;
+  const delays = retry.delaysMs || RETRY_DELAYS_MS;
+  const sleep = retry.sleep || defaultSleep;
+  let result = null;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    result = await wrangler.run(args, options);
+    if (result.ok) return result;
+    const reason = transientReason(result);
+    if (!reason) return result;
+    if (attempt === attempts) return { ...result, transient: { reason, attempts } };
+    const delayMs = delays[Math.min(attempt - 1, delays.length - 1)];
+    if (retry.onRetry) {
+      try { retry.onRetry({ attempt, attempts, reason, delayMs }); } catch { /* a progress line never fails a step */ }
+    }
+    await sleep(delayMs);
+  }
+  return result;
+}
+
+/** The failure after the last retry: plain, and explicitly worth trying again. */
+function transientError(result, fallback) {
+  const transient = result.transient || {};
+  return new StepError('CLOUDFLARE_TEMPORARY', 'Cloudflare had a temporary problem, try again.', {
+    hint: 'Nothing is wrong with this Mac or this library; run the same command again in a minute.',
+    retryable: true,
+    data: {
+      reason: transient.reason || 'a temporary Cloudflare error',
+      attempts: transient.attempts || 1,
+      output: failureMessage(result, fallback),
+    },
+  });
+}
+
+async function deployWorker(wrangler, { dataRoot, accountId, onOutput, retry }) {
   const file = configPath(dataRoot);
-  const result = await wrangler.run(['deploy', '--config', file], {
+  const result = await runTransient(wrangler, ['deploy', '--config', file], {
     cwd: path.dirname(file),
     env: { CLOUDFLARE_ACCOUNT_ID: accountId },
     onStdout: onOutput,
     onStderr: onOutput,
-  });
+  }, retry);
   if (!result.ok) {
     const known = classifyWranglerFailure(result);
     if (known) throw known;
+    if (result.transient) throw transientError(result, 'wrangler deploy exited non-zero');
     throw new StepError('DEPLOY_FAILED', 'The Worker deploy failed.', {
       hint: 'Fix the Cloudflare error above, then run the same command again. Completed steps are skipped.',
       data: { output: failureMessage(result, 'wrangler deploy exited non-zero') },
@@ -147,16 +229,20 @@ async function dryRunDeploy(wrangler, { dataRoot, accountId, outdir }) {
   return wrangler.run(args, { cwd: path.dirname(file), env: { CLOUDFLARE_ACCOUNT_ID: accountId } });
 }
 
-async function applyMigrations(wrangler, { dataRoot, accountId, remote = true, local = false, persistTo, config }) {
+async function applyMigrations(wrangler, { dataRoot, accountId, remote = true, local = false, persistTo, config, retry }) {
   const file = config || configPath(dataRoot);
   const args = ['d1', 'migrations', 'apply', 'DB', '--config', file];
   if (remote) args.push('--remote');
   if (local) args.push('--local');
   if (persistTo) args.push('--persist-to', persistTo);
-  const result = await wrangler.run(args, { cwd: path.dirname(file), env: { CLOUDFLARE_ACCOUNT_ID: accountId } });
+  // A local apply talks to a bundled Miniflare, not Cloudflare, so there is
+  // nothing transient to wait out and a SQL error must keep its own message.
+  const options = { cwd: path.dirname(file), env: { CLOUDFLARE_ACCOUNT_ID: accountId } };
+  const result = remote ? await runTransient(wrangler, args, options, retry || {}) : await wrangler.run(args, options);
   if (!result.ok) {
     const known = classifyWranglerFailure(result);
     if (known) throw known;
+    if (result.transient) throw transientError(result, 'wrangler d1 migrations apply exited non-zero');
     throw new StepError('MIGRATE_FAILED', 'The database migration failed.', {
       hint: 'Fix the error above, then run the same command again. Migrations are additive and safe to re-run.',
       data: { output: failureMessage(result, 'wrangler d1 migrations apply exited non-zero') },
@@ -330,6 +416,9 @@ module.exports = {
   prepareDeployLayout,
   readDeployConfig,
   remoteQuery,
+  runTransient,
   runtimeProblem,
   runtimeSources,
+  transientError,
+  transientReason,
 };

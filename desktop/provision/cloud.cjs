@@ -8,7 +8,7 @@ const path = require('node:path');
 const { StepError } = require('./engine.cjs');
 const { parseJsonLoose } = require('./deps.cjs');
 const { BUCKET_NAME, D1_NAME, KV_NAME, WORKER_NAME, parseCreatedId } = require('./lib.cjs');
-const { classifyWranglerFailure } = require('./deploy.cjs');
+const { classifyWranglerFailure, runTransient, transientError } = require('./deploy.cjs');
 
 function wranglerFailure(result, code, message, hint) {
   const known = classifyWranglerFailure(result);
@@ -116,7 +116,7 @@ async function listSecrets(wrangler, { dataRoot, accountId }) {
 }
 
 /** Put several secrets in one request, from a 0600 temp file that is always removed. */
-async function putSecrets(wrangler, { dataRoot, accountId, secrets }) {
+async function putSecrets(wrangler, { dataRoot, accountId, secrets, retry }) {
   const names = Object.keys(secrets);
   if (!names.length) return { names: [] };
   const { configPath } = require('./deploy.cjs');
@@ -124,8 +124,12 @@ async function putSecrets(wrangler, { dataRoot, accountId, secrets }) {
   const temp = path.join(fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'snip-secrets-')), 'secrets.json');
   try {
     fs.writeFileSync(temp, JSON.stringify(secrets), { mode: 0o600 });
-    const result = await wrangler.run(['secret', 'bulk', temp, '--config', configPath(dataRoot)], { cwd: dir, env: { CLOUDFLARE_ACCOUNT_ID: accountId } });
-    if (!result.ok) throw wranglerFailure(result, 'SECRET_PUT_FAILED', 'Could not save the Worker secrets.', 'Check the Cloudflare sign-in, then try again.');
+    // Writing the same secret twice is harmless, so a transient failure is retried.
+    const result = await runTransient(wrangler, ['secret', 'bulk', temp, '--config', configPath(dataRoot)], { cwd: dir, env: { CLOUDFLARE_ACCOUNT_ID: accountId } }, retry);
+    if (!result.ok) {
+      if (result.transient) throw transientError(result, 'wrangler secret bulk exited non-zero');
+      throw wranglerFailure(result, 'SECRET_PUT_FAILED', 'Could not save the Worker secrets.', 'Check the Cloudflare sign-in, then try again.');
+    }
   } finally {
     fs.rmSync(path.dirname(temp), { recursive: true, force: true });
   }
