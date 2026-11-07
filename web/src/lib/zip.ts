@@ -1,4 +1,4 @@
-// A minimal ZIP writer (stored, no compression). Screenshots and GIFs are already
+// A minimal ZIP writer (stored, no compression). Screenshots and recordings are already
 // compressed, so storing them keeps the export fast and dependency-free.
 
 const CRC_TABLE = (() => {

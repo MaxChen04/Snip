@@ -106,11 +106,15 @@ app.get("/files/*", async (c) => {
   if (!KEY_RE.test(key) || key.includes("..")) return c.notFound()
   const signedOk = await verifyFileSig(c.env, key, c.req.query("exp"), c.req.query("sig"))
   if (!signedOk && !(await getSessionLogin(c))) return c.json({ error: "unauthorized" }, 401)
-  const obj = await c.env.FILES.get(key)
+  // Byte ranges, which Safari needs before it will play a video. R2 reads the Range header itself.
+  const ranged = c.req.header("range")?.startsWith("bytes=")
+  // A range R2 can't satisfy is ignored and the whole file sent, which HTTP allows.
+  const obj = ranged ? await c.env.FILES.get(key, { range: c.req.raw.headers }).catch(() => c.env.FILES.get(key)) : await c.env.FILES.get(key)
   if (!obj) return c.notFound()
   const headers = new Headers()
   obj.writeHttpMetadata(headers)
   headers.set("etag", obj.httpEtag)
+  headers.set("accept-ranges", "bytes")
   headers.set("cache-control", "private, max-age=86400, immutable")
   headers.set("x-content-type-options", "nosniff")
   if (key.endsWith(".html")) {
@@ -119,6 +123,14 @@ app.get("/files/*", async (c) => {
   }
   if (key.endsWith(".json") && c.req.query("download")) {
     headers.set("content-disposition", `attachment; filename="${key.split("/").slice(-2).join("-")}"`)
+  }
+  const range = ranged && obj.body ? obj.range : undefined
+  if (range) {
+    const start = "suffix" in range ? Math.max(0, obj.size - range.suffix) : (range.offset ?? 0)
+    const length = Math.min(obj.size - start, "suffix" in range ? obj.size - start : (range.length ?? obj.size - start))
+    headers.set("content-range", `bytes ${start}-${start + length - 1}/${obj.size}`)
+    headers.set("content-length", String(length))
+    return new Response(obj.body, { status: 206, headers })
   }
   return new Response(obj.body, { headers })
 })

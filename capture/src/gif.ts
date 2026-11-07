@@ -6,7 +6,10 @@ sharp.cache(false)
 sharp.concurrency(1)
 
 export interface Frame {
-  /** Absent once a scroll frame has been streamed into its GIF; those frames keep a `still` where sampled. */
+  /**
+   * The frame image: PNG, or JPEG for scroll frames recorded as video. Absent once a scroll frame has been
+   * streamed into its recording; those frames keep a `still` where sampled.
+   */
   png?: Buffer
   /** ms this frame stays on screen */
   delay: number
@@ -22,6 +25,21 @@ export interface Frame {
 /** Width and height from a PNG header. */
 export const pngSize = (buf: Buffer) => ({ width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) })
 
+/** Width and height of a PNG or JPEG (from its start-of-frame marker). */
+export function imageSize(buf: Buffer) {
+  if (buf[0] !== 0xff) return pngSize(buf)
+  let at = 2
+  while (at + 9 < buf.length) {
+    if (buf[at] !== 0xff) throw new Error("Bad JPEG marker")
+    const marker = buf[at + 1]!
+    // SOF0-SOF15, except DHT (c4), JPG (c8) and DAC (cc)
+    if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc)
+      return { width: buf.readUInt16BE(at + 7), height: buf.readUInt16BE(at + 5) }
+    at += 2 + buf.readUInt16BE(at + 2)
+  }
+  throw new Error("JPEG has no frame header")
+}
+
 /**
  * Builds a looping GIF from PNG frames as they arrive. libvips downscales, quantizes (libimagequant) and
  * compresses each frame natively on a worker thread, about twice as fast as doing it in JavaScript and with a
@@ -35,7 +53,7 @@ export function gifWriter(opts: { scale?: number } = {}) {
   let height = 0
   return {
     async add(png: Buffer, delay: number) {
-      const size = pngSize(png)
+      const size = imageSize(png)
       const w = Math.floor(size.width / scale)
       const h = Math.floor(size.height / scale)
       if (width && (w !== width || h !== height)) return

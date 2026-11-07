@@ -203,7 +203,7 @@ function PrivacySection() {
   const systems = [
     { k: "Worker", v: "Gallery, API and the /mcp endpoint", Icon: Server },
     { k: "D1", v: "References, pages, animations, collections", Icon: Database },
-    { k: "R2", v: "Screenshots, GIFs, HTML snapshots, styles", Icon: HardDrive },
+    { k: "R2", v: "Screenshots, recordings, HTML snapshots, styles", Icon: HardDrive },
     { k: "KV", v: "OAuth tokens for connected agents", Icon: KeyRound },
     { k: "Machine", v: "Runs the capture agent. Queued captures wait until it is running.", Icon: Monitor },
   ]
@@ -353,9 +353,9 @@ function ConnectSection() {
         ["get_reference", "An overview, then pages, animations or tokens in smaller parts"],
         ["get_page", "One page with an inline screenshot"],
         ["get_page_styles", "Computed styles filtered by element, text or section"],
-        ["get_animation", "A contact sheet, sampled frame or original GIF"],
+        ["get_animation", "A contact sheet or sampled frame, plus a link to the recording"],
         ["search_pages", "Pages across references, or every page in a collection"],
-        ["search_animations", "Scroll and hover GIFs across references"],
+        ["search_animations", "Scroll and hover recordings across references"],
         ["get_capture_status", "Capture progress and whether your capture agent is online"],
         ["list_collections", "Collections with counts"],
       ],
@@ -408,7 +408,7 @@ function ConnectSection() {
 
 function LimitsSection() {
   const stats = [
-    { k: "R2 storage", v: "10 GB", d: "Roughly 1,500 to 3,000 captured pages" },
+    { k: "R2 storage", v: "10 GB", d: "Roughly 3,000 to 6,000 captured pages" },
     { k: "D1 database", v: "5 GB", d: "References, pages and collections" },
     { k: "Worker requests", v: "100k", d: "Per day, gallery and agents combined" },
   ]
@@ -416,7 +416,7 @@ function LimitsSection() {
     ["Page height", "Full-page screenshots stop at 16,000 px, Chromium’s texture limit."],
     ["Crawl scope", "Crawls stay on one hostname, with or without www, and ignore query strings."],
     ["Logins and bot walls", "Captures show what an anonymous browser sees, unless you tick “Use my saved sign-in” and point STORAGE_STATE at a Playwright sign-in file. Obvious cookie banners are dismissed."],
-    ["Hover GIFs", "Up to 6 elements per page. Shared nav and footer effects are recorded once per site."],
+    ["Hover recordings", "Up to 6 elements per page. Shared nav and footer effects are recorded once per site."],
   ]
   return (
     <Section id="limits" title="Limits and headroom" intro="What the free plan holds, and what a capture can’t see.">

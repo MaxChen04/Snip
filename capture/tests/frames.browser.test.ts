@@ -6,7 +6,7 @@ import sharp from "sharp"
 import type { SnipApi } from "../src/api"
 import { recordScroll, screencast } from "../src/capture"
 import type { Frame } from "../src/gif"
-import { buildStills, closeRenderer, pickStills, sampleIndexes } from "../src/sheet"
+import { buildStills, closeRenderer, pickStills, renderer, sampleIndexes } from "../src/sheet"
 
 const BAND = 400
 const COLORS = [[230, 30, 30], [30, 160, 60], [40, 70, 220], [240, 200, 20], [150, 40, 200], [20, 190, 200], [250, 120, 20], [90, 90, 90], [200, 60, 140], [60, 120, 40]] as const
@@ -104,24 +104,46 @@ test("stills converted together keep each frame's own image, in order", { timeou
   }
 })
 
-test("scroll recording streams frames into a half-size GIF and keeps full-size stills where sampled", { timeout: 60_000 }, async () => {
+test("scroll recording streams frames into a half-size video and keeps full-size stills where sampled", { timeout: 60_000 }, async () => {
   const browser = await chromium.launch({ headless: true })
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
     await page.setContent(`<style>body{margin:0}div{height:${BAND}px}</style>${COLORS.map(([r, g, b]) => `<div style="background:rgb(${r},${g},${b})"></div>`).join("")}`)
-    const { frames, gif } = await recordScroll(page, true)
+    const { frames, recording } = await recordScroll(page, true)
     const travel = COLORS.length * BAND - 900
     assert.equal(frames.length, Math.ceil(travel / 40) + 1)
     assert.deepEqual(frames.flatMap((f, i) => (f.still ? [i] : [])), sampleIndexes(frames.length))
     assert.ok(frames.every((f) => !f.png), "frames are dropped once encoded")
     assert.deepEqual([frames[0]!.delay, frames.at(-1)!.delay], [700, 1200])
-    assert.deepEqual([gif?.width, gif?.height, gif?.bytes.toString("latin1", 0, 6)], [720, 450, "GIF89a"])
-    // Each GIF frame was painted at its own scroll position: the band at scrollY + 20 CSS px (10 GIF px).
+    assert.deepEqual([recording?.ext, recording?.width, recording?.height], ["webm", 720, 450])
+    // Each video frame was painted at its own scroll position: the band at scrollY + 20 CSS px (10 video px).
+    const starts: number[] = []
+    let t = 0
+    for (const f of frames) {
+      starts.push(t)
+      t += f.delay
+    }
+    const player = await renderer(browser)
+    const pixels = await player.evaluate(`(async ({ data, times }) => {
+      const video = document.createElement("video")
+      video.muted = true
+      video.src = URL.createObjectURL(new Blob([Uint8Array.from(atob(data), (c) => c.charCodeAt(0))], { type: "video/webm" }))
+      await new Promise((resolve) => { video.onloadeddata = resolve })
+      const canvas = Object.assign(document.createElement("canvas"), { width: video.videoWidth, height: video.videoHeight })
+      const g = canvas.getContext("2d")
+      const out = []
+      for (const time of times) {
+        await new Promise((resolve) => { video.onseeked = resolve; video.currentTime = time })
+        g.drawImage(video, 0, 0)
+        out.push([...g.getImageData(10, 10, 1, 1).data.slice(0, 3)])
+      }
+      return { duration: video.duration, out }
+    })(${JSON.stringify({ data: recording!.bytes.toString("base64"), times: starts.map((s) => (s + 5) / 1000) })})`) as { duration: number; out: number[][] }
+    assert.ok(Math.abs(pixels.duration * 1000 - t) < 50, `duration ${pixels.duration}s, expected ${t}ms`)
     for (const [i, f] of frames.entries()) {
-      const { data } = await sharp(gif!.bytes, { page: i }).removeAlpha().raw().toBuffer({ resolveWithObject: true })
-      const px = [...data.subarray((10 * 720 + 10) * 3, (10 * 720 + 10) * 3 + 3)]
+      const px = pixels.out[i]!
       const expected = COLORS[Math.floor((f.scrollY! + 20) / BAND)]!
-      assert.ok(px.every((v, c) => Math.abs(v - expected[c]!) < 12), `GIF frame ${i} at y=${f.scrollY} shows ${px}, expected ${expected}`)
+      assert.ok(px.every((v, c) => Math.abs(v - expected[c]!) < 16), `video frame ${i} at y=${f.scrollY} shows ${px}, expected ${expected}`)
     }
     // Each still shows the page at its frame's scroll position: the band at scrollY + 20 CSS px.
     for (const f of frames.filter((f) => f.still)) {
@@ -139,6 +161,7 @@ test("scroll recording streams frames into a half-size GIF and keeps full-size s
       assert.ok(px.every((v, c) => Math.abs(v - expected[c]!) < 12), `still at y=${f.scrollY} shows ${px}, expected ${expected}`)
     }
   } finally {
+    await closeRenderer()
     await browser.close()
   }
 })

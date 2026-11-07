@@ -7,7 +7,7 @@ import { useAddFlow } from "@/components/add-flow"
 import { diagnoseCaptureError, RetryCaptureButton } from "@/components/capture-retry"
 import { CaptureControls, captureLabel } from "@/components/capture-controls"
 import { CollectionPicker, CollectionThumb, collectionCountLabel } from "@/components/collection-picker"
-import { GifTile } from "@/components/reference-page"
+import { RecordingTile } from "@/components/reference-page"
 import { SiteIcon } from "@/components/site-icon"
 import { ActionCircle, TopBar, type View } from "@/components/top-bar"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
@@ -439,7 +439,7 @@ function FolderMeta({ r }: { r: Reference }) {
   return (
     <span className="mt-0.5 max-w-full truncate text-2xs text-ink-10">
       {r.domain} · {r.pageCount} {r.pageCount === 1 ? "page" : "pages"}
-      {r.animationCount > 0 && ` · ${r.animationCount} ${r.animationCount === 1 ? "GIF" : "GIFs"}`}
+      {r.animationCount > 0 && ` · ${r.animationCount} ${r.animationCount === 1 ? "recording" : "recordings"}`}
     </span>
   )
 }
@@ -506,7 +506,7 @@ function AnimationsGrid({ filters, onCount }: { filters: Filters; onCount: (n: n
             label={`${a.kind === "scroll" ? "Scroll" : "Hover"} · ${a.label || a.reference.domain}`}
             domain={a.reference.domain}
           >
-            <GifTile a={a} bare />
+            <RecordingTile a={a} bare />
           </Tile>
         ))}
       </Masonry>

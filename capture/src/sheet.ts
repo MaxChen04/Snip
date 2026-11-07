@@ -1,7 +1,7 @@
 import type { Browser, Page } from "playwright"
 import type { AnimationFrame, AnimationMeta } from "../../web/shared/types"
 import type { SnipApi } from "./api"
-import { pngSize, type Frame } from "./gif"
+import { imageSize, type Frame } from "./gif"
 
 // Still representations of an animation, for models that can't watch a GIF (many only read the first frame).
 // Frames are sampled uniformly; the count and sheet width are settings to evaluate, not a proven recipe.
@@ -22,16 +22,22 @@ export function pickStills(frames: Frame[]) {
   return [...new Set(sampleIndexes(frames.length).map(nearest))]
 }
 
-// One page renders every still and contact sheet. A page per image started a renderer process each time.
+// One helper page renders every still and contact sheet and encodes recordings (video.ts). A page per image
+// started a renderer process each time. It is served at http://localhost/ (answered here, never fetched) so it
+// is a secure context, which WebCodecs needs.
+const HELPER_URL = "http://localhost/snip-helper"
 let rendererPage: Page | null = null
-async function renderer(browser: Browser) {
+export async function renderer(browser: Browser) {
   if (rendererPage && !rendererPage.isClosed() && rendererPage.context().browser() === browser && browser.isConnected()) return rendererPage
   const ctx = await browser.newContext({ viewport: { width: 800, height: 600 }, deviceScaleFactor: 1 })
-  rendererPage = await ctx.newPage()
-  return rendererPage
+  const page = await ctx.newPage()
+  await page.route(HELPER_URL, (route) => route.fulfill({ contentType: "text/html", body: "<!doctype html><title>snip</title>" }))
+  await page.goto(HELPER_URL)
+  rendererPage = page
+  return page
 }
 
-/** Close the still renderer once a page's stills are done, so its process doesn't idle through the next capture. */
+/** Close the helper page once a page's stills are done, so its process doesn't idle through the next capture. */
 export async function closeRenderer() {
   const page = rendererPage
   rendererPage = null
@@ -103,7 +109,7 @@ export async function buildStills(
     t += Math.max(20, Math.round(f.delay))
   }
   const picked = pickStills(frames)
-  const sizeOf = (f: Frame) => f.still ?? pngSize(f.png!) // frames without a png always carry a still
+  const sizeOf = (f: Frame) => f.still ?? imageSize(f.png!) // frames without a png always carry a still
   const size = sizeOf(frames[picked[0]!]!)
   const fits = (f: Frame) => sizeOf(f).width === size.width && sizeOf(f).height === size.height
   const convert = picked.filter((i) => fits(frames[i]!) && !frames[i]!.still)

@@ -55,4 +55,4 @@ Existing captures and saved files are kept across upgrades.
 
 ## Free-tier headroom
 
-R2 gives 10 GB (roughly 1,500 to 3,000 captured pages, depending on page length and GIFs), D1 5 GB, Workers 100k requests a day. The account menu shows how much of the R2 free tier you're using.
+R2 gives 10 GB (roughly 3,000 to 6,000 captured pages, depending on page length and motion), D1 5 GB, Workers 100k requests a day. The account menu shows how much of the R2 free tier you're using.

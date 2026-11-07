@@ -36,6 +36,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { cn } from "@/lib/utils"
 import { api, fileUrl, type Animation, type Page, type Reference } from "@/lib/api"
+import { isVideoKey } from "../../shared/types"
 import { useCollections } from "@/lib/collections"
 import { referenceViewUrl, useDesktopState } from "@/hooks/use-desktop-state"
 import { usePoll } from "@/hooks/use-poll"
@@ -165,8 +166,8 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
     )
   const selectedPages = pages.filter((p) => sel.pages.includes(p.id))
   const current = pages.find((p) => p.id === openPage) ?? null
-  const scrollGifs = animations.filter((a) => a.kind === "scroll")
-  const hoverGifs = animations.filter((a) => a.kind === "hover")
+  const scrollRecordings = animations.filter((a) => a.kind === "scroll")
+  const hoverRecordings = animations.filter((a) => a.kind === "hover")
 
   const inCollections = collections.filter((c) => r.collectionIds.includes(c.id))
 
@@ -198,7 +199,7 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
           <h1 className="mt-1 text-xl font-medium tracking-tight text-balance">{r.title || r.domain}</h1>
           <a href={r.url} target="_blank" rel="noreferrer" className="mt-1 inline-block text-xs text-ink-11 hover:text-foreground">
             {r.domain} · {r.pageCount} {r.pageCount === 1 ? "page" : "pages"}
-            {r.animationCount > 0 && ` · ${r.animationCount} ${r.animationCount === 1 ? "GIF" : "GIFs"}`}
+            {r.animationCount > 0 && ` · ${r.animationCount} ${r.animationCount === 1 ? "recording" : "recordings"}`}
             {optionLabel(r) && ` · ${optionLabel(r)}`}
           </a>
           <div className="flex justify-center">
@@ -359,8 +360,8 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
         {tab === "animations" && (
           <div className="space-y-10">
             {!animations.length && <p className="py-16 text-center text-sm text-muted-foreground">No animations captured yet.</p>}
-            {scrollGifs.length > 0 && <AnimationSection title="Scroll" items={scrollGifs} pages={pages} selected={sel.animations} selecting={selecting} onToggle={(id) => setSel((x) => ({ ...x, animations: toggleIn(x.animations, id) }))} />}
-            {hoverGifs.length > 0 && <AnimationSection title="Hover" items={hoverGifs} pages={pages} selected={sel.animations} selecting={selecting} onToggle={(id) => setSel((x) => ({ ...x, animations: toggleIn(x.animations, id) }))} />}
+            {scrollRecordings.length > 0 && <AnimationSection title="Scroll" items={scrollRecordings} pages={pages} selected={sel.animations} selecting={selecting} onToggle={(id) => setSel((x) => ({ ...x, animations: toggleIn(x.animations, id) }))} />}
+            {hoverRecordings.length > 0 && <AnimationSection title="Hover" items={hoverRecordings} pages={pages} selected={sel.animations} selecting={selecting} onToggle={(id) => setSel((x) => ({ ...x, animations: toggleIn(x.animations, id) }))} />}
           </div>
         )}
 
@@ -424,7 +425,7 @@ function AnimationSection({
             onClick={selecting ? () => onToggle(a.id) : undefined}
           >
             <SelectCheck on={selected.includes(a.id)} active={selecting} label={`Select ${a.label ?? a.kind} animation`} onToggle={() => onToggle(a.id)} />
-            <GifTile a={a} bare />
+            <RecordingTile a={a} bare />
             <figcaption className="pointer-events-none absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-black/60 to-transparent px-3 pt-8 pb-2 text-2xs text-white opacity-0 transition-opacity group-hover:opacity-100">
               {a.label ? `${a.label} · ` : ""}
               {pageName(a.pageId)}
@@ -436,19 +437,55 @@ function AnimationSection({
   )
 }
 
-export function GifTile({ a, bare }: { a: Animation; bare?: boolean }) {
-  // Hover GIFs are small element crops: show them at natural size, centered, instead of upscaling.
+export function RecordingTile({ a, bare }: { a: Animation; bare?: boolean }) {
+  // Hover recordings are small element crops: show them at natural size, centered, instead of upscaling.
   const small = a.kind === "hover" && a.width < 480
   const frame = bare ? "rounded-lg bg-surface-top shadow-card" : "rounded-xl bg-surface-top shadow-card"
+  const className = small ? "max-w-full rounded-md" : "w-full"
+  const style = small ? { width: a.width } : { aspectRatio: `${a.width}/${a.height}` }
   return (
     <div className={small ? `grid place-items-center overflow-hidden p-8 ${frame}` : `overflow-hidden ${frame}`}>
-      <img
-        src={fileUrl(a.gifKey)}
-        alt={a.label ?? ""}
-        loading="lazy"
-        className={small ? "max-w-full rounded-md" : "w-full"}
-        style={small ? { width: a.width } : { aspectRatio: `${a.width}/${a.height}` }}
-      />
+      {isVideoKey(a.gifKey) ? (
+        <RecordingVideo src={fileUrl(a.gifKey)} label={a.label ?? ""} className={className} style={style} />
+      ) : (
+        <img src={fileUrl(a.gifKey)} alt={a.label ?? ""} loading="lazy" className={className} style={style} />
+      )}
     </div>
+  )
+}
+
+/** A looping, muted recording that only loads and plays while near the viewport, like a lazy GIF. */
+function RecordingVideo({ src, label, className, style }: { src: string | undefined; label: string; className: string; style: React.CSSProperties }) {
+  const ref = useRef<HTMLVideoElement>(null)
+  const [near, setNear] = useState(false)
+  const [loaded, setLoaded] = useState(false) // keep the source once loaded, so scrolling back doesn't refetch
+  useEffect(() => {
+    const video = ref.current
+    if (!video) return
+    const io = new IntersectionObserver(([entry]) => setNear(!!entry?.isIntersecting), { rootMargin: "200px" })
+    io.observe(video)
+    return () => io.disconnect()
+  }, [])
+  useEffect(() => {
+    const video = ref.current
+    if (!video) return
+    if (near) {
+      setLoaded(true)
+      video.play().catch(() => {})
+    } else video.pause()
+  }, [near])
+  return (
+    <video
+      ref={ref}
+      src={near || loaded ? src : undefined}
+      aria-label={label}
+      muted
+      loop
+      playsInline
+      preload="none"
+      disablePictureInPicture
+      className={className}
+      style={style}
+    />
   )
 }
