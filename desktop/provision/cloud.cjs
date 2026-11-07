@@ -31,7 +31,9 @@ async function createD1(wrangler, { accountId }) {
 }
 
 async function listKv(wrangler, { accountId }) {
-  const result = await wrangler.run(['kv', 'namespace', 'list', '--json'], { env: { CLOUDFLARE_ACCOUNT_ID: accountId } });
+  // This wrangler version's `kv namespace list` has no --json flag; it prints a
+  // JSON array after its preamble either way.
+  const result = await wrangler.run(['kv', 'namespace', 'list'], { env: { CLOUDFLARE_ACCOUNT_ID: accountId } });
   if (!result.ok) throw wranglerFailure(result, 'KV_LIST_FAILED', 'Could not list KV namespaces.', 'Check the Cloudflare sign-in, then try again.');
   const parsed = parseJsonLoose(result.stdout);
   if (!Array.isArray(parsed)) throw new StepError('KV_LIST_FAILED', 'Cloudflare returned an unexpected KV list.', { hint: 'Update Snip, then try again.' });

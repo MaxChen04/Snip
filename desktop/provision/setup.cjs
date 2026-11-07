@@ -32,8 +32,10 @@ const deploy = require('./deploy.cjs');
 const local = require('./local.cjs');
 const { mintOwnerLink, ownerSecretHash, startLoopback } = require('./transfer.cjs');
 
+// guard runs before resources: classification is read-only, so it must be able
+// to refuse a foreign Worker without creating a single resource first.
 const ENABLE_STEPS = [
-  'preflight', 'cloudflare-auth', 'account', 'url', 'r2', 'resources', 'guard', 'config',
+  'preflight', 'cloudflare-auth', 'account', 'url', 'r2', 'guard', 'resources', 'config',
   'schema', 'deploy', 'secrets', 'quiesce', 'release', 'export', 'import', 'verify', 'owner', 'finish',
 ];
 
@@ -86,9 +88,11 @@ async function classifyAccount(ctx) {
 
   // L-C: a legacy deploy config on this Mac naming this install.
   const legacy = readLegacyDeployConfig(ctx.dataRoot);
+  // L-C: a legacy deploy config on this Mac naming this install. It is local
+  // evidence, so it is accepted only when it names the same database or origin
+  // the account actually has; a stale config cannot claim someone else's Worker.
   const legacyMatches = Boolean(legacy && (
     (legacy.d1 && database && legacy.d1 === database.id)
-    || (legacy.kv && (ctx.cloud.kvId === legacy.kv))
     || (legacy.url && ctx.cloud.url && legacy.url === ctx.cloud.url)
   ));
 
@@ -426,6 +430,21 @@ function guardStep() {
       } else if (facts.outcome === 'adopt-empty') {
         ctx.setWork({ adopted: 'empty' });
         ctx.setCloud({ adoptedAt: new Date().toISOString(), adoptedFrom: 'legacy', adoptedLibrary: facts.counts });
+      } else if (facts.outcome === 'resume' && ctx.state().mode !== 'enabling') {
+        // Re-enabling a detached copy of this Mac's own library. The cloud copy
+        // is the one that kept running, so it is adopted rather than overwritten
+        // by a fresh import; the local library stays exactly where it is.
+        ctx.setWork({ adopted: 'existing' });
+        ctx.setCloud({
+          adoptedAt: new Date().toISOString(),
+          adoptedFrom: 'detached',
+          adoptedLibrary: facts.counts,
+          move: { status: 'skipped', reason: 'detached' },
+        });
+        ctx.save((next) => {
+          next.snapshot = { ...(next.snapshot || {}), keptLocal: true };
+          return next;
+        });
       }
 
       const record = ctx.state().cloud || {};
@@ -1076,8 +1095,8 @@ function setupSteps() {
     accountStep(),
     urlStep(),
     r2Step(),
-    resourcesStep(),
     guardStep(),
+    resourcesStep(),
     configStep(),
     schemaStep(),
     deployStep(),

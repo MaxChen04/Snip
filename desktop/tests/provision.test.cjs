@@ -87,7 +87,7 @@ function fakeWrangler(model) {
       model.d1.push(db);
       return text(`✅ Successfully created DB '${db.name}'\n\ndatabase_id = "${db.id}"\n`);
     }
-    if (line === 'kv namespace list --json') return json(model.kv.map((ns) => ({ id: ns.id, title: ns.title })));
+    if (line === 'kv namespace list') return json(model.kv.map((ns) => ({ id: ns.id, title: ns.title })));
     if (args[0] === 'kv' && args[1] === 'namespace' && args[2] === 'create') {
       const ns = { id: crypto.randomBytes(16).toString('hex'), title: args[3] };
       model.kv.push(ns);
@@ -968,4 +968,104 @@ test('npm run setup:cloudflare forwards its arguments instead of forcing setup',
   const unknown = spawnSync(process.execPath, [path.join(__dirname, '../../scripts/cloudflare.mjs'), 'nonsense'], { encoding: 'utf8' });
   assert.equal(unknown.status, 4);
   assert.match(unknown.stderr, /Unknown command nonsense/);
+});
+
+test('snapshot restore moves a state snapshot back and refuses in cloud mode', async () => {
+  const library = fakeLibrary();
+  const live = path.join(library.root, 'web/.wrangler/state');
+  fs.mkdirSync(path.join(live, 'v3/d1'), { recursive: true });
+  fs.writeFileSync(path.join(live, 'v3/d1/marker'), 'cloud-copy');
+  const kept = path.join(library.root, 'backups/cloud-move-2026-11-06');
+  fs.mkdirSync(path.join(kept, 'v3/d1'), { recursive: true });
+  fs.writeFileSync(path.join(kept, 'v3/d1/marker'), 'snapshot');
+  stateModule.updateState(library.root, (next) => {
+    next.mode = 'local';
+    next.snapshot = { path: 'backups/cloud-move-2026-11-06', takenAt: new Date().toISOString(), kind: 'state' };
+    return next;
+  });
+  const emitter = collectedEmitter();
+  const ctx = createContext({ root: library.root, dataRoot: library.root, flags: { snapshotAction: 'restore' }, emit: emitter.emit, api: {}, wrangler: { bin: '/x', run: async () => ({ ok: true }) }, deps: { fetch: async () => { throw new Error('no network'); } } });
+  await commands.commandSnapshot(ctx);
+  assert.equal(fs.readFileSync(path.join(live, 'v3/d1/marker'), 'utf8'), 'snapshot');
+  // The replaced copy is kept, never deleted.
+  const backups = fs.readdirSync(path.join(library.root, 'backups')).filter((name) => name.startsWith('replaced-'));
+  assert.equal(backups.length, 1);
+  assert.equal(fs.readFileSync(path.join(library.root, 'backups', backups[0], 'v3/d1/marker'), 'utf8'), 'cloud-copy', 'the replaced copy must be kept for recovery');
+
+});
+
+test('snapshot restore refuses in cloud mode and delete clears the record', async () => {
+  const library = fakeLibrary();
+  const kept = path.join(library.root, 'backups/cloud-move-x');
+  fs.mkdirSync(kept, { recursive: true });
+  fs.writeFileSync(path.join(kept, 'dump.sql'), '');
+  stateModule.updateState(library.root, (next) => {
+    next.mode = 'cloud';
+    next.snapshot = { path: 'backups/cloud-move-x', takenAt: new Date().toISOString() };
+    return next;
+  });
+  const emitter = collectedEmitter();
+  const ctx = createContext({ root: library.root, dataRoot: library.root, flags: { snapshotAction: 'restore' }, emit: emitter.emit, api: {}, wrangler: { bin: '/x', run: async () => ({ ok: true }) }, deps: { fetch: async () => { throw new Error('no network'); } } });
+  await assert.rejects(() => commands.commandSnapshot(ctx), (error) => error.code === 'IN_CLOUD');
+  const del = createContext({ root: library.root, dataRoot: library.root, flags: { snapshotAction: 'delete' }, emit: emitter.emit, api: {}, wrangler: { bin: '/x', run: async () => ({ ok: true }) }, deps: { fetch: async () => { throw new Error('no network'); } } });
+  await commands.commandSnapshot(del);
+  assert.equal(stateModule.readState(library.root).snapshot, null);
+  assert.equal(fs.existsSync(kept), false);
+});
+
+test('no resource is created before guard has classified the account', async () => {
+  const CREATES = ['d1 create', 'kv namespace create', 'r2 bucket create'];
+  for (const scenario of ['fresh', 'foreign', 'adopt-empty', 'adopt-existing']) {
+    const model = buildModel(scenario === 'fresh' ? {} : {
+      deployed: true,
+      schema: true,
+      bindings: [{ name: 'DB' }, { name: 'FILES' }, { name: 'OAUTH_KV' }],
+      d1: [{ id: 'legacy-d1', name: 'snip', tables: 6 }],
+      remoteRows: { refs: scenario === 'adopt-existing' ? 1284 : 0, pages: scenario === 'adopt-existing' ? 9120 : 0, collections: 0 },
+      ...(scenario === 'foreign' ? { schema: false, bindings: [{ name: 'OTHER' }] } : {}),
+    });
+    const wrangler = fakeWrangler(model);
+    const cloudFake = fakeCloud(model);
+    let guardSeen = false;
+    const emitter = collectedEmitter();
+    const originalStep = emitter.emit.step;
+    emitter.emit.step = (step, status, message, extra) => {
+      if (step === 'guard') guardSeen = true;
+      return originalStep(step, status, message, extra);
+    };
+    const createsBeforeGuard = [];
+    const spyRun = wrangler.run;
+    wrangler.run = async (args, options) => {
+      const line = args.join(' ');
+      if (!guardSeen && CREATES.some((prefix) => line.startsWith(prefix))) createsBeforeGuard.push(line);
+      return spyRun(args, options);
+    };
+    const ctx = createContext({
+      root: model.root,
+      dataRoot: model.root,
+      flags: { login: 'tester', domain: 'tester', noOpen: true, adoptExisting: scenario === 'adopt-existing' },
+      emit: emitter.emit,
+      api: fakeApi(model),
+      wrangler,
+      deps: {
+        fetch: cloudFake.fetch,
+        library: fakeLibraryModule(model),
+        local: LOCAL_FAKE,
+        transferOf: (context) => ({ status: async () => ({
+          version: '1.1.0', counts: { refs: 1284, pages: 0, collections: 0 }, hasOwner: true, ownerId: 'tester',
+          ownerSecretHash: transfer.ownerSecretHash(context.secrets().ownerLinkSecret),
+        }) }),
+      },
+    });
+    emitter.emit.human = (step, action, url, message) => {
+      if (step === 'owner') cloudFake.setOwner(true);
+      return createEmitter({ json: true, stdout: { write: (line) => { emitter.events.push(JSON.parse(line)); return true; } }, stderr: { write: () => true } }).human(step, action, url, message);
+    };
+    await commands.commandSetup(ctx).catch((error) => {
+      // A foreign account must refuse; every other scenario should finish.
+      if (scenario !== 'foreign') throw error;
+      assert.equal(error.code, 'FOREIGN_SNIP');
+    });
+    assert.deepEqual(createsBeforeGuard, [], `${scenario}: created ${createsBeforeGuard.join(', ')} before guard`);
+  }
 });
