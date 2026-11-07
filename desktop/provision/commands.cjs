@@ -63,7 +63,7 @@ async function commandSetup(ctx, { steps = setupSteps.setupSteps() } = {}) {
   // Contract order: finish ok → delete TRANSFER_TOKEN → result. The token has no
   // purpose after the transfer, and losing it costs nothing (a later pull mints one).
   const finished = ctx.state().cloud || {};
-  if (finished.accountId && deploy.configExists(ctx.dataRoot)) {
+  if (finished.accountId && ctx.deps.deploy.configExists(ctx.dataRoot)) {
     try { await cloud.deleteSecret(ctx.wrangler, { dataRoot: ctx.dataRoot, accountId: finished.accountId, name: 'TRANSFER_TOKEN' }); } catch {}
   }
   ctx.clearTransferToken();
@@ -93,7 +93,7 @@ async function commandPull(ctx) {
   // pull mints its own transfer token: setup deletes it at the end of a move,
   // so a detached install holds no credential until a pull needs one.
   if (!ctx.transferToken()) {
-    if (!deploy.configExists(ctx.dataRoot)) {
+    if (!ctx.deps.deploy.configExists(ctx.dataRoot)) {
       throw new StepError('TRANSFER_TOKEN_MISSING', 'This Mac has no cloud deploy configuration to pull with.', {
         hint: 'Run `setup` once from this library, then `pull`.',
       });
@@ -146,7 +146,10 @@ function pullSteps({ stagedRoot, stagedState }) {
       if (await local.reachable(origin)) {
         throw new StepError('LOCAL_SERVER_RUNNING', 'Snip is running. Quit Snip.app (or stop `npm run dev`), then run this again.', { data: { origin } });
       }
-      if (deploy.runtimeProblem(ctx.root)) throw new StepError('NO_BUILD', deploy.runtimeProblem(ctx.root).message, { hint: deploy.runtimeProblem(ctx.root).hint });
+      if (ctx.deps.deploy.runtimeProblem(ctx.root)) {
+        const problem = ctx.deps.deploy.runtimeProblem(ctx.root);
+        throw new StepError('NO_BUILD', problem.message, { hint: problem.hint });
+      }
       fs.mkdirSync(stagedRoot, { recursive: true, mode: 0o700 });
       // The checks are cheap and must run again on a resumed pull, so the mark
       // lives in this invocation's work, never in the step journal.
@@ -429,7 +432,7 @@ function pullFinishStep() {
       }
       ctx.save((next) => { next.mode = 'local'; next.error = null; return next; });
       // The cloud copy keeps working; only this Mac's transfer credential goes.
-      if (record.accountId && deploy.configExists(ctx.dataRoot)) {
+      if (record.accountId && ctx.deps.deploy.configExists(ctx.dataRoot)) {
         try { await cloud.deleteSecret(ctx.wrangler, { dataRoot: ctx.dataRoot, accountId: record.accountId, name: 'TRANSFER_TOKEN' }); } catch {}
       }
       ctx.clearTransferToken();
@@ -449,11 +452,11 @@ async function commandDeploy(ctx) {
       id: 'deploy-preflight',
       title: 'Checking this Mac',
       async run(ctx2) {
-        if (!deploy.configExists(ctx2.dataRoot)) {
+        if (!ctx2.deps.deploy.configExists(ctx2.dataRoot)) {
           throw new StepError('NOT_PROVISIONED', 'This Mac has no cloud deploy configuration yet.', { hint: 'Run `setup` first.' });
         }
-        if (deploy.runtimeProblem(ctx2.root)) {
-          const problem = deploy.runtimeProblem(ctx2.root);
+        if (ctx2.deps.deploy.runtimeProblem(ctx2.root)) {
+          const problem = ctx2.deps.deploy.runtimeProblem(ctx2.root);
           throw new StepError('NO_BUILD', problem.message, { hint: problem.hint });
         }
         return { message: 'Ready' };
@@ -475,7 +478,7 @@ async function commandDeploy(ctx) {
       async run(ctx2) {
         // Refresh the copy first, so a new bundle is never shadowed by a stale one.
         const stored = ctx2.secrets() || {};
-        const layout = deploy.prepareDeployLayout({
+        const layout = ctx2.deps.deploy.prepareDeployLayout({
           root: ctx2.root,
           dataRoot: ctx2.dataRoot,
           d1Id: record.d1 && record.d1.id,
@@ -485,7 +488,7 @@ async function commandDeploy(ctx) {
         });
         void stored;
         void layout;
-        await deploy.deployWorker(ctx2.wrangler, { dataRoot: ctx2.dataRoot, accountId: record.accountId });
+        await ctx2.deps.deploy.deployWorker(ctx2.wrangler, { dataRoot: ctx2.dataRoot, accountId: record.accountId });
         ctx2.setCloud({ lastDeployedAt: NOW(), bundleHash: setupSteps.bundleHash(ctx2.dataRoot) });
         return { message: `Live at ${record.url}` };
       },
@@ -498,10 +501,13 @@ async function commandDeploy(ctx) {
         const token = randomSecret();
         await cloud.putSecrets(ctx2.wrangler, { dataRoot: ctx2.dataRoot, accountId: record.accountId, secrets: { TRANSFER_TOKEN: token } });
         ctx2.setTransferToken(token);
-        const status = await ctx2.transfer().status().catch(() => null);
+        // A secret write is not live at the edge instantly: the Worker answers
+        // its status route a moment after the deploy, not during it.
+        const status = await ctx2.waitForTransferStatus();
         if (!status) {
           throw new StepError('DEPLOY_VERIFY_FAILED', 'The deployed Worker did not answer its status route.', {
             hint: 'Check the Worker in the Cloudflare dashboard, then run `deploy` again.',
+            retryable: true,
           });
         }
         if (typeof status.version !== 'string' || !status.version) {
@@ -520,7 +526,10 @@ async function commandDeploy(ctx) {
       async verify() { return true; },
     },
   ];
-  const result = await require('./engine.cjs').runSteps(steps, ctx);
+  // Never journaled: deploying is the action, so a second `deploy` must upload
+  // the bundle again rather than report a previous run as done. `update.mjs`
+  // calls this after every build.
+  const result = await require('./engine.cjs').runSteps(steps, ctx, { journal: false });
   ctx.reload();
   return { ok: true, code: 'OK', mode: ctx.state().mode, data: { url: record.url, steps: result.completed }, message: `Deployed ${record.url}` };
 }
@@ -533,7 +542,7 @@ async function commandMigrate(ctx) {
       id: 'migrate-preflight',
       title: 'Checking this Mac',
       async run(ctx2) {
-        if (!deploy.configExists(ctx2.dataRoot)) throw new StepError('NOT_PROVISIONED', 'This Mac has no cloud deploy configuration yet.', { hint: 'Run `setup` first.' });
+        if (!ctx2.deps.deploy.configExists(ctx2.dataRoot)) throw new StepError('NOT_PROVISIONED', 'This Mac has no cloud deploy configuration yet.', { hint: 'Run `setup` first.' });
         return { message: 'Ready' };
       },
       async verify() { return true; },
@@ -548,7 +557,8 @@ async function commandMigrate(ctx) {
       async verify() { return true; },
     },
   ];
-  await require('./engine.cjs').runSteps(steps, ctx);
+  // Same reason as deploy: migrating is the action, so it always runs.
+  await require('./engine.cjs').runSteps(steps, ctx, { journal: false });
   return { ok: true, code: 'OK', mode: ctx.state().mode, data: {}, message: 'Migrations applied' };
 }
 

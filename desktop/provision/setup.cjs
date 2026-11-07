@@ -600,18 +600,13 @@ function secretsStep() {
         proof.captureToken = null;
       }
       // A secret write is not instantly live at the edge, so the first status
-      // request right after `secret bulk` can still 404. Poll briefly rather
-      // than declaring a good deploy broken.
-      let status = null;
-      for (let attempt = 0; attempt < 12; attempt++) {
-        ctx.checkCancel();
-        status = await ctx.deps.transferOf(ctx).status().catch(() => undefined) || null;
-        if (status && typeof status.version === 'string' && status.version) break;
-        if (attempt < 11) await ctx.deps.sleep(1500);
-      }
+      // request right after `secret bulk` can still 404. Poll rather than
+      // declaring a good deploy broken. The run's transfer client comes from
+      // the injectable factory so a resumed run and a test both keep working.
+      const status = await ctx.waitForTransferStatus();
       // One version constant lives in the Worker; record exactly what this deploy
       // reported so later checks compare against a record, not an engine constant.
-      if (!status || typeof status.version !== 'string' || !status.version) {
+      if (!status) {
         throw new StepError('VERSION_UNREADABLE', 'The deployed Snip did not report a version.', {
           hint: 'Check the Worker in the Cloudflare dashboard, then run setup again.',
         });
