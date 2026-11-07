@@ -969,3 +969,46 @@ test('npm run setup:cloudflare forwards its arguments instead of forcing setup',
   assert.equal(unknown.status, 4);
   assert.match(unknown.stderr, /Unknown command nonsense/);
 });
+
+test('snapshot restore moves a state snapshot back and refuses in cloud mode', async () => {
+  const library = fakeLibrary();
+  const live = path.join(library.root, 'web/.wrangler/state');
+  fs.mkdirSync(path.join(live, 'v3/d1'), { recursive: true });
+  fs.writeFileSync(path.join(live, 'v3/d1/marker'), 'cloud-copy');
+  const kept = path.join(library.root, 'backups/cloud-move-2026-11-06');
+  fs.mkdirSync(path.join(kept, 'v3/d1'), { recursive: true });
+  fs.writeFileSync(path.join(kept, 'v3/d1/marker'), 'snapshot');
+  stateModule.updateState(library.root, (next) => {
+    next.mode = 'local';
+    next.snapshot = { path: 'backups/cloud-move-2026-11-06', takenAt: new Date().toISOString(), kind: 'state' };
+    return next;
+  });
+  const emitter = collectedEmitter();
+  const ctx = createContext({ root: library.root, dataRoot: library.root, flags: { snapshotAction: 'restore' }, emit: emitter.emit, api: {}, wrangler: { bin: '/x', run: async () => ({ ok: true }) }, deps: { fetch: async () => { throw new Error('no network'); } } });
+  await commands.commandSnapshot(ctx);
+  assert.equal(fs.readFileSync(path.join(live, 'v3/d1/marker'), 'utf8'), 'snapshot');
+  // The replaced copy is kept, never deleted.
+  const backups = fs.readdirSync(path.join(library.root, 'backups')).filter((name) => name.startsWith('replaced-'));
+  assert.equal(backups.length, 1);
+  assert.equal(fs.readFileSync(path.join(library.root, 'backups', backups[0], 'v3/d1/marker'), 'utf8'), 'cloud-copy', 'the replaced copy must be kept for recovery');
+
+});
+
+test('snapshot restore refuses in cloud mode and delete clears the record', async () => {
+  const library = fakeLibrary();
+  const kept = path.join(library.root, 'backups/cloud-move-x');
+  fs.mkdirSync(kept, { recursive: true });
+  fs.writeFileSync(path.join(kept, 'dump.sql'), '');
+  stateModule.updateState(library.root, (next) => {
+    next.mode = 'cloud';
+    next.snapshot = { path: 'backups/cloud-move-x', takenAt: new Date().toISOString() };
+    return next;
+  });
+  const emitter = collectedEmitter();
+  const ctx = createContext({ root: library.root, dataRoot: library.root, flags: { snapshotAction: 'restore' }, emit: emitter.emit, api: {}, wrangler: { bin: '/x', run: async () => ({ ok: true }) }, deps: { fetch: async () => { throw new Error('no network'); } } });
+  await assert.rejects(() => commands.commandSnapshot(ctx), (error) => error.code === 'IN_CLOUD');
+  const del = createContext({ root: library.root, dataRoot: library.root, flags: { snapshotAction: 'delete' }, emit: emitter.emit, api: {}, wrangler: { bin: '/x', run: async () => ({ ok: true }) }, deps: { fetch: async () => { throw new Error('no network'); } } });
+  await commands.commandSnapshot(del);
+  assert.equal(stateModule.readState(library.root).snapshot, null);
+  assert.equal(fs.existsSync(kept), false);
+});

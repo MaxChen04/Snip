@@ -319,7 +319,9 @@ function pullSwapStep({ stagedRoot, stagedState }) {
       }
       const record = ctx.state().cloud || {};
       ctx.save((next) => {
-        next.snapshot = hadLocal ? { path: path.relative(ctx.dataRoot, previous), takenAt: NOW(), refs: 0, files: 0, bytes: 0 } : null;
+        // The previous library is a real state dir, so `snapshot restore` can
+        // move it back; no counts are claimed for something not inspected.
+        next.snapshot = hadLocal ? { path: path.relative(ctx.dataRoot, previous), takenAt: NOW(), kind: 'state' } : null;
         next.cloud = { ...(next.cloud || {}), detachedAt: NOW(), lastVerifiedAt: NOW() };
         next.mode = 'local';
         return next;
@@ -610,10 +612,37 @@ async function commandSnapshot(ctx) {
         }
         const snapshotState = path.join(ctx2.dataRoot, record.path, 'state');
         const live = local.localStatePath(ctx2.dataRoot);
-        if (fs.existsSync(snapshotState)) {
-          fs.rmSync(live, { recursive: true, force: true });
-          fs.mkdirSync(path.dirname(live), { recursive: true, mode: 0o700 });
-          fs.renameSync(snapshotState, live);
+        // Two shapes are restorable: a staged `state/` dir, or a whole state
+        // directory a move left behind (`<snapshot>/v3`). A snapshot that holds
+        // only the D1 dump cannot restore files, so it is refused rather than
+        // silently producing a library with no screenshots.
+        const candidate = fs.existsSync(snapshotState)
+          ? snapshotState
+          : fs.existsSync(path.join(ctx2.dataRoot, record.path, 'v3'))
+            ? path.join(ctx2.dataRoot, record.path)
+            : null;
+        if (!candidate) {
+          if (!fs.existsSync(live)) {
+            throw new StepError('SNAPSHOT_INCOMPLETE', 'This snapshot has no restorable library.', {
+              hint: 'It holds only a database dump. Enable cloud again and use `pull` to bring the full library back.',
+            });
+          }
+          // The library never left in this case (detach does not move it), so
+          // there is nothing to restore over and nothing is changed.
+          return { message: 'This Mac is already using the snapshot library' };
+        }
+        if (candidate === live) return { message: 'This Mac is already using the snapshot library' };
+        const discard = path.join(ctx2.dataRoot, 'backups', `replaced-${NOW().replace(/[:.]/g, '-')}`);
+        if (fs.existsSync(live)) {
+          fs.mkdirSync(path.dirname(discard), { recursive: true, mode: 0o700 });
+          fs.renameSync(live, discard);
+        }
+        fs.mkdirSync(path.dirname(live), { recursive: true, mode: 0o700 });
+        try {
+          fs.renameSync(candidate, live);
+        } catch (error) {
+          if (fs.existsSync(discard)) { try { fs.renameSync(discard, live); } catch {} }
+          throw new StepError('SNAPSHOT_RESTORE_FAILED', 'The snapshot could not be restored.', { hint: 'Nothing else was changed.', data: { cause: error.message } });
         }
         return { message: 'Snapshot restored' };
       },
