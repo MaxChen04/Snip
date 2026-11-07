@@ -6,7 +6,7 @@ import { PUBLIC_SITE, REPO_URL, signInHref } from "@/lib/site"
 
 // Self-hosted instances sign in; the public site points to the source.
 const primaryHref = () => (PUBLIC_SITE ? REPO_URL : signInHref())
-const primaryLabel = PUBLIC_SITE ? "Get Snip on GitHub" : "Sign in with GitHub"
+const primaryLabel = PUBLIC_SITE ? "Get Snip on GitHub" : "Sign in"
 
 const img = (name: string) => `/landing/${name}.jpg`
 
@@ -459,7 +459,7 @@ function FinalCta() {
       <p className="max-w-[460px] text-[17px] leading-[1.55] text-muted-foreground">
         {PUBLIC_SITE
           ? "Install Snip on your Mac, paste your first URL, and let the agent do the rest."
-          : "Sign in with GitHub, paste your first URL, and let the agent do the rest."}
+          : "Sign in, paste your first URL, and let the agent do the rest."}
       </p>
       <a href={primaryHref()} className={cn(pill, "bg-foreground text-background hover:bg-foreground/90")}>
         {primaryLabel}

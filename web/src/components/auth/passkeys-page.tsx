@@ -18,9 +18,9 @@ import { api, type Me, type PasskeyDevice } from "@/lib/api"
 import { ALREADY_ADDED, registerPasskey } from "@/lib/passkeys"
 
 /**
- * The owner's devices. A passkey is per-device and owner-only: it is not an invite, and a second
- * person signs in with GitHub instead. Removing one here is the recovery path for a lost device;
- * "Sign out all devices" is the recovery path for a leaked session.
+ * The owner's devices. A passkey is per-device and owner-only: it is not an invite. Removing one
+ * here is the recovery path for a lost device; "Sign out all devices" is the recovery path for a
+ * leaked session.
  */
 export function PasskeysPage() {
   const [me, setMe] = useState<"checking" | "anon" | Me>("checking")
@@ -165,7 +165,7 @@ export function PasskeysPage() {
               <KeyRound className="size-4" />
             </span>
             <p className="text-[12.5px] leading-relaxed text-muted-foreground">
-              No passkeys yet. Add this device so you can sign in without the owner link or GitHub.
+              No passkeys yet. Add this device so you can sign in without the owner link.
             </p>
           </div>
         ) : (
@@ -218,7 +218,7 @@ export function PasskeysPage() {
           <DialogHeader>
             <DialogTitle>Remove this passkey?</DialogTitle>
             <DialogDescription>
-              {removing?.label || "This device"} will no longer open Snip. If it's your only passkey you'll need the owner link or GitHub to sign in again.
+              {removing?.label || "This device"} will no longer open Snip. If it's your only passkey you'll need a fresh owner link to sign in again.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

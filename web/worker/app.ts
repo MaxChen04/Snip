@@ -15,6 +15,7 @@ import {
   verifyFileSig,
 } from "./auth"
 import * as db from "./db"
+import { signInPath } from "../shared/safe-next"
 import { loginOptions, loginVerify, registerOptions, registerVerify, listDevices, removeDevice } from "./passkeys"
 import { ownerLinkPage, ownerLinkSubmit } from "./owner"
 import { transfer } from "./transfer"
@@ -29,8 +30,9 @@ app.onError((err, c) => {
 
 // ---------- Auth ----------
 
-// GitHub stays mounted whenever credentials exist: until passkeys are registered it is the only
-// browser sign-in, an MCP client needs it, and it is the path for a second person.
+// GitHub stays mounted whenever credentials exist, but it is optional: a passkeys-only install has
+// no GitHub App, and an MCP client authorizes through `/sign-in` instead (see `/authorize` below).
+// On an install that configures it, `/sign-in` still offers it as the fallback.
 app.get("/auth/login", (c) => startLogin(c))
 app.get("/auth/callback", (c) => finishLogin(c))
 app.get("/auth/logout", (c) => logout(c))
@@ -44,6 +46,13 @@ app.get("/auth/passkey/register/options", (c) => registerOptions(c))
 app.post("/auth/passkey/register/verify", (c) => registerVerify(c))
 app.get("/auth/passkey/login/options", (c) => loginOptions(c))
 app.post("/auth/passkey/login/verify", (c) => loginVerify(c))
+
+/**
+ * What this install can sign in with, for the anonymous sign-in page. It needs both facts to avoid
+ * offering a dead end: a passkey button when none is registered, or a GitHub link on a passkeys-only
+ * install. Nothing here is secret — the login page already reveals the same two things by trying.
+ */
+app.get("/auth/methods", async (c) => c.json({ github: githubEnabled(c.env), hasPasskeys: await db.hasPasskeys(c.env.DB) }))
 
 // ---------- Transfer (TRANSFER_TOKEN only; 404 when unset) ----------
 // Mounted before /api and outside its middleware: a move must not inherit session auth.
@@ -59,8 +68,11 @@ const escapeHtml = (s: string) =>
 app.get("/authorize", async (c) => {
   const session = await getSession(c)
   if (!session) {
+    // Sign in first, then come back here. `/sign-in` is the passkey page — the one route that works
+    // on a passkeys-only install with no GitHub App — and it returns to this exact URL, query
+    // included, so the client's authorization request survives the detour.
     const url = new URL(c.req.url)
-    return c.redirect(`/auth/login?next=${encodeURIComponent(url.pathname + url.search)}`)
+    return c.redirect(signInPath(url.pathname + url.search))
   }
   const login = session.ownerId
   const authReq = await c.env.OAUTH_PROVIDER.parseAuthRequest(c.req.raw)

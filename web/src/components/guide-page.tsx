@@ -75,7 +75,7 @@ export function GuidePage({ signedIn }: { signedIn: boolean }) {
             <ArrowLeft className="size-3.5" />
             Back to home
           </a>
-          <a href={signedIn ? "/" : PUBLIC_SITE ? REPO_URL : "/auth/login?next=%2F"} className="flex h-8 items-center rounded-full bg-fill-2 px-3.5 text-xs font-medium transition-colors hover:bg-fill-3">
+          <a href={signedIn ? "/" : PUBLIC_SITE ? REPO_URL : "/sign-in"} className="flex h-8 items-center rounded-full bg-fill-2 px-3.5 text-xs font-medium transition-colors hover:bg-fill-3">
             {signedIn ? "Open library" : PUBLIC_SITE ? "GitHub" : "Sign in"}
           </a>
         </div>

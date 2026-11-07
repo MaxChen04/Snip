@@ -92,7 +92,7 @@ export async function registerPasskey(deviceLabel?: string): Promise<{ duplicate
   return { duplicate: verified.duplicate === true }
 }
 
-/** Signs this browser in with a passkey and reloads so the app picks up the new session. */
+/** Signs this browser in with a passkey. The caller navigates afterwards to pick up the session. */
 export async function signInWithPasskey() {
   const unsupported = passkeyUnsupported()
   if (unsupported) throw unsupported
