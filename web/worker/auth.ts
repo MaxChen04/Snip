@@ -1,6 +1,7 @@
 import type { Context, MiddlewareHandler } from "hono"
 import { deleteCookie, getCookie, setCookie } from "hono/cookie"
 import type { OAuthHelpers } from "@cloudflare/workers-oauth-provider"
+import { safeNext } from "../shared/safe-next"
 
 // Web sessions, stored as an HMAC-signed cookie.
 //
@@ -18,7 +19,7 @@ export type SessionMethod = "owner" | "passkey" | "github"
 export type Session = { ownerId: string; label: string; method: SessionMethod; epoch: number }
 
 export const SESSION_COOKIE = "rs_session"
-const STATE_COOKIE = "rs_oauth_state"
+export const STATE_COOKIE = "rs_oauth_state"
 const SESSION_DAYS = 30
 
 const enc = new TextEncoder()
@@ -326,7 +327,9 @@ export const sameOriginWrites: MiddlewareHandler<AppEnv> = async (c, next) => {
  */
 export const githubEnabled = (env: Env) => !!(env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET)
 
-const safeNext = (next: string | undefined | null) => (next && next.startsWith("/") && !next.startsWith("//") ? next : "/")
+// The GitHub flow's `next` is imported from `web/shared/safe-next`, the same function the passkey
+// page uses before it navigates, so there is one rule and no way for the two to drift apart.
+export { safeNext }
 
 export async function startLogin(c: Context<AppEnv>) {
   if (!githubEnabled(c.env)) return c.notFound()

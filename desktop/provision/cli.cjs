@@ -25,7 +25,10 @@ const { createContext } = require('./context.cjs');
 
 const COMMANDS = new Set(['setup', 'pull', 'deploy', 'migrate', 'status', 'detach', 'delete-resources', 'snapshot', 'abort', 'owner']);
 const VALUE_FLAGS = new Set(['root', 'data-root', 'login', 'domain', 'account', 'capture-env', 'confirm']);
-const BOOLEAN_FLAGS = new Set(['json', 'yes', 'check', 'resume', 'no-open', 'managed', 'adopt-existing', 'help', 'version']);
+// `resume` is accepted and deliberately never read: every step re-verifies, so a
+// run always resumes where the last one stopped and the flag cannot change that.
+// The desktop app and the docs spell `setup --resume`, so it must stay accepted.
+const BOOLEAN_FLAGS = new Set(['json', 'yes', 'check', 'resume', 'no-open', 'managed', 'adopt-existing', 'no-handoff', 'help', 'version']);
 
 const EXIT = { OK: 0, FAILED: 1, NEEDS_INPUT: 2, LOCKED: 3, UNSUPPORTED: 4, CANCELLED: 1 };
 
@@ -66,7 +69,7 @@ function normalizeFlags(flags) {
   if (flags['data-root'] === undefined && flags.root !== undefined) flags['data-root'] = flags.root;
   // Steps read camelCase; the flags arrive dashed. Keep both so the documented
   // spelling works and nothing has to remember which one a step uses.
-  const camel = { 'data-root': 'dataRoot', 'no-open': 'noOpen', 'adopt-existing': 'adoptExisting', 'capture-env': 'captureEnv' };
+  const camel = { 'data-root': 'dataRoot', 'no-open': 'noOpen', 'adopt-existing': 'adoptExisting', 'capture-env': 'captureEnv', 'no-handoff': 'noHandoff' };
   for (const [dashed, name] of Object.entries(camel)) {
     if (flags[dashed] !== undefined) flags[name] = flags[dashed];
   }
@@ -96,9 +99,8 @@ function helpText() {
     '  status               Print the cloud state (see --json)',
     '  detach               Go back to local; the cloud library stays live',
     '  delete-resources     Delete the cloud Worker, database, KV and bucket',
-    '  snapshot restore     Restore this Mac’s pre-cloud snapshot',
-    '  snapshot restore     Switch back to the previous library after a pull',
-    '  snapshot delete      Delete the previous library (needs --confirm <name>)',
+    '  snapshot restore     Switch back to the library a `pull` replaced',
+    '  snapshot delete      Delete that previous library (needs --confirm <name>)',
     '  snapshot delete-export  Delete setup\'s portable backup files (needs --confirm <name>)',
     '  abort                Clean up an interrupted setup',
     '  owner link           Mint and open a sign-in link',
@@ -106,7 +108,13 @@ function helpText() {
     '',
     'Flags: --root --data-root --json --yes --check --resume --login --domain',
     '       --account --capture-env <replace|separate|keep> --no-open --managed',
-    '       --adopt-existing --confirm <basename|host>',
+    '       --adopt-existing --no-handoff --confirm <basename|host>',
+    '',
+    '--resume is optional; setup always resumes where it stopped.',
+    '',
+    '--no-handoff is for `owner link` when the link is for another browser or',
+    'device: the link carries port 0, no handoff is attempted, and the command',
+    'ends as soon as the link is minted. `setup` always uses the handoff.',
   ].join('\n');
 }
 
@@ -287,7 +295,10 @@ async function main(argv, io = {}) {
       // The specific code names the failure; `code` stays inside the contract's set.
       data: { code: specific, ...(error.data || {}) },
       message: error.message,
-      retryable: code === 4 ? retryableFor(error) : false,
+      // A failure says whether running the same command again can work: exit 4
+      // uses the contract's table, and a step failure only when it names itself
+      // retryable (a transient Cloudflare problem, an unreachable surface).
+      retryable: retryableFor(error),
     });
     return { code };
   } finally {

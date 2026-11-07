@@ -23,21 +23,69 @@ cp capture/.env.example capture/.env      # SNIP_URL stays http://localhost:5173
 npm run app                              # builds Snip.app and installs it in /Applications
 ```
 
-Open **Snip** from Applications or the menu bar. Paste a URL, pick **Single page** or **Crawl site**, and the capture agent starts working. `npm run doctor` checks both config files if something looks off.
+Open **Snip** from Applications or the menu bar. Paste a URL, pick **Single page** or **Crawl site**, and the capture agent starts working. `npm run doctor` checks the checkout, the two config files and the capture browser if something looks off; add `--check` to have it ask the cloud library whether it answers.
 
 Prefer a terminal and hot reload? Run `npm run dev`, then `npm run capture` in a second terminal, and open http://localhost:5173.
 
 ## Use Snip on your other devices (cloud mode)
 
-Optional. Everything above works without this. To read the library from another Mac or a browser, or to let a cloud agent such as Claude.ai reach it, deploy the same Snip to your own Cloudflare account:
+Optional. Everything above works without this. To read the library from another Mac or a browser, or to let a cloud agent such as Claude.ai reach it, copy the library into your own Cloudflare account.
+
+In Snip.app, open **Settings → Cloud → Enable cloud**. The app says what will copy before anything leaves the Mac. Then Cloudflare asks for two things, one time:
+
+1. **Sign in and Allow.** Your browser opens on Cloudflare. Pick the account that should own the library.
+2. **Turn on R2** if it has never been used there. Cloudflare asks for a card once; storage is still free up to 10 GB. Snip waits while you do it.
+
+Snip creates the Worker, database, key-value store and bucket, deploys, copies the library and checks the result. A one-time owner link then opens in your browser and registers a passkey (Touch ID), which signs Snip.app back in. There are no IDs to copy and no secrets to paste.
+
+After that, every other browser or device signs in at **/sign-in** with its passkey; **Passkeys and devices** in the account menu adds or removes them.
+
+**One owner in this version.** The person who enabled cloud is the only person who can sign in, on their own devices. Sharing a library with a second person is planned for later, so there is no invitation, no allowlist and no second account to set up. Nothing in the setup asks for GitHub.
+
+Capture stays on this Mac. A capture started from another device waits in the queue and shows **Waiting for your Mac** until this Mac's capture agent checks in. The gallery card and every agent status use those exact words, whether the agent is busy or the Mac is asleep.
+
+Already deployed Snip before this button existed? The setup recognises your own library. An empty one is adopted silently; one with references asks first and offers **Use that library** or **Stop**. Choosing to use it switches this Mac to the cloud library and leaves your local one on disk, listed as **This Mac's library** with a single **Switch back to it** action. The owner link signs in as the same owner and only adds this device's passkey; existing devices keep theirs. [Cloud mode](docs/deploy.md) covers the copy, the two approvals, adoption, the command-line path, turning cloud off and the free-tier limits.
+
+### Command line and agents
+
+The button and the command line run the same provisioning engine. Use the CLI for a scripted setup, or hand the job to an agent:
 
 ```bash
-npm run setup:cloudflare
+npm run setup:cloudflare -- --check --json   # preflight only; changes nothing
+npm run setup:cloudflare -- --yes --json     # enable cloud, never prompt
 ```
 
-The setup signs you in to Cloudflare, creates the database, key-value store and storage bucket, deploys, and prints your URL. When it asks, create a GitHub OAuth app with the two URLs it prints and paste its Client ID and secret. Sign in at the printed URL with an allowed GitHub login.
+Each line of output is a JSON event. A `human` event carries a URL that only a person can open (Cloudflare's allow page, the R2 page, the owner link); the run pauses there. A `choice` event is a decision with consequences and exits 2 until you pick, so `--yes` never adopts an existing library: pass `--adopt-existing` when that is what you mean. A `needs_input` event exits 2 and names the flags to add. Nothing prompts, and no secret is ever typed into a chat.
 
-Today this creates a **separate** library: your local references are not copied into it, and the in-app **Enable cloud** button that will copy them is not released yet. [Cloud mode](docs/deploy.md) covers what it creates, R2 activation, upgrading and how to do it by hand.
+The bare `npm run setup:cloudflare` means `setup`. Add any other command after `--`:
+
+```bash
+npm run setup:cloudflare -- status --json          # mode, URL, snapshot, last error; offline
+npm run setup:cloudflare -- status --check --json  # also ask the cloud library whether it answers
+npm run setup:cloudflare -- detach --json
+npm run setup:cloudflare -- pull --json
+npm run setup:cloudflare -- snapshot delete --confirm <basename>
+npm run setup:cloudflare -- snapshot delete-export --confirm <basename>
+npm run setup:cloudflare -- delete-resources --confirm snip.<your-subdomain>.workers.dev
+```
+
+`status` never calls the network; `--check` is the one form that does, and then it says which surface answered. `--confirm` is the basename of the item being deleted (for `delete-resources`, the cloud URL's host), and a missing or different value changes nothing.
+
+### Turning cloud off
+
+**Settings → Cloud → Turn off cloud** points this Mac back at its own local library, which stayed on disk the whole time. The cloud library is **not** deleted: it stays live at its address, and devices and agents signed in to it keep working. The dialog says that, and offers **Bring the cloud library back to this Mac** (or **Copy back now** later) to copy the cloud library down first.
+
+**Delete cloud resources** is separate and destructive. **Sign out all devices** ends every browser session and the app's session. Passkeys stay registered, and agents connected over MCP keep their own tokens until those expire.
+
+### One Snip per account, workers.dev only
+
+Snip keeps one library per Cloudflare account. An empty older Snip is adopted silently. One with references asks first: **Use that library** switches to it and leaves this Mac's library in place, listed as **This Mac's library** with **Switch back to it**, and **Stop** changes nothing. A Worker named `snip` that is not a Snip is refused, with instructions to rename or delete it or choose another account. There is no replace option and no second Worker name.
+
+The address is always `https://snip.<your-subdomain>.workers.dev`. Custom domains are not supported in this release: the address is what the passkey and MCP connections are bound to.
+
+**One owner, passkeys only.** You sign in with a passkey on each device you use, and so does an agent you connect to the cloud address. Sharing with a second person is planned for later, so v1 has no allowlist to maintain and no OAuth app to register.
+
+Installs that were set up before this version and already have GitHub sign-in configured keep working: their secrets are left in place and their extra GitHub logins can still sign in. A new install never configures GitHub.
 
 ## What it captures
 
@@ -61,6 +109,7 @@ The app is an infinite gallery (Websites / Pages / Animations) with search and s
 - **Export** a website as a .zip (screenshots, HTML, styles, GIFs, tokens) from its **More** menu.
 - **Connect MCP** in the top bar shows copy-ready setup for Claude, Codex, OpenCode, Cursor and other clients.
 - Press <kbd>/</kbd> to search. A banner tells you when captures are waiting on an offline capture agent, and the account menu shows how much storage your captures use: bytes on disk in the local app, and R2 usage against the 10 GB free tier in cloud mode.
+- In cloud mode a capture started elsewhere shows **Waiting for your Mac** until this Mac's capture agent picks it up.
 
 **Page viewer.** Drag the sidebar to resize it, switch between Tokens, HTML and CSS, and flip between desktop and mobile captures.
 
@@ -81,23 +130,29 @@ The app is an infinite gallery (Websites / Pages / Animations) with search and s
 ## How it works
 
 ```
-┌──────────────────── your Mac ────────────────────┐
-│ Snip.app                                         │
-│   Worker: gallery, API and /mcp, run by Wrangler │
-│   D1 · R2 · KV: files in the library folder      │
-│   capture agent: Playwright + Chromium           │
-└──────────────────────────────────────────────────┘
+┌───────────────── your Mac ─────────────────┐
+│ Snip.app: gallery, API and /mcp            │
+│ D1 · R2 · KV: files in the library folder  │
+│ capture agent: Playwright + Chromium       │
+└────────────────────────────────────────────┘
+        │  optional: Settings → Cloud → Enable cloud
+        ▼
+┌───────── your Cloudflare account ──────────┐
+│ the same Worker, app and library           │
+│ D1 · R2 · KV in your account               │
+│ capture still runs on your Mac             │
+└────────────────────────────────────────────┘
 ```
 
 Snip is one Worker in two places. Locally, Snip.app runs it from this checkout through Wrangler, with D1, R2 and KV as files in the library folder; the capture agent browses with Chromium on the same machine.
 
 Capture runs locally because the free plans can't crawl sites: Cloudflare's free Browser Rendering allows 10 browser-minutes a day, and Vercel Hobby functions stop after 5 minutes. Queued references wait until the agent is running.
 
-Cloud mode deploys the same Worker to your own Cloudflare account, with D1, R2 and KV in that account, so other devices and cloud agents can reach it. Capture still runs on a Mac: the agent follows `SNIP_URL`, so point it at the hosted copy or leave it local. See [SECURITY.md](SECURITY.md) for the full trust model.
+Cloud mode deploys the same Worker to your own Cloudflare account and copies the library into it, so other devices and cloud agents can reach it. Capture still runs on a Mac: the app points its capture agent at the cloud library after the move, and captures queued while the Mac is off show **Waiting for your Mac**. See [SECURITY.md](SECURITY.md) for the full trust model.
 
 ## Connect your agent (MCP)
 
-The MCP endpoint is `http://localhost:5173/mcp` when Snip runs on your Mac, and `https://snip.<your-subdomain>.workers.dev/mcp` in cloud mode. Locally, only agents on the same Mac can reach it while Snip is running; cloud clients such as Claude.ai need the deployed URL. Clients register themselves, ask for your approval, and show a consent screen.
+The MCP endpoint is `http://localhost:5173/mcp` when Snip runs on your Mac, and `https://snip.<your-subdomain>.workers.dev/mcp` in cloud mode. Locally, only agents on the same Mac can reach it while Snip is running. A cloud client such as Claude.ai needs the deployed URL, then signs in with your passkey and asks for your approval; locally there is no sign-in, just a consent screen.
 
 ```bash
 claude mcp add --transport http snip http://localhost:5173/mcp
@@ -116,7 +171,7 @@ OpenCode (`~/.config/opencode/opencode.json` or a project `opencode.json`; note 
 { "mcp": { "snip": { "type": "remote", "url": "http://localhost:5173/mcp" } } }
 ```
 
-For Claude.ai or Claude Desktop, add it as a custom connector with the same URL. In cloud mode, use your deployed URL in every command and connector above.
+For Claude.ai or Claude Desktop, add it as a custom connector with the same URL. In cloud mode, use your deployed URL in every command and connector above; the client signs in with your passkey when it connects.
 
 <img src="docs/media/connect-mcp.png" alt="Connect MCP dialog" width="420">
 
@@ -149,8 +204,8 @@ File URLs returned by the MCP are signed and expire after 24 hours.
 
 | Variable | Default | |
 | --- | --- | --- |
-| `SNIP_URL` | `http://localhost:5173` | Your local app. Set your Worker URL in cloud mode |
-| `CAPTURE_TOKEN` | | Must match `web/.dev.vars` (or the Worker secret when hosted) |
+| `SNIP_URL` | `http://localhost:5173` | Your local app. In cloud mode the app points it at your Worker automatically |
+| `CAPTURE_TOKEN` | | Must match `web/.dev.vars` (or the cloud Worker's secret) |
 | `CHROMIUM_PATH` | Playwright's Chromium | Use your installed Chrome instead |
 | `POLL_SECONDS` | `5` | Queue poll interval |
 | `HEADLESS` | `true` | `false` to watch the browser |
@@ -177,20 +232,20 @@ npm run dev                                       # http://localhost:5173
 # second terminal
 cp capture/.env.example capture/.env              # SNIP_URL=http://localhost:5173, CAPTURE_TOKEN from .dev.vars
 npm run capture
-npm run doctor                                    # checks the setup
+npm run doctor                                    # offline checks, plus --check to probe the cloud library
 ```
 
-`DEV_LOGIN` in `web/.dev.vars` replaces GitHub sign-in on localhost, so the app never asks you to log in while you work. It is the name you appear as. Never set it on a deployed Worker. [Snip.app](docs/mac-app.md) runs this same checkout as a menu-bar app.
+`DEV_LOGIN` in `web/.dev.vars` skips sign-in on localhost, so the app never asks you to log in while you work. It is the name you appear as. Never set it on a deployed Worker. [Snip.app](docs/mac-app.md) runs this same checkout as a menu-bar app.
 
 ## Updating
 
-When new changes land on `main`, one command brings a local copy (and Snip.app) up to date. For a deployed Worker, see [Upgrading](docs/deploy.md#upgrading).
+When new changes land on `main`, one command brings a local copy (and Snip.app) up to date. In cloud mode it also migrates and redeploys the cloud Worker, so the two never drift apart.
 
 ```bash
 npm run update
 ```
 
-It quits Snip.app gracefully (active captures finish first), fast-forwards `main`, runs `npm ci` when dependencies changed, installs the capture browser, backs up and migrates the local database, rebuilds the web app, rebuilds Snip.app when `desktop/` changed, and reopens the app. It never touches untracked files such as `.env` files, `web/wrangler.deploy.jsonc`, `web/wrangler.local.jsonc` or your library. npm lockfile churn is reset automatically; any other local edit, or a terminal `npm run dev` or `npm run capture` still using the database, stops the update before anything changes (`npm run update -- --stash` sets edits aside instead). If a step fails, fix the error and run `npm run update` again to finish. `--full` reruns every step even when you're already up to date.
+It quits Snip.app gracefully (active captures finish first), fast-forwards `main`, runs `npm ci` when dependencies changed, installs the capture browser, backs up and migrates the local database, rebuilds the web app, rebuilds Snip.app when `desktop/` changed, and reopens the app. In cloud mode it then applies the remote database migrations and deploys the new Worker before capture restarts. Snip records the version it deployed; if the deployed Worker no longer matches, it reports that the deployment changed outside Snip and asks you to deploy again instead of redeploying on its own. It never touches untracked files such as `.env` files, `.snip/` or your library. npm lockfile churn is reset automatically; any other local edit, or a terminal `npm run dev` or `npm run capture` still using the database, stops the update before anything changes (`npm run update -- --stash` sets edits aside instead). If a step fails, fix the error and run `npm run update` again to finish. `--full` reruns every step even when you're already up to date.
 
 To run it from any folder, add an alias to `~/.zshrc`:
 

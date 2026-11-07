@@ -18,6 +18,16 @@ Service logs are capped at three 2 MiB files per service (12 MiB total), includi
 
 The app runs this repo in place; `npm run update` keeps its web build and the app itself current. Rebuild the app manually only after moving the repo. It is ad-hoc signed for your own Mac and is not notarized for distribution. `npm run app:dev` uses Vite with hot reload for development (install desktop dependencies first with `npm ci --prefix desktop`). The installer verifies an existing app's identity, stages and verifies the new copy, and restores the old app if replacement fails. For a build without installation: `npm run build --prefix desktop -- --no-install`; `--out DIR` and `--install-dir DIR` support isolated builds and tests.
 
+## Settings and cloud mode
+
+**Snip → Settings** (also in the menu-bar menu) opens a small window that stays available in both modes. In local mode its **Cloud** tab offers **Enable cloud** beside this Mac's library, shows any **Previous library** left by a copy-back, and can hand the job to an agent with **Copy prompt**.
+
+In cloud mode the same tab is organised as panels: **Cloud library** with the address, **This Mac's library**, **Previous library** and **Export** rows; **Access** with **Passkeys** and **Sign out all devices**; **Turn off cloud**; **Let your agent do it**; and **Delete cloud resources**. The local row is **This Mac's library** with one action, **Switch back to it**, because enabling cloud never moves it; **Previous library** appears only after **Copy back now** or `pull`, and **Export** is setup's dump, which can only be deleted. Adopting a library that was deployed earlier lands in the same shape. [Cloud mode](deploy.md#what-settings-lists) lists every row and its actions.
+
+The main window is the cloud gallery in cloud mode and no longer has the local preload bridge; Settings stays reachable from the menu bar, and its Cloud tab shows the cloud address, the install steps and the local rows. Capture stays on this Mac and is pointed at the cloud library. Passkeys and devices are managed in the browser at `/passkeys`, linked from Settings. [Cloud mode](deploy.md) explains what moves, the Cloudflare approvals, turning it off and the command-line path.
+
+An instance set up by an earlier version that already has GitHub credentials keeps signing in with GitHub on the sign-in page, but Settings is passkeys-only for every install: it lists devices and never mentions GitHub, so a legacy owner manages devices there exactly like a new one.
+
 ## Release app and updates
 
 Signed release builds contain their own web app, capture engine, Node.js and Chromium. They check for **published stable releases** at most once every six hours, including after sleep, and expose **Check for updates** in the Snip and menu-bar menus. Downloads begin only when you choose **Download update**. **Restart and update** lets an active capture finish before stopping its API and installing. A downloaded update can also apply on the next normal quit/relaunch. Failed downloads leave the running version intact; the native macOS updater verifies the archive digest, size and signing identity.

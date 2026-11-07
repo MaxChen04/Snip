@@ -219,4 +219,19 @@ function pendingStepIds(all, done) {
   return all.filter((id) => !finished.has(id));
 }
 
-module.exports = { createContext, pendingStepIds, runSetup };
+/**
+ * The retry policy a mutating step passes to deploy/cloud: real backoff through
+ * the injected clock, and one warning line per attempt so a slow step explains
+ * itself instead of looking hung.
+ */
+function retryOf(ctx) {
+  return {
+    sleep: ctx.deps.sleep,
+    onRetry: ({ attempt, attempts, reason, delayMs }) => {
+      const seconds = Math.round(delayMs / 1000);
+      ctx.emit.log('warn', `Cloudflare had a temporary problem (${reason}); retrying in ${seconds}s (attempt ${attempt + 1} of ${attempts})`);
+    },
+  };
+}
+
+module.exports = { createContext, pendingStepIds, retryOf, runSetup };

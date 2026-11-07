@@ -24,6 +24,7 @@ const sections = [
   { id: "privacy", title: "Your data stays yours" },
   { id: "setup", title: "Set it up" },
   { id: "cloud", title: "Use it on other devices" },
+  { id: "turning-off", title: "Turning cloud off" },
   { id: "agent-setup", title: "Let your agent set it up" },
   { id: "connect", title: "Connect your agent" },
   { id: "limits", title: "Limits and headroom" },
@@ -74,7 +75,7 @@ export function GuidePage({ signedIn }: { signedIn: boolean }) {
             <ArrowLeft className="size-3.5" />
             Back to home
           </a>
-          <a href={signedIn ? "/" : PUBLIC_SITE ? REPO_URL : "/auth/login?next=%2F"} className="flex h-8 items-center rounded-full bg-fill-2 px-3.5 text-xs font-medium transition-colors hover:bg-fill-3">
+          <a href={signedIn ? "/" : PUBLIC_SITE ? REPO_URL : "/sign-in"} className="flex h-8 items-center rounded-full bg-fill-2 px-3.5 text-xs font-medium transition-colors hover:bg-fill-3">
             {signedIn ? "Open library" : PUBLIC_SITE ? "GitHub" : "Sign in"}
           </a>
         </div>
@@ -116,6 +117,7 @@ export function GuidePage({ signedIn }: { signedIn: boolean }) {
           <PrivacySection />
           <SetupSection />
           <CloudSection />
+          <TurningOffSection />
           <AgentSetupSection />
           <ConnectSection />
           <LimitsSection />
@@ -216,17 +218,17 @@ function PrivacySection() {
     },
     {
       t: "Captures run on your Mac",
-      b: "Chromium browses on your machine with your own capture token. No shared crawler ever sees your list.",
+      b: "Chromium browses on your machine with your own capture token. No shared crawler ever sees your list, and a queued cloud capture waits until this Mac is awake.",
       Icon: Monitor,
     },
     {
       t: "Cloud is your own account",
-      b: "If you host Snip, everything lives in Cloudflare resources you create. There is no Snip server in either mode.",
+      b: "If you enable it, the library is copied into Cloudflare resources you create. There is no Snip server in either mode, and the local copy stays where it is.",
       Icon: Server,
     },
     {
       t: "Agents ask before reading",
-      b: "Clients approve access first: a consent screen locally, GitHub login and a consent screen when hosted. File links they receive are signed and expire after 24 hours.",
+      b: "Clients approve access first: a consent screen locally, a passkey sign-in and a consent screen when hosted. File links they receive are signed and expire after 24 hours.",
       Icon: Lock,
     },
   ]
@@ -337,26 +339,27 @@ function SetupSection() {
 function CloudSection() {
   const steps = [
     {
-      t: "Run the setup",
-      b: "It signs you in to Cloudflare, asks for your GitHub login and workers.dev subdomain, creates the database, key-value store and storage bucket, then deploys. R2 has to be switched on once in the Cloudflare dashboard (R2 → Get started) before the bucket can be created. If capture/.env already points somewhere else, it asks before changing it and otherwise saves capture/.env.cloudflare.",
-      c: ["npm run setup:cloudflare"],
+      t: "Settings → Cloud → Enable cloud",
+      b: "Snip shows what copies first: every reference, page, animation, collection, note, token and file. Your local library stays exactly where it is, listed as This Mac's library, and switching back to it is one action. Browser sessions and MCP grants don't move; agents sign in again at the new address. Then the copy starts, one step at a time, with a Retry button on any failure.",
     },
     {
-      t: "Create a GitHub OAuth app when asked",
-      b: "The setup prints both URLs. In GitHub, open Settings → Developer settings → OAuth Apps, add a new one, then paste its Client ID and a new Client secret into the setup. It generates the other secrets itself.",
-      c: ["Homepage URL   https://snip.<your-subdomain>.workers.dev", "Callback URL   https://snip.<your-subdomain>.workers.dev/auth/callback"],
+      t: "Allow it in Cloudflare",
+      b: "Your browser opens on Cloudflare. Sign in, choose the account that should own the library, and press Allow. If you belong to more than one account, pick one here.",
     },
     {
-      t: "Sign in at the URL it prints",
-      b: "Only the GitHub login you gave the setup can get in. To have this Mac's agent serve the hosted copy without moving the local one, run it with the cloud env file.",
-      c: ["SNIP_CAPTURE_ENV_FILE=capture/.env.cloudflare npm run capture"],
+      t: "Turn on R2, if it has never been used",
+      b: "Cloudflare asks for a card once to switch on R2, even though storage is free up to 10 GB. Snip opens the R2 page and waits; the setup continues by itself when you come back.",
+    },
+    {
+      t: "Register your passkey",
+      b: "A one-time owner link opens in your browser, registers a passkey (Touch ID on a Mac) and signs Snip.app back in. The link works once and expires after ten minutes, and it always signs in as the library's one owner: re-enabling or adopting an existing library reuses that identity and keeps every passkey it had. From then on, every other browser or device signs in at /sign-in with its own passkey; Passkeys and devices in the account menu adds or removes them, and adding one twice says You already added a passkey on this device.",
     },
   ]
   return (
     <Section
       id="cloud"
       title="Use Snip on your other devices"
-      intro="Optional. Snip works completely on your Mac. Cloud mode deploys the same app to your own Cloudflare account, so another Mac, a browser or a cloud agent such as Claude.ai can read the library. The account is yours; nothing is shared with anyone else."
+      intro="Optional. Snip works completely on your Mac. Cloud mode copies the library into your own Cloudflare account, so another Mac, a browser or a cloud agent such as Claude.ai can read it. Capture still runs here."
     >
       <ol className="flex max-w-[760px] flex-col">
         {steps.map((s, i) => (
@@ -368,24 +371,108 @@ function CloudSection() {
             <div className="flex min-w-0 flex-1 flex-col gap-3 pt-1 pb-10">
               <h3 className="text-lg leading-[1.4] font-medium">{s.t}</h3>
               <p className="text-[15px] leading-[1.6] text-muted-foreground">{s.b}</p>
-              <div className="mt-1">
-                <CodeBlock lines={s.c} />
-              </div>
             </div>
           </li>
         ))}
       </ol>
+      <div className="grid max-w-[760px] grid-cols-1 gap-4 md:grid-cols-2">
+        {[
+          { t: "Waiting for your Mac", b: "A capture started from another device waits in the cloud queue until this Mac's capture agent checks in. The card and every agent status say Waiting for your Mac, whether the agent is busy or the Mac is asleep." },
+          { t: "One Snip per account", b: "An older Snip you already deployed is recognised, not refused: if it's empty the setup adopts it, and if it has references you choose Use that library or Stop. Your local library stays on disk either way, listed as This Mac's library with one action, Switch back to it. A Worker named snip that isn't a Snip is refused, with instructions to rename or delete it or pick another account." },
+          { t: "workers.dev only", b: "The address is https://snip.<your-subdomain>.workers.dev. Custom domains aren't supported in this release, because the address is what your passkey and agent connections are bound to." },
+          { t: "One owner for now", b: "You sign in with a passkey on each device you use, and that's the only way in: no GitHub app to register, no allowlist to maintain. Sharing a library with a second person is planned for later, and installs that already configured GitHub keep working." },
+        ].map(({ t, b }) => (
+          <div key={t} className="flex flex-col gap-1.5 rounded-2xl bg-card p-5 ring-1 ring-border">
+            <p className="text-[15px] font-medium">{t}</p>
+            <p className="text-sm leading-[1.6] text-muted-foreground">{b}</p>
+          </div>
+        ))}
+      </div>
+      <div className="flex max-w-[760px] flex-col gap-4">
+        <h3 className="text-lg leading-[1.4] font-medium">From a terminal, or from an agent</h3>
+        <p className="max-w-[640px] text-[15px] leading-[1.6] text-muted-foreground">
+          The button and the command line run the same engine. Use it to script a setup or to hand the job to an agent. It never prompts: a step that needs you emits a URL, and a missing value exits with the flag to add.
+        </p>
+        <CodeBlock label="Preflight, then enable without prompts" lines={["npm run setup:cloudflare -- --check --json", "npm run setup:cloudflare -- --yes --json"]} />
+        <p className="max-w-[640px] text-sm leading-[1.6] text-muted-foreground">
+          Output is one JSON event per line; the last is always result. Exit 0 means success, 2 means a flag or a choice is unanswered, 3 means another run holds the lock, 4 means this machine or library can't be provisioned right now. The agent stops for the Cloudflare Allow page, the R2 page and the owner link, and never types a secret into a chat.
+        </p>
+        <p className="max-w-[640px] text-sm leading-[1.6] text-muted-foreground">
+          --yes never adopts an existing library: pass --adopt-existing when Use that library is the intended answer. The CLI also leaves capture/.env alone and writes capture/.env.cloud; serve the cloud library with SNIP_CAPTURE_ENV_FILE=capture/.env.cloud npm run capture. The app's button instead points capture/.env at the copy, which is the intended end state.
+        </p>
+        <p className="max-w-[640px] text-sm leading-[1.6] text-muted-foreground">
+          The bare npm run setup:cloudflare means setup. Put any other command after --: status, detach, pull, snapshot restore, snapshot delete, snapshot delete-export, delete-resources, owner link, owner rotate, abort, migrate or deploy. status stays offline unless you add --check, and the three destructive commands need --confirm with the item's own name.
+        </p>
+      </div>
       <div className="flex max-w-[760px] items-start gap-3 rounded-2xl bg-note p-5 text-note-ink">
         <Server className="mt-0.5 size-4 shrink-0" />
         <div className="flex flex-col gap-1">
-          <p className="text-[15px] font-medium">What this is today</p>
+          <p className="text-[15px] font-medium">Full lifecycle</p>
           <p className="text-sm leading-[1.6]">
-            The setup deploys a separate Snip with its own library. Your local references are not copied to it, and the in-app Enable cloud button that will copy them
-            is not released yet.{" "}
             <a href={`${REPO_URL}/blob/main/docs/deploy.md`} target="_blank" rel="noreferrer" className="font-medium underline underline-offset-2">
               Cloud mode
             </a>{" "}
-            covers upgrading, turning it off and doing it by hand.
+            covers every command, upgrading, the local rows, deleting cloud resources and what to do if the cloud library can't be reached.
+          </p>
+        </div>
+      </div>
+    </Section>
+  )
+}
+
+function TurningOffSection() {
+  const outcomes = [
+    { t: "Stay in cloud", b: "Keep using the cloud library. Nothing changes." },
+    { t: "Turn off and keep local", b: "This Mac goes back to its own library. Nothing is deleted, on this Mac or on Cloudflare." },
+    { t: "Bring the cloud library back", b: "Downloads the cloud library, checks every reference, then switches this Mac to it. This Mac's current library is kept." },
+  ]
+  return (
+    <Section
+      id="turning-off"
+      title="Turning cloud off"
+      intro="Turning off detaches this Mac. It does not delete the cloud copy, and nothing is carried back automatically."
+    >
+      <p className="max-w-[760px] text-[15px] leading-[1.6] text-muted-foreground">
+        Settings → Cloud → Turn off cloud asks first, and says what stays: changes made in the cloud library remain there, this Mac goes back to its own library (or, for an empty
+        one, to an empty library), and the cloud library is still reachable by anything signed in to it.
+      </p>
+      <dl className="flex max-w-[760px] flex-col">
+        {outcomes.map(({ t, b }) => (
+          <div key={t} className="flex flex-col gap-1 border-t py-4 sm:flex-row sm:gap-6">
+            <dt className="w-[200px] shrink-0 text-[15px] font-medium">{t}</dt>
+            <dd className="text-[15px] leading-[1.6] text-muted-foreground">{b}</dd>
+          </div>
+        ))}
+      </dl>
+      <div className="flex max-w-[760px] flex-col gap-6">
+        <div className="flex flex-col gap-1.5">
+          <p className="text-[15px] font-medium">Copy back now</p>
+          <p className="text-[15px] leading-[1.6] text-muted-foreground">
+            Downloads a manifest, exports the cloud database, stages a new local library, downloads every file, checks the counts and a digest, then swaps it in. The library from
+            before the pull is kept as Previous library.
+          </p>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <p className="text-[15px] font-medium">This Mac's library, Previous library, Export</p>
+          <p className="text-[15px] leading-[1.6] text-muted-foreground">
+            Your library never moves, so after a move Settings lists it as This Mac's library with one action, Switch back to it. There is no Restore, because nothing was left
+            behind, and no Delete on the only copy of your library. A real second copy appears only after Copy back now or pull, as Previous library, with the line “Snapshot from
+            6 Nov, 10:12 — 812 MB. This Mac used it before the copy came back.” It can be switched back to or deleted. Setup's export is separate and can only be deleted, because a
+            database dump can't rebuild the stored files. An install with nothing to copy has no rows at all.
+          </p>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <p className="text-[15px] font-medium">Delete cloud resources</p>
+          <p className="text-[15px] leading-[1.6] text-muted-foreground">
+            Separate, destructive and never offered inside the turn-off dialog. Removes the Worker, database, key-value store and bucket after you type the library's address. The local
+            library and any previous library are untouched.
+          </p>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <p className="text-[15px] font-medium">Sign out all devices</p>
+          <p className="text-[15px] leading-[1.6] text-muted-foreground">
+            Ends every browser session and this app's session for the install. Passkeys stay registered, and agents connected over MCP keep their own tokens until those expire.
+            Removing a device is separate, on the Passkeys and devices page: a passkey is a credential, not a session.
           </p>
         </div>
       </div>
@@ -411,7 +498,8 @@ function AgentSetupSection() {
       <div className="flex max-w-[760px] flex-col gap-4">
         <CodeBlock wrap label="Prompt" lines={[`Read ${llms} and set up Snip for me.`]} />
         <p className="max-w-[640px] text-[15px] leading-[1.6] text-muted-foreground">
-          The agent runs the commands and stops for the parts only you can do: creating the GitHub OAuth app and signing in to Cloudflare, if you ask for cloud mode.
+          The agent runs the commands and stops for anything only you can do: opening the Cloudflare Allow page, turning on R2, and the owner link. It never asks you to paste a secret
+          into a chat.
         </p>
       </div>
     </Section>
@@ -431,7 +519,7 @@ function ConnectSection() {
         ["get_animation", "A contact sheet, sampled frame or original GIF"],
         ["search_pages", "Pages across references, or every page in a collection"],
         ["search_animations", "Scroll and hover GIFs across references"],
-        ["get_capture_status", "Capture progress and whether your capture agent is online"],
+        ["get_capture_status", "Capture progress and whether your capture agent is online; a queued cloud capture says Waiting for your Mac"],
         ["list_collections", "Collections with counts"],
       ],
     },
@@ -460,7 +548,8 @@ function ConnectSection() {
           lines={['{ "mcp": { "snip": { "type": "remote", "url": "http://localhost:5173/mcp" } } }']}
         />
         <p className="text-sm leading-[1.6] text-muted-foreground">
-          For Claude.ai or Claude Desktop, add a custom connector with the same URL. In cloud mode, use your deployed URL in every command and connector above.
+          For Claude.ai or Claude Desktop, add a custom connector with the same URL. In cloud mode, use your deployed URL in every command and connector above: the client signs
+          in with your passkey when it connects, then asks for your approval.
         </p>
       </div>
       <div className="grid max-w-[760px] grid-cols-1 items-start gap-6 md:grid-cols-2">
@@ -491,7 +580,8 @@ function LimitsSection() {
   ]
   const limits = [
     ["Local storage", "Only limited by your disk. Every capture is a file in the library folder, and the account menu shows the bytes used."],
-    ["Sign-in", "None locally: DEV_LOGIN names you. A hosted Snip signs in with GitHub, and only accounts in ALLOWED_GITHUB_LOGINS get in."],
+    ["Sign-in", "None locally: DEV_LOGIN names you. Cloud mode signs you in with a passkey at /sign-in. There is one owner in this version; sharing with a second person is planned for later."],
+    ["Address", "Cloud mode uses https://snip.<your-subdomain>.workers.dev. Custom domains are not supported in this release."],
     ["Page height", "Full-page screenshots stop at 16,000 px, Chromium’s texture limit."],
     ["Crawl scope", "Crawls stay on one hostname, with or without www, and ignore query strings."],
     ["Logins and bot walls", "Captures show what an anonymous browser sees, unless you tick “Use my saved sign-in” and point STORAGE_STATE at a Playwright sign-in file. Obvious cookie banners are dismissed."],

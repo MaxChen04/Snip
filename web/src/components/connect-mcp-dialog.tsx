@@ -116,7 +116,7 @@ export function ConnectMcpDialog({ open, onOpenChange }: { open: boolean; onOpen
             <p className="flex items-start gap-2 rounded-xl bg-fill-2 px-3 py-2.5 text-xs leading-[1.5] text-muted-foreground">
               <LaptopIcon className="mt-px size-3.5 shrink-0" />
               <span>
-                This is your local Snip. Agents on this Mac can use it while Snip is running. For cloud agents such as Claude.ai, host Snip on Cloudflare and use
+                This is your local Snip. Agents on this Mac can use it while Snip is running. For cloud agents such as Claude.ai, turn on cloud mode and use
                 the deployed URL instead: see{" "}
                 <a href="/guide#cloud" className="font-medium text-foreground underline underline-offset-2">
                   cloud mode
@@ -165,7 +165,7 @@ export function ConnectMcpDialog({ open, onOpenChange }: { open: boolean; onOpen
                   <span>Name it Snip, paste the MCP URL above, then Connect and finish the sign-in.</span>,
                 ]}
               </Steps>
-              {local && <p className="text-xs leading-[1.5] text-muted-foreground">Connectors reach Snip from Claude's servers, so they need your deployed URL, not localhost.</p>}
+              {local && <p className="text-xs leading-[1.5] text-muted-foreground">Connectors reach Snip from Claude's servers, so they need your cloud URL, not localhost.</p>}
             </ClientSection>
           </TabsContent>
 
@@ -243,7 +243,7 @@ export function ConnectMcpDialog({ open, onOpenChange }: { open: boolean; onOpen
         <div className="flex flex-col gap-3 border-t bg-fill-1 px-5 py-4 sm:flex-row sm:items-center">
           <p className="flex flex-1 items-start gap-2 text-xs leading-[1.5] text-muted-foreground">
             <ShieldCheckIcon className="mt-px size-3.5 shrink-0" />
-            {local ? "Your client opens a consent screen in this local Snip. Review the request before allowing access to your library." : "The first time, your client opens GitHub sign-in and a consent screen. Only allowed GitHub accounts get in."}
+            {local ? "Your client opens a consent screen in this local Snip. Review the request before allowing access to your library." : "The first time, your client sends you to Snip's sign-in page. Sign in with your passkey, then approve the request."}
           </p>
           <a
             href="/guide#connect"
