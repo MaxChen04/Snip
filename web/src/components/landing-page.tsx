@@ -380,7 +380,7 @@ function HowSection() {
         ))}
       </ol>
       <p className="max-w-[640px] text-sm leading-[1.6] text-muted-foreground">
-        Capture runs locally because free hosting plans can’t crawl whole sites. Queued references wait until the agent is running. Hosting the library on your own Cloudflare account is optional.
+        Capture runs locally because free hosting plans can’t crawl whole sites. Queued references wait until the agent is running. Copying the library to your own Cloudflare account is optional.
       </p>
     </section>
   )
@@ -389,7 +389,7 @@ function HowSection() {
 const faqs: { q: string; a: ReactNode }[] = [
   {
     q: "Does anyone else see the sites I capture?",
-    a: "No. Snip runs on your Mac and keeps the library there, and the capture agent browses from your machine, so no shared server ever sees your list. If you host Snip on your own Cloudflare account to reach it from other devices, it is still yours alone.",
+    a: "No. Snip runs on your Mac and keeps the library there, and the capture agent browses from your machine, so no shared server ever sees your list. If you turn on cloud mode, the copy lives in your own Cloudflare account and is still yours alone.",
   },
   {
     q: "Is this legal?",
@@ -403,17 +403,17 @@ const faqs: { q: string; a: ReactNode }[] = [
         <a href="/llms.txt" className="font-medium text-foreground underline-offset-4 hover:underline">
           Point your agent at our llms.txt
         </a>{" "}
-        and it can install Snip on your Mac for you, then connect it to your library through the MCP endpoint. Hosting it on Cloudflare is an optional second step.
+        and it can install Snip on your Mac for you, then connect it to your library through the MCP endpoint. Turning on cloud mode is an optional second step.
       </>
     ),
   },
   {
     q: "Does it cost anything?",
-    a: "No. Snip runs on your Mac. If you choose cloud mode, it fits in Cloudflare’s free plan: R2 gives you 10 GB of storage, roughly 1,500 to 3,000 captured pages depending on page length and GIFs.",
+    a: "No. Snip runs on your Mac. If you turn on cloud mode, it fits in Cloudflare’s free plan: R2 gives you 10 GB of storage, roughly 1,500 to 3,000 captured pages depending on page length and GIFs. R2 has to be switched on once, and Cloudflare asks for a card at that point even though the plan is free.",
   },
   {
     q: "Does my laptop need to stay on?",
-    a: "Only while capturing. Queued URLs wait until the agent is running. In cloud mode the gallery stays available from any browser in the meantime; locally, open the app on the Mac.",
+    a: "Only while capturing. Queued URLs wait until the agent is running. In cloud mode the gallery stays available from any browser while the Mac is off, and captures queued meanwhile show “Waiting for your Mac” until it wakes.",
   },
   {
     q: "Can it capture pages behind a login?",
@@ -465,7 +465,7 @@ function FinalCta() {
         {primaryLabel}
       </a>
       <p className="text-xs text-muted-foreground">
-        {PUBLIC_SITE ? "Free and source-available. Runs on your Mac; cloud hosting is optional." : "Private. Only GitHub logins you allow can sign in."}
+        {PUBLIC_SITE ? "Free and source-available. Runs on your Mac; cloud mode is optional." : "Private. Your library stays on your Mac unless you turn on cloud mode."}
       </p>
     </section>
   )
