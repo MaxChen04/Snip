@@ -1,10 +1,10 @@
 import { existsSync, readFileSync } from "node:fs"
-import type { Browser, BrowserContext, BrowserContextOptions, Page as PwPage } from "playwright"
+import type { Browser, BrowserContext, BrowserContextOptions, CDPSession, Page as PwPage } from "playwright"
 import type { CrawlState, DesignTokens, Job, PageUpload } from "../../web/shared/types"
 import { JobGoneError, type SnipApi } from "./api"
-import { encodeGif, type Frame } from "./gif"
+import { encodeGif, gifWriter, type Frame } from "./gif"
 import { allowPrivateUrls, assertPublicUrl, createCaptureNetwork, PrivateAddressError } from "./network-guard"
-import { buildStills } from "./sheet"
+import { buildStills, closeRenderer, sampleIndexes } from "./sheet"
 
 // In-page scripts live in plain .js files so the TS toolchain can't inject helpers into them.
 const script = (name: string) => readFileSync(new URL(`./inpage/${name}.js`, import.meta.url), "utf8")
@@ -25,7 +25,11 @@ const MAX_SHOT_PX = 16000 // Chromium texture limit for full-page screenshots
 const SCROLL_FPS = Math.min(50, Math.max(5, Number(process.env.SCROLL_FPS ?? 30)))
 const SCROLL_STEP = Math.max(8, Number(process.env.SCROLL_STEP ?? 40)) // px per frame at 1440 wide
 const MAX_SCROLL_FRAMES = Math.max(20, Number(process.env.SCROLL_MAX_FRAMES ?? 360))
+const SCROLL_GIF_SCALE = 2 // scroll GIFs are half the viewport size
+const FIRST_FRAME_MS = 700 // beat at the top before it starts moving
+const LAST_FRAME_MS = 1200
 const MAX_HOVER_GIFS = 6
+const HOVER_FRAME_MS = 33
 const MAX_SAVED_QUEUE = 2000 // URLs kept when a crawl pauses
 // Same text as STOPPED_EMPTY in web/shared/capture-errors.ts. Released apps ship capture/src without
 // web/shared, so the agent may only import types from there.
@@ -103,41 +107,119 @@ export async function dismissBanners(page: PwPage) {
   if (total.clicked || total.hidden) log(`  closed popups: ${total.clicked} clicked, ${total.hidden} hidden`)
 }
 
-const docHeight = (page: PwPage) => page.evaluate(() => Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight ?? 0))
+const scrollState = (page: PwPage) =>
+  page.evaluate(() => ({ y: Math.round(window.scrollY), height: Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight ?? 0) }))
+const docHeight = async (page: PwPage) => (await scrollState(page)).height
 
-/** Scroll through the page recording frames; also triggers lazy loading and scroll-reveal content. */
-export async function recordScroll(page: PwPage, record: boolean): Promise<Frame[]> {
+/**
+ * Chromium's screencast, scaled to fit `width` x `height` on the GPU as frames are composited. Call scrolled()
+ * after each scroll step; frameAt(y) is then the newest frame painted at scroll offset y, else the next one to
+ * arrive, or null if none comes within `waitMs`. After 3 misses in a row it gives up: the screencast stops and
+ * frameAt returns null at once, so a browser that never sends frames costs 3 waits, not one per frame.
+ */
+export async function screencast(cdp: CDPSession, width: number, height: number, waitMs = 250) {
+  let latest: { y: number; data: string } | null = null
+  let waiting: { y: number; done: (data: string) => void } | null = null
+  let running = false
+  let perStep = false
+  let received = 0
+  let kept = 0
+  let misses = 0 // in a row
+  const onFrame = ({ data, metadata, sessionId }: { data: string; metadata: { scrollOffsetY: number }; sessionId: number }) => {
+    cdp.send("Page.screencastFrameAck", { sessionId }).catch(() => {})
+    received++
+    latest = { y: metadata.scrollOffsetY, data }
+    if (waiting && Math.abs(waiting.y - latest.y) < 1) waiting.done(data)
+  }
+  cdp.on("Page.screencastFrame", onFrame)
+  const run = async (on: boolean) => {
+    if (on === running) return
+    running = on
+    if (on) await cdp.send("Page.startScreencast", { format: "png", maxWidth: width, maxHeight: height })
+    else await cdp.send("Page.stopScreencast").catch(() => {})
+  }
+  return {
+    scrolled: async () => { if (misses < 3) await run(true) },
+    frameAt: async (y: number) => {
+      if (misses >= 3) return null
+      const data = latest && Math.abs(latest.y - y) < 1 ? latest.data : await new Promise<string | null>((resolve) => {
+        const timer = setTimeout(() => { waiting = null; resolve(null) }, waitMs)
+        waiting = { y, done: (d) => { clearTimeout(timer); waiting = null; resolve(d) } }
+      })
+      misses = data == null ? misses + 1 : 0
+      // Left running, the screencast also captures every frame an animation paints between steps. Once those
+      // outnumber the kept frames 3 to 1, stop it after each step: every restart costs one extra capture, which
+      // is cheaper than a running animation but dearer than a still page.
+      if (++kept >= 5 && received > kept * 3) perStep = true
+      if (perStep || misses >= 3) await run(false)
+      return data == null ? null : Buffer.from(data, "base64")
+    },
+    stop: async () => {
+      cdp.off("Page.screencastFrame", onFrame)
+      await run(false)
+    },
+  }
+}
+
+/** Scroll through the page recording a GIF; also triggers lazy loading and scroll-reveal content. */
+export async function recordScroll(page: PwPage, record: boolean) {
   const frames: Frame[] = []
-  const vh = page.viewportSize()!.height
+  const { width: vw, height: vh } = page.viewportSize()!
   let height = await docHeight(page)
   const travel = Math.max(0, height - vh)
   // Small fixed steps for smooth motion; long pages take bigger steps to stay under the frame cap.
   const step = record ? Math.max(SCROLL_STEP, Math.ceil(travel / (MAX_SCROLL_FRAMES - 1))) : 400
   const delay = Math.round(1000 / SCROLL_FPS)
-  // Raw CDP with optimizeForSpeed is ~3-4x faster than page.screenshot for PNG frames.
+  const frameCount = (h: number) => Math.min(MAX_SCROLL_FRAMES, Math.ceil(Math.max(0, Math.min(h, 40_000) - vh) / step) + 1)
+  // GIF frames come from the screencast, which scales each composited frame to GIF size on the GPU: on a real
+  // site about half the browser and GPU work of a full-size screenshot. A smaller captureScreenshot would
+  // re-raster the whole page every frame, so it is only the fallback when no frame arrives in time. Each frame
+  // is encoded into the GIF on a worker thread while the next scroll paints, then dropped. Sampled frames keep
+  // a full-size JPEG still.
   const cdp = record ? await page.context().newCDPSession(page) : null
-  const shot = async () => {
-    const { data } = await cdp!.send("Page.captureScreenshot", { format: "png", optimizeForSpeed: true } as { format: "png" })
+  const shot = async (params: object) => {
+    const { data } = await cdp!.send("Page.captureScreenshot", params as { format: "png" })
     return Buffer.from(data, "base64")
+  }
+  const cast = cdp ? await screencast(cdp, Math.round(vw / SCROLL_GIF_SCALE), Math.round(vh / SCROLL_GIF_SCALE)) : null
+  let fallbacks = 0
+  const gif = gifWriter()
+  const encode = async (frame: Frame | undefined, ms: number) => {
+    if (!frame?.png) return
+    const png = frame.png
+    delete frame.png
+    frame.delay = ms
+    await gif.add(png, ms)
   }
   for (let y = 0; ; y += step) {
     await page.evaluate((top) => window.scrollTo({ top, behavior: "instant" as ScrollBehavior }), y)
-    await sleep(record ? 30 : 60)
+    await cast?.scrolled()
+    await Promise.all([encode(frames.at(-1), frames.length === 1 ? FIRST_FRAME_MS : delay), sleep(record ? 30 : 60)])
+    const state = await scrollState(page)
+    height = state.height // infinite/lazy pages can grow
+    let frame: Frame | undefined
     if (record) {
-      const scrollY = await page.evaluate(() => Math.round(window.scrollY))
-      frames.push({ png: await shot(), delay, scrollY, phase: "scroll" })
+      let png = await cast!.frameAt(state.y)
+      if (!png) {
+        fallbacks++
+        png = await shot({ format: "png", optimizeForSpeed: true, clip: { x: 0, y: state.y, width: vw, height: vh, scale: 1 / SCROLL_GIF_SCALE } })
+      }
+      frame = { png, delay, scrollY: state.y, phase: "scroll" }
+      frames.push(frame)
     }
-    height = await docHeight(page) // infinite/lazy pages can grow
-    if (y >= Math.min(height, 40_000) - vh || (record && frames.length >= MAX_SCROLL_FRAMES)) break
+    const last = y >= Math.min(height, 40_000) - vh || (record && frames.length >= MAX_SCROLL_FRAMES)
+    // The sample plan follows the page's current height; buildStills uses the nearest still if it grew later.
+    if (frame && (last || sampleIndexes(frameCount(height)).includes(frames.length - 1)))
+      frame.still = { jpeg: await shot({ format: "jpeg", quality: 82, optimizeForSpeed: true }), width: vw, height: vh }
+    if (last) break
   }
+  await encode(frames.at(-1), LAST_FRAME_MS)
+  await cast?.stop()
   await cdp?.detach().catch(() => {})
-  if (frames.length) {
-    frames[0]!.delay = 700 // beat at the top before it starts moving
-    frames[frames.length - 1]!.delay = 1200
-  }
+  if (fallbacks) log(`  scroll: ${fallbacks}/${frames.length} frames fell back to screenshots`)
   await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" as ScrollBehavior }))
   await sleep(400)
-  return frames
+  return { frames, gif: frames.length > 1 ? gif.finish() : null }
 }
 
 async function fullPageShot(page: PwPage, dpr: number) {
@@ -153,6 +235,8 @@ async function recordHovers(page: PwPage, seen: Set<string>) {
   // Shared chrome (nav links, footer buttons) repeats on every page: record each effect once per site.
   const targets = found.filter((t) => !seen.has(`${t.selector}|${t.label}`)).slice(0, MAX_HOVER_GIFS)
   const out: { gif: Buffer; width: number; height: number; label: string; selector: string; frames: Frame[]; observedStyles: Record<string, string> | null }[] = []
+  if (!targets.length) return out
+  const cdp = await page.context().newCDPSession(page)
   for (const t of targets) {
     try {
       const el = page.locator(`[data-rs-hover="${t.i}"]`).first()
@@ -188,14 +272,27 @@ async function recordHovers(page: PwPage, seen: Set<string>) {
         })
         .catch(() => null)
 
+      // Raw CDP skips page.screenshot's per-shot work in every frame (caret hiding, font wait). It takes the
+      // clip in document coordinates; whole-pixel sizes match what page.screenshot produced.
+      const scroll = await page.evaluate(() => ({ x: window.scrollX, y: window.scrollY }))
+      const shotClip = { x: clip.x + scroll.x, y: clip.y + scroll.y, width: Math.floor(clip.width + 1e-3), height: Math.floor(clip.height + 1e-3), scale: 1 }
       const frames: Frame[] = []
       const t0 = Date.now()
       let last = t0
+      let started = 0
       let phase: Frame["phase"] = "rest"
       const grab = async () => {
-        const png = await page.screenshot({ type: "png", clip })
+        // Hold the ~30 fps page.screenshot managed: faster shots would only add frames and CPU.
+        const wait = started + HOVER_FRAME_MS - Date.now()
+        if (wait > 0) await sleep(wait)
+        started = Date.now()
+        const { data } = await cdp.send("Page.captureScreenshot", { format: "png", optimizeForSpeed: true, clip: shotClip } as { format: "png" })
+        const png = Buffer.from(data, "base64")
         const now = Date.now()
-        if (frames.length) frames[frames.length - 1]!.delay = now - last
+        const prev = frames.at(-1)
+        // An unchanged shot just keeps the previous frame on screen longer, so the GIF and stills skip repeats.
+        if (prev?.png?.equals(png)) return
+        if (prev) prev.delay = now - last
         frames.push({ png, delay: 80, offsetMs: now - t0, phase })
         last = now
       }
@@ -214,16 +311,17 @@ async function recordHovers(page: PwPage, seen: Set<string>) {
       while (Date.now() - leave < 600) await grab()
       frames[frames.length - 1]!.delay = 900
 
-      // Skip effects that changed nothing visible.
-      if (frames.every((f) => f.png.equals(frames[0]!.png))) continue
+      // Skip effects that changed nothing visible (repeats were merged, so that leaves one frame).
+      if (frames.length < 2) continue
       const scale = clip.width > 700 ? 2 : 1
-      const gif = encodeGif(frames, { scale })
+      const gif = await encodeGif(frames, { scale })
       seen.add(`${t.selector}|${t.label}`)
       out.push({ gif: gif.bytes, width: gif.width, height: gif.height, label: t.label, selector: t.selector, frames, observedStyles })
     } catch (e) {
       log("  hover capture skipped:", (e as Error).message.split("\n")[0])
     }
   }
+  await cdp.detach().catch(() => {})
   return out
 }
 
@@ -360,8 +458,6 @@ export async function captureJob(browser: Browser, api: SnipApi, job: Job) {
 async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: BrowserContext, mobile: BrowserContext, network: CaptureNetwork) {
   const root = new URL(job.url)
   const prefix = `refs/${job.id}/${job.attempt}`
-  const dPage = await desktop.newPage()
-  const mPage = await mobile.newPage()
 
   const resume = job.resume
   const queue: string[] = resume ? [...resume.queue] : [normalize(root.href, root) ?? root.href]
@@ -434,8 +530,14 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
     await api.progress(job.id, `Capturing ${captured + 1}/${job.mode === "crawl" ? `${Math.min(job.maxPages, captured + 1 + queue.length)}` : 1}: ${path}`)
     log(`[${job.id}] ${url}`)
     const p = `${prefix}/p${ord}`
+    // Each viewport gets a fresh page that closes once captured, so only one site's renderer is alive at a time.
+    // The contexts live for the whole job and keep cookies (dismissed banners stay dismissed).
+    const open: PwPage[] = []
+    const newPage = async (context: BrowserContext) => { const page = await context.newPage(); open.push(page); return page }
+    const closePages = () => Promise.allSettled(open.map((page) => page.close()))
     try {
       // ---- Desktop ----
+      const dPage = await newPage(desktop)
       await load(dPage, url, network)
       const pageMeta = await run<{ title: string | null; description: string | null; favicon: string | null; links: { href: string; nav: boolean }[] }>(dPage, META_JS)
       if (!meta) meta = pageMeta
@@ -458,18 +560,20 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
         } else queue.push(...fresh)
       }
 
-      const scrollFrames = await recordScroll(dPage, true)
+      const scroll = await recordScroll(dPage, true)
       await dismissBanners(dPage) // popups that only appear after scrolling
       const desktopShot = await fullPageShot(dPage, 1)
       const desktopThumb = await dPage.screenshot({ type: "jpeg", quality: 75 })
       const styles = await run<{ tokens: DesignTokens }>(dPage, STYLES_JS, { maxElements: 3000 })
       const html = await buildSnapshot(dPage, desktop)
       const hovers = await recordHovers(dPage, hoverSeen)
+      await closePages()
 
       // ---- Mobile ----
       let mobileShot: { buf: Buffer; width: number; height: number } | null = null
       let mobileThumb: Buffer | null = null
       try {
+        const mPage = await newPage(mobile)
         await load(mPage, url, network)
         await recordScroll(mPage, false)
         mobileShot = await fullPageShot(mPage, MOBILE_DPR)
@@ -477,6 +581,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       } catch (e) {
         log("  mobile capture failed:", (e as Error).message.split("\n")[0])
       }
+      await closePages()
 
       network?.assertAllowed()
 
@@ -490,17 +595,16 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
           return { sheetKey: null, meta: null }
         }
       }
-      if (scrollFrames.length > 1) {
-        const gif = encodeGif(scrollFrames, { scale: 2 })
+      if (scroll.gif) {
         animations.push({
-          ...(await stills(`${p}/scroll`, scrollFrames, "synthetic", null)),
+          ...(await stills(`${p}/scroll`, scroll.frames, "synthetic", null)),
           kind: "scroll",
           label: path === "/" ? "Home" : path,
           selector: null,
           viewport: "desktop",
-          gifKey: await api.upload(`${p}/scroll.gif`, gif.bytes, "image/gif"),
-          width: gif.width,
-          height: gif.height,
+          gifKey: await api.upload(`${p}/scroll.gif`, scroll.gif.bytes, "image/gif"),
+          width: scroll.gif.width,
+          height: scroll.gif.height,
         })
       }
       for (let i = 0; i < hovers.length; i++) {
@@ -547,6 +651,8 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       log(`  ✗ ${url}: ${(e as Error).message.split("\n")[0]}`)
       if (captured === 0 && job.mode === "single") throw e
       if (failures > Math.max(5, job.maxPages)) throw e
+    } finally {
+      await Promise.allSettled([closePages(), closeRenderer()])
     }
   }
 

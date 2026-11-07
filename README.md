@@ -198,7 +198,7 @@ npm test               # web, capture (including MCP response budgets) and deskt
 ## Stack
 
 - `web/`: Vite + React 19 + Tailwind v4, **shadcn/ui** with the **SortUI** registry (`src/components/ui`, restyled with tactile surfaces), **Hugeicons**, Hono on Cloudflare Workers, D1, R2, `@cloudflare/workers-oauth-provider`, MCP via `@modelcontextprotocol/server`.
-- `capture/`: Node 22+ + Playwright, `gifenc` for GIF encoding.
+- `capture/`: Node 22+ + Playwright, `sharp` (libvips) for GIF encoding.
 - `desktop/`: Electron menu-bar app for Apple Silicon Macs ([Snip.app](docs/mac-app.md)).
 - `web/site/`: the static [public site](docs/public-site.md) on usesnip.dev.
 

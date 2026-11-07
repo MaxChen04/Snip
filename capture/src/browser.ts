@@ -2,6 +2,9 @@ import { spawn } from "node:child_process"
 import { createRequire } from "node:module"
 import path from "node:path"
 
+/** Chromium flags for capture, shared by the agent and the benchmark. */
+export const CHROMIUM_ARGS = ["--force-webrtc-ip-handling-policy=disable_non_proxied_udp"]
+
 /** Playwright's error when its pinned browser build was never downloaded (e.g. after a Playwright update). */
 export const isMissingBrowser = (error: unknown) =>
   error instanceof Error && /Executable doesn't exist at/i.test(error.message)
