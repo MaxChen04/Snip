@@ -47,7 +47,7 @@ test("pages can be saved to many collections without copying files, and survive 
     await db.setReferenceCollection(database, mistral.reference.id, llm, true)
 
     const pending: Promise<unknown>[] = []
-    const ctx = { waitUntil(p: Promise<unknown>) { pending.push(p) }, passThroughOnException() {} } as ExecutionContext
+    const ctx = { waitUntil(p: Promise<unknown>) { pending.push(p) }, passThroughOnException() {}, props: { ownerId: "max" } } as unknown as ExecutionContext
     const env = { DB: database, FILES: files, SESSION_SECRET: "test-secret", DEV_LOGIN: "max" } as unknown as Env
     const objectCount = async () => (await files.list()).objects.length
     await files.put(pricingPages[0]!.desktopKey!, "stored-screenshot-canary")
