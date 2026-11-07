@@ -26,7 +26,7 @@ In cloud mode the same tab is organised as panels: **Cloud library** with the ad
 
 The main window is the cloud gallery in cloud mode and no longer has the local preload bridge; Settings stays reachable from the menu bar, and its Cloud tab shows the cloud address, the install steps and the local rows. Capture stays on this Mac and is pointed at the cloud library. Passkeys and devices are managed in the browser at `/passkeys`, linked from Settings. [Cloud mode](deploy.md) explains what moves, the Cloudflare approvals, turning it off and the command-line path.
 
-An instance that was set up by an earlier version and already has GitHub credentials reports a **GitHub sign-in** row in **Access**; a new install never configures GitHub and never shows it.
+An instance set up by an earlier version that already has GitHub credentials keeps signing in with GitHub on the sign-in page, but Settings is passkeys-only for every install: it lists devices and never mentions GitHub, so a legacy owner manages devices there exactly like a new one.
 
 ## Release app and updates
 

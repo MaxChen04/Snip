@@ -241,7 +241,7 @@ Cloud mode has exactly one owner: the person who enabled it. They sign in with a
 
 Sharing a library with a second person is planned for later. When it ships, it will not change how you sign in today.
 
-**Installs that already configured GitHub keep working.** An install set up by an earlier version that has `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` set on its Worker still mounts GitHub sign-in, still honours its existing allowlist, and still offers **Use GitHub** on the sign-in page. Setup leaves those secrets alone, and Settings shows a **GitHub sign-in** row only when the Worker reports that method. A fresh install never provisions it, so the row is absent there.
+**Installs that already configured GitHub keep working.** An install set up by an earlier version that has `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` set on its Worker still mounts GitHub sign-in, still honours its existing allowlist, and still offers **Use GitHub** on the sign-in page. Setup leaves those secrets alone. Settings never mentions GitHub: it is a passkeys-only surface, so a legacy install manages its devices there and signs in through the same sign-in page as everyone else.
 
 ## Updating a cloud install
 
