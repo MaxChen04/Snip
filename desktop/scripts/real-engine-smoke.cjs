@@ -115,6 +115,13 @@ async function main() {
       'schema', 'deploy', 'secrets', 'quiesce', 'release', 'export', 'import', 'verify', 'owner', 'finish',
     ])
     assert.equal(state.steps.some(step => step.status === 'failed'), false)
+    // The live model: this Mac's library was never copied, and setup's dump is a
+    // separate delete-only export (contracts §1.11).
+    assert.equal(state.snapshot.kind, 'live')
+    assert.equal(state.snapshot.path, null)
+    assert.equal(state.snapshot.keptLocal, true)
+    assert.ok(state.snapshot.export.path, 'setup wrote the portable export')
+    assert.equal(state.move.status, 'completed')
     console.log('PASS the real engine enabled cloud, all 18 steps in order, and Settings shows the cloud state')
 
     // The capture agent follows the mode: local settings kept, cloud queue active.
@@ -141,15 +148,94 @@ async function main() {
     console.log('PASS an unreachable cloud origin says so and never falls back to the local library')
 
     await settings.bringToFront()
-
+    // The live row renders from the engine's own record, with one action and no delete.
     await settings.screenshot({ path: path.join(out, 'settings-real-engine-cloud-light.png') })
-    // One dark pass, in the same window, so both faces are from the same build.
     await settings.emulateMedia({ colorScheme: 'dark' })
     await settings.evaluate(() => document.documentElement.classList.add('dark'))
     await sleep(300)
     await settings.screenshot({ path: path.join(out, 'settings-real-engine-cloud-dark.png') })
+    await settings.emulateMedia({ colorScheme: 'light' })
+    await settings.evaluate(() => document.documentElement.classList.remove('dark'))
+    await sleep(200)
     console.log('SHOT', path.join(out, 'settings-real-engine-cloud-light.png'))
     console.log('SHOT', path.join(out, 'settings-real-engine-cloud-dark.png'))
+
+    const liveRow = settings.getByText("This Mac's library · 2 references")
+    await liveRow.waitFor({ timeout: 30000 })
+    const rowText = await liveRow.locator("xpath=ancestor::div[contains(@class,'flex')][1]").innerText()
+    assert.match(rowText, /Kept on this Mac and not updated while you use your cloud library/)
+    assert.equal(await settings.getByRole('button', { name: 'Switch back to it' }).count(), 1)
+    assert.equal(await settings.getByRole('button', { name: 'Restore' }).count(), 0)
+    console.log("PASS the live row shows this Mac's library with only Switch back to it")
+
+    // Deleting the export goes through the real `snapshot delete-export --confirm`.
+    await settings.getByRole('button', { name: 'Delete export' }).click()
+    await settings.getByRole('button', { name: 'Delete export', exact: true }).click()
+    await settings.getByRole('button', { name: 'Delete export' }).waitFor({ state: 'detached', timeout: 90000 }).catch(() => {})
+    await until(async () => {
+      const current = JSON.parse(await fs.promises.readFile(path.join(site.root, '.snip/cloud.json'), 'utf8'))
+      return current.snapshot?.export == null
+    }, 'the real engine did not delete the export', 90000).catch(async error => {
+      console.error('EXPORT STATE:', JSON.stringify(JSON.parse(await fs.promises.readFile(path.join(site.root, '.snip/cloud.json'), 'utf8')).snapshot))
+      throw error
+    })
+    console.log('PASS the real engine deleted the export through the basename confirm')
+
+    // Turn off cloud (detach), then bring it back with pull, which leaves a backup row.
+    await settings.getByRole('button', { name: 'Turn off cloud…' }).click()
+    await settings.getByRole('button', { name: /Bring the cloud library back/ }).click()
+    await settings.getByRole('button', { name: 'Copy back now' }).click()
+    await settings.getByRole('heading', { name: 'This Mac', exact: true }).waitFor({ timeout: 120000 })
+    const pulled = JSON.parse(await fs.promises.readFile(path.join(site.root, '.snip/cloud.json'), 'utf8'))
+    assert.equal(pulled.mode, 'local')
+    assert.equal(pulled.snapshot?.kind, 'backup', `pull should leave a backup: ${JSON.stringify(pulled.snapshot)}`)
+    assert.ok(pulled.snapshot.path, 'the backup has a directory')
+    console.log('PASS pull created a backup and returned the app to this Mac')
+
+    // A pull leaves the app local, so the backup row lives in the local view and is
+    // the only place its two actions can be reached.
+    const previousRow = settings.getByRole('heading', { name: 'Previous library' })
+    await previousRow.waitFor({ timeout: 30000 })
+    assert.equal(await settings.getByRole('button', { name: 'Switch back to previous library' }).count(), 1)
+    assert.equal(await settings.getByRole('button', { name: 'Delete previous library' }).count(), 1)
+    await settings.screenshot({ path: path.join(out, 'settings-real-engine-previous-library-light.png') })
+    await settings.emulateMedia({ colorScheme: 'dark' })
+    await settings.evaluate(() => document.documentElement.classList.add('dark'))
+    await sleep(300)
+    await settings.screenshot({ path: path.join(out, 'settings-real-engine-previous-library-dark.png') })
+    await settings.emulateMedia({ colorScheme: 'light' })
+    await settings.evaluate(() => document.documentElement.classList.remove('dark'))
+    await sleep(200)
+    console.log('PASS the backup row offers Switch back to previous library and Delete')
+
+    // Enable again, then detach: this is the "turn off and keep local" outcome, and
+    // it must leave the cloud copy live and recorded as detached.
+    await settings.getByRole('button', { name: 'Enable cloud' }).click()
+    await settings.getByRole('button', { name: 'Continue to Cloudflare' }).click()
+    await settings.getByRole('heading', { name: 'Cloud library', exact: true }).waitFor({ timeout: 120000 })
+    await settings.getByRole('button', { name: 'Turn off cloud…' }).click()
+    await settings.getByRole('button', { name: /Turn off and keep local/ }).click()
+    await settings.getByRole('button', { name: 'Turn off cloud', exact: true }).click()
+    await settings.getByRole('heading', { name: 'This Mac', exact: true }).waitFor({ timeout: 120000 })
+    const detached = JSON.parse(await fs.promises.readFile(path.join(site.root, '.snip/cloud.json'), 'utf8'))
+    assert.equal(detached.mode, 'local')
+    assert.ok(detached.cloud?.detachedAt, 'detach records when the cloud copy was left')
+    assert.ok(detached.cloud?.url, 'the cloud copy is still recorded, not deleted')
+    await settings.getByRole('heading', { name: 'Detached copy' }).waitFor({ timeout: 30000 })
+    await settings.screenshot({ path: path.join(out, 'settings-real-engine-detached-light.png') })
+    await settings.emulateMedia({ colorScheme: 'dark' })
+    await settings.evaluate(() => document.documentElement.classList.add('dark'))
+    await sleep(300)
+    await settings.screenshot({ path: path.join(out, 'settings-real-engine-detached-dark.png') })
+    console.log('PASS detach leaves the cloud copy live and Settings lists it as detached')
+
+    // The enabled cloud state and the local states are captured by their own smokes;
+    // this one owns the states that only the real engine can produce.
+    console.log('SHOT', path.join(out, 'settings-real-engine-previous-library-light.png'))
+    console.log('SHOT', path.join(out, 'settings-real-engine-detached-light.png'))
+    console.log('SHOT', path.join(out, 'settings-real-engine-detached-dark.png'))
+
+
   } finally {
     if (application) await application.close().catch(() => {})
     if (!process.env.SNIP_KEEP_HARNESS) await fs.promises.rm(site.temp, { recursive: true, force: true })
