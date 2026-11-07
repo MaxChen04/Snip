@@ -4,7 +4,7 @@
   "main": "worker/index.ts",
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
-  // Workers Paid (Standard) only: enable in wrangler.deploy.jsonc after checking your plan.
+  // Workers Paid (Standard) only: uncomment here after checking your plan; every deploy builds from this file.
   // Free already enforces 10 ms and rejects a custom CPU limit. See docs/cloudflare-cost-controls.md.
   // "limits": { "cpu_ms": 250 },
   // One approximate counter per IP and endpoint in each Cloudflare location.

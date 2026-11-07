@@ -76,8 +76,27 @@ function readValues(text) {
  * build-machine paths and a migrations_dir relative to the build tree; both are
  * wrong once the files are copied into the library.
  */
-function patchDeployConfig(config, { d1Id, kvId, login, url, migrations = '../migrations' }) {
+/**
+ * The `ratelimits` array from a wrangler.jsonc, or null. Full-line comments are
+ * stripped first; the array itself must be plain JSON, as the tracked file keeps it.
+ */
+function readRatelimits(text) {
+  const stripped = String(text || '').split('\n').filter((line) => !/^\s*\/\//.test(line)).join('\n');
+  const match = stripped.match(/"ratelimits"\s*:\s*(\[[\s\S]*?\])\s*,?\s*\n/);
+  if (!match) return null;
+  try {
+    const value = JSON.parse(match[1]);
+    return Array.isArray(value) && value.length ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function patchDeployConfig(config, { d1Id, kvId, login, url, migrations = '../migrations', ratelimits = null }) {
   const next = JSON.parse(JSON.stringify(config));
+  // A build from an older web/wrangler.local.jsonc has no rate-limit bindings, and the
+  // hosted OAuth guards answer 503 without them, so take them from the tracked template.
+  if ((!Array.isArray(next.ratelimits) || !next.ratelimits.length) && ratelimits) next.ratelimits = JSON.parse(JSON.stringify(ratelimits));
   delete next.configPath;
   delete next.userConfigPath;
   next.name = WORKER_NAME;
@@ -284,6 +303,7 @@ module.exports = {
   originHost,
   parseCreatedId,
   patchDeployConfig,
+  readRatelimits,
   publicUrlFrom,
   randomSecret,
   readValues,

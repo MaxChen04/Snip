@@ -415,6 +415,21 @@ test('patches the built config for the library layout', () => {
   assert.equal(built.d1_databases[0].database_id, 'REPLACE_WITH_D1_DATABASE_ID');
 });
 
+test('a build without rate-limit bindings takes them from the tracked template', () => {
+  const template = fs.readFileSync(path.join(__dirname, '../../web/wrangler.jsonc'), 'utf8');
+  const ratelimits = lib.readRatelimits(template);
+  assert.ok(ratelimits && ratelimits.length, 'the tracked template declares rate limits');
+  assert.ok(ratelimits.every((entry) => entry.name && entry.namespace_id && entry.simple));
+  const base = { d1_databases: [{ binding: 'DB' }], kv_namespaces: [{ binding: 'OAUTH_KV' }] };
+  const filled = lib.patchDeployConfig(base, { d1Id: 'd1-id', kvId: 'kv-id', login: 'tester', url: PROVIDED, ratelimits });
+  assert.deepEqual(filled.ratelimits, ratelimits);
+  // A build that already has them (for example tuned thresholds) keeps its own.
+  const own = [{ name: 'OAUTH_TOKEN_LIMITER', namespace_id: '1', simple: { limit: 5, period: 60 } }];
+  const kept = lib.patchDeployConfig({ ...base, ratelimits: own }, { d1Id: 'd1-id', kvId: 'kv-id', login: 'tester', url: PROVIDED, ratelimits });
+  assert.deepEqual(kept.ratelimits, own);
+  assert.equal(lib.readRatelimits('{ "name": "snip" }'), null);
+});
+
 test('prepareDeployLayout copies snip, client and migrations and never touches the runtime', () => {
   const library = fakeLibrary();
   const result = deploy.prepareDeployLayout({ root: library.root, dataRoot: library.root, d1Id: 'd1-id', kvId: 'kv-id', login: 'tester', url: PROVIDED });

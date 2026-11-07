@@ -38,7 +38,7 @@ const out = path.join(here, 'dist')
 const copy = (from, to) => { fs.mkdirSync(path.dirname(to), { recursive: true }); fs.cpSync(from, to, { recursive: true, verbatimSymlinks: true }) }
 try {
   fs.mkdirSync(stage)
-  for (const file of ['package.json', 'package-lock.json', 'web/package.json', 'capture/package.json', 'web/wrangler.jsonc', 'web/index.html', 'web/vite.config.ts', 'web/local-config.mjs', 'web/tsconfig.json', 'web/tsconfig.app.json', 'web/tsconfig.worker.json', 'web/components.json']) copy(path.join(root, file), path.join(stage, file))
+  for (const file of ['package.json', 'package-lock.json', 'web/package.json', 'capture/package.json', 'web/wrangler.jsonc', 'web/index.html', 'web/vite.config.ts', 'web/vite.settings.config.ts', 'web/settings.html', 'web/local-config.mjs', 'web/tsconfig.json', 'web/tsconfig.app.json', 'web/tsconfig.worker.json', 'web/components.json']) copy(path.join(root, file), path.join(stage, file))
   for (const dir of ['web/src', 'web/shared', 'web/worker', 'web/public', 'web/migrations', 'capture/src']) copy(path.join(root, dir), path.join(stage, dir))
   // Install only from the lockfile into fresh staging; never copy checkout dependencies.
   run('npm', ['ci'], { cwd: stage, env: { ...buildEnv, PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1' } })

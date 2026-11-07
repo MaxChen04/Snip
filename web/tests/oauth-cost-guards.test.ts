@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url"
 import { test } from "node:test"
 import { Miniflare, convertV4MiniflareOptions } from "miniflare"
 import { sign } from "../worker/auth"
+import { applyMigrations } from "./helpers/d1"
 
 // Use Wrangler's installed bundler to run the real entrypoint and OAuth provider in
 // workerd. Node cannot import the provider's cloudflare:workers runtime module.
@@ -48,6 +49,8 @@ test("hosted OAuth guards reject before KV and preserve normal OAuth and local r
     modules: true, script: bundle.outputFiles[0].text,
     compatibilityDate: "2026-10-01", compatibilityFlags: ["nodejs_compat"],
     kvNamespaces: ["OAUTH_KV"],
+    // Sessions are checked against the owners table (sign out all devices).
+    d1Databases: ["DB"],
     bindings: {
       PUBLIC_URL: "https://snip.test", ALLOWED_GITHUB_LOGINS: "alice", SESSION_SECRET: "test-secret",
       GITHUB_CLIENT_ID: "test-client", GITHUB_CLIENT_SECRET: "test-client-secret",
@@ -56,6 +59,7 @@ test("hosted OAuth guards reject before KV and preserve normal OAuth and local r
       OAUTH_REGISTER_LIMITER: { namespace_id: "17431001", simple: { limit: 1, period: 60 } },
     },
   }))
+  await applyMigrations(await mf.getD1Database("DB") as unknown as D1Database)
   try {
     const request = (path: string, method = "GET", mode = "allow", init: RequestInit = {}) => mf.dispatchFetch(`https://snip.test${path}`, {
       method, redirect: "manual", ...init, headers: { "cf-connecting-ip": "192.0.2.1", "x-test-guard-mode": mode, ...init.headers },

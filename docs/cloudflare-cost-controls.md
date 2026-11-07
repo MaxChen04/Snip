@@ -27,12 +27,13 @@ The guard does not throttle discovery, OPTIONS preflights, `/mcp`, galleries, si
 
 ## Apply the configuration to an existing install
 
-`npm run deploy` uses gitignored **`web/wrangler.deploy.jsonc`**, not the tracked template. Pulling the new Worker alone does not add the bindings to an existing deploy config.
+Cloud deploys (`npm run update` in cloud mode, `npm run setup:cloudflare -- deploy`, or Settings) build the Worker config from the tracked `web/wrangler.jsonc` every time, so the `ratelimits` bindings ship with the next deploy. There is nothing to copy. See [Cloud mode](deploy.md#updating-a-cloud-install).
 
-1. Back up `web/wrangler.deploy.jsonc`. Copy the `ratelimits` block from the updated tracked `web/wrangler.jsonc` into it, preserving your resource IDs, public URL, allowed logins and other custom settings.
-2. Alternatively, run `npm run setup:cloudflare`. It regenerates the deploy config from the current template and preserves the existing D1 ID, KV ID, public URL and allowed logins. It also migrates and deploys, so review the template first. Setup does **not** preserve arbitrary custom configuration such as changed thresholds, a paid CPU limit, routes or observability settings; reapply those deliberately.
-3. Keep any `web/wrangler.local.jsonc` with its existing local storage identities. No new bindings are required for loopback use. Do not copy hosted storage IDs into the local config.
-4. If updating the config by hand, run the repository checks and `npm run deploy` when ready. Test a browser sign-in and an MCP connection, including token refresh, after deploying.
+1. Update and deploy the Worker as usual. Migrations run before the deploy.
+2. Keep any `web/wrangler.local.jsonc` with its existing local storage identities. No new bindings are required for loopback use. Do not copy hosted storage IDs into the local config.
+3. Test a browser sign-in and an MCP connection, including token refresh, after deploying.
+
+`web/wrangler.deploy.jsonc` from an older install is no longer used for deploys; setup only reads it to recognise that install. Thresholds or other settings you customised there must be made in `web/wrangler.jsonc` instead.
 
 No dashboard settings or deployments are performed by these source changes.
 
@@ -44,7 +45,7 @@ Cloudflare's [Workers limits](https://developers.cloudflare.com/workers/platform
 "limits": { "cpu_ms": 250 },
 ```
 
-**For Workers Paid:** uncomment that block in your generated deploy config before the next deployment to opt into a 250 ms per-request ceiling, instead of the 30,000 ms paid default. Keep it commented out for Workers Free. This does not subscribe you to a plan, change billing alerts or set an account spending cap. Setup regenerates and deploys the commented template, removing this opt-in ceiling. For customized installs, copy the new binding block by hand, keep your active paid limit, and use `npm run deploy`. If you already reran setup, re-enable the paid block and deploy again.
+**For Workers Paid:** uncomment that block in `web/wrangler.jsonc` before the next deploy to opt into a 250 ms per-request ceiling, instead of the 30,000 ms paid default. Every deploy builds from that file, so the change has to stay there (`npm run update` will report it as a local edit). Keep it commented out for Workers Free. This does not subscribe you to a plan, change billing alerts or set an account spending cap.
 
 CPU measures execution, not time waiting for KV, D1, R2 or GitHub. A slow network response can take seconds without using 250 ms of CPU. Cloudflare allows some occasional execution flexibility; repeated excess CPU produces `exceededCpu`/Error 1102 and interrupts the request. Check Worker Metrics for these errors and CPU percentiles after deployment, especially with large captures or legacy full MCP reads, and adjust the paid ceiling if legitimate requests need more headroom. Local development does not enforce this deployed limit. See [Wrangler limits configuration](https://developers.cloudflare.com/workers/wrangler/configuration/#limits).
 
