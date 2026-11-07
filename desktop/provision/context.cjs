@@ -146,6 +146,21 @@ function createContext({ root, dataRoot, flags = {}, emit, api, wrangler, releas
       }
       return createTransfer({ url: current.cloud && current.cloud.url, token, fetchImpl: ctx.deps.fetch });
     },
+    /**
+     * A Worker secret is not live at the edge the moment it is written, so the
+     * first status request right after `secret bulk` can still 401. Poll rather
+     * than declaring a good deploy broken; `undefined` means it never answered.
+     */
+    async waitForTransferStatus({ attempts = 12, delayMs = 1500 } = {}) {
+      for (let attempt = 0; attempt < attempts; attempt++) {
+        ctx.checkCancel();
+        // `transferOf` is the injectable factory; by default it is ctx.transfer().
+        const status = await ctx.deps.transferOf(ctx).status().catch(() => null);
+        if (status && typeof status.version === 'string' && status.version) return status;
+        if (attempt < attempts - 1) await ctx.deps.sleep(delayMs);
+      }
+      return null;
+    },
     captureEnvMode() {
       if (flags.captureEnv) return flags.captureEnv;
       return flags.managed ? 'replace' : 'keep';
