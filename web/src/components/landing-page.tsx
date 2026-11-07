@@ -321,12 +321,12 @@ function MotionSection() {
         <div className="reveal flex flex-col gap-6 rounded-4xl bg-foreground p-6 text-background md:p-8 lg:flex-[5_1_0%]">
           <div className="flex flex-col gap-2">
             <h3 className="text-[22px] font-medium tracking-[-0.025em]">Connect an agent</h3>
-            <p className="text-[15px] leading-[1.6] text-background/70">A remote MCP server lets your agent search, read and add references.</p>
+            <p className="text-[15px] leading-[1.6] text-background/70">A local MCP server lets your agent search, read and add references.</p>
           </div>
           <div className="flex flex-col gap-1.5 overflow-x-auto rounded-xl bg-background/10 p-4">
             <span className="text-2xs text-background/60">Terminal</span>
             <code className="font-mono text-xs whitespace-nowrap">claude mcp add --transport http snip</code>
-            <code className="font-mono text-xs whitespace-nowrap text-background/70">https://snip.your-name.workers.dev/mcp</code>
+            <code className="font-mono text-xs whitespace-nowrap text-background/70">http://localhost:5173/mcp</code>
           </div>
           <div className="flex flex-col gap-1.5 rounded-xl bg-background p-4 text-foreground">
             <span className="text-2xs text-muted-foreground">Ask</span>
@@ -360,8 +360,8 @@ function MotionChip({ children }: { children: ReactNode }) {
 
 function HowSection() {
   const steps = [
-    ["Paste a URL", "Choose Static page or Crawl site. The job goes into your queue."],
-    ["Your machine captures it", "A local capture agent runs Chromium, records every page, then uploads the files to your library."],
+    ["Paste a URL", "Choose Single page or Crawl site. The job goes into your queue."],
+    ["Your machine captures it", "A local capture agent runs Chromium, records every page, and keeps the files in your library."],
     ["Browse, organize, ask", "Search the gallery, group references into collections, or query them from an agent."],
   ]
   return (
@@ -380,7 +380,7 @@ function HowSection() {
         ))}
       </ol>
       <p className="max-w-[640px] text-sm leading-[1.6] text-muted-foreground">
-        Capture runs locally because free hosting plans can’t crawl whole sites. Queued references wait until the agent is running.
+        Capture runs locally because free hosting plans can’t crawl whole sites. Queued references wait until the agent is running. Hosting the library on your own Cloudflare account is optional.
       </p>
     </section>
   )
@@ -389,7 +389,7 @@ function HowSection() {
 const faqs: { q: string; a: ReactNode }[] = [
   {
     q: "Does anyone else see the sites I capture?",
-    a: "No. Snip runs on your own Cloudflare account and the capture agent browses from your machine, so no shared server ever sees your list. It’s fully private. You can also run everything locally, where capture speed depends on your hardware.",
+    a: "No. Snip runs on your Mac and keeps the library there, and the capture agent browses from your machine, so no shared server ever sees your list. If you host Snip on your own Cloudflare account to reach it from other devices, it is still yours alone.",
   },
   {
     q: "Is this legal?",
@@ -403,17 +403,17 @@ const faqs: { q: string; a: ReactNode }[] = [
         <a href="/llms.txt" className="font-medium text-foreground underline-offset-4 hover:underline">
           Point your agent at our llms.txt
         </a>{" "}
-        and it can configure everything for you. Once deployed, connect it to your library through the MCP endpoint.
+        and it can install Snip on your Mac for you, then connect it to your library through the MCP endpoint. Hosting it on Cloudflare is an optional second step.
       </>
     ),
   },
   {
     q: "Does it cost anything?",
-    a: "It fits in Cloudflare’s free plan. R2 gives you 10 GB of storage, roughly 1,500 to 3,000 captured pages depending on page length and GIFs.",
+    a: "No. Snip runs on your Mac. If you choose cloud mode, it fits in Cloudflare’s free plan: R2 gives you 10 GB of storage, roughly 1,500 to 3,000 captured pages depending on page length and GIFs.",
   },
   {
     q: "Does my laptop need to stay on?",
-    a: "Only while capturing. Queued URLs wait until the agent is running, and the gallery stays available from any browser in the meantime.",
+    a: "Only while capturing. Queued URLs wait until the agent is running. In cloud mode the gallery stays available from any browser in the meantime; locally, open the app on the Mac.",
   },
   {
     q: "Can it capture pages behind a login?",
@@ -458,14 +458,14 @@ function FinalCta() {
       <h2 className="reveal text-[40px] leading-[1.05] font-medium tracking-[-0.05em] md:text-[56px]">Start your shelf</h2>
       <p className="max-w-[460px] text-[17px] leading-[1.55] text-muted-foreground">
         {PUBLIC_SITE
-          ? "Deploy your own copy on Cloudflare’s free plan, paste your first URL, and let the agent do the rest."
+          ? "Install Snip on your Mac, paste your first URL, and let the agent do the rest."
           : "Sign in with GitHub, paste your first URL, and let the agent do the rest."}
       </p>
       <a href={primaryHref()} className={cn(pill, "bg-foreground text-background hover:bg-foreground/90")}>
         {primaryLabel}
       </a>
       <p className="text-xs text-muted-foreground">
-        {PUBLIC_SITE ? "Free and self-hosted. Your library lives in your own Cloudflare account." : "Private. Only GitHub logins you allow can sign in."}
+        {PUBLIC_SITE ? "Free and source-available. Runs on your Mac; cloud hosting is optional." : "Private. Only GitHub logins you allow can sign in."}
       </p>
     </section>
   )
@@ -483,7 +483,7 @@ export function Footer() {
         <a href="/llms.txt" className="font-mono transition-colors hover:text-foreground">llms.txt</a>
         {PUBLIC_SITE && <a href={REPO_URL} className="transition-colors hover:text-foreground">GitHub</a>}
         <a href={`${REPO_URL}/blob/main/LICENSE`} className="transition-colors hover:text-foreground">Source-available (Apache 2.0 + Commons Clause)</a>
-        <span>Runs on Cloudflare Workers, D1 and R2.</span>
+        <span>Runs locally, or on your own Cloudflare account.</span>
       </nav>
       <p className="w-full text-2xs text-muted-foreground">
         Example captures show third-party websites for illustration only. Their designs and trademarks belong to their owners.
