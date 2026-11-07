@@ -1040,6 +1040,8 @@ test('no resource is created before guard has classified the account', async () 
       if (!guardSeen && CREATES.some((prefix) => line.startsWith(prefix))) createsBeforeGuard.push(line);
       return spyRun(args, options);
     };
+    let classifyCalls = 0;
+    const baseDeps = { fetch: cloudFake.fetch, library: fakeLibraryModule(model), local: LOCAL_FAKE };
     const ctx = createContext({
       root: model.root,
       dataRoot: model.root,
@@ -1048,9 +1050,8 @@ test('no resource is created before guard has classified the account', async () 
       api: fakeApi(model),
       wrangler,
       deps: {
-        fetch: cloudFake.fetch,
-        library: fakeLibraryModule(model),
-        local: LOCAL_FAKE,
+        ...baseDeps,
+        classify: (context) => { classifyCalls++; return setup.classifyAccount(context); },
         transferOf: (context) => ({ status: async () => ({
           version: '1.1.0', counts: { refs: 1284, pages: 0, collections: 0 }, hasOwner: true, ownerId: 'tester',
           ownerSecretHash: transfer.ownerSecretHash(context.secrets().ownerLinkSecret),
@@ -1067,5 +1068,31 @@ test('no resource is created before guard has classified the account', async () 
       assert.equal(error.code, 'FOREIGN_SNIP');
     });
     assert.deepEqual(createsBeforeGuard, [], `${scenario}: created ${createsBeforeGuard.join(', ')} before guard`);
+    // guard is the only classifier: two passes could disagree about the account.
+    assert.ok(classifyCalls <= 1, `${scenario}: the account was classified ${classifyCalls} times`);
   }
+});
+
+test('the choice path leaves no resource behind when the caller stops', async () => {
+  const model = buildModel({
+    deployed: true,
+    schema: true,
+    bindings: [{ name: 'DB' }, { name: 'FILES' }, { name: 'OAUTH_KV' }],
+    d1: [{ id: 'legacy-d1', name: 'snip', tables: 6 }],
+    remoteRows: { refs: 1284, pages: 9120, collections: 7 },
+  });
+  const wrangler = fakeWrangler(model);
+  const emitter = collectedEmitter();
+  const ctx = createContext({
+    root: model.root,
+    dataRoot: model.root,
+    flags: { login: 'tester', domain: 'tester', noOpen: true },
+    emit: emitter.emit,
+    api: fakeApi(model),
+    wrangler,
+    deps: { fetch: fakeCloud(model).fetch, library: fakeLibraryModule(model), local: LOCAL_FAKE },
+  });
+  await assert.rejects(() => commands.commandSetup(ctx), (error) => error.code === 'NEEDS_INPUT');
+  const creates = wrangler.calls.map((call) => call.line).filter((line) => /^(d1 create|kv namespace create|r2 bucket create|deploy|secret|d1 migrations apply)/.test(line));
+  assert.deepEqual(creates, [], 'Stop must change nothing');
 });
