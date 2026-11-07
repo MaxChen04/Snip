@@ -128,10 +128,9 @@ export async function loginVerify(c: Context<AppEnv>) {
   const body = await c.req.json<{ response?: AuthenticationResponseJSON }>().catch(() => null)
   if (!body?.response?.id) return c.json(badRequest("Expected an authentication response"), 400)
 
-  const passkey = await db.getPasskey(c.env.DB, body.response.id)
-  if (!passkey) return c.json(badRequest("This passkey is not registered on this Snip library."), 400)
-  const owner = await db.getOwner(c.env.DB, passkey.ownerId)
-  if (!owner) return c.json(badRequest("This passkey's owner no longer exists."), 400)
+  const context = await db.getPasskeyLogin(c.env.DB, body.response.id)
+  if (!context) return c.json(badRequest("This passkey is not registered on this Snip library."), 400)
+  const { passkey, owner, epoch } = context
 
   const { rpID, origin } = relyingParty(c.env)
   const credential: WebAuthnCredential = {
@@ -155,7 +154,7 @@ export async function loginVerify(c: Context<AppEnv>) {
   if (!verification.verified) return c.json(badRequest("Passkey sign-in could not be verified."), 400)
 
   await db.touchPasskey(c.env.DB, passkey.id, verification.authenticationInfo.newCounter)
-  await setSessionCookie(c, { ownerId: owner.id, label: owner.label ?? owner.id, method: "passkey", epoch: await currentEpoch(c.env.DB) })
+  await setSessionCookie(c, { ownerId: owner.id, label: owner.label ?? owner.id, method: "passkey", epoch })
   return c.json({ ok: true })
 }
 

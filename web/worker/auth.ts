@@ -283,11 +283,17 @@ export const requireCaptureToken: MiddlewareHandler<AppEnv> = async (c, next) =>
  * Blocks cross-site writes. A local install signs in with DEV_LOGIN and needs no cookie, so any
  * website open in the browser could otherwise send a simple (no-preflight) POST to localhost.
  * Requiring JSON forces a CORS preflight, and a foreign Origin or Sec-Fetch-Site is refused.
+ *
+ * `allowNullOrigin` exists for the owner link: Chromium sends `Origin: null` for a form
+ * submission from a document served with `Referrer-Policy: no-referrer`, which that page must
+ * keep. There the token in the form body is the credential, and it is single use, so a request
+ * without a usable origin is still authenticated.
  */
-export function crossSiteWrite(req: Request, { json = true } = {}): string | null {
+export function crossSiteWrite(req: Request, { json = true, allowNullOrigin = false } = {}): string | null {
   if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") return null
   const origin = req.headers.get("origin")
-  if (origin && origin !== new URL(req.url).origin) return "cross-origin request refused"
+  const opaque = allowNullOrigin && origin === "null"
+  if (origin && !opaque && origin !== new URL(req.url).origin) return "cross-origin request refused"
   const site = req.headers.get("sec-fetch-site")
   if (site && site !== "same-origin" && site !== "none") return "cross-site request refused"
   if (json && req.headers.get("content-length") !== "0" && req.body !== null) {

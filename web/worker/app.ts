@@ -17,7 +17,8 @@ import {
 import * as db from "./db"
 import { loginOptions, loginVerify, registerOptions, registerVerify, listDevices, removeDevice } from "./passkeys"
 import { ownerLinkPage, ownerLinkSubmit } from "./owner"
-import { transfer, WORKER_VERSION } from "./transfer"
+import { transfer } from "./transfer"
+import { WORKER_VERSION } from "./version"
 
 export const app = new Hono<AppEnv>()
 

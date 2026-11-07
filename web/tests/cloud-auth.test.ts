@@ -149,6 +149,9 @@ test("the owner link GET renders a form, sets no cookie and asks for no referrer
     const html = await res.text()
     assert.match(html, /<form id="snip-owner" method="post" action="\/auth\/owner">/)
     assert.ok(html.includes(token), "the form carries the signed token")
+    // The expiry/one-use note appears once; the body says what the button does.
+    assert.equal(html.match(/once/g)?.length, 1)
+    assert.match(html, /Continue to sign this browser in to your Snip library\./)
   }))
 
 test("an expired owner link is 410, an invalid one is 400, and neither sets a cookie", () =>
@@ -206,6 +209,34 @@ test("two simultaneous redemptions of one link: exactly one wins", () =>
     const [a, b] = await Promise.all([post(), post()])
     assert.deepEqual([a.status, b.status].sort(), [302, 409], "the D1 burn admits exactly one redeemer")
     assert.equal([a, b].filter((r) => r.headers.getSetCookie().length > 0).length, 1)
+  }))
+
+test("the owner link POST accepts the null origin Chromium sends with no-referrer, but not a foreign one", () =>
+  withWorker(async ({ env, call }) => {
+    const post = (token: string, origin?: string) =>
+      call("/auth/owner", {
+        method: "POST",
+        body: new URLSearchParams({ t: token }),
+        headers: { "content-type": "application/x-www-form-urlencoded", ...(origin ? { origin } : {}) },
+      })
+
+    // Chromium: a form POST from a `Referrer-Policy: no-referrer` document carries Origin: null.
+    const first = await mintOwnerLink(env, { ownerId: "max" })
+    assert.equal((await post(first.token, "null")).status, 302, "the real browser path works")
+
+    const second = await mintOwnerLink(env, { ownerId: "max" })
+    const foreign = await post(second.token, "https://evil.example")
+    assert.equal(foreign.status, 403, "a foreign origin is still refused")
+    assert.deepEqual(foreign.headers.getSetCookie(), [])
+    // The token was not burned by the refused attempt.
+    assert.equal((await post(second.token, "null")).status, 302)
+
+    const crossSite = await call("/auth/owner", {
+      method: "POST",
+      body: new URLSearchParams({ t: (await mintOwnerLink(env, { ownerId: "max" })).token }),
+      headers: { "content-type": "application/x-www-form-urlencoded", "sec-fetch-site": "cross-site" },
+    })
+    assert.equal(crossSite.status, 403, "a cross-site fetch is refused even without an origin")
   }))
 
 test("an owner link without a port redirects home instead of to a listener", () =>
@@ -380,15 +411,62 @@ test("the manifest lists every bucket page, orphans included, and never reads D1
 
     const res = await app.fetch(new Request("https://snip.test/transfer/manifest", { headers: bearer }), { ...env, ...transfer, FILES: files } as Env, ctx0)
     assert.equal(res.status, 200)
-    const manifest = (await res.json()) as { keys: { key: string; size: number; contentType: string }[]; totalBytes: number; tables: Record<string, number> }
+    const manifest = (await res.json()) as { keys: { key: string; size: number; contentType: string }[]; totalBytes: number; tables: Record<string, number>; heads: number; keyCount: number }
     assert.equal(calls, 3, "every page is listed")
     assert.equal(manifest.keys.length, 2500)
+    assert.equal(manifest.keyCount, 2500)
     assert.equal(manifest.totalBytes, (2500 * 2501) / 2)
     assert.deepEqual(manifest.keys[0], { key: objects[0]!.key, size: 1, contentType: "image/jpeg" })
     assert.equal(manifest.keys[2499]!.key, objects[2499]!.key)
+    assert.equal(manifest.heads, 2500, "one fallback HEAD per object, reported so a hosted regression is visible")
     // Tables still come from D1.
     assert.equal(manifest.tables.refs, 0)
     void database
+  }))
+
+test("the content-type fallback is batched, and costs nothing when the listing carries it", () =>
+  withWorker(async ({ env }) => {
+    let inFlight = 0
+    let peak = 0
+    let heads = 0
+    const objects = Array.from({ length: 40 }, (_, i) => ({
+      key: `refs/ab12cd34ef567890/${i.toString(16).padStart(32, "0")}/p0/page.jpg`,
+      size: 10,
+      httpMetadata: {},
+      httpEtag: `"${i}"`,
+    }))
+    const files = {
+      list: async () => ({ objects, truncated: false, cursor: "" }),
+      head: async (key: string) => {
+        heads++
+        inFlight++
+        peak = Math.max(peak, inFlight)
+        // A microtask is enough to let the other workers overlap; a truly serial loop never peaks above 1.
+        await new Promise((resolve) => setTimeout(resolve, 1))
+        inFlight--
+        return { key, size: 10, httpEtag: '"x"', httpMetadata: { contentType: "image/png" } }
+      },
+    } as unknown as R2Bucket
+
+    const batched = (await (await app.fetch(new Request("https://snip.test/transfer/manifest", { headers: bearer }), { ...env, ...transfer, FILES: files } as Env, ctx0)).json()) as { heads: number; keys: { contentType: string }[] }
+    assert.equal(heads, 40)
+    assert.equal(batched.heads, 40)
+    assert.equal(peak, 8, "concurrency is exactly 8, not one await per object")
+    assert.ok(batched.keys.every((k) => k.contentType === "image/png"))
+
+    // When the listing has the metadata (real R2), no HEAD happens at all.
+    heads = 0
+    const withMetadata = {
+      list: async () => ({ objects: objects.map((o) => ({ ...o, httpMetadata: { contentType: "image/jpeg" } })), truncated: false, cursor: "" }),
+      head: async () => {
+        heads++
+        throw new Error("no HEAD should be needed")
+      },
+    } as unknown as R2Bucket
+    const direct = (await (await app.fetch(new Request("https://snip.test/transfer/manifest", { headers: bearer }), { ...env, ...transfer, FILES: withMetadata } as Env, ctx0)).json()) as { heads: number; keys: { contentType: string }[] }
+    assert.equal(heads, 0)
+    assert.equal(direct.heads, 0)
+    assert.ok(direct.keys.every((k) => k.contentType === "image/jpeg"))
   }))
 
 test("transfer resume un-pauses through db.resumeReference and is idempotent", () =>

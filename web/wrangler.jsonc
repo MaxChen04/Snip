@@ -33,4 +33,6 @@
   //   SESSION_SECRET, CAPTURE_TOKEN, OWNER_LINK_SECRET: required. OWNER_LINK_SECRET is separate so
   //   rotating it does not invalidate sessions or signed file URLs.
   //   TRANSFER_TOKEN: only during a move or pull; /transfer/* 404s without it.
+  // `npm run cf-typegen` regenerates worker/worker-configuration.d.ts. Every name above must be
+  // present in .dev.vars for the run, or its binding disappears from the generated Env.
 }
