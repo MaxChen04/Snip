@@ -628,19 +628,57 @@ async function commandDeleteResources(ctx) {
     },
     {
       id: 'delete-verify',
-      title: 'Checking',
+      title: 'Checking everything is gone',
       async run(ctx2) {
-        const exists = await ctx2.api.workerExists(record.accountId, record.workerName || 'snip');
-        if (exists) throw new StepError('DELETE_INCOMPLETE', 'The Worker is still present.', { hint: 'Run `delete-resources` again.' });
+        // Every artifact, not just the Worker, and only then the record. A
+        // delete that reports success while a database survives is the same
+        // class of lie as a snapshot delete that clears a row and keeps the dir.
+        const worker = await ctx2.api.workerExists(record.accountId, record.workerName || 'snip');
+        if (worker) throw new StepError('DELETE_INCOMPLETE', 'The Worker is still present.', { hint: 'Run `delete-resources` again.' });
+        // A listing that fails is not evidence of absence: an unverifiable
+        // delete is reported as unverified, never as done.
+        const listed = async (list, what) => list(ctx2.wrangler, { accountId: record.accountId }).catch((error) => {
+          throw new StepError('DELETE_UNVERIFIED', `Cloudflare did not answer while checking that the ${what} was deleted.`, {
+            hint: 'Run `delete-resources` again. Nothing was changed.',
+            data: { cause: error && error.message },
+          });
+        });
+        const leftover = [];
+        if (record.d1 && record.d1.id) {
+          const databases = await listed(ctx2.deps.cloud.listD1, 'database');
+          if (databases.some((entry) => entry.id === record.d1.id || entry.name === record.d1.name)) leftover.push('database');
+        }
+        if (record.kv && record.kv.id) {
+          const namespaces = await listed(ctx2.deps.cloud.listKv, 'key-value store');
+          if (namespaces.some((entry) => entry.id === record.kv.id)) leftover.push('key-value store');
+        }
+        if (record.bucket) {
+          const buckets = await listed(ctx2.deps.cloud.listBuckets, 'storage bucket');
+          if (buckets.some((entry) => entry.name === record.bucket)) leftover.push('storage bucket');
+        }
+        if (leftover.length) {
+          throw new StepError('DELETE_INCOMPLETE', `The ${leftover.join(', ')} could not be deleted.`, {
+            hint: 'Remove them in the Cloudflare dashboard, then run `delete-resources` again.',
+            data: { leftover },
+          });
+        }
         ctx2.save((next) => {
-          next.cloud = { ...(next.cloud || {}), deletedAt: NOW() };
+          // The install is gone, so only the account and the date stay: leaving
+          // the old ids behind would let a later guard mistake a deleted Snip
+          // for one that is still installable.
+          next.cloud = { accountId: record.accountId, deletedAt: NOW() };
           next.mode = 'local';
           next.snapshot = next.snapshot || null;
+          next.steps = [];
+          next.error = null;
           return next;
         });
         return { message: 'Cloud resources are gone; this Mac keeps its local library' };
       },
-      async verify(ctx2) { return Boolean(ctx2.state().cloud && ctx2.state().cloud.deletedAt); },
+      async verify(ctx2) {
+        const cloud = ctx2.state().cloud || {};
+        return Boolean(cloud.deletedAt) && !cloud.url && !cloud.d1 && !cloud.kv && !cloud.bucket;
+      },
     },
   ];
   await require('./engine.cjs').runSteps(steps, ctx, { journal: false });

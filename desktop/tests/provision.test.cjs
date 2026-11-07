@@ -1881,3 +1881,48 @@ test('the snapshot command runs the contract step ids, in order', async () => {
     assert.deepEqual(started, expected, `${action} runs the documented steps`);
   }
 });
+
+test('delete-resources verifies every artifact and clears the install record', async () => {
+  const library = fakeLibrary();
+  stateModule.setMode(library.root, 'cloud');
+  stateModule.updateState(library.root, (next) => {
+    next.cloud = { url: PROVIDED, accountId: 'acct', workerName: 'snip', d1: { name: 'snip', id: 'd1' }, kv: { name: 'OAUTH_KV', id: 'kv' }, bucket: 'snip-files' };
+    return next;
+  });
+  const emitter = collectedEmitter();
+  const fakeCloudModule = {
+    listD1: async () => [],
+    listKv: async () => [],
+    listBuckets: async () => [],
+    deleteSecret: async () => {},
+  };
+  const ctx = createContext({
+    root: library.root, dataRoot: library.root, flags: { confirm: 'snip.tester.workers.dev' }, emit: emitter.emit,
+    api: { workerExists: async () => false },
+    wrangler: { bin: '/x', run: async () => ({ ok: true, stdout: '', stderr: '' }) },
+    deps: { fetch: async () => { throw new Error('no network'); }, cloud: fakeCloudModule },
+  });
+  const result = await commands.commandDeleteResources(ctx);
+  assert.equal(result.ok, true);
+  const record = stateModule.readState(library.root);
+  assert.equal(record.mode, 'local');
+  assert.equal(record.cloud.deletedAt !== undefined, true);
+  assert.equal(record.cloud.url, undefined, 'no stale url is left to re-install from');
+  assert.equal(record.cloud.d1, undefined);
+
+  // A surviving database is a failed delete, not a success.
+  const library2 = fakeLibrary();
+  stateModule.setMode(library2.root, 'cloud');
+  stateModule.updateState(library2.root, (next) => {
+    next.cloud = { url: PROVIDED, accountId: 'acct', workerName: 'snip', d1: { name: 'snip', id: 'd1' }, bucket: 'snip-files' };
+    return next;
+  });
+  const survivor = createContext({
+    root: library2.root, dataRoot: library2.root, flags: { confirm: 'snip.tester.workers.dev' }, emit: emitter.emit,
+    api: { workerExists: async () => false },
+    wrangler: { bin: '/x', run: async () => ({ ok: true, stdout: '', stderr: '' }) },
+    deps: { fetch: async () => { throw new Error('no network'); }, cloud: { ...fakeCloudModule, listD1: async () => [{ id: 'd1', name: 'snip' }] } },
+  });
+  await assert.rejects(() => commands.commandDeleteResources(survivor), (error) => error.code === 'DELETE_INCOMPLETE' && error.data.leftover.includes('database'));
+  assert.equal(stateModule.readState(library2.root).cloud.url, PROVIDED, 'the record stays until everything is gone');
+});
