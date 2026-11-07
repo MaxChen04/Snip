@@ -264,7 +264,11 @@ const local = {
   },
 };
 
+// Same rule as `local`: take the real module so every seam the engine adds is
+// present, and fake only the one that would start a Worker on a persist dir.
+const realLibrary = require(path.join(root, 'desktop/provision/library.cjs'));
 const libraryModule = {
+  ...realLibrary,
   async withLocalWorker(_options, fn) {
     // A real library with references also has objects; the engine refuses a copy of
     // counts without files (EXPORT_EMPTY), so seed one screenshot per reference.
