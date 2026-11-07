@@ -98,7 +98,8 @@ function start(key) {
       }
     } else {
       cwd = path.join(ROOT, "capture")
-      args = ["--import", fromRepo.resolve("tsx"), path.join(cwd, "src/index.ts")]
+      // A small young generation keeps the agent's memory near its live data; screenshots churn hundreds of MB.
+      args = ["--max-semi-space-size=4", "--import", fromRepo.resolve("tsx"), path.join(cwd, "src/index.ts")]
     }
     services[key].start({ executable: node.executable, args, cwd, env: node.env, log: makeLog(key), development: key === "web" && development })
     if (key === "web" && services.web.proc) {
