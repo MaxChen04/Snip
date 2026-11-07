@@ -87,7 +87,7 @@ function fakeWrangler(model) {
       model.d1.push(db);
       return text(`✅ Successfully created DB '${db.name}'\n\ndatabase_id = "${db.id}"\n`);
     }
-    if (line === 'kv namespace list --json') return json(model.kv.map((ns) => ({ id: ns.id, title: ns.title })));
+    if (line === 'kv namespace list') return json(model.kv.map((ns) => ({ id: ns.id, title: ns.title })));
     if (args[0] === 'kv' && args[1] === 'namespace' && args[2] === 'create') {
       const ns = { id: crypto.randomBytes(16).toString('hex'), title: args[3] };
       model.kv.push(ns);
@@ -1011,4 +1011,61 @@ test('snapshot restore refuses in cloud mode and delete clears the record', asyn
   await commands.commandSnapshot(del);
   assert.equal(stateModule.readState(library.root).snapshot, null);
   assert.equal(fs.existsSync(kept), false);
+});
+
+test('no resource is created before guard has classified the account', async () => {
+  const CREATES = ['d1 create', 'kv namespace create', 'r2 bucket create'];
+  for (const scenario of ['fresh', 'foreign', 'adopt-empty', 'adopt-existing']) {
+    const model = buildModel(scenario === 'fresh' ? {} : {
+      deployed: true,
+      schema: true,
+      bindings: [{ name: 'DB' }, { name: 'FILES' }, { name: 'OAUTH_KV' }],
+      d1: [{ id: 'legacy-d1', name: 'snip', tables: 6 }],
+      remoteRows: { refs: scenario === 'adopt-existing' ? 1284 : 0, pages: scenario === 'adopt-existing' ? 9120 : 0, collections: 0 },
+      ...(scenario === 'foreign' ? { schema: false, bindings: [{ name: 'OTHER' }] } : {}),
+    });
+    const wrangler = fakeWrangler(model);
+    const cloudFake = fakeCloud(model);
+    let guardSeen = false;
+    const emitter = collectedEmitter();
+    const originalStep = emitter.emit.step;
+    emitter.emit.step = (step, status, message, extra) => {
+      if (step === 'guard') guardSeen = true;
+      return originalStep(step, status, message, extra);
+    };
+    const createsBeforeGuard = [];
+    const spyRun = wrangler.run;
+    wrangler.run = async (args, options) => {
+      const line = args.join(' ');
+      if (!guardSeen && CREATES.some((prefix) => line.startsWith(prefix))) createsBeforeGuard.push(line);
+      return spyRun(args, options);
+    };
+    const ctx = createContext({
+      root: model.root,
+      dataRoot: model.root,
+      flags: { login: 'tester', domain: 'tester', noOpen: true, adoptExisting: scenario === 'adopt-existing' },
+      emit: emitter.emit,
+      api: fakeApi(model),
+      wrangler,
+      deps: {
+        fetch: cloudFake.fetch,
+        library: fakeLibraryModule(model),
+        local: LOCAL_FAKE,
+        transferOf: (context) => ({ status: async () => ({
+          version: '1.1.0', counts: { refs: 1284, pages: 0, collections: 0 }, hasOwner: true, ownerId: 'tester',
+          ownerSecretHash: transfer.ownerSecretHash(context.secrets().ownerLinkSecret),
+        }) }),
+      },
+    });
+    emitter.emit.human = (step, action, url, message) => {
+      if (step === 'owner') cloudFake.setOwner(true);
+      return createEmitter({ json: true, stdout: { write: (line) => { emitter.events.push(JSON.parse(line)); return true; } }, stderr: { write: () => true } }).human(step, action, url, message);
+    };
+    await commands.commandSetup(ctx).catch((error) => {
+      // A foreign account must refuse; every other scenario should finish.
+      if (scenario !== 'foreign') throw error;
+      assert.equal(error.code, 'FOREIGN_SNIP');
+    });
+    assert.deepEqual(createsBeforeGuard, [], `${scenario}: created ${createsBeforeGuard.join(', ')} before guard`);
+  }
 });

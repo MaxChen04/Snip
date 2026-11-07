@@ -223,12 +223,16 @@ function createApi({ fetchImpl = fetch, token = readWranglerToken, base = 'https
     throw new ApiError('CLOUDFLARE_API', `Cloudflare returned ${result.status} while checking for the Worker.`, { status: result.status });
   }
 
-  /** Raw script metadata, or null when absent. */
+  /**
+   * The Worker's script record, or null when it does not exist. The script
+   * endpoint answers 200 with an empty body for an existing script, so existence
+   * is the status, not the payload.
+   */
   async function worker(accountId, name) {
     const result = await request(`/accounts/${encodeURIComponent(accountId)}/workers/scripts/${encodeURIComponent(name)}`);
     if (result.status === 404) return null;
     if (!result.ok) throw new ApiError('CLOUDFLARE_API', `Cloudflare returned ${result.status} while checking for the Worker.`, { status: result.status });
-    return result.body && result.body.result;
+    return { name, exists: true, body: result.body && result.body.result };
   }
 
   /** A Worker's script settings, including its bindings. */
