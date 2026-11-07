@@ -9,7 +9,8 @@ test("no GitHub login is allowed until the owner sets one", async () => {
   assert.deepEqual(allowedLogins({ ALLOWED_GITHUB_LOGINS: "" } as Env), [])
   assert.deepEqual(allowedLogins({ ALLOWED_GITHUB_LOGINS: "your-github-login" } as Env), [])
   assert.deepEqual(allowedLogins({ ALLOWED_GITHUB_LOGINS: " Alice, your-github-login ,bob" } as Env), ["alice", "bob"])
-  const env = { ALLOWED_GITHUB_LOGINS: "your-github-login", SESSION_SECRET: "s", GITHUB_CLIENT_ID: "id" } as unknown as Env
+  // Both GitHub credentials are present, so the routes mount and the allowlist is what refuses (§5.2).
+  const env = { ALLOWED_GITHUB_LOGINS: "your-github-login", SESSION_SECRET: "s", GITHUB_CLIENT_ID: "id", GITHUB_CLIENT_SECRET: "secret" } as unknown as Env
   const res = await app.request("https://snip.test/auth/login", {}, env, ctx)
   assert.equal(res.status, 503)
   assert.match(await res.text(), /ALLOWED_GITHUB_LOGINS/)

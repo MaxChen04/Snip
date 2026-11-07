@@ -15,7 +15,12 @@ export async function guardOAuthRequest(request: Request, env: OAuthCostGuardBin
     case "/register": limiter = env.OAUTH_REGISTER_LIMITER; break
     case "/token": limiter = env.OAUTH_TOKEN_LIMITER; break
     case "/auth/login":
-    case "/auth/callback": limiter = env.OAUTH_LOGIN_LIMITER; break
+    case "/auth/callback":
+    // Passkey sign-in and the owner link are unauthenticated and write to D1 (challenges, nonces),
+    // so anonymous traffic could otherwise spend the free plan's daily D1 writes.
+    case "/auth/passkey/login/options":
+    case "/auth/passkey/login/verify":
+    case "/auth/owner": limiter = env.OAUTH_LOGIN_LIMITER; break
     case "/authorize": limiter = env.OAUTH_AUTHORIZE_LIMITER; break
     default: return
   }

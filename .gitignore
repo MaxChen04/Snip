@@ -1,6 +1,7 @@
 node_modules/
 dist/
 dist-site/
+dist-settings/
 dist-deploy/
 .wrangler/
 .dev.vars
@@ -8,6 +9,7 @@ dist-deploy/
 *.tmp.mjs
 web/node_modules/.tmp/
 backups/
+.snip/
 web/wrangler.deploy.jsonc
 capture/.env.cloudflare
 web/wrangler.local.jsonc

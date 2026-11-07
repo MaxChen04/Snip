@@ -4,7 +4,7 @@
   "main": "worker/index.ts",
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
-  // Workers Paid (Standard) only: enable in wrangler.deploy.jsonc after checking your plan.
+  // Workers Paid (Standard) only: uncomment here after checking your plan; every deploy builds from this file.
   // Free already enforces 10 ms and rejects a custom CPU limit. See docs/cloudflare-cost-controls.md.
   // "limits": { "cpu_ms": 250 },
   // One approximate counter per IP and endpoint in each Cloudflare location.
@@ -19,7 +19,7 @@
   "assets": {
     "not_found_handling": "single-page-application",
     "run_worker_first": [
-      "/api/*", "/agent/*", "/auth/*", "/files/*", "/mcp", "/mcp/*",
+      "/api/*", "/agent/*", "/auth/*", "/files/*", "/transfer/*", "/mcp", "/mcp/*",
       "/authorize", "/token", "/register", "/.well-known/*"
     ]
   },
@@ -34,12 +34,18 @@
   "r2_buckets": [{ "binding": "FILES", "bucket_name": "snip-files" }],
   "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "REPLACE_WITH_KV_NAMESPACE_ID" }],
   "vars": {
-    // Comma-separated GitHub logins allowed to sign in. Nobody can sign in until this is
-    // set: `npm run setup:cloudflare` writes your login into web/wrangler.deploy.jsonc.
+    // Comma-separated GitHub logins allowed to sign in. Read only when GITHUB_CLIENT_ID and
+    // GITHUB_CLIENT_SECRET are both set: a new install signs in with a passkey and never
+    // configures them, while an install that already had GitHub sign-in keeps working.
     "ALLOWED_GITHUB_LOGINS": "your-github-login",
     // Public origin of the deployed Worker, used as the MCP OAuth resource id.
     "PUBLIC_URL": "https://snip.YOUR-SUBDOMAIN.workers.dev"
   }
   // Secrets (wrangler secret put / .dev.vars):
-  //   GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, SESSION_SECRET, CAPTURE_TOKEN
+  //   GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET: optional; GitHub routes mount only when both exist.
+  //   SESSION_SECRET, CAPTURE_TOKEN, OWNER_LINK_SECRET: required. OWNER_LINK_SECRET is separate so
+  //   rotating it does not invalidate sessions or signed file URLs.
+  //   TRANSFER_TOKEN: only during a move or pull; /transfer/* 404s without it.
+  // `npm run cf-typegen` regenerates worker/worker-configuration.d.ts. Every name above must be
+  // present in .dev.vars for the run, or its binding disappears from the generated Env.
 }

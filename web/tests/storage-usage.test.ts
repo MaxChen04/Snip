@@ -3,13 +3,18 @@ import assert from "node:assert/strict"
 import { Miniflare, convertV4MiniflareOptions } from "miniflare"
 import { app } from "../worker/app"
 import { sign } from "../worker/auth"
+import { applyMigrations } from "./helpers/d1"
 
 async function setup(t: TestContext) {
   const mf = new Miniflare(convertV4MiniflareOptions({
     modules: true,
     script: 'export default {fetch(){return new Response("ok")}}',
     r2Buckets: ["FILES", "OTHER_FILES"],
+    // Sessions are checked against the owners table (sign out all devices).
+    d1Databases: ["DB"],
   }))
+  const database = await mf.getD1Database("DB") as unknown as D1Database
+  await applyMigrations(database)
   const cacheStorage = await mf.getCaches()
   const previousCaches = Object.getOwnPropertyDescriptor(globalThis, "caches")
   const setCaches = (value: unknown) => Object.defineProperty(globalThis, "caches", { value, configurable: true })
@@ -42,7 +47,7 @@ async function setup(t: TestContext) {
   const call = async ({ authenticated = true, origin = "https://snip.example", secret = "test-secret", bucket = trackedFiles, query = "" } = {}) => {
     const headers = new Headers()
     if (authenticated) headers.set("cookie", `rs_session=${await sign(secret, `max|${Date.now() + 60_000}`)}`)
-    const env = { FILES: bucket, SESSION_SECRET: secret, ALLOWED_GITHUB_LOGINS: "max" } as unknown as Env
+    const env = { DB: database, FILES: bucket, SESSION_SECRET: secret, ALLOWED_GITHUB_LOGINS: "max" } as unknown as Env
     return app.request(`${origin}/api/storage${query}`, { headers }, env)
   }
   return {

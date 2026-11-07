@@ -38,7 +38,7 @@ const out = path.join(here, 'dist')
 const copy = (from, to) => { fs.mkdirSync(path.dirname(to), { recursive: true }); fs.cpSync(from, to, { recursive: true, verbatimSymlinks: true }) }
 try {
   fs.mkdirSync(stage)
-  for (const file of ['package.json', 'package-lock.json', 'web/package.json', 'capture/package.json', 'web/wrangler.jsonc', 'web/index.html', 'web/vite.config.ts', 'web/local-config.mjs', 'web/tsconfig.json', 'web/tsconfig.app.json', 'web/tsconfig.worker.json', 'web/components.json']) copy(path.join(root, file), path.join(stage, file))
+  for (const file of ['package.json', 'package-lock.json', 'web/package.json', 'capture/package.json', 'web/wrangler.jsonc', 'web/index.html', 'web/vite.config.ts', 'web/vite.settings.config.ts', 'web/settings.html', 'web/local-config.mjs', 'web/tsconfig.json', 'web/tsconfig.app.json', 'web/tsconfig.worker.json', 'web/components.json']) copy(path.join(root, file), path.join(stage, file))
   for (const dir of ['web/src', 'web/shared', 'web/worker', 'web/public', 'web/migrations', 'capture/src']) copy(path.join(root, dir), path.join(stage, dir))
   // Install only from the lockfile into fresh staging; never copy checkout dependencies.
   run('npm', ['ci'], { cwd: stage, env: { ...buildEnv, PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1' } })
@@ -61,6 +61,10 @@ try {
   copy(license, path.join(stage, 'node/LICENSE'))
   fs.mkdirSync(app)
   for (const file of APP_FILES) copy(path.join(here, file), path.join(app, file))
+  // The Settings window is a static Vite bundle built from the staged source, not from
+  // the checkout; it must exist next to main.cjs so it loads with no local Worker.
+  copy(path.join(stage, 'web/dist-settings'), path.join(app, 'settings'))
+  fs.rmSync(path.join(stage, 'web/dist-settings'), { recursive: true, force: true })
   fs.writeFileSync(path.join(app, 'release.json'), JSON.stringify({ channel: 'stable', repository: REPOSITORY, updatesEnabled: release }) + '\n')
   const icon = path.join(here, 'assets/Snip.icns')
   const electronVersion = JSON.parse(fs.readFileSync(path.join(here, 'node_modules/electron/package.json'))).version

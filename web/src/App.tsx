@@ -1,15 +1,17 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from "react"
 import { Route, Switch } from "wouter"
 import { Spinner } from "@/components/ui/spinner"
-import { api, UnauthorizedError } from "@/lib/api"
+import { api, UnauthorizedError, type Me } from "@/lib/api"
 import { CollectionsProvider } from "@/lib/collections"
 import { GalleryPage } from "@/components/gallery-page"
 import { ReferencePage } from "@/components/reference-page"
 import { AddFlowProvider } from "@/components/add-flow"
 
-// Signed-out pages are split out so the app bundle doesn't carry them.
+// Signed-out and account pages are split out so the gallery bundle doesn't carry them.
 const GuidePage = lazy(() => import("@/components/guide-page").then((m) => ({ default: m.GuidePage })))
 const LandingPage = lazy(() => import("@/components/landing-page").then((m) => ({ default: m.LandingPage })))
+const SignInPage = lazy(() => import("@/components/auth/sign-in-page").then((m) => ({ default: m.SignInPage })))
+const PasskeysPage = lazy(() => import("@/components/auth/passkeys-page").then((m) => ({ default: m.PasskeysPage })))
 
 const Loading = () => (
   <div className="grid min-h-svh place-items-center">
@@ -18,7 +20,7 @@ const Loading = () => (
 )
 
 export function App() {
-  const [state, setState] = useState<"loading" | "anon" | "offline" | { login: string }>("loading")
+  const [state, setState] = useState<"loading" | "anon" | "offline" | Me>("loading")
 
   const check = useCallback(() => {
     setState("loading")
@@ -50,6 +52,17 @@ export function App() {
     return (
       <Suspense fallback={<Loading />}>
       <Switch>
+        {/* Reachable signed out: the passkey form decides for itself whether a session exists. */}
+        <Route path="/sign-in">
+          <Suspense fallback={<Loading />}>
+            <SignInPage />
+          </Suspense>
+        </Route>
+        <Route path="/passkeys">
+          <Suspense fallback={<Loading />}>
+            <PasskeysPage />
+          </Suspense>
+        </Route>
         <Route path="/guide">
           <GuidePage signedIn={false} />
         </Route>
@@ -68,6 +81,16 @@ export function App() {
         <Route path="/guide">
           <Suspense fallback={<Loading />}>
             <GuidePage signedIn />
+          </Suspense>
+        </Route>
+        <Route path="/sign-in">
+          <Suspense fallback={<Loading />}>
+            <SignInPage />
+          </Suspense>
+        </Route>
+        <Route path="/passkeys">
+          <Suspense fallback={<Loading />}>
+            <PasskeysPage />
           </Suspense>
         </Route>
         <Route path="/r/:id">{(p) => <ReferencePage key={p.id} id={p.id} login={state.login} />}</Route>
