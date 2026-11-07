@@ -37,6 +37,18 @@ class ChoiceRequired extends Error {
   }
 }
 
+/**
+ * A destructive command run without naming its target. Exit 2 and name the exact
+ * value and command; the engine never prompts and nothing is mutated.
+ */
+class ConfirmRequired extends Error {
+  constructor({ expected, command, message = 'This command needs the name of what it will delete.' }) {
+    super(message);
+    this.code = 'NEEDS_INPUT';
+    this.confirm = { expected, command };
+  }
+}
+
 class CancelledError extends Error {
   constructor() {
     super('Cancelled.');
@@ -53,8 +65,12 @@ function stepTitle(step) {
  * Throws NeedsInputError, StepError or CancelledError; the command layer turns
  * those into a result event and an exit code.
  */
-async function runSteps(steps, ctx) {
+async function runSteps(steps, ctx, { journal = true } = {}) {
   const total = steps.length;
+  // One-shot commands (owner, snapshot, delete-resources) pass journal:false:
+  // their steps describe this invocation, and a stale "done" row must never turn
+  // a second `snapshot delete` into a success for an artifact that is gone.
+  const record = (id, status, detail) => { if (journal) ctx.journal(id, status, detail); };
   let completed = 0;
   for (let index = 0; index < total; index++) {
     ctx.checkCancel();
@@ -69,19 +85,19 @@ async function runSteps(steps, ctx) {
       try { skipped = await step.skip(ctx); } catch { skipped = false; }
       if (skipped) {
         const reason = (typeof step.skipMessage === 'function' && step.skipMessage(ctx)) || 'Not needed for this library';
-        ctx.journal(step.id, 'skipped', reason);
+        record(step.id, 'skipped', reason);
         ctx.emit.step(step.id, 'skipped', reason, { progress: { done: index + 1, total } });
         completed = index + 1;
         continue;
       }
     }
 
-    const journaled = ctx.stepStatus(step.id) === 'done' || ctx.stepStatus(step.id) === 'skipped';
+    const journaled = journal && (ctx.stepStatus(step.id) === 'done' || ctx.stepStatus(step.id) === 'skipped');
     if (journaled && step.verify) {
       let verified = false;
       try { verified = await step.verify(ctx); } catch { verified = false; }
       if (verified) {
-        ctx.journal(step.id, 'done', 'Verified an earlier run');
+        record(step.id, 'done', 'Verified an earlier run');
         ctx.emit.step(step.id, 'skipped', 'Already done', { progress: { done: index + 1, total } });
         completed = index + 1;
         continue;
@@ -92,12 +108,12 @@ async function runSteps(steps, ctx) {
     try {
       data = (await step.run(ctx)) || {};
     } catch (error) {
-      if (error instanceof NeedsInputError || error instanceof CancelledError || error instanceof ChoiceRequired) throw error;
+      if (error instanceof NeedsInputError || error instanceof CancelledError || error instanceof ChoiceRequired || error instanceof ConfirmRequired) throw error;
       const failure = error instanceof StepError
         ? error
         : new StepError('STEP_FAILED', error && error.message ? error.message : `${title} failed.`, { hint: error && error.hint });
       failure.step = failure.step || step.id;
-      ctx.journal(step.id, 'failed', failure.message);
+      record(step.id, 'failed', failure.message);
       ctx.emit.step(step.id, 'failed', failure.message, { progress: { done: index, total }, data: failure.data || {} });
       throw failure;
     }
@@ -110,17 +126,17 @@ async function runSteps(steps, ctx) {
           hint: 'Fix the cause and run the same command again; completed steps are skipped.',
           step: step.id,
         });
-        ctx.journal(step.id, 'failed', failure.message);
+        record(step.id, 'failed', failure.message);
         ctx.emit.step(step.id, 'failed', failure.message, { progress: { done: index, total } });
         throw failure;
       }
     }
 
-    ctx.journal(step.id, 'done', (data && data.detail) || '');
+    record(step.id, 'done', (data && data.detail) || '');
     ctx.emit.step(step.id, 'ok', (data && data.message) || title, { progress: { done: index + 1, total }, data });
     completed = index + 1;
   }
   return { completed, total };
 }
 
-module.exports = { CancelledError, ChoiceRequired, NeedsInputError, StepError, runSteps, stepTitle };
+module.exports = { CancelledError, ChoiceRequired, ConfirmRequired, NeedsInputError, StepError, runSteps, stepTitle };

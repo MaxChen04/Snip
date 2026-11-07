@@ -19,6 +19,7 @@ const { createEmitter } = require('../provision/emit.cjs');
 const { createContext } = require('../provision/context.cjs');
 const realLocal = require('../provision/local.cjs');
 const transfer = require('../provision/transfer.cjs');
+const { libraryConfig } = require('../provision/library.cjs');
 const setup = require('../provision/setup.cjs');
 const commands = require('../provision/commands.cjs');
 const cli = require('../provision/cli.cjs');
@@ -324,6 +325,7 @@ function fakeLibraryModule(model) {
       return fn(handle);
     },
     async localWorker() { throw new Error('not used in this test'); },
+    libraryConfig: ({ dataRoot }) => path.join(dataRoot, 'web/wrangler.jsonc'),
   };
 }
 
@@ -924,7 +926,19 @@ test('delete-resources refuses without an exact host confirmation', async () => 
     wrangler: { bin: '/x', run: async () => ({ ok: true, stdout: '', stderr: '' }) },
     deps: { fetch: async () => { throw new Error('no network'); } },
   });
-  await assert.rejects(() => commands.commandDeleteResources(ctx), (error) => error.code === 'CONFIRM_REQUIRED' && error.data.expected === 'snip.tester.workers.dev');
+  await assert.rejects(() => commands.commandDeleteResources(ctx), (error) => error.code === 'CONFIRM_MISMATCH' && error.data.expected === 'snip.tester.workers.dev');
+
+  // Missing entirely is exit 2 with the exact value and command, not a mutation.
+  const missing = createContext({
+    root: library.root, dataRoot: library.root, flags: {}, emit: emitter.emit, api: {},
+    wrangler: { bin: '/x', run: async () => ({ ok: true, stdout: '', stderr: '' }) },
+    deps: { fetch: async () => { throw new Error('no network'); } },
+  });
+  await assert.rejects(() => commands.commandDeleteResources(missing), (error) => (
+    error.code === 'NEEDS_INPUT'
+    && error.confirm.expected === 'snip.tester.workers.dev'
+    && /delete-resources --confirm snip\.tester\.workers\.dev/.test(error.confirm.command)
+  ));
 });
 
 test('abort returns an interrupted enabling to local and never touches a healthy cloud', async () => {
@@ -980,47 +994,243 @@ test('npm run setup:cloudflare forwards its arguments instead of forcing setup',
   assert.match(unknown.stderr, /Unknown command nonsense/);
 });
 
-test('snapshot restore moves a state snapshot back and refuses in cloud mode', async () => {
+/** A snapshot context whose Worker reads the state dir as it really is. */
+function snapshotContext(library, { action, confirm = undefined, mode = 'local', counts = { refs: 7, pages: 3, files: 2, bytes: 24 } } = {}) {
+  const emitter = collectedEmitter();
+  const started = [];
+  const ctx = createContext({
+    root: library.root,
+    dataRoot: library.root,
+    flags: { confirm, snapshotAction: action },
+    emit: emitter.emit,
+    api: {},
+    wrangler: { bin: '/x', run: async () => ({ ok: true }) },
+    deps: {
+      fetch: async () => { throw new Error('no network'); },
+      library: {
+        async withLocalWorker(options, fn) {
+          started.push(options.persist);
+          return fn({
+            transfer: {
+              async status() { return { counts: { refs: counts.refs, pages: counts.pages } }; },
+              async manifest() { return { keys: Array.from({ length: counts.files }, (_, index) => ({ key: `k${index}`, size: counts.bytes / Math.max(1, counts.files) })) }; },
+            },
+            async dispose() {},
+          });
+        },
+        libraryConfig: ({ dataRoot }) => path.join(dataRoot, 'web/wrangler.jsonc'),
+      },
+    },
+  });
+  if (mode === 'cloud') stateModule.updateState(library.root, (next) => { next.mode = 'cloud'; return next; });
+  return { ctx, emitter, started };
+}
+
+function stateDir(base, marker) {
+  fs.mkdirSync(path.join(base, 'v3/d1'), { recursive: true });
+  fs.writeFileSync(path.join(base, 'v3/d1/marker'), marker);
+}
+
+test('restore swaps a backup in, keeps the displaced library, and records real counts', async () => {
   const library = fakeLibrary();
   const live = path.join(library.root, 'web/.wrangler/state');
-  fs.mkdirSync(path.join(live, 'v3/d1'), { recursive: true });
-  fs.writeFileSync(path.join(live, 'v3/d1/marker'), 'cloud-copy');
-  const kept = path.join(library.root, 'backups/cloud-move-2026-11-06');
-  fs.mkdirSync(path.join(kept, 'v3/d1'), { recursive: true });
-  fs.writeFileSync(path.join(kept, 'v3/d1/marker'), 'snapshot');
+  stateDir(live, 'cloud-copy');
+  const backup = path.join(library.root, 'backups/cloud-pull-2026-11-06T10-12-00');
+  stateDir(backup, 'previous');
   stateModule.updateState(library.root, (next) => {
     next.mode = 'local';
-    next.snapshot = { path: 'backups/cloud-move-2026-11-06', takenAt: new Date().toISOString(), kind: 'state' };
+    next.snapshot = { kind: 'backup', path: 'backups/cloud-pull-2026-11-06T10-12-00', keptLocal: false, takenAt: new Date().toISOString(), refs: 7 };
     return next;
   });
-  const emitter = collectedEmitter();
-  const ctx = createContext({ root: library.root, dataRoot: library.root, flags: { snapshotAction: 'restore' }, emit: emitter.emit, api: {}, wrangler: { bin: '/x', run: async () => ({ ok: true }) }, deps: { fetch: async () => { throw new Error('no network'); } } });
-  await commands.commandSnapshot(ctx);
-  assert.equal(fs.readFileSync(path.join(live, 'v3/d1/marker'), 'utf8'), 'snapshot');
-  // The replaced copy is kept, never deleted.
-  const backups = fs.readdirSync(path.join(library.root, 'backups')).filter((name) => name.startsWith('replaced-'));
-  assert.equal(backups.length, 1);
-  assert.equal(fs.readFileSync(path.join(library.root, 'backups', backups[0], 'v3/d1/marker'), 'utf8'), 'cloud-copy', 'the replaced copy must be kept for recovery');
 
+  const { ctx, started } = snapshotContext(library, { action: 'restore' });
+  const result = await commands.commandSnapshot(ctx);
+  assert.equal(result.ok, true);
+  assert.equal(fs.readFileSync(path.join(live, 'v3/d1/marker'), 'utf8'), 'previous');
+  assert.deepEqual(started, [path.join(library.root, 'backups', fs.readdirSync(path.join(library.root, 'backups')).find((name) => name.startsWith('replaced-')))], 'the displaced library is counted through a Worker');
+
+  const replaced = fs.readdirSync(path.join(library.root, 'backups')).find((name) => name.startsWith('replaced-'));
+  assert.equal(fs.readFileSync(path.join(library.root, 'backups', replaced, 'v3/d1/marker'), 'utf8'), 'cloud-copy', 'the replaced copy must be kept for recovery');
+  const after = stateModule.readState(library.root).snapshot;
+  assert.equal(after.kind, 'backup');
+  assert.equal(after.path, `backups/${replaced}`);
+  assert.equal(after.refs, 7, 'counts are read, never claimed as zero');
+  assert.equal(after.files, 2);
 });
 
-test('snapshot restore refuses in cloud mode and delete clears the record', async () => {
+test('restore is valid only for a backup: live is KEPT_LOCAL, never a success', async () => {
   const library = fakeLibrary();
-  const kept = path.join(library.root, 'backups/cloud-move-x');
-  fs.mkdirSync(kept, { recursive: true });
-  fs.writeFileSync(path.join(kept, 'dump.sql'), '');
+  stateDir(path.join(library.root, 'web/.wrangler/state'), 'kept');
   stateModule.updateState(library.root, (next) => {
     next.mode = 'cloud';
-    next.snapshot = { path: 'backups/cloud-move-x', takenAt: new Date().toISOString() };
+    next.snapshot = { kind: 'live', path: null, keptLocal: true, takenAt: new Date().toISOString(), refs: 3 };
     return next;
   });
-  const emitter = collectedEmitter();
-  const ctx = createContext({ root: library.root, dataRoot: library.root, flags: { snapshotAction: 'restore' }, emit: emitter.emit, api: {}, wrangler: { bin: '/x', run: async () => ({ ok: true }) }, deps: { fetch: async () => { throw new Error('no network'); } } });
-  await assert.rejects(() => commands.commandSnapshot(ctx), (error) => error.code === 'IN_CLOUD');
-  const del = createContext({ root: library.root, dataRoot: library.root, flags: { snapshotAction: 'delete' }, emit: emitter.emit, api: {}, wrangler: { bin: '/x', run: async () => ({ ok: true }) }, deps: { fetch: async () => { throw new Error('no network'); } } });
-  await commands.commandSnapshot(del);
+  const { ctx } = snapshotContext(library, { action: 'restore' });
+  await assert.rejects(() => commands.commandSnapshot(ctx), (error) => error.code === 'KEPT_LOCAL');
+  assert.equal(stateModule.readState(library.root).snapshot.kind, 'live');
+});
+
+test('restore refuses an export-shaped path even when a live library exists', async () => {
+  // The adopt-empty case: live and cloud are both empty, so a false "restored"
+  // is invisible to every count check. Only the shape catches it.
+  const library = fakeLibrary();
+  stateDir(path.join(library.root, 'web/.wrangler/state'), 'empty-live');
+  const exported = path.join(library.root, 'backups/cloud-export-2026-11-06T10-12-00');
+  fs.mkdirSync(exported, { recursive: true });
+  fs.writeFileSync(path.join(exported, 'dump.sql'), '');
+  fs.writeFileSync(path.join(exported, 'files.json'), '{"keys":[]}\n');
+  stateModule.updateState(library.root, (next) => {
+    next.mode = 'local';
+    next.snapshot = { kind: 'backup', path: 'backups/cloud-export-2026-11-06T10-12-00', keptLocal: false, takenAt: new Date().toISOString(), refs: 0 };
+    return next;
+  });
+  const { ctx } = snapshotContext(library, { action: 'restore' });
+  await assert.rejects(() => commands.commandSnapshot(ctx), (error) => error.code === 'SNAPSHOT_NOT_RESTORABLE');
+  assert.equal(fs.readFileSync(path.join(library.root, 'web/.wrangler/state/v3/d1/marker'), 'utf8'), 'empty-live');
+  assert.equal(stateModule.readState(library.root).snapshot.path, 'backups/cloud-export-2026-11-06T10-12-00', 'nothing was changed');
+});
+
+test('restore says "already using" only when the paths are the same directory', async () => {
+  const library = fakeLibrary();
+  const live = path.join(library.root, 'web/.wrangler/state');
+  stateDir(live, 'only-copy');
+  stateModule.updateState(library.root, (next) => {
+    next.mode = 'local';
+    next.snapshot = { kind: 'backup', path: 'web/.wrangler/state', keptLocal: false, takenAt: new Date().toISOString(), refs: 1 };
+    return next;
+  });
+  const { ctx, emitter } = snapshotContext(library, { action: 'restore' });
+  const result = await commands.commandSnapshot(ctx);
+  assert.equal(result.ok, true);
+  assert.ok(emitter.events.some((event) => event.event === 'step' && event.status === 'skipped' && /already using/.test(event.message)));
+  assert.equal(fs.readFileSync(path.join(live, 'v3/d1/marker'), 'utf8'), 'only-copy', 'nothing moved');
+});
+
+test('snapshot delete needs the basename, refuses live, and clears both the directory and the record', async () => {
+  const library = fakeLibrary();
+  stateDir(path.join(library.root, 'web/.wrangler/state'), 'live');
+  const backup = path.join(library.root, 'backups/cloud-pull-2026-11-06T10-12-00');
+  stateDir(backup, 'previous');
+  stateModule.updateState(library.root, (next) => {
+    next.mode = 'local';
+    next.snapshot = { kind: 'backup', path: 'backups/cloud-pull-2026-11-06T10-12-00', keptLocal: false, takenAt: new Date().toISOString(), refs: 2 };
+    return next;
+  });
+
+  const noConfirm = snapshotContext(library, { action: 'delete' });
+  await assert.rejects(() => commands.commandSnapshot(noConfirm.ctx), (error) => error.code === 'NEEDS_INPUT' && error.confirm.expected === 'cloud-pull-2026-11-06T10-12-00');
+  assert.equal(fs.existsSync(backup), true, 'nothing is deleted without the confirmation');
+
+  const wrong = snapshotContext(library, { action: 'delete', confirm: 'cloud-pull-other' });
+  await assert.rejects(() => commands.commandSnapshot(wrong.ctx), (error) => error.code === 'CONFIRM_MISMATCH' && error.data.expected === 'cloud-pull-2026-11-06T10-12-00');
+  assert.equal(fs.existsSync(backup), true);
+
+  const separator = snapshotContext(library, { action: 'delete', confirm: 'backups/cloud-pull-2026-11-06T10-12-00' });
+  await assert.rejects(() => commands.commandSnapshot(separator.ctx), (error) => error.code === 'CONFIRM_MISMATCH');
+  assert.equal(fs.existsSync(backup), true);
+
+  const ok = snapshotContext(library, { action: 'delete', confirm: 'cloud-pull-2026-11-06T10-12-00' });
+  const result = await commands.commandSnapshot(ok.ctx);
+  assert.equal(result.ok, true);
+  assert.equal(fs.existsSync(backup), false);
   assert.equal(stateModule.readState(library.root).snapshot, null);
-  assert.equal(fs.existsSync(kept), false);
+
+  // And a live record can never be deleted, even with a matching name.
+  stateModule.updateState(library.root, (next) => {
+    next.snapshot = { kind: 'live', path: null, keptLocal: true, takenAt: new Date().toISOString(), refs: 2 };
+    return next;
+  });
+  const liveDelete = snapshotContext(library, { action: 'delete', confirm: 'state' });
+  await assert.rejects(() => commands.commandSnapshot(liveDelete.ctx), (error) => error.code === 'CANNOT_DELETE_LOCAL');
+  assert.equal(fs.existsSync(path.join(library.root, 'web/.wrangler/state')), true);
+});
+
+test('snapshot delete refuses when the live library is gone, because the backup is the only copy', async () => {
+  const library = fakeLibrary();
+  const backup = path.join(library.root, 'backups/cloud-pull-2026-11-06T10-12-00');
+  stateDir(backup, 'previous');
+  stateModule.updateState(library.root, (next) => {
+    next.mode = 'local';
+    next.snapshot = { kind: 'backup', path: 'backups/cloud-pull-2026-11-06T10-12-00', keptLocal: false, takenAt: new Date().toISOString(), refs: 2 };
+    return next;
+  });
+  const { ctx } = snapshotContext(library, { action: 'delete', confirm: 'cloud-pull-2026-11-06T10-12-00' });
+  await assert.rejects(() => commands.commandSnapshot(ctx), (error) => error.code === 'LIVE_MISSING');
+  assert.equal(fs.existsSync(backup), true);
+});
+
+test('snapshot delete-export works in any mode, needs the basename, and leaves the snapshot alone', async () => {
+  const library = fakeLibrary();
+  const exported = path.join(library.root, 'backups/cloud-export-2026-11-06T10-12-00');
+  fs.mkdirSync(exported, { recursive: true });
+  fs.writeFileSync(path.join(exported, 'dump.sql'), '');
+  stateModule.updateState(library.root, (next) => {
+    next.mode = 'cloud';
+    next.snapshot = {
+      kind: 'live', path: null, keptLocal: true, takenAt: new Date().toISOString(), refs: 4,
+      export: { path: 'backups/cloud-export-2026-11-06T10-12-00', takenAt: new Date().toISOString(), refs: 4, files: 1, bytes: 10 },
+    };
+    return next;
+  });
+
+  const missing = snapshotContext(library, { action: 'delete-export' });
+  await assert.rejects(() => commands.commandSnapshot(missing.ctx), (error) => error.code === 'NEEDS_INPUT' && error.confirm.expected === 'cloud-export-2026-11-06T10-12-00');
+
+  const ok = snapshotContext(library, { action: 'delete-export', confirm: 'cloud-export-2026-11-06T10-12-00' });
+  const result = await commands.commandSnapshot(ok.ctx);
+  assert.equal(result.ok, true);
+  assert.equal(fs.existsSync(exported), false);
+  const after = stateModule.readState(library.root);
+  assert.equal(after.mode, 'cloud', 'the mode is untouched');
+  assert.equal(after.snapshot.kind, 'live');
+  assert.equal(after.snapshot.export, null);
+
+  // Nothing left to delete is NO_EXPORT, not a silent success.
+  const again = snapshotContext(library, { action: 'delete-export', confirm: 'cloud-export-2026-11-06T10-12-00' });
+  await assert.rejects(() => commands.commandSnapshot(again.ctx), (error) => error.code === 'NO_EXPORT');
+});
+
+test('an adopt-empty move records a live snapshot plus a delete-only export', async () => {
+  const library = fakeLibrary();
+  const model = buildModel({ deployed: true, schema: true, bindings: [{ name: 'DB' }, { name: 'FILES' }, { name: 'OAUTH_KV' }], d1: [{ id: 'legacy-d1', name: 'snip', tables: 6 }], remoteRows: { refs: 0, pages: 0, collections: 0 } });
+  const wrangler = fakeWrangler(model);
+  const emitter = collectedEmitter();
+  const cloudFake = fakeCloud(model);
+  emitter.emit.human = (step, action, url, message) => {
+    if (step === 'owner') cloudFake.setOwner(true);
+    return createEmitter({ json: true, stdout: { write: (line) => { emitter.events.push(JSON.parse(line)); return true; } }, stderr: { write: () => true } }).human(step, action, url, message);
+  };
+  const ctx = createContext({
+    root: library.root,
+    dataRoot: library.root,
+    flags: { login: 'tester', domain: 'tester', noOpen: true, adoptExisting: true },
+    emit: emitter.emit,
+    api: fakeApi(model),
+    wrangler,
+    deps: {
+      fetch: cloudFake.fetch,
+      library: fakeLibraryModule(model),
+      local: LOCAL_FAKE,
+      transferOf: (context) => ({ status: async () => ({
+        version: '1.1.0', hasOwner: true, ownerId: 'tester',
+        counts: { refs: 0, pages: 0, collections: 0 },
+        ownerSecretHash: transfer.ownerSecretHash(context.secrets().ownerLinkSecret),
+      }) }),
+    },
+  });
+  await commands.commandSetup(ctx);
+  const record = stateModule.readState(library.root);
+  assert.equal(record.snapshot.kind, 'live');
+  assert.equal(record.snapshot.path, null, 'the local library never moved');
+  assert.ok(record.snapshot.export && record.snapshot.export.path.startsWith('backups/cloud-export-'), 'the dump is a separate export');
+  // The export is not restorable, which is what makes the empty case safe.
+  const { ctx: restoreCtx } = snapshotContext(library, { action: 'restore' });
+  stateModule.updateState(library.root, (next) => {
+    next.snapshot = { ...next.snapshot, kind: 'backup', keptLocal: false, path: next.snapshot.export.path, refs: 0 };
+    return next;
+  });
+  await assert.rejects(() => commands.commandSnapshot(restoreCtx), (error) => error.code === 'SNAPSHOT_NOT_RESTORABLE');
 });
 
 test('no resource is created before guard has classified the account', async () => {
@@ -1395,4 +1605,504 @@ test('imports drop SQLite internals a fresh database does not have', () => {
     "INSERT INTO \"owners\" (id) VALUES ('c')",
     "INSERT INTO \"sessions\" (id) VALUES ('b')",
   ]);
+});
+
+test('the engine reads the library identity the app uses, not a stale config', () => {
+  const { root, dataRoot } = fakeLibrary();
+  const saved = path.join(dataRoot, '.snip/storage-identities.json');
+  fs.mkdirSync(path.dirname(saved), { recursive: true });
+  fs.writeFileSync(saved, JSON.stringify({
+    version: 1,
+    d1_databases: [{ binding: 'DB', database_name: 'snip', database_id: 'LOCAL-ONLY' }],
+    r2_buckets: [{ binding: 'FILES', bucket_name: 'snip-files' }],
+    kv_namespaces: [{ binding: 'OAUTH_KV', id: 'KV-LOCAL' }],
+    vars: { PUBLIC_URL: 'http://127.0.0.1:5199' },
+  }));
+  const config = libraryConfig({ root, dataRoot });
+  assert.equal(config, path.join(dataRoot, '.snip/wrangler-library.json'));
+  const written = JSON.parse(fs.readFileSync(config, 'utf8'));
+  assert.equal(written.d1_databases[0].database_id, 'LOCAL-ONLY');
+  assert.equal(written.kv_namespaces[0].id, 'KV-LOCAL');
+  assert.match(written.d1_databases[0].migrations_dir, /web\/migrations$/);
+});
+
+test('without a storage snapshot the config on disk is the identity, and nothing is written', () => {
+  const { root, dataRoot } = fakeLibrary();
+  assert.equal(libraryConfig({ root, dataRoot }), path.join(dataRoot, 'web/wrangler.jsonc'));
+  assert.equal(fs.existsSync(path.join(dataRoot, '.snip/wrangler-library.json')), false);
+});
+
+test('a legacy export record cannot be restored or deleted as a library', async () => {
+  const library = fakeLibrary();
+  stateDir(path.join(library.root, 'web/.wrangler/state'), 'live');
+  const exported = path.join(library.root, 'backups/cloud-move-2026-11-06T10-12-00');
+  fs.mkdirSync(exported, { recursive: true });
+  fs.writeFileSync(path.join(exported, 'dump.sql'), '');
+  fs.writeFileSync(path.join(exported, 'files.json'), '{"keys":[]}\n');
+  stateModule.updateState(library.root, (next) => {
+    next.mode = 'cloud';
+    next.snapshot = { path: 'backups/cloud-move-2026-11-06T10-12-00', takenAt: new Date().toISOString(), refs: 0 };
+    return next;
+  });
+  const restore = snapshotContext(library, { action: 'restore' });
+  await assert.rejects(() => commands.commandSnapshot(restore.ctx), (error) => error.code === 'NOT_A_BACKUP');
+  const del = snapshotContext(library, { action: 'delete', confirm: 'cloud-move-2026-11-06T10-12-00' });
+  await assert.rejects(() => commands.commandSnapshot(del.ctx), (error) => error.code === 'NOT_A_BACKUP');
+  // It is still delete-only, through the export command.
+  const exportedDelete = snapshotContext(library, { action: 'delete-export', confirm: 'cloud-move-2026-11-06T10-12-00' });
+  const result = await commands.commandSnapshot(exportedDelete.ctx);
+  assert.equal(result.ok, true);
+  assert.equal(fs.existsSync(exported), false);
+  assert.equal(stateModule.readState(library.root).snapshot, null, 'a snapshot that was only an export becomes null');
+});
+
+test('a second snapshot delete is NO_SNAPSHOT, not a journaled success', async () => {
+  const library = fakeLibrary();
+  stateDir(path.join(library.root, 'web/.wrangler/state'), 'live');
+  const backup = path.join(library.root, 'backups/cloud-pull-2026-11-06T10-12-00');
+  stateDir(backup, 'previous');
+  stateModule.updateState(library.root, (next) => {
+    next.mode = 'local';
+    next.snapshot = { kind: 'backup', path: 'backups/cloud-pull-2026-11-06T10-12-00', keptLocal: false, takenAt: new Date().toISOString(), refs: 2 };
+    return next;
+  });
+  const first = snapshotContext(library, { action: 'delete', confirm: 'cloud-pull-2026-11-06T10-12-00' });
+  await commands.commandSnapshot(first.ctx);
+  const second = snapshotContext(library, { action: 'delete', confirm: 'cloud-pull-2026-11-06T10-12-00' });
+  await assert.rejects(() => commands.commandSnapshot(second.ctx), (error) => error.code === 'NO_SNAPSHOT');
+});
+
+test('owner link on a bare CLI does not wait when an owner already exists', async () => {
+  const library = fakeLibrary();
+  stateModule.writeSecrets(library.root, { version: 1, ownerLinkSecret: crypto.randomBytes(32).toString('hex'), captureToken: 'c' });
+  stateModule.updateState(library.root, (next) => {
+    next.mode = 'cloud';
+    next.cloud = { url: PROVIDED, accountId: 'acct', ownerId: 'tester' };
+    return next;
+  });
+  const emitter = collectedEmitter();
+  const ctx = createContext({
+    root: library.root, dataRoot: library.root, flags: { ownerAction: 'link', noOpen: true }, emit: emitter.emit, api: {},
+    wrangler: { bin: '/x', run: async () => ({ ok: true }) },
+    deps: {
+      fetch: async () => { throw new Error('no network'); },
+      transferOf: () => ({ status: async () => ({ hasOwner: true, ownerId: 'tester' }) }),
+    },
+  });
+  const result = await commands.commandOwner(ctx);
+  assert.equal(result.ok, true);
+  assert.match(result.message, /Sign-in link: https:\/\/snip\.tester\.workers\.dev\/auth\/owner\?t=/);
+  const open = emitter.events.find((event) => event.event === 'step' && event.step === 'owner-open' && event.status === 'ok');
+  assert.match(open.message, /open it in the browser/);
+  assert.equal(emitter.events.some((event) => event.event === 'session'), false, 'a bare CLI has no handoff');
+});
+
+test('owner link waits for the first owner, then reports Signed in', async () => {
+  const library = fakeLibrary();
+  stateModule.writeSecrets(library.root, { version: 1, ownerLinkSecret: crypto.randomBytes(32).toString('hex'), captureToken: 'c' });
+  stateModule.updateState(library.root, (next) => {
+    next.mode = 'cloud';
+    next.cloud = { url: PROVIDED, accountId: 'acct' };
+    return next;
+  });
+  let hasOwner = false;
+  let ticks = 0;
+  const emitter = collectedEmitter();
+  const ctx = createContext({
+    root: library.root, dataRoot: library.root, flags: { ownerAction: 'link', noOpen: true }, emit: emitter.emit, api: {},
+    wrangler: { bin: '/x', run: async () => ({ ok: true }) },
+    deps: {
+      fetch: async () => { throw new Error('no network'); },
+      sleep: async () => { ticks++; hasOwner = true; },
+      transferOf: () => ({ status: async () => ({ hasOwner }) }),
+    },
+  });
+  const result = await commands.commandOwner(ctx);
+  assert.equal(result.ok, true);
+  assert.equal(ticks, 1, 'it polls until the Worker reports an owner');
+  const open = emitter.events.find((event) => event.event === 'step' && event.step === 'owner-open' && event.status === 'ok');
+  assert.equal(open.message, 'Signed in');
+});
+
+test('status is offline, and status --check is the only form that goes to the network', async () => {
+  const library = fakeLibrary();
+  stateModule.setMode(library.root, 'local');
+  let calls = 0;
+  const emitter = collectedEmitter();
+  const make = (check) => createContext({
+    root: library.root, dataRoot: library.root, flags: { check }, emit: emitter.emit, api: {},
+    wrangler: { bin: '/x', run: async () => ({ ok: true }) },
+    deps: {
+      fetch: async () => { calls++; return new Response('ok'); },
+      local: { ...LOCAL_FAKE, reachable: async () => true },
+    },
+  });
+  const offline = await commands.commandStatus(make(false));
+  assert.equal(calls, 0, 'status never reaches the network');
+  assert.equal(offline.data.online, false);
+  assert.equal(offline.data.state.mode, 'local');
+
+  const checked = await commands.commandStatus(make(true), { check: true });
+  assert.equal(checked.data.online, true);
+  assert.equal(checked.data.checks.local.reachable, true);
+});
+
+test('status --check fails when the active surface does not answer', async () => {
+  const library = fakeLibrary();
+  stateModule.setMode(library.root, 'local');
+  const emitter = collectedEmitter();
+  const ctx = createContext({
+    root: library.root, dataRoot: library.root, flags: { check: true }, emit: emitter.emit, api: {},
+    wrangler: { bin: '/x', run: async () => ({ ok: true }) },
+    deps: { fetch: async () => { throw new Error('no network'); }, local: { ...LOCAL_FAKE, reachable: async () => false } },
+  });
+  await assert.rejects(() => commands.commandStatus(ctx, { check: true }), (error) => error.code === 'LOCAL_UNREACHABLE');
+});
+
+test('pull keeps the replaced library as a backup with real counts read through a Worker', async () => {
+  const library = fakeLibrary();
+  stateModule.setMode(library.root, 'cloud');
+  const live = path.join(library.root, 'web/.wrangler/state');
+  stateDir(live, 'previous');
+  const stagedRoot = path.join(library.root, 'backups/pull-test');
+  const stagedState = path.join(stagedRoot, 'state');
+  stateDir(stagedState, 'cloud-copy');
+  const seen = [];
+  const emitter = collectedEmitter();
+  const ctx = createContext({
+    root: library.root, dataRoot: library.root, flags: {}, emit: emitter.emit, api: {},
+    wrangler: { bin: '/x', run: async () => ({ ok: true }) },
+    deps: {
+      fetch: async () => { throw new Error('no network'); },
+      library: {
+        async withLocalWorker(options, fn) {
+          seen.push(options.persist);
+          return fn({
+            transfer: {
+              async status() { return { counts: { refs: 9, pages: 4 } }; },
+              async manifest() { return { keys: [{ key: 'a', size: 10 }, { key: 'b', size: 5 }] }; },
+            },
+            async dispose() {},
+          });
+        },
+        libraryConfig: ({ dataRoot }) => path.join(dataRoot, 'web/wrangler.jsonc'),
+      },
+    },
+  });
+  const swap = commands.pullSteps({ stagedRoot, stagedState }).find((step) => step.id === 'pull-swap');
+  await swap.run(ctx);
+  assert.equal(await swap.verify(ctx), true, 'verify passes when the copy is live and the backup is on disk');
+  assert.equal(fs.readFileSync(path.join(live, 'v3/d1/marker'), 'utf8'), 'cloud-copy');
+  const record = stateModule.readState(library.root);
+  assert.equal(record.mode, 'local');
+  assert.equal(record.snapshot.kind, 'backup');
+  assert.match(record.snapshot.path, /^backups\/cloud-pull-/);
+  assert.equal(record.snapshot.keptLocal, false);
+  assert.equal(record.snapshot.refs, 9, 'counts come from the Worker, never 0');
+  assert.equal(record.snapshot.files, 2);
+  assert.equal(record.snapshot.bytes, 15);
+  assert.deepEqual(seen, [path.join(library.root, record.snapshot.path)], 'the Worker reads the renamed directory');
+  assert.equal(fs.readFileSync(path.join(library.root, record.snapshot.path, 'v3/d1/marker'), 'utf8'), 'previous');
+});
+
+test('pull puts the previous library back when its counts cannot be read', async () => {
+  const library = fakeLibrary();
+  stateModule.setMode(library.root, 'cloud');
+  const live = path.join(library.root, 'web/.wrangler/state');
+  stateDir(live, 'previous');
+  const stagedRoot = path.join(library.root, 'backups/pull-test');
+  const stagedState = path.join(stagedRoot, 'state');
+  stateDir(stagedState, 'cloud-copy');
+  const emitter = collectedEmitter();
+  const ctx = createContext({
+    root: library.root, dataRoot: library.root, flags: {}, emit: emitter.emit, api: {},
+    wrangler: { bin: '/x', run: async () => ({ ok: true }) },
+    deps: {
+      fetch: async () => { throw new Error('no network'); },
+      library: {
+        async withLocalWorker() { throw new Error('cannot open'); },
+        libraryConfig: ({ dataRoot }) => path.join(dataRoot, 'web/wrangler.jsonc'),
+      },
+    },
+  });
+  const swap = commands.pullSteps({ stagedRoot, stagedState }).find((step) => step.id === 'pull-swap');
+  await assert.rejects(() => swap.run(ctx), (error) => error.code === 'PULL_COUNTS_FAILED');
+  assert.equal(fs.readFileSync(path.join(live, 'v3/d1/marker'), 'utf8'), 'previous', 'the previous library is back in place');
+  assert.equal(stateModule.readState(library.root).snapshot, null, 'no record was written');
+  assert.deepEqual(fs.readdirSync(path.join(library.root, 'backups')).filter((name) => name.startsWith('cloud-pull-')), []);
+});
+
+test('pull with no previous library records no snapshot at all', async () => {
+  const library = fakeLibrary();
+  stateModule.setMode(library.root, 'cloud');
+  const stagedRoot = path.join(library.root, 'backups/pull-test');
+  const stagedState = path.join(stagedRoot, 'state');
+  stateDir(stagedState, 'cloud-copy');
+  const emitter = collectedEmitter();
+  const ctx = createContext({
+    root: library.root, dataRoot: library.root, flags: {}, emit: emitter.emit, api: {},
+    wrangler: { bin: '/x', run: async () => ({ ok: true }) },
+    deps: { fetch: async () => { throw new Error('no network'); }, library: { async withLocalWorker() { throw new Error('must not be called'); }, libraryConfig: () => null } },
+  });
+  const swap = commands.pullSteps({ stagedRoot, stagedState }).find((step) => step.id === 'pull-swap');
+  await swap.run(ctx);
+  assert.equal(stateModule.readState(library.root).snapshot, null);
+  assert.equal(fs.existsSync(path.join(library.root, 'web/.wrangler/state/v3/d1/marker')), true);
+});
+
+test('the snapshot command runs the contract step ids, in order', async () => {
+  const library = fakeLibrary();
+  stateDir(path.join(library.root, 'web/.wrangler/state'), 'live');
+  const backup = path.join(library.root, 'backups/cloud-pull-2026-11-06T10-12-00');
+  stateDir(backup, 'previous');
+  stateModule.updateState(library.root, (next) => {
+    next.mode = 'local';
+    next.snapshot = { kind: 'backup', path: 'backups/cloud-pull-2026-11-06T10-12-00', keptLocal: false, takenAt: new Date().toISOString(), refs: 2 };
+    return next;
+  });
+  for (const [action, expected] of [
+    ['restore', ['snapshot-preflight', 'snapshot-restore', 'snapshot-finish']],
+    ['delete', ['snapshot-preflight', 'snapshot-delete', 'snapshot-finish']],
+    ['delete-export', ['snapshot-preflight', 'snapshot-delete-export', 'snapshot-finish']],
+  ]) {
+    stateModule.updateState(library.root, (next) => {
+      next.snapshot = {
+        kind: 'backup', path: 'backups/cloud-pull-2026-11-06T10-12-00', keptLocal: false, takenAt: new Date().toISOString(), refs: 2,
+        export: { path: 'backups/cloud-export-x', takenAt: new Date().toISOString(), refs: 2 },
+      };
+      return next;
+    });
+    fs.mkdirSync(backup, { recursive: true });
+    stateDir(backup, 'previous');
+    fs.mkdirSync(path.join(library.root, 'backups/cloud-export-x'), { recursive: true });
+    const { ctx, emitter } = snapshotContext(library, { action, confirm: action === 'restore' ? undefined : action === 'delete' ? 'cloud-pull-2026-11-06T10-12-00' : 'cloud-export-x' });
+    await commands.commandSnapshot(ctx);
+    const started = emitter.events.filter((event) => event.event === 'step' && event.status === 'started').map((event) => event.step);
+    assert.deepEqual(started, expected, `${action} runs the documented steps`);
+  }
+});
+
+test('delete-resources verifies every artifact and clears the install record', async () => {
+  const library = fakeLibrary();
+  stateModule.setMode(library.root, 'cloud');
+  stateModule.updateState(library.root, (next) => {
+    next.cloud = { url: PROVIDED, accountId: 'acct', workerName: 'snip', d1: { name: 'snip', id: 'd1' }, kv: { name: 'OAUTH_KV', id: 'kv' }, bucket: 'snip-files' };
+    return next;
+  });
+  const emitter = collectedEmitter();
+  const fakeCloudModule = {
+    listD1: async () => [],
+    listKv: async () => [],
+    listBuckets: async () => [],
+    deleteSecret: async () => {},
+  };
+  const ctx = createContext({
+    root: library.root, dataRoot: library.root, flags: { confirm: 'snip.tester.workers.dev' }, emit: emitter.emit,
+    api: { workerExists: async () => false },
+    wrangler: { bin: '/x', run: async () => ({ ok: true, stdout: '', stderr: '' }) },
+    deps: { fetch: async () => { throw new Error('no network'); }, cloud: fakeCloudModule },
+  });
+  const result = await commands.commandDeleteResources(ctx);
+  assert.equal(result.ok, true);
+  const record = stateModule.readState(library.root);
+  assert.equal(record.mode, 'local');
+  assert.equal(record.cloud.deletedAt !== undefined, true);
+  assert.equal(record.cloud.url, undefined, 'no stale url is left to re-install from');
+  assert.equal(record.cloud.d1, undefined);
+
+  // A surviving database is a failed delete, not a success.
+  const library2 = fakeLibrary();
+  stateModule.setMode(library2.root, 'cloud');
+  stateModule.updateState(library2.root, (next) => {
+    next.cloud = { url: PROVIDED, accountId: 'acct', workerName: 'snip', d1: { name: 'snip', id: 'd1' }, bucket: 'snip-files' };
+    return next;
+  });
+  const survivor = createContext({
+    root: library2.root, dataRoot: library2.root, flags: { confirm: 'snip.tester.workers.dev' }, emit: emitter.emit,
+    api: { workerExists: async () => false },
+    wrangler: { bin: '/x', run: async () => ({ ok: true, stdout: '', stderr: '' }) },
+    deps: { fetch: async () => { throw new Error('no network'); }, cloud: { ...fakeCloudModule, listD1: async () => [{ id: 'd1', name: 'snip' }] } },
+  });
+  await assert.rejects(() => commands.commandDeleteResources(survivor), (error) => error.code === 'DELETE_INCOMPLETE' && error.data.leftover.includes('database'));
+  assert.equal(stateModule.readState(library2.root).cloud.url, PROVIDED, 'the record stays until everything is gone');
+});
+
+/** A pull-verify context that records which tables verify actually compares. */
+function pullVerifyContext({ library, stagedState, manifestValue, dump, counts, localCounts = counts }) {
+  const queried = [];
+  const tableOf = (sql) => (sql.match(/FROM "([A-Za-z0-9_]+)"/) || [])[1];
+  const emitter = collectedEmitter();
+  const ctx = createContext({
+    root: library.root,
+    dataRoot: library.root,
+    flags: {},
+    emit: emitter.emit,
+    api: {},
+    wrangler: { bin: '/x', run: async () => ({ ok: true }) },
+    deps: {
+      fetch: async () => { throw new Error('no network'); },
+      deploy: {
+        ...deploy,
+        // The quoted identifier only appears in a per-table digest, so the
+        // "is the library empty" count does not pollute the recording.
+        remoteQuery: async (_wrangler, options) => {
+          const table = tableOf(options.sql);
+          if (table) queried.push(`remote:${table}`);
+          return [{ rows: counts[table] || 0, sig: counts[table] || 0 }];
+        },
+        localQuery: async (_wrangler, options) => {
+          const table = tableOf(options.sql);
+          if (table) queried.push(`local:${table}`);
+          return [{ rows: localCounts[table] || 0, sig: localCounts[table] || 0 }];
+        },
+      },
+      library: {
+        async withLocalWorker(_options, fn) {
+          return fn({
+            transfer: { async head() { return 10; } },
+            async dispose() {},
+          });
+        },
+        libraryConfig: ({ dataRoot }) => path.join(dataRoot, 'web/wrangler.jsonc'),
+      },
+      local: { ...LOCAL_FAKE, localOrigin: () => 'http://localhost:5199' },
+    },
+  });
+  stateModule.updateState(library.root, (next) => {
+    next.mode = 'cloud';
+    next.cloud = { url: PROVIDED, accountId: 'acct' };
+    return next;
+  });
+  ctx.reload();
+  fs.mkdirSync(path.dirname(stagedState), { recursive: true });
+  fs.writeFileSync(path.join(path.dirname(stagedState), 'dump.sql'), dump);
+  ctx.setWork({ pullManifest: manifestValue });
+  const verify = commands.pullSteps({ stagedRoot: path.dirname(stagedState), stagedState }).find((step) => step.id === 'pull-verify');
+  return { ctx, verify, queried };
+}
+
+const DUMP_WITH_LEDGER = [
+  'INSERT INTO "refs" (id, url) VALUES (\'a\', \'https://a.test\');',
+  'INSERT INTO "pages" (id) VALUES (\'p\');',
+  'INSERT INTO "d1_migrations" (id, name) VALUES (1, \'0001_init.sql\'), (2, \'0002_x.sql\');',
+  'INSERT INTO "owner_nonces" (nonce) VALUES (\'n\');',
+].join('\n');
+
+test('pull-verify skips every table the manifest excludes', async () => {
+  const { root } = fakeLibrary();
+  const stagedState = path.join(root, 'backups/pull-test/state');
+  // The cloud ledger says 10 migrations, the staged copy has 12 after applying
+  // migrations locally. Comparing them would fail a correct pull.
+  const { ctx, verify, queried } = pullVerifyContext({
+    library: { root },
+    stagedState,
+    manifestValue: {
+      tables: { refs: 1, pages: 1, d1_migrations: 10, owner_nonces: 0 },
+      excluded: ['d1_migrations', 'owner_nonces'],
+      keys: [{ key: 'refs/a/b/shot.png', size: 10 }],
+    },
+    dump: DUMP_WITH_LEDGER,
+    counts: { refs: 1, pages: 1, d1_migrations: 10, owner_nonces: 1 },
+    localCounts: { refs: 1, pages: 1, d1_migrations: 12, owner_nonces: 1 },
+  });
+  await verify.run(ctx);
+  assert.deepEqual(queried, ['remote:refs', 'local:refs', 'remote:pages', 'local:pages'], 'excluded tables are never queried');
+});
+
+test('an older Worker with no excluded list still verifies with a shorter migrations ledger', async () => {
+  const { root } = fakeLibrary();
+  const stagedState = path.join(root, 'backups/pull-old/state');
+  // An older Worker reports no `excluded` and no d1_migrations row at all. The
+  // engine must not require either: it compares what the manifest says was
+  // copied, and nothing else.
+  const { ctx, verify, queried } = pullVerifyContext({
+    library: { root },
+    stagedState,
+    manifestValue: {
+      tables: { refs: 1, pages: 1 },
+      keys: [{ key: 'refs/a/b/shot.png', size: 10 }],
+    },
+    dump: DUMP_WITH_LEDGER,
+    counts: { refs: 1, pages: 1 },
+  });
+  await verify.run(ctx);
+  assert.deepEqual(queried, ['remote:refs', 'local:refs', 'remote:pages', 'local:pages']);
+  assert.equal(ctx.work.pullVerified.keys, 1);
+});
+
+test('a newer Worker that excludes a table the engine has never heard of still verifies', async () => {
+  const { root } = fakeLibrary();
+  const stagedState = path.join(root, 'backups/pull-new/state');
+  const { ctx, verify, queried } = pullVerifyContext({
+    library: { root },
+    stagedState,
+    manifestValue: {
+      tables: { refs: 1, future_table: 4 },
+      excluded: ['future_table'],
+      keys: [{ key: 'refs/a/b/shot.png', size: 10 }],
+    },
+    dump: DUMP_WITH_LEDGER,
+    counts: { refs: 1, future_table: 4 },
+  });
+  await verify.run(ctx);
+  assert.deepEqual(queried, ['remote:refs', 'local:refs']);
+});
+
+test('pull-verify fails when two zeros would otherwise pass for a copy', async () => {
+  const { root } = fakeLibrary();
+  const stagedState = path.join(root, 'backups/pull-empty/state');
+  const { ctx, verify } = pullVerifyContext({
+    library: { root },
+    stagedState,
+    manifestValue: { tables: { refs: 3 }, excluded: ['d1_migrations'], keys: [] },
+    dump: DUMP_WITH_LEDGER,
+    counts: { refs: 0 },
+    localCounts: { refs: 3 },
+  });
+  await assert.rejects(() => verify.run(ctx), (error) => error.code === 'VERIFY_COUNT_MISMATCH');
+});
+
+test('setup verify skips an excluded ledger and compares what the manifest copied', async () => {
+  const { root } = fakeLibrary();
+  const directory = path.join(root, 'backups/cloud-export-2026-11-06T10-12-00');
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, 'dump.sql'), DUMP_WITH_LEDGER);
+  // The cloud has 10 migrations, the local dump holds a longer ledger: an
+  // excluded table must not be compared, or a correct move fails.
+  fs.writeFileSync(path.join(directory, 'manifest.json'), JSON.stringify({ tables: { refs: 1, pages: 1, d1_migrations: 10 } }));
+  fs.writeFileSync(path.join(directory, 'files.json'), JSON.stringify({ keys: [{ key: 'refs/a/b/shot.png', size: 10, contentType: 'image/png' }], excluded: ['d1_migrations'] }));
+  stateModule.setMode(root, 'cloud');
+  stateModule.updateState(root, (next) => {
+    next.cloud = { url: PROVIDED, accountId: 'acct', lastVerifiedAt: 'x' };
+    next.snapshot = { kind: 'live', path: null, keptLocal: true, takenAt: new Date().toISOString(), refs: 1, export: { path: 'backups/cloud-export-2026-11-06T10-12-00', takenAt: new Date().toISOString(), refs: 1 } };
+    return next;
+  });
+  stateModule.writeSecrets(root, { version: 1, ownerLinkSecret: crypto.randomBytes(32).toString('hex'), captureToken: 'c', transferToken: crypto.randomBytes(32).toString('hex') });
+  const queried = [];
+  const tableOf = (sql) => (sql.match(/FROM "([A-Za-z0-9_]+)"/) || [])[1];
+  const emitter = collectedEmitter();
+  const ctx = createContext({
+    root, dataRoot: root, flags: {}, emit: emitter.emit, api: {},
+    wrangler: { bin: '/x', run: async () => ({ ok: true }) },
+    deps: {
+      // The only network call this step makes is the manifest, over the
+      // transfer client the context builds from deps.fetch.
+      fetch: async () => new Response(JSON.stringify({ tables: { refs: 1, pages: 1 }, keys: [{ key: 'refs/a/b/shot.png', size: 10 }] }), { status: 200, headers: { 'content-type': 'application/json' } }),
+      local: { ...LOCAL_FAKE, localOrigin: () => null },
+      library: { libraryConfig: ({ dataRoot }) => path.join(dataRoot, 'web/wrangler.jsonc'), async withLocalWorker() { throw new Error('not used'); } },
+      deploy: {
+        ...deploy,
+        remoteQuery: async (_w, options) => { const t = tableOf(options.sql); if (t) queried.push(t); return [{ rows: 1, sig: 1 }]; },
+        localQuery: async (_w, options) => {
+          const t = tableOf(options.sql);
+          if (!t) return [{ rows: 0 }];
+          return [{ rows: 1, sig: 1 }];
+        },
+      },
+    },
+  });
+  ctx.reload();
+  const verify = setup.setupSteps().find((step) => step.id === 'verify');
+  await verify.run(ctx);
+  assert.deepEqual(queried.sort(), ['pages', 'refs'], 'the migrations ledger is never compared');
 });
