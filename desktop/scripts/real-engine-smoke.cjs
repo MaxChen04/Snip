@@ -170,41 +170,51 @@ async function main() {
 
     // The real `owner link` mints a signed URL from this Mac's own secret. It is the
     // one URL that belongs in Settings, so the guard must accept the engine's output
-    // and the run must leave cloud.json untouched. `--no-handoff` is in contracts
-    // v3.22 §1.4.2; until the engine ships it the real run would refuse the flag.
-    const engineSource = await fs.promises.readFile(path.join(desktop, 'provision/cli.cjs'), 'utf8')
-    if (!engineSource.includes('no-handoff')) {
-      console.log('SKIP owner link: this engine build predates `--no-handoff` (contracts v3.22 §1.4.2)')
-    } else {
-      const beforeLink = await fs.promises.readFile(path.join(site.root, '.snip/cloud.json'), 'utf8')
-      await settings.getByRole('button', { name: 'Create link…' }).click()
-      const linkDialog = settings.locator('[role=dialog]')
-      await linkDialog.getByText(/\/auth\/owner\?t=/).waitFor({ timeout: 90000 }).catch(async error => {
-        console.error('LINK DIALOG:', await linkDialog.innerText().catch(() => 'n/a'))
-        const logs = await application.evaluate(({ app }) => app.getPath('logs')).catch(() => null)
-        if (logs) console.error('CLOUD LOG:', await fs.promises.readFile(path.join(logs, 'cloud.log'), 'utf8').catch(() => 'n/a'))
-        throw error
-      })
-      const linkUrl = (await linkDialog.locator('p.font-mono').innerText()).trim()
-      const minted = new URL(linkUrl)
-      assert.equal(minted.origin, 'https://snip.snip-harness.workers.dev')
-      assert.equal(minted.pathname, '/auth/owner')
-      // snip-owner-v1|ownerId|exp|nonce|port.signature: port 0 means no handoff, so the
-      // link works on whichever device opens it instead of that device's localhost.
-      const payload = minted.searchParams.get('t')
-      assert.match(payload, /^snip-owner-v1\|harness\|\d+\|[0-9a-f]+\|0\.[A-Za-z0-9_-]+$/)
-      assert.equal(await fs.promises.readFile(path.join(site.root, '.snip/cloud.json'), 'utf8'), beforeLink, 'minting a link must not rewrite cloud.json')
-      await settings.screenshot({ path: path.join(out, 'settings-real-engine-owner-link-light.png') })
-      await settings.emulateMedia({ colorScheme: 'dark' })
-      await settings.evaluate(() => document.documentElement.classList.add('dark'))
-      await sleep(300)
-      await settings.screenshot({ path: path.join(out, 'settings-real-engine-owner-link-dark.png') })
-      await settings.emulateMedia({ colorScheme: 'light' })
-      await settings.evaluate(() => document.documentElement.classList.remove('dark'))
-      await sleep(200)
-      await linkDialog.getByRole('button', { name: 'Close' }).click()
-      console.log('PASS the real engine minted a port-0 owner link and left cloud.json alone')
-    }
+    // and the run must leave cloud.json untouched. `--no-handoff` (contracts v3.22
+    // §1.4.2) is what makes the link work on whichever device opens it.
+    const beforeLink = await fs.promises.readFile(path.join(site.root, '.snip/cloud.json'), 'utf8')
+    await settings.getByRole('button', { name: 'Create link…' }).click()
+    const linkDialog = settings.locator('[role=dialog]')
+    await linkDialog.getByText(/\/auth\/owner\?t=/).waitFor({ timeout: 90000 }).catch(async error => {
+      console.error('LINK DIALOG:', await linkDialog.innerText().catch(() => 'n/a'))
+      const logs = await application.evaluate(({ app }) => app.getPath('logs')).catch(() => null)
+      if (logs) console.error('CLOUD LOG:', await fs.promises.readFile(path.join(logs, 'cloud.log'), 'utf8').catch(() => 'n/a'))
+      throw error
+    })
+    const linkUrl = (await linkDialog.locator('p.font-mono').innerText()).trim()
+    const minted = new URL(linkUrl)
+    assert.equal(minted.origin, 'https://snip.snip-harness.workers.dev')
+    assert.equal(minted.pathname, '/auth/owner')
+    // snip-owner-v1|ownerId|exp|nonce|port.signature: port 0 means no handoff, so the
+    // link works on whichever device opens it instead of that device's localhost.
+    const payload = minted.searchParams.get('t')
+    assert.match(payload, /^snip-owner-v1\|harness\|\d+\|[0-9a-f]+\|0\.[A-Za-z0-9_-]+$/)
+    // The run can't see the other device, so it reports the link, never a sign-in.
+    const linkText = await linkDialog.innerText()
+    assert.match(linkText, /Link ready/)
+    assert.doesNotMatch(linkText, /Signed in/)
+    assert.match(linkText, /Works once and expires in 10 minutes\. The browser that opens it is signed in and can add a passkey\./)
+    // The wait ends the moment the link arrives, so a fresh link can be asked for
+    // straight away instead of leaving the button disabled behind a slow read.
+    assert.equal(await linkDialog.getByRole('button', { name: 'Create a new link' }).isDisabled(), false)
+    assert.equal(await fs.promises.readFile(path.join(site.root, '.snip/cloud.json'), 'utf8'), beforeLink, 'minting a link must not rewrite cloud.json')
+    await settings.screenshot({ path: path.join(out, 'settings-real-engine-owner-link-light.png') })
+    await settings.emulateMedia({ colorScheme: 'dark' })
+    await settings.evaluate(() => document.documentElement.classList.add('dark'))
+    await sleep(300)
+    await settings.screenshot({ path: path.join(out, 'settings-real-engine-owner-link-dark.png') })
+    await settings.emulateMedia({ colorScheme: 'light' })
+    await settings.evaluate(() => document.documentElement.classList.remove('dark'))
+    await sleep(200)
+    console.log('SHOT', path.join(out, 'settings-real-engine-owner-link-light.png'))
+    console.log('SHOT', path.join(out, 'settings-real-engine-owner-link-dark.png'))
+    // A second link is a fresh mint, not the first one replayed.
+    await linkDialog.getByRole('button', { name: 'Create a new link' }).click()
+    await linkDialog.getByText(/\/auth\/owner\?t=/).waitFor({ timeout: 60000 })
+    const second = new URL((await linkDialog.locator('p.font-mono').innerText()).trim())
+    assert.match(second.searchParams.get('t'), /\|0\.[A-Za-z0-9_-]+$/)
+    await linkDialog.getByRole('button', { name: 'Close' }).click()
+    console.log('PASS the real engine minted a port-0 owner link and left cloud.json alone')
 
     // Deleting the export goes through the real `snapshot delete-export --confirm`.
     await settings.getByRole('button', { name: 'Delete export' }).click()

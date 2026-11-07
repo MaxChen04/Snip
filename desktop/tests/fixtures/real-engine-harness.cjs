@@ -352,9 +352,14 @@ function buildContext() {
       confirm: flag('confirm'),
       // The CLI stores the positional subcommand here; commands read it from flags.
       snapshotAction: subcommand ?? undefined,
+      ownerAction: command === 'owner' ? subcommand ?? undefined : undefined,
       'capture-env': flag('capture-env') ?? 'keep',
       noOpen: true,
       managed: true,
+      // The real flag parser maps `--no-handoff` to this; the harness builds its own
+      // flags, so it has to read the argument too or `owner link` would open a loopback
+      // for a link that is meant for another device (contracts v3.22 §1.4.2).
+      noHandoff: argv.includes('--no-handoff'),
       adoptExisting: argv.includes('--adopt-existing'),
     },
     emit: wrapped,
@@ -404,6 +409,7 @@ async function main() {
     else if (command === 'snapshot') result = await commands.commandSnapshot(ctx);
     else if (command === 'delete-resources') result = await commands.commandDeleteResources(ctx);
     else if (command === 'abort') result = await commands.commandAbort(ctx);
+    else if (command === 'owner') result = await commands.commandOwner(ctx);
     else if (command === 'deploy') result = await commands.commandDeploy(ctx);
     else if (command === 'migrate') result = await commands.commandMigrate(ctx);
     else throw new StepError('USAGE', `The harness does not run ${command}.`);

@@ -71,6 +71,10 @@ export function useCloud(bridge = window.snipCloud) {
   // The log callback is installed once; this ref says whether a mint is waiting, so a
   // failure can be shown in the sheet that asked for it instead of as a loose toast.
   const minting = useRef(false)
+  // The link arrives on its own channel. These let the wait end the moment it does,
+  // rather than after the next `state()` round trip.
+  const linkSettled = useRef(false)
+  const linkLatest = useRef<OwnerLink | null>(null)
   const [note, setNote] = useState<{ level: "info" | "warn" | "error"; message: string; id: number } | null>(null)
   const runId = useRef(0)
 
@@ -204,7 +208,9 @@ export function useCloud(bridge = window.snipCloud) {
     const offLog = bridge.onLog(entry => {
       if (entry.level === "error" && minting.current) {
         // One reason, in the sheet that asked for it, next to its own Try again.
+        linkSettled.current = true
         setLinkError(entry.message)
+        setLinkPending(false)
         return
       }
       setNote({ level: entry.level, message: entry.message, id: Date.now() })
@@ -212,7 +218,12 @@ export function useCloud(bridge = window.snipCloud) {
     })
     // The link is not a "step" event: it arrives on its own channel so the window never
     // flips into the progress view for it.
-    const offLink = bridge.onLink(next => setLink(next))
+    const offLink = bridge.onLink(next => {
+      linkLatest.current = next
+      linkSettled.current = true
+      setLink(next)
+      setLinkPending(false)
+    })
     return () => {
       offProgress()
       offLog()
@@ -223,6 +234,8 @@ export function useCloud(bridge = window.snipCloud) {
   const requestLink = useCallback(async () => {
     if (!bridge) return null
     minting.current = true
+    linkSettled.current = false
+    linkLatest.current = null
     setLinkPending(true)
     setLinkError(null)
     try {
@@ -231,12 +244,16 @@ export function useCloud(bridge = window.snipCloud) {
         setLinkError(reply.error)
         return null
       }
-      // The mint lands on its own channel; this loop only finds the end of the run,
-      // which is the one moment it is certain no link is coming.
-      for (let attempt = 0; attempt < 100; attempt++) {
-        await new Promise(resolve => window.setTimeout(resolve, 300))
+      // The mint lands on its own channel. This loop is the fallback for a link that
+      // arrived before anyone was listening, and the way to notice a run that ended
+      // without one. `settled` keeps it from waiting on a slow read it doesn't need.
+      for (let attempt = 0; attempt < 60; attempt++) {
+        if (linkSettled.current) return linkLatest.current
+        await new Promise(resolve => window.setTimeout(resolve, 250))
+        if (linkSettled.current) return linkLatest.current
         const next = await bridge.state()
         if (next?.link) {
+          linkLatest.current = next.link
           setLink(next.link)
           return next.link
         }

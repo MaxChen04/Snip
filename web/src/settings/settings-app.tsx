@@ -29,6 +29,7 @@ import { Meta, Panel, Row, references } from "./bits"
 import { AbortSetupDialog, DeleteResourcesDialog, EnableDialog, ExportDeleteDialog, OwnerLinkDialog, SignOutDialog, SnapshotDeleteDialog, TurnOffDialog, type TurnOffChoice } from "./dialogs"
 import { dirName, formatBytes, hostOf, shortDate, snapshotLabel, snapshotPhrase } from "./format"
 import { copyText, pullPrompt, setupPrompt } from "./prompts"
+import { errorAction } from "./retry"
 import { commandFor, stepTitle, stepsFor } from "./steps"
 import type { CloudRecord } from "./types"
 import { useCloud, type LiveStep } from "./use-cloud"
@@ -865,7 +866,7 @@ function HumanActionCard({ action, onOpen }: { action: NonNullable<ReturnType<ty
 }
 
 function ErrorCard({ error, onRetry, onRefresh }: { error: NonNullable<ReturnType<typeof useCloud>["error"]>; onRetry: () => void; onRefresh: () => void }) {
-  const stale = error.code === "CONFIRM_MISSING" || error.code === "CONFIRM_MISMATCH"
+  const action = errorAction(error)
   return (
     <div className="rounded-xl bg-(--red-3) px-4 py-3.5">
       <p className="flex items-center gap-2 text-sm leading-5 text-(--red-11)">
@@ -873,19 +874,11 @@ function ErrorCard({ error, onRetry, onRefresh }: { error: NonNullable<ReturnTyp
         {error.message}
       </p>
       {error.hint ? <p className="mt-1 text-xs leading-[1.5] text-ink-11">{error.hint}</p> : null}
-      {/* A stale record is fixed by reading it again, not by repeating the same request. */}
-      {stale ? (
+      {action === "none" ? null : (
         <div className="mt-2.5">
-          <Button size="sm" variant="outline" onClick={onRefresh}>
+          <Button size="sm" variant="outline" onClick={action === "refresh" ? onRefresh : onRetry}>
             <RefreshCwIcon data-icon="inline-start" />
-            Refresh
-          </Button>
-        </div>
-      ) : error.retryable === false ? null : (
-        <div className="mt-2.5">
-          <Button size="sm" variant="outline" onClick={onRetry}>
-            <RefreshCwIcon data-icon="inline-start" />
-            Retry
+            {action === "refresh" ? "Refresh" : "Retry"}
           </Button>
         </div>
       )}

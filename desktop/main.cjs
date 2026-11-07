@@ -529,8 +529,9 @@ async function finishCloudRun(run, { cancelled, code }) {
         : cancelled
           ? "The sign-in link wasn’t created."
           : "Snip couldn’t create a sign-in link. Try again."
-      // The code is the only thing worth recording: the URL itself is never logged.
-      makeLog("cloud").end(`${new Date().toISOString()} owner link exited ${code ?? "?"} ${result?.code ?? "no result"}\n`)
+      // The codes are the only thing worth recording: the URL itself is never logged.
+      const detail = typeof result?.data?.code === "string" ? ` (${result.data.code})` : ""
+      makeLog("cloud").end(`${new Date().toISOString()} owner link exited ${code ?? "?"} ${result?.code ?? "no result"}${detail}\n`)
       sendToSettings("snip:cloud-log", { level: "error", message })
     }
     refresh()

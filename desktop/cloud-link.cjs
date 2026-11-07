@@ -19,9 +19,11 @@ function ownerLinkFrom(event, cloudUrl) {
   if (!event || typeof event !== "object" || event.event === "session") return null
   let candidate = null
   if (event.event === "step" && event.step === "owner-mint" && event.data && typeof event.data === "object") {
-    // A step's `data` is whatever the step returned; the mint returns `{ data: { url } }`.
+    // The engine puts the url at the step data's top level, and nested under `data`
+    // for the older shape; accept either rather than depend on one.
     const inner = event.data.data && typeof event.data.data === "object" ? event.data.data : event.data
-    if (typeof inner.url === "string") candidate = inner.url
+    if (typeof event.data.url === "string") candidate = event.data.url
+    else if (typeof inner.url === "string") candidate = inner.url
   } else if (event.event === "human" && event.action === "open_url" && typeof event.url === "string") candidate = event.url
   else if (event.event === "result" && event.data && typeof event.data.url === "string") candidate = event.data.url
   if (!candidate || candidate.length > 4096) return null
