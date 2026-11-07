@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && vite build --config vite.settings.config.ts",
+    "build:settings": "vite build --config vite.settings.config.ts",
+    "dev:settings": "vite --config vite.settings.config.ts --port 5174 --strictPort --open /settings.html",
     "preview": "npm run build && vite preview",
     "deploy": "node ../scripts/cloudflare.mjs deploy",
     "build:site": "vite build --config vite.site.config.ts",

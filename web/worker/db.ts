@@ -322,7 +322,7 @@ export async function createReference(
   const stmts = [
     db
       .prepare(
-        `INSERT INTO refs (id, url, domain, mode, max_pages, status, progress, notes, capture_options, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'queued', 'Waiting for the capture agent', ?, ?, ?, ?)`,
+        `INSERT INTO refs (id, url, domain, mode, max_pages, status, progress, notes, capture_options, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'queued', 'Waiting for your Mac', ?, ?, ?, ?)`,
       )
       .bind(id, url.toString(), url.hostname.replace(/^www\./, ""), input.mode, maxPages, cleanNotes(input.notes), options ? JSON.stringify(options) : null, ts, ts),
   ]
@@ -341,7 +341,7 @@ export async function requeueReference(db: D1Database, id: string) {
     db.prepare(`DELETE FROM pages WHERE reference_id = ?`).bind(id), // animations cascade
     db
       .prepare(
-        `UPDATE refs SET status = 'queued', progress = 'Waiting for the capture agent', error = NULL, page_count = 0, animation_count = 0, cover_key = NULL, tokens_json = NULL, claimed_at = NULL, capture_control = NULL, crawl_state = NULL, updated_at = ? WHERE id = ?`,
+        `UPDATE refs SET status = 'queued', progress = 'Waiting for your Mac', error = NULL, page_count = 0, animation_count = 0, cover_key = NULL, tokens_json = NULL, claimed_at = NULL, capture_control = NULL, crawl_state = NULL, updated_at = ? WHERE id = ?`,
       )
       .bind(now(), id),
   ])
@@ -628,7 +628,7 @@ export async function requestPause(db: D1Database, id: string) {
 export async function resumeReference(db: D1Database, id: string) {
   const ts = now()
   const [paused, pending] = await db.batch([
-    db.prepare(`UPDATE refs SET capture_control = NULL, progress = 'Waiting for the capture agent', updated_at = ? WHERE id = ? AND status = 'queued' AND capture_control = 'paused'`).bind(ts, id),
+    db.prepare(`UPDATE refs SET capture_control = NULL, progress = 'Waiting for your Mac', updated_at = ? WHERE id = ? AND status = 'queued' AND capture_control = 'paused'`).bind(ts, id),
     db.prepare(`UPDATE refs SET capture_control = NULL, updated_at = ? WHERE id = ? AND status = 'capturing' AND capture_control = 'pause'`).bind(ts, id),
   ])
   return !!(paused!.meta.changes || pending!.meta.changes)
@@ -745,14 +745,19 @@ export async function getCaptureStatus(db: D1Database, ref: Reference): Promise<
       advice = `Capture failed${ref.error ? `: ${ref.error}` : ""}. Tell the user; they can recapture from the Snip app.`
       break
     case "queued":
+      // Queued means "waiting for this Mac", whether the agent is busy or absent.
+      // The phrase matches the gallery card, so an agent relays it verbatim.
       if (freshness === "recent") {
-        advice = activity === "busy" ? "Waiting in the queue while the capture worker finishes another job." : "The capture worker is online and should pick this up shortly."
+        advice =
+          activity === "busy"
+            ? "Waiting for your Mac: the capture agent is finishing another job and will pick this up next."
+            : "Waiting for your Mac: the capture agent is online and should pick this up shortly."
         pollAfterSeconds = activity === "busy" ? 60 : 15
       } else {
         advice =
           freshness === "never"
-            ? "No capture worker has ever contacted Snip. Ask the user to run `npm run capture` on their machine. Stop polling until they do."
-            : `The capture worker was last seen ${secondsSinceSeen}s ago and is probably not running. Ask the user to start \`npm run capture\`. Stop polling until they do.`
+            ? "Waiting for your Mac: no capture agent has ever contacted Snip. Ask the user to run `npm run capture` on their Mac. Stop polling until they do."
+            : `Waiting for your Mac: the capture agent was last seen ${secondsSinceSeen}s ago and is probably not running. Ask the user to start \`npm run capture\`. Stop polling until they do.`
       }
       break
     case "capturing": {

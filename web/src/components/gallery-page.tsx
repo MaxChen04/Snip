@@ -430,7 +430,7 @@ function FolderMeta({ r }: { r: Reference }) {
           <div className={cn("h-full rounded-full transition-[width] duration-300 ease-out", paused ? "bg-ink-9" : "bg-ink-12")} style={{ width: `${pct}%` }} />
         </div>
         <span className="flex items-center gap-1.5 text-2xs whitespace-nowrap text-ink-11">
-          {captureLabel(r, true) ?? (r.status === "queued" ? "Waiting for capture agent" : m ? `${m[1]} of ${m[2]} pages` : "Capturing")}
+          {captureLabel(r, true) ?? (r.status === "queued" ? "Waiting for your Mac" : m ? `${m[1]} of ${m[2]} pages` : "Capturing")}
           <CaptureControls r={r} compact onChange={() => window.dispatchEvent(new Event("rs:reload"))} />
         </span>
       </div>
