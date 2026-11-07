@@ -5,7 +5,7 @@ const assert = require("node:assert/strict")
 const fs = require("node:fs")
 const os = require("node:os")
 const path = require("node:path")
-const { resolveSettingsAsset, contentType, settingsUrl, inside } = require("../settings-assets.cjs")
+const { resolveSettingsAsset, contentType, settingsUrl, inside, SETTINGS_CSP, settingsCsp } = require("../settings-assets.cjs")
 
 function bundle(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "snip-settings-assets-"))
@@ -34,6 +34,26 @@ test("assets resolve inside the bundle and anything else does not", t => {
   assert.equal(resolveSettingsAsset(root, "https://settings/index.html"), null)
   assert.equal(resolveSettingsAsset(root, "snip://settings/assets"), null)
   assert.equal(inside(root, path.join(root, "..")), false)
+})
+
+test("the Settings policy allows no remote host at all", () => {
+  const policy = settingsCsp()
+  // Settings must work with the network off: no stylesheet, font or fetch may leave
+  // the bundle. A remote host here is the regression this test exists to catch.
+  assert.equal(/https?:\/\//.test(policy), false, policy)
+  assert.equal(/\*\s*(;|$)/.test(policy), false, "no wildcard sources")
+  assert.match(policy, /default-src 'none'/)
+  assert.match(policy, /font-src 'self'/)
+  assert.match(policy, /script-src 'self'/)
+  assert.equal(/connect-src/.test(policy), false, "default-src 'none' already forbids network fetches")
+  assert.equal(/\bdata:/.test(policy.split("font-src")[1].split(";")[0]), false, "data: would let a remote font be inlined")
+  for (const host of ["googleapis", "gstatic", "cloudflare", "cdn", "unpkg"]) assert.equal(policy.includes(host), false, host)
+})
+
+test("the policy covers the directives a Vite bundle needs and nothing more", () => {
+  assert.deepEqual(Object.keys(SETTINGS_CSP).sort(), ["baseUri", "defaultSrc", "fontSrc", "formAction", "frameAncestors", "imgSrc", "scriptSrc", "styleSrc"])
+  assert.match(settingsCsp(), /style-src 'self' 'unsafe-inline'/, "base-ui writes inline styles")
+  assert.match(settingsCsp(), /img-src 'self' data:/, "the app icon is inlined by Vite")
 })
 
 test("content types cover what a Vite bundle emits", () => {

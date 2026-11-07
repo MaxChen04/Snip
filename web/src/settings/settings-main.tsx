@@ -6,6 +6,8 @@ import { ThemeProvider } from "next-themes"
 import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { SettingsApp } from "./settings-app"
+// index.css already asks for "Inter Variable"; this declares it from the bundle.
+import "./fonts.css"
 import "../index.css"
 
 // In development there is no preload: use the fixture bridge so every state can be

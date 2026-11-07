@@ -102,6 +102,29 @@ async function main() {
       console.error("BRIDGE STATE:", JSON.stringify(await settings.evaluate(() => window.snipCloud.state()).catch(() => "unavailable")))
       throw error
     })
+
+    // Offline check: Settings is the recovery window, so it must render with every
+    // network request blocked. Any request at all is a regression, not just a failure.
+    const attempted = []
+    await settings.route("**/*", route => {
+      const url = route.request().url()
+      // The bundle itself is local; only a request that leaves it counts.
+      if (url.startsWith("snip://") || url.startsWith("devtools://")) return route.continue()
+      attempted.push(url)
+      return route.abort()
+    })
+    await settings.reload({ waitUntil: "domcontentloaded" })
+    await settings.getByRole("button", { name: "Enable cloud" }).waitFor({ timeout: 30000 })
+    const face = await settings.evaluate(async () => {
+      await document.fonts.ready
+      const loaded = [...document.fonts].filter(entry => entry.status === "loaded").map(entry => entry.family)
+      return { loaded, body: getComputedStyle(document.body).fontFamily }
+    })
+    assert.deepEqual(attempted, [], `Settings requested the network: ${attempted.join(", ")}`)
+    assert.match(face.body, /Inter/, "the vendored face is what the window asks for")
+    assert.ok(face.loaded.some(family => /Inter/.test(family)), `the vendored Inter face never loaded: ${JSON.stringify(face.loaded)}`)
+    await settings.unroute("**/*")
+    console.log("PASS Settings renders with every network request blocked, using the vendored Inter face")
     assert.equal(await settings.evaluate(() => location.protocol), "snip:")
     console.log("PASS settings opens from the app menu over snip:// with no local Worker dependency")
 
