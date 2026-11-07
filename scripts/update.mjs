@@ -85,7 +85,7 @@ function appRunning() {
 }
 // A terminal dev server or capture agent keeps writing to the database, so a
 // backup or migration taken under it may be inconsistent. Run after Snip.app quits.
-const terminalServices = () => spawnSync("pgrep", ["-f", "tsx[^ ]* src/index\\.ts|capture/src/index\\.ts|node_modules/\\.bin/vite"], { stdio: "ignore" }).status === 0
+const terminalServices = () => spawnSync("pgrep", ["-f", "tsx[^ ]*( --[^ ]+)* src/index\\.ts|capture/src/index\\.ts|node_modules/\\.bin/vite"], { stdio: "ignore" }).status === 0
 async function quitApp() {
   log("Quitting Snip.app (active captures finish first)…")
   spawnSync("osascript", ["-e", `tell application id "${APP_ID}" to quit`], { stdio: "ignore" })

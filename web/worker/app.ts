@@ -20,6 +20,7 @@ import { loginOptions, loginVerify, registerOptions, registerVerify, listDevices
 import { ownerLinkPage, ownerLinkSubmit } from "./owner"
 import { transfer } from "./transfer"
 import { WORKER_VERSION } from "./version"
+import { cachedStorageUsage } from "./storage-usage"
 
 export const app = new Hono<AppEnv>()
 
@@ -241,7 +242,10 @@ api.patch("/references/:id", async (c) => {
 })
 
 api.get("/agent", async (c) => c.json(await db.getPresence(c.env.DB)))
-api.get("/storage", async (c) => c.json(await db.storageUsage(c.env.FILES)))
+api.get("/storage", async (c) => {
+  c.header("cache-control", "private, no-store")
+  return c.json(await cachedStorageUsage({ files: c.env.FILES, requestUrl: c.req.url, sessionSecret: c.env.SESSION_SECRET }))
+})
 
 api.get("/references/:id", async (c) => {
   const r = await db.getReference(c.env.DB, c.req.param("id"))

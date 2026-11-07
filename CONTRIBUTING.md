@@ -19,7 +19,8 @@ Thanks for helping. Bug reports, ideas and pull requests are all welcome.
    npm run build -w web
    npm test
    ```
-5. Open the PR and fill in the template. The `core` check has to pass.
+5. If you change `capture/`, run `npm run bench -w capture` before and after, and put both summaries in the PR. It crawls a local fixture site and reports the agent's CPU and memory (about 56% average CPU and 820 MB p95 on an M4 today). `-- --assert cpu=65,rss=900` fails a run that goes over those budgets.
+6. Open the PR and fill in the template. The `core` check has to pass.
 
 Only the maintainer ([@MaxChen04](https://github.com/MaxChen04)) merges into `main`. Contributors who help regularly may be given triage or write access.
 

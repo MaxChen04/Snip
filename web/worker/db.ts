@@ -707,7 +707,7 @@ const R2_FREE_BYTES = 10 * 1024 ** 3
 // Free-plan Workers get 50 subrequests; a listing page holds up to 1,000 objects.
 const STORAGE_LIST_PAGES = 40
 
-/** Bytes stored in R2, counted from listings (cheap Class A operations, no downloads). */
+/** Bytes stored in R2, counted from paginated Class A listings (no downloads). */
 export async function storageUsage(files: R2Bucket): Promise<StorageUsage> {
   let bytes = 0
   let objects = 0

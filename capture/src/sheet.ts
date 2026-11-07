@@ -1,4 +1,4 @@
-import type { Browser, BrowserContext } from "playwright"
+import type { Browser, Page } from "playwright"
 import type { AnimationFrame, AnimationMeta } from "../../web/shared/types"
 import type { SnipApi } from "./api"
 import { pngSize, type Frame } from "./gif"
@@ -15,30 +15,49 @@ export function sampleIndexes(n: number, k = SHEET_FRAMES) {
   return [...new Set(Array.from({ length: k }, (_, i) => Math.round((i * (n - 1)) / (k - 1))))]
 }
 
-let ctx: BrowserContext | null = null
-async function renderer(browser: Browser) {
-  if (!ctx || !ctx.browser()?.isConnected()) ctx = await browser.newContext({ viewport: { width: 800, height: 600 }, deviceScaleFactor: 1 })
-  return ctx.newPage()
+/** Frames to make stills from. Recordings with full-size stills only have them where a sample was planned: use the nearest. */
+export function pickStills(frames: Frame[]) {
+  const withStill = frames.flatMap((f, i) => (f.still ? [i] : []))
+  const nearest = (i: number) => (withStill.length ? withStill.reduce((a, b) => (Math.abs(b - i) < Math.abs(a - i) ? b : a)) : i)
+  return [...new Set(sampleIndexes(frames.length).map(nearest))]
 }
 
-const dataUrl = (png: Buffer) => `data:image/png;base64,${png.toString("base64")}`
+// One page renders every still and contact sheet. A page per image started a renderer process each time.
+let rendererPage: Page | null = null
+async function renderer(browser: Browser) {
+  if (rendererPage && !rendererPage.isClosed() && rendererPage.context().browser() === browser && browser.isConnected()) return rendererPage
+  const ctx = await browser.newContext({ viewport: { width: 800, height: 600 }, deviceScaleFactor: 1 })
+  rendererPage = await ctx.newPage()
+  return rendererPage
+}
+
+/** Close the still renderer once a page's stills are done, so its process doesn't idle through the next capture. */
+export async function closeRenderer() {
+  const page = rendererPage
+  rendererPage = null
+  await page?.context().close().catch(() => {})
+}
+
+const dataUrl = (image: Buffer) => `data:image/${image[0] === 0xff ? "jpeg" : "png"};base64,${image.toString("base64")}`
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`)
 
-/** Re-encode one PNG frame as JPEG at its own size. */
-async function toJpeg(browser: Browser, png: Buffer, width: number, height: number) {
+/** Re-encode same-size PNG frames as JPEGs: decode them in one document, then show and capture each in turn. */
+async function toJpegs(browser: Browser, pngs: Buffer[], width: number, height: number) {
+  if (!pngs.length) return []
   const page = await renderer(browser)
-  try {
-    await page.setViewportSize({ width, height })
-    await page.setContent(`<style>*{margin:0}img{display:block}</style><img src="${dataUrl(png)}" width="${width}" height="${height}">`)
-    await page.locator("img").evaluate((img: HTMLImageElement) => img.decode())
-    return await page.screenshot({ type: "jpeg", quality: 82 })
-  } finally {
-    await page.close()
+  await page.setViewportSize({ width, height })
+  await page.setContent(`<style>*{margin:0}img{display:block;position:fixed;top:0;left:0;visibility:hidden}</style>${pngs.map((png) => `<img src="${dataUrl(png)}" width="${width}" height="${height}">`).join("")}`)
+  await page.evaluate(() => Promise.all([...document.images].map((i) => i.decode())))
+  const out: Buffer[] = []
+  for (let i = 0; i < pngs.length; i++) {
+    await page.evaluate((shown) => [...document.images].forEach((img, n) => { img.style.visibility = n === shown ? "visible" : "hidden" }), i)
+    out.push(await page.screenshot({ type: "jpeg", quality: 82 }))
   }
+  return out
 }
 
 /** Tile frames into a labelled grid. Labels show order and playback time, plus measured offsets or scroll position when known. */
-async function contactSheet(browser: Browser, frames: { png: Buffer; label: string }[], frameW: number, frameH: number) {
+async function contactSheet(browser: Browser, frames: { image: Buffer; label: string }[], frameW: number, frameH: number) {
   const columns = Math.min(SHEET_COLUMNS, frames.length)
   const cellW = Math.min(frameW, Math.floor(SHEET_WIDTH / columns)) // never upscale small hover crops
   const cellH = Math.round((cellW * frameH) / frameW)
@@ -49,28 +68,25 @@ async function contactSheet(browser: Browser, frames: { png: Buffer; label: stri
   const cells = frames
     .map(
       (f) =>
-        `<figure><img src="${dataUrl(f.png)}" width="${cellW}" height="${cellH}"><figcaption>${esc(f.label)}</figcaption></figure>`,
+        `<figure><img src="${dataUrl(f.image)}" width="${cellW}" height="${cellH}"><figcaption>${esc(f.label)}</figcaption></figure>`,
     )
     .join("")
   const page = await renderer(browser)
-  try {
-    await page.setViewportSize({ width, height })
-    await page.setContent(
-      `<style>*{margin:0;box-sizing:border-box}body{display:grid;grid-template-columns:repeat(${columns},${cellW}px);background:#fff}
-      figure{border:1px solid #ddd}img{display:block;object-fit:contain;background:#f4f4f4}
-      figcaption{height:${labelH}px;font:12px/${labelH}px ui-monospace,Menlo,monospace;padding:0 6px;color:#111;background:#fafafa;white-space:nowrap;overflow:hidden}</style>${cells}`,
-    )
-    await page.evaluate(() => Promise.all([...document.images].map((i) => i.decode())))
-    const buf = await page.screenshot({ type: "jpeg", quality: 80 })
-    return { buf, width, height, columns }
-  } finally {
-    await page.close()
-  }
+  await page.setViewportSize({ width, height })
+  await page.setContent(
+    `<style>*{margin:0;box-sizing:border-box}body{display:grid;grid-template-columns:repeat(${columns},${cellW}px);background:#fff}
+    figure{border:1px solid #ddd}img{display:block;object-fit:contain;background:#f4f4f4}
+    figcaption{height:${labelH}px;font:12px/${labelH}px ui-monospace,Menlo,monospace;padding:0 6px;color:#111;background:#fafafa;white-space:nowrap;overflow:hidden}</style>${cells}`,
+  )
+  await page.evaluate(() => Promise.all([...document.images].map((i) => i.decode())))
+  const buf = await page.screenshot({ type: "jpeg", quality: 80 })
+  await page.setContent("") // drop the decoded frames until the next animation
+  return { buf, width, height, columns }
 }
 
 /**
  * Upload sampled frames and a contact sheet for one animation and return its metadata.
- * `frames` are the GIF's source frames (PNG, before GIF downscaling).
+ * `frames` are the GIF's source frames; a frame's `still`, when present, is its full-size image.
  */
 export async function buildStills(
   browser: Browser,
@@ -86,19 +102,24 @@ export async function buildStills(
     starts.push(t)
     t += Math.max(20, Math.round(f.delay))
   }
-  const size = pngSize(frames[0]!.png)
-  const picked = sampleIndexes(frames.length)
+  const picked = pickStills(frames)
+  const sizeOf = (f: Frame) => f.still ?? pngSize(f.png!) // frames without a png always carry a still
+  const size = sizeOf(frames[picked[0]!]!)
+  const fits = (f: Frame) => sizeOf(f).width === size.width && sizeOf(f).height === size.height
+  const convert = picked.filter((i) => fits(frames[i]!) && !frames[i]!.still)
+  const converted = await toJpegs(browser, convert.map((i) => frames[i]!.png!), size.width, size.height)
+  const jpegs = new Map(convert.map((i, k) => [i, converted[k]!]))
   const out: AnimationFrame[] = []
-  const labelled: { png: Buffer; label: string }[] = []
+  const labelled: { image: Buffer; label: string }[] = []
   for (const [n, i] of picked.entries()) {
     const f = frames[i]!
     const fi = { captureOffsetMs: f.offsetMs ?? null, scrollY: f.scrollY ?? null, phase: f.phase ?? ("scroll" as const) }
-    const own = pngSize(f.png)
-    if (own.width !== size.width || own.height !== size.height) continue
-    const key = await api.upload(`${keyPrefix}-f${n}.jpg`, await toJpeg(browser, f.png, size.width, size.height), "image/jpeg")
+    if (!fits(f)) continue
+    const jpeg = f.still?.jpeg ?? jpegs.get(i)!
+    const key = await api.upload(`${keyPrefix}-f${n}.jpg`, jpeg, "image/jpeg")
     out.push({ key, width: size.width, height: size.height, sourceIndex: i, playbackMs: starts[i]!, ...fi })
     const where = fi.scrollY != null ? ` y=${fi.scrollY}` : fi.captureOffsetMs != null ? ` +${fi.captureOffsetMs}ms` : ""
-    labelled.push({ png: f.png, label: `#${n} ${fi.phase} play ${(starts[i]! / 1000).toFixed(2)}s${where}` })
+    labelled.push({ image: f.still?.jpeg ?? f.png!, label: `#${n} ${fi.phase} play ${(starts[i]! / 1000).toFixed(2)}s${where}` })
   }
   let sheetKey: string | null = null
   let sheet: AnimationMeta["sheet"] = null
