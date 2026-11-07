@@ -15,6 +15,7 @@ const { readCloudState, cloudMode, selectCaptureEnvFile, keepLocalCaptureEnv } =
 const { engineAvailable, runEngine } = require("./cloud-engine.cjs")
 const { sessionCookie, externalUrl } = require("./cloud-session.cjs")
 const { snapshotFlags } = require("./cloud-confirm.cjs")
+const { ownerLinkFrom, LINK_NOTE, LINK_TTL_MS } = require("./cloud-link.cjs")
 const { resolveSettingsAsset, contentType, settingsCsp, settingsUrl, SETTINGS_ORIGIN } = require("./settings-assets.cjs")
 
 // Settings is a static Vite bundle served from the app, so it keeps working while the
@@ -51,6 +52,9 @@ let startupError = "", lastUrl = null, position = null
 let resolvingNode = false
 let settingsWin = null, cloudState = null
 let cloudRun = null, cloudResult = null
+// The owner link is minted for a person to open in another browser, so it is the one
+// URL that belongs in the renderer. It lives in memory only, and never in a log.
+let ownerLink = null
 const pins = new WeakMap()
 const cloudInput = new Map()
 let localLibrary = { at: 0, value: null }
@@ -412,14 +416,19 @@ async function cloudSnapshotState() {
   // While the engine is writing, its own events are the freshest source; between runs
   // re-read so a change made by the CLI shows the next time Settings opens.
   if (!cloudRun && layout) cloudState = readCloudState(layout.dataRoot)
+  // An expired link is dead: drop it rather than offer a button that cannot work.
+  if (ownerLink && Date.now() - ownerLink.at >= LINK_TTL_MS) ownerLink = null
   return {
     cloudStatus: await cloudSignInMethods(),
     mode: mode(),
     state: cloudState,
     // A result means the engine is done even if the child has not been reaped yet;
     // Settings should leave the progress view without waiting on the exit event.
-    busy: !!cloudRun && !cloudRun.resultSeen,
+    // Minting a link is not a library operation, so it never drives that view.
+    busy: !!cloudRun && !cloudRun.resultSeen && cloudRun.purpose !== "owner-link",
     running: cloudRun ? { command: cloudRun.command, step: cloudRun.step } : null,
+    // The owner link is for the person at the keyboard; it is never written to disk.
+    link: ownerLink ? { url: ownerLink.url, note: LINK_NOTE, expiresAt: new Date(ownerLink.at + LINK_TTL_MS).toISOString() } : null,
     engine: { available: engineAvailable(__dirname) },
     // Enable waits for the runtime (Node, library layout) to be ready; the sheet is
     // still readable, but starting before that only produces a confusing error.
@@ -463,6 +472,22 @@ function onCloudEvent(run, event) {
     cloudResult = event
     run.resultSeen = true
   }
+  if (run.purpose === "owner-link") {
+    // `owner link` contributes exactly one thing to Settings: the URL. Its steps,
+    // logs and any session handoff stay here, so the window keeps its normal layout
+    // and this Mac is never signed in by a link meant for another browser.
+    const url = ownerLinkFrom(event, cloudState?.cloud?.url)
+    if (url && !run.link) {
+      run.link = url
+      ownerLink = { url, at: Date.now() }
+      sendToSettings("snip:cloud-link", { url, note: LINK_NOTE, expiresAt: new Date(ownerLink.at + LINK_TTL_MS).toISOString() })
+      // Without `--managed` the engine's last step only waits to watch a sign-in this
+      // Mac does not need, so the run has done its job once the link exists.
+      if (run.cancel) run.cancel()
+      else run.cancelPending = true
+    }
+    return
+  }
   if (event.event === "session") { void acceptCloudSession(event); return }
   if (event.event === "needs_input") {
     for (const key of Array.isArray(event.keys) ? event.keys : []) {
@@ -494,6 +519,23 @@ async function finishCloudRun(run, { cancelled, code }) {
   cloudResult = null
   if (cloudRun === run) cloudRun = null
   cloudState = layout ? readCloudState(layout.dataRoot) : null
+  if (run.purpose === "owner-link") {
+    // Nothing about the library changed, so there is no mode to enter and no log line
+    // to add: a link that was minted is already in Settings, and one that was not has
+    // a sentence of its own.
+    if (!run.link) {
+      const message = result?.code === "SECRET_MISSING"
+        ? "This Mac holds no owner secret for its cloud library. Turn cloud off and on again to replace it."
+        : cancelled
+          ? "The sign-in link wasn’t created."
+          : "Snip couldn’t create a sign-in link. Try again."
+      // The code is the only thing worth recording: the URL itself is never logged.
+      makeLog("cloud").end(`${new Date().toISOString()} owner link exited ${code ?? "?"} ${result?.code ?? "no result"}\n`)
+      sendToSettings("snip:cloud-log", { level: "error", message })
+    }
+    refresh()
+    return
+  }
   if (result?.ok) {
     if (result.mode === "cloud") await enterCloudMode()
     else if (result.mode === "local") await enterLocalMode()
@@ -511,14 +553,14 @@ async function finishCloudRun(run, { cancelled, code }) {
   }
   refresh()
 }
-function startCloudRun(command, flags = {}, subcommand) {
+function startCloudRun(command, flags = {}, subcommand, purpose) {
   if (cloudRun) return { error: "busy" }
   if (!layout || !node) return { error: "Snip is still starting." }
   if (!engineAvailable(__dirname)) return { error: "Cloud setup isn’t included in this build.", code: "UNSUPPORTED" }
   if (command === "setup") {
     try { keepLocalCaptureEnv({ dataRoot: layout.dataRoot }) } catch {}
   }
-  const run = { command: subcommand ? `${command} ${subcommand}` : command, step: null, cancel: null, resultSeen: false }
+  const run = { command: subcommand ? `${command} ${subcommand}` : command, step: null, cancel: null, resultSeen: false, purpose, link: null }
   cloudRun = run
   cloudResult = null
   const opening = {
@@ -527,8 +569,10 @@ function startCloudRun(command, flags = {}, subcommand) {
     "delete-resources": "Deleting the cloud copy.",
     "snapshot restore": "Restoring the snapshot on this Mac.",
     "snapshot delete": "Deleting the snapshot.",
+    "owner link": "Creating a sign-in link.",
   }[run.command] ?? "Setting up your cloud library."
-  sendToSettings("snip:cloud-log", { level: "info", message: opening })
+  // The owner-link run reports through its own channel, so it does not touch the log.
+  if (purpose !== "owner-link") sendToSettings("snip:cloud-log", { level: "info", message: opening })
   try {
     const handle = runEngine({
       executable: node.executable, appDir: __dirname, root: ROOT, dataRoot: layout.dataRoot, command, subcommand, flags, baseEnv: node.env,
@@ -536,6 +580,8 @@ function startCloudRun(command, flags = {}, subcommand) {
       onExit: info => { if (cloudRun === run) void finishCloudRun(run, info) },
     })
     run.cancel = () => handle.cancel()
+    // An event can land before the handle exists; honour a cancel that came first.
+    if (run.cancelPending) run.cancel()
   } catch (error) {
     cloudRun = null
     return { error: error.message }
@@ -621,6 +667,14 @@ function registerCloudIpc() {
     const reply = snapshotFlags(payload.action, payload.confirm)
     if (!reply.ok) return { error: reply.error, code: reply.code }
     return startCloudRun("snapshot", reply.flags, payload.action)
+  }))
+  // A second way in for a browser with no passkey yet (contracts §4.2, §4.2.1).
+  // `--no-handoff` is passed on every invocation: this link is for another browser or
+  // device, so a loopback redirect would point at that device's own localhost. The run
+  // ends once the link is minted instead of waiting for a sign-in this run can't see.
+  ipcMain.handle("snip:cloud-owner-link", guard(() => {
+    if (mode() !== "cloud") return { error: "Turn on cloud before creating a sign-in link." }
+    return startCloudRun("owner", { "no-handoff": true }, "link", "owner-link")
   }))
 }
 registerCloudIpc()

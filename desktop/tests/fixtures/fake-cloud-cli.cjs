@@ -351,6 +351,36 @@ async function abort() {
   emit({ event: "result", ok: true, code: "OK", mode: "local", data: {} })
 }
 
+async function owner() {
+  const action = argv[1] === "rotate" ? "rotate" : "link"
+  // `--no-handoff` is what the app passes on every invocation; anything else would
+  // make the link useless on the device that opens it.
+  if (!argv.includes("--no-handoff")) {
+    emit({ event: "result", ok: false, code: "FAILED", mode: readState().mode, data: { code: "HANDOFF_REQUIRED" } })
+    process.exitCode = 1
+    return
+  }
+  const state = readState()
+  if (!state.cloud?.url) {
+    emit({ event: "step", command, step: "owner-preflight", status: "failed", message: "This Mac holds no owner secret for its cloud library.", at: now() })
+    emit({ event: "result", ok: false, code: "FAILED", mode: state.mode, data: { code: "SECRET_MISSING" } })
+    process.exitCode = 1
+    return
+  }
+  if (action === "rotate") {
+    if (!(await step("owner-rotate", "Rotating the owner secret"))) return
+  }
+  if (!(await step("owner-preflight", "Checking the cloud library", () => ({ message: state.cloud.url })))) return
+  const minted = { link: `${state.cloud.url.replace(/\/+$/, "")}/auth/owner?t=fake.${"a".repeat(43)}` }
+  // The mint's event data nests what the step returned, exactly like the real engine.
+  if (!(await step("owner-mint", "Creating a sign-in link", () => ({ message: "Link ready", data: { url: minted.link } })))) return
+  emit({ event: "human", step: "owner-open", action: "open_url", url: minted.link, message: "Sign in to your Snip in the browser" })
+  // With `--no-handoff` the run is over once the link exists: a device cannot be
+  // observed from here, so it reports the link as ready rather than as a sign-in.
+  if (!(await step("owner-open", "Link ready", () => ({ message: "Link ready; open it in the browser to sign this device in" })))) return
+  emit({ event: "result", ok: true, code: "OK", mode: state.mode, data: { url: minted.link, cloudUrl: state.cloud.url } })
+}
+
 async function main() {
   if (command === "status") {
     emit({ event: "result", ok: true, code: "OK", mode: readState().mode, data: readState() })
@@ -362,6 +392,7 @@ async function main() {
   else if (command === "delete-resources") await deleteResources()
   else if (command === "snapshot") await snapshot()
   else if (command === "abort") await abort()
+  else if (command === "owner") await owner()
   else {
     emit({ event: "result", ok: false, code: "UNSUPPORTED", mode: "local" })
     process.exitCode = 4
