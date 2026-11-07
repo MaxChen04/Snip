@@ -807,23 +807,28 @@ export async function hasPasskeys(db: D1Database): Promise<boolean> {
 }
 
 // Challenges and link nonces are short-lived: they exist to be burned, and a pull that copied
-// them would compare numbers that legitimately move between the manifest and the dump.
+// them would compare numbers that legitimately move between the manifest and the dump. They are
+// named in the manifest rather than silently dropped, so the engine can see what was left out.
 const EPHEMERAL_TABLES = new Set(["owner_nonces", "webauthn_challenges"])
 
-/** Row counts for every table a move or pull copies. */
-export async function tableCounts(db: D1Database): Promise<Record<string, number>> {
+export type TableCounts = { tables: Record<string, number>; excluded: string[] }
+
+/** Row counts for every table a move or pull copies, plus the short-lived ones it does not. */
+export async function tableCounts(db: D1Database): Promise<TableCounts> {
   const { results } = await db
     .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY name`)
     .all<{ name: string }>()
-  const names = results.map((r) => r.name).filter((name) => !EPHEMERAL_TABLES.has(name))
-  if (!names.length) return {}
+  const all = results.map((r) => r.name)
+  const names = all.filter((name) => !EPHEMERAL_TABLES.has(name))
+  const excluded = all.filter((name) => EPHEMERAL_TABLES.has(name))
+  if (!names.length) return { tables: {}, excluded }
   const counts = await db.batch(names.map((name) => db.prepare(`SELECT count(*) AS n FROM "${name.replace(/"/g, '""')}"`)))
-  const out: Record<string, number> = {}
+  const tables: Record<string, number> = {}
   names.forEach((name, i) => {
     const rows = counts[i]?.results as { n: number }[] | undefined
-    out[name] = rows?.[0]?.n ?? 0
+    tables[name] = rows?.[0]?.n ?? 0
   })
-  return out
+  return { tables, excluded }
 }
 
 // ---------- Owners and passkeys ----------

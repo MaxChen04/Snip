@@ -4,6 +4,9 @@ SESSION_SECRET=generate-with-openssl-rand-hex-32
 CAPTURE_TOKEN=generate-with-openssl-rand-hex-32
 # Owner link HMAC. Kept separate from SESSION_SECRET so rotating one does not break the other.
 OWNER_LINK_SECRET=generate-with-openssl-rand-hex-32
+# Only while a move or pull is copying files: /transfer/* returns 404 without it. The engine sets
+# and deletes its own, so leave this commented unless you are exercising those routes locally.
+# TRANSFER_TOKEN=generate-with-openssl-rand-hex-32
 # Local only: skip GitHub login and act as this user (never set in production)
 DEV_LOGIN=your-github-login
 PUBLIC_URL=http://localhost:5173

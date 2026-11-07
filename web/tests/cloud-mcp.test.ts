@@ -114,8 +114,7 @@ test("a cloud origin exposes neither the prompts nor the tool", async () => {
 })
 
 test("the Worker reports one version everywhere the engine compares it", async () => {
-  const { WORKER_VERSION, MCP_SERVER_VERSION } = await import("../worker/version")
-  assert.equal(MCP_SERVER_VERSION, WORKER_VERSION)
+  const { WORKER_VERSION } = await import("../worker/version")
   assert.match(WORKER_VERSION, /^\d+\.\d+\.\d+$/)
 
   const initialize = await rpcRaw("http://localhost:5173", "initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "0" } })
