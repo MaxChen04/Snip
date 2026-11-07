@@ -178,22 +178,8 @@ function preflightStep() {
 
       // Is there anything to copy at all? A failed read means "not empty": the
       // empty path is the one that skips the safety checks, so it must be proven.
-      let libraryEmpty = false;
-      const config = ctx.deps.local.localConfig(ctx.dataRoot);
-      if (config) {
-        try {
-          const rows = await ctx.deps.deploy.localQuery(ctx.wrangler, {
-            dataRoot: ctx.dataRoot,
-            sql: 'SELECT COUNT(*) AS rows FROM refs',
-            config,
-            persistTo: ctx.deps.local.localStatePath(ctx.dataRoot),
-          });
-          libraryEmpty = Number(rows[0] && rows[0].rows) === 0;
-        } catch {
-          libraryEmpty = false;
-        }
-      }
-      ctx.setWork({ libraryEmpty, localOrigin: origin, localConfig: config });
+      const facts = await ctx.libraryFacts();
+      const libraryEmpty = facts.empty === true;
 
       let freeBytes = null;
       try {

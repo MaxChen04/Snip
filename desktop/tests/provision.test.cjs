@@ -19,6 +19,7 @@ const { createEmitter } = require('../provision/emit.cjs');
 const { createContext } = require('../provision/context.cjs');
 const realLocal = require('../provision/local.cjs');
 const transfer = require('../provision/transfer.cjs');
+const { libraryConfig } = require('../provision/library.cjs');
 const setup = require('../provision/setup.cjs');
 const commands = require('../provision/commands.cjs');
 const cli = require('../provision/cli.cjs');
@@ -324,6 +325,7 @@ function fakeLibraryModule(model) {
       return fn(handle);
     },
     async localWorker() { throw new Error('not used in this test'); },
+    libraryConfig: ({ dataRoot }) => path.join(dataRoot, 'web/wrangler.jsonc'),
   };
 }
 
@@ -1395,4 +1397,29 @@ test('imports drop SQLite internals a fresh database does not have', () => {
     "INSERT INTO \"owners\" (id) VALUES ('c')",
     "INSERT INTO \"sessions\" (id) VALUES ('b')",
   ]);
+});
+
+test('the engine reads the library identity the app uses, not a stale config', () => {
+  const { root, dataRoot } = fakeLibrary();
+  const saved = path.join(dataRoot, '.snip/storage-identities.json');
+  fs.mkdirSync(path.dirname(saved), { recursive: true });
+  fs.writeFileSync(saved, JSON.stringify({
+    version: 1,
+    d1_databases: [{ binding: 'DB', database_name: 'snip', database_id: 'LOCAL-ONLY' }],
+    r2_buckets: [{ binding: 'FILES', bucket_name: 'snip-files' }],
+    kv_namespaces: [{ binding: 'OAUTH_KV', id: 'KV-LOCAL' }],
+    vars: { PUBLIC_URL: 'http://127.0.0.1:5199' },
+  }));
+  const config = libraryConfig({ root, dataRoot });
+  assert.equal(config, path.join(dataRoot, '.snip/wrangler-library.json'));
+  const written = JSON.parse(fs.readFileSync(config, 'utf8'));
+  assert.equal(written.d1_databases[0].database_id, 'LOCAL-ONLY');
+  assert.equal(written.kv_namespaces[0].id, 'KV-LOCAL');
+  assert.match(written.d1_databases[0].migrations_dir, /web\/migrations$/);
+});
+
+test('without a storage snapshot the config on disk is the identity, and nothing is written', () => {
+  const { root, dataRoot } = fakeLibrary();
+  assert.equal(libraryConfig({ root, dataRoot }), path.join(dataRoot, 'web/wrangler.jsonc'));
+  assert.equal(fs.existsSync(path.join(dataRoot, '.snip/wrangler-library.json')), false);
 });

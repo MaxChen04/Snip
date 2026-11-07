@@ -87,7 +87,9 @@ function createContext({ root, dataRoot, flags = {}, emit, api, wrangler, releas
     libraryFacts() {
       if (!libraryFactsPromise) {
         libraryFactsPromise = (async () => {
-          const localConfig = ctx.deps.local.localConfig(dataRoot);
+          // The config that names this library's own storage, so a config edited
+          // after first launch cannot point the engine at an empty database.
+          const localConfig = ctx.deps.library.libraryConfig({ root, dataRoot });
           const localOrigin = ctx.deps.local.localOrigin(dataRoot);
           let empty = false;
           if (localConfig) {
