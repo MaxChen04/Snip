@@ -447,22 +447,17 @@ function CloudPanels({
         ) : null}
       </Panel>
 
-      <Panel title="Access" description="This Mac signed in through an owner link. Other browsers use a passkey.">
-        {/* Only when the Worker reports a fully configured GitHub app: otherwise the
-            option would be a dead end. */}
-        {cloud.snapshot.cloudStatus?.methods.includes("github") ? (
-          <Row
-            icon={<ShieldCheckIcon className="size-4" />}
-            title="GitHub sign-in"
-            body="Other people you allow can sign in with GitHub instead of a passkey."
-            action={
-              <Button variant="outline" size="sm" onClick={onPasskeys}>
-                Manage
-                <ArrowUpRightIcon data-icon="inline-end" />
-              </Button>
-            }
-          />
-        ) : null}
+      {/* v1 signs in with passkeys only, so this window never advertises a second
+          identity provider. An install that already has one keeps working; it is
+          simply not something Settings sets up. */}
+      <Panel
+        title="Access"
+        description={
+          cloud.snapshot.cloudStatus?.ownerId
+            ? `Signed in as ${cloud.snapshot.cloudStatus.ownerId}. Other browsers use a passkey.`
+            : "This Mac signed in through an owner link. Other browsers use a passkey."
+        }
+      >
         <Row
           icon={<ShieldCheckIcon className="size-4" />}
           title="Passkeys"

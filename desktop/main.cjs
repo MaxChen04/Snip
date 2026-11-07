@@ -392,8 +392,8 @@ async function localLibraryStatus() {
   return value
 }
 /**
- * The Worker reports which sign-in methods are actually configured. Settings must not
- * offer GitHub as a second-person path when it would 503, and must not claim it either.
+ * The Worker reports who owns the library and which methods it has. Settings uses the
+ * owner only; sign-in in v1 is passkeys, so GitHub is deliberately not offered.
  */
 async function cloudSignInMethods() {
   const origin = cloudOrigin()
