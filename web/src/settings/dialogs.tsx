@@ -165,8 +165,8 @@ export function SignOutDialog({ open, onOpenChange, onConfirm }: { open: boolean
         <DialogHeader>
           <DialogTitle>Sign out all devices?</DialogTitle>
           <DialogDescription>
-            Signs out browsers and this app. You'll sign in again with your passkey or GitHub. Agents that already have access keep it until their token expires,
-            up to 7 days.
+            Signs out browsers and this app. You'll sign in again with your passkey. Agents that already have access keep it until their token expires, up to 7
+            days.
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
