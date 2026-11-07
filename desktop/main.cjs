@@ -15,7 +15,7 @@ const { readCloudState, cloudMode, selectCaptureEnvFile, keepLocalCaptureEnv } =
 const { engineAvailable, runEngine } = require("./cloud-engine.cjs")
 const { sessionCookie, externalUrl } = require("./cloud-session.cjs")
 const { snapshotFlags } = require("./cloud-confirm.cjs")
-const { resolveSettingsAsset, contentType, settingsUrl, SETTINGS_ORIGIN } = require("./settings-assets.cjs")
+const { resolveSettingsAsset, contentType, settingsCsp, settingsUrl, SETTINGS_ORIGIN } = require("./settings-assets.cjs")
 
 // Settings is a static Vite bundle served from the app, so it keeps working while the
 // local Worker is stopped or the app is in cloud mode. Standard+secure makes ES
@@ -312,10 +312,7 @@ function showApp() {
 // ---------- Settings window ----------
 
 const SETTINGS_DIR = [path.join(__dirname, "settings"), path.join(ROOT, "web/dist-settings")].find(dir => fs.existsSync(path.join(dir, "index.html"))) ?? path.join(__dirname, "settings")
-// Settings never makes a network request of its own: every action is IPC. The two font
-// hosts are the same Inter stylesheet the gallery loads, so the window keeps its
-// typography online and falls back to the system face offline.
-const SETTINGS_CSP = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+const SETTINGS_CSP = settingsCsp()
 function serveSettings() {
   protocol.handle("snip", async request => {
     const file = resolveSettingsAsset(SETTINGS_DIR, request.url)

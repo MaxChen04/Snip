@@ -7,6 +7,27 @@ const path = require("node:path")
 const SETTINGS_ORIGIN = "snip://settings"
 const SETTINGS_ENTRY = "index.html"
 
+// Settings is the privileged, offline window: it loads nothing from the network, ever.
+// Every asset, including the Inter face, is shipped in the bundle. There is no
+// connect-src to grant, no form to submit and no frame to embed. Keeping the policy
+// here lets a test assert it never grows a remote host.
+const SETTINGS_CSP = Object.freeze({
+  defaultSrc: "'none'",
+  scriptSrc: "'self'",
+  styleSrc: "'self' 'unsafe-inline'",
+  fontSrc: "'self'",
+  imgSrc: "'self' data:",
+  baseUri: "'none'",
+  formAction: "'none'",
+  frameAncestors: "'none'",
+})
+
+function settingsCsp(directives = SETTINGS_CSP) {
+  return Object.entries(directives)
+    .map(([key, value]) => `${key.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`)} ${value}`)
+    .join("; ")
+}
+
 function inside(root, target) {
   const relative = path.relative(root, target)
   return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))
@@ -72,4 +93,4 @@ function contentType(file) {
 
 const settingsUrl = (query = "") => `${SETTINGS_ORIGIN}/${SETTINGS_ENTRY}${query}`
 
-module.exports = { SETTINGS_ORIGIN, SETTINGS_ENTRY, resolveSettingsAsset, contentType, settingsUrl, inside }
+module.exports = { SETTINGS_ORIGIN, SETTINGS_ENTRY, SETTINGS_CSP, settingsCsp, resolveSettingsAsset, contentType, settingsUrl, inside }
