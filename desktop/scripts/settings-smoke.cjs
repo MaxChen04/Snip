@@ -166,6 +166,27 @@ async function main() {
     assert.ok(detachedState.cloud?.detachedAt, "the cloud copy is remembered as detached")
     await until(async () => application.windows().some(candidate => candidate.url().startsWith(site.origin)), "the gallery never returned to the local origin")
     console.log("PASS turning off cloud detaches and brings the app back to this Mac")
+
+    // Re-enable so the copy-back path can be exercised from cloud mode. The Settings
+    // window from the detach step is still open, so focus it instead of opening another.
+    const settingsThird = application.windows().find(candidate => candidate.url().startsWith("snip://settings"))
+    assert.ok(settingsThird, "the Settings window closed unexpectedly")
+    settingsThird.setDefaultTimeout(30000)
+    await settingsThird.bringToFront()
+    await settingsThird.getByRole("button", { name: "Enable cloud" }).click()
+    await settingsThird.getByRole("button", { name: "Continue to Cloudflare" }).click()
+    await settingsThird.getByRole("heading", { name: "Cloud library", exact: true }).waitFor({ timeout: 60000 })
+
+    // Bring the cloud library back (pull): the app returns to local and the capture
+    // agent follows the mode again. The fake CLI switches mode; this proves main reacts.
+    await settingsThird.getByRole("button", { name: "Turn off cloud…" }).click()
+    await settingsThird.getByRole("button", { name: /Bring the cloud library back/ }).click()
+    await settingsThird.getByRole("button", { name: "Copy back now" }).click()
+    await settingsThird.getByRole("heading", { name: "This Mac", exact: true }).waitFor({ timeout: 60000 })
+    const pulledState = JSON.parse(await fs.readFile(path.join(site.root, ".snip/cloud.json"), "utf8"))
+    assert.equal(pulledState.mode, "local")
+    await until(async () => application.windows().some(candidate => candidate.url().startsWith(site.origin)), "the gallery never came back after pull")
+    console.log("PASS bringing the cloud library back returns the app to this Mac")
   } finally {
     if (application) await application.close().catch(() => {})
     await new Promise(resolve => stub.close(resolve))
