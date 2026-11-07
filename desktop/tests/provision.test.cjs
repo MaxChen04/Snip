@@ -11,6 +11,7 @@ const path = require('node:path');
 const http = require('node:http');
 const crypto = require('node:crypto');
 
+const SYNTHETIC = require('./fixtures/synthetic.cjs');
 const { runSteps, StepError, NeedsInputError } = require('../provision/engine.cjs');
 const stateModule = require('../provision/state.cjs');
 const lib = require('../provision/lib.cjs');
@@ -303,8 +304,8 @@ function fakeLibraryModule(model) {
     version: 1,
     tables: { ...LIBRARY },
     keys: [
-      { key: 'refs/aaaaaaaaaaaaaaaa/11111111111111111111111111111111/desktop.png', size: 11, contentType: 'image/png' },
-      { key: 'refs/bbbbbbbbbbbbbbbb/22222222222222222222222222222222/snapshot.html', size: 7, contentType: 'text/html' },
+      { key: SYNTHETIC.fileKey(1, 'desktop.png'), size: 11, contentType: 'image/png' },
+      { key: SYNTHETIC.fileKey(2, 'snapshot.html'), size: 7, contentType: 'text/html' },
     ],
     totalBytes: 18,
   };
@@ -448,9 +449,12 @@ test('public URL, canonical origin and hosts', () => {
 // (`cloud.cjs` parses `wrangler d1 create` / `kv namespace create` output with it),
 // so its coverage moves here rather than disappearing with the old script.
 test('ids printed by wrangler create commands', () => {
-  assert.equal(lib.parseCreatedId(`[[d1_databases]]\nbinding = "DB"\ndatabase_name = "snip"\ndatabase_id = "0f0e0d0c-0b0a-0908-0706-050403020100"`, 'database_id'), '0f0e0d0c-0b0a-0908-0706-050403020100');
-  assert.equal(lib.parseCreatedId(`{\n  "d1_databases": [{ "binding": "DB", "database_id": "0f0e0d0c-0b0a-0908-0706-050403020100" }]\n}`, 'database_id'), '0f0e0d0c-0b0a-0908-0706-050403020100');
-  assert.equal(lib.parseCreatedId(`"kv_namespaces": [{ "binding": "OAUTH_KV", "id": "a1b2c3d4e5f60718293a4b5c6d7e8f90" }]`, 'id'), 'a1b2c3d4e5f60718293a4b5c6d7e8f90');
+  // Synthetic ids: all zeros with a tag, never a real database or namespace.
+  const databaseId = '00000000-0000-4000-8000-00000000a001';
+  const namespaceId = '00000000000000000000000000000a02';
+  assert.equal(lib.parseCreatedId(`[[d1_databases]]\nbinding = "DB"\ndatabase_name = "snip"\ndatabase_id = "${databaseId}"`, 'database_id'), databaseId);
+  assert.equal(lib.parseCreatedId(`{\n  "d1_databases": [{ "binding": "DB", "database_id": "${databaseId}" }]\n}`, 'database_id'), databaseId);
+  assert.equal(lib.parseCreatedId(`"kv_namespaces": [{ "binding": "OAUTH_KV", "id": "${namespaceId}" }]`, 'id'), namespaceId);
   // Nothing printable is "no id", never a guess.
   assert.equal(lib.parseCreatedId('no ids here', 'database_id'), null);
 });
@@ -604,7 +608,7 @@ test('the transfer client streams uploads, respects 409 and lists the manifest',
   const empty = await client.manifest();
   assert.deepEqual(empty.keys, [], 'a fresh bucket lists nothing until something is uploaded');
   const { Readable } = require('node:stream');
-  const key = 'refs/aaaaaaaaaaaaaaaa/11111111111111111111111111111111/desktop.png';
+  const key = SYNTHETIC.fileKey(1, 'desktop.png');
   const put = await client.put(key, Readable.from([Buffer.from('hello world')]), { size: 11, contentType: 'image/png' });
   assert.equal(put.ok, true);
   assert.equal(cloud.objects.get(key).toString(), 'hello world');
@@ -614,8 +618,8 @@ test('the transfer client streams uploads, respects 409 and lists the manifest',
   const listed = await client.manifest();
   assert.deepEqual(listed.keys.map((entry) => [entry.key, entry.size, entry.contentType]), [[key, 11, 'image/png']]);
   assert.equal(await client.head(key), 11);
-  assert.equal(await client.head('refs/cccccccccccccccc/33333333333333333333333333333333/missing.png'), null);
-  const resumed = await client.resume(['aaaaaaaaaaaaaaaa', 'aaaaaaaaaaaaaaaa', 'bbbbbbbbbbbbbbbb']);
+  assert.equal(await client.head(SYNTHETIC.fileKey(3, 'missing.png')), null);
+  const resumed = await client.resume([SYNTHETIC.refId(1), SYNTHETIC.refId(1), SYNTHETIC.refId(2)]);
   assert.equal(resumed.resumed, 2);
   // A bad token is a 404 at the surface and a clear error here.
   const wrong = transfer.createTransfer({ url: PROVIDED, token: 'nope', fetchImpl: cloud.fetch });
@@ -646,7 +650,7 @@ test('a full setup runs every step against fakes and never succeeds on an empty 
   // The deploy used the patched config in the library, never the checkout.
   const deployCall = wrangler.calls.find((call) => call.args[0] === 'deploy');
   assert.ok(deployCall.args.includes(path.join(model.root, 'cloud/snip/wrangler.json')));
-  assert.equal(cloud.calls.some((call) => call.route === 'PUT /transfer/file/refs/aaaaaaaaaaaaaaaa/11111111111111111111111111111111/desktop.png'), true);
+  assert.equal(cloud.calls.some((call) => call.route === `PUT /transfer/file/${SYNTHETIC.fileKey(1, 'desktop.png')}`), true);
   const state = stateModule.readState(model.root);
   assert.equal(state.mode, 'cloud');
   assert.equal(state.cloud.url, PROVIDED);
@@ -1564,11 +1568,11 @@ test('a streamed upload sends duplex: half, as Node fetch requires', async () =>
   };
   const client = transfer.createTransfer({ url: PROVIDED, token: 't', fetchImpl });
   const { Readable } = require('node:stream');
-  await client.put('refs/abcdabcdabcdabcd/0123456789abcdef0123456789abcdef/a.png', Readable.from([Buffer.from('x')]), { size: 1 });
+  await client.put(SYNTHETIC.fileKey(4, 'a.png'), Readable.from([Buffer.from('x')]), { size: 1 });
   assert.equal(seen[0].duplex, 'half');
   // A web ReadableStream (what a local GET returns) must get it too.
   const web = new Response(Buffer.from('hello')).body;
-  await client.put('refs/abcdabcdabcdabcd/0123456789abcdef0123456789abcdef/b.png', web, { size: 5 });
+  await client.put(SYNTHETIC.fileKey(4, 'b.png'), web, { size: 5 });
   assert.equal(seen[1].duplex, 'half');
 });
 
@@ -2316,7 +2320,7 @@ test('pull-verify skips every table the manifest excludes', async () => {
     manifestValue: {
       tables: { refs: 1, pages: 1, d1_migrations: 10, owner_nonces: 0 },
       excluded: ['d1_migrations', 'owner_nonces'],
-      keys: [{ key: 'refs/a/b/shot.png', size: 10 }],
+      keys: [{ key: SYNTHETIC.fileKey(5, 'shot.png'), size: 10 }],
     },
     dump: DUMP_WITH_LEDGER,
     counts: { refs: 1, pages: 1, d1_migrations: 10, owner_nonces: 1 },
@@ -2337,7 +2341,7 @@ test('an older Worker with no excluded list still verifies with a shorter migrat
     stagedState,
     manifestValue: {
       tables: { refs: 1, pages: 1 },
-      keys: [{ key: 'refs/a/b/shot.png', size: 10 }],
+      keys: [{ key: SYNTHETIC.fileKey(5, 'shot.png'), size: 10 }],
     },
     dump: DUMP_WITH_LEDGER,
     counts: { refs: 1, pages: 1 },
@@ -2356,7 +2360,7 @@ test('a newer Worker that excludes a table the engine has never heard of still v
     manifestValue: {
       tables: { refs: 1, future_table: 4 },
       excluded: ['future_table'],
-      keys: [{ key: 'refs/a/b/shot.png', size: 10 }],
+      keys: [{ key: SYNTHETIC.fileKey(5, 'shot.png'), size: 10 }],
     },
     dump: DUMP_WITH_LEDGER,
     counts: { refs: 1, future_table: 4 },
@@ -2387,7 +2391,7 @@ test('setup verify skips an excluded ledger and compares what the manifest copie
   // The cloud has 10 migrations, the local dump holds a longer ledger: an
   // excluded table must not be compared, or a correct move fails.
   fs.writeFileSync(path.join(directory, 'manifest.json'), JSON.stringify({ tables: { refs: 1, pages: 1, d1_migrations: 10 } }));
-  fs.writeFileSync(path.join(directory, 'files.json'), JSON.stringify({ keys: [{ key: 'refs/a/b/shot.png', size: 10, contentType: 'image/png' }], excluded: ['d1_migrations'] }));
+  fs.writeFileSync(path.join(directory, 'files.json'), JSON.stringify({ keys: [{ key: SYNTHETIC.fileKey(5, 'shot.png'), size: 10, contentType: 'image/png' }], excluded: ['d1_migrations'] }));
   stateModule.setMode(root, 'cloud');
   stateModule.updateState(root, (next) => {
     next.cloud = { url: PROVIDED, accountId: 'acct', lastVerifiedAt: 'x' };
@@ -2404,7 +2408,7 @@ test('setup verify skips an excluded ledger and compares what the manifest copie
     deps: {
       // The only network call this step makes is the manifest, over the
       // transfer client the context builds from deps.fetch.
-      fetch: async () => new Response(JSON.stringify({ tables: { refs: 1, pages: 1 }, keys: [{ key: 'refs/a/b/shot.png', size: 10 }] }), { status: 200, headers: { 'content-type': 'application/json' } }),
+      fetch: async () => new Response(JSON.stringify({ tables: { refs: 1, pages: 1 }, keys: [{ key: SYNTHETIC.fileKey(5, 'shot.png'), size: 10 }] }), { status: 200, headers: { 'content-type': 'application/json' } }),
       local: { ...LOCAL_FAKE, localOrigin: () => null },
       library: { libraryConfig: ({ dataRoot }) => path.join(dataRoot, 'web/wrangler.jsonc'), async withLocalWorker() { throw new Error('not used'); } },
       deploy: {

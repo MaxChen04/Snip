@@ -4,6 +4,7 @@
 // end-to-end without Cloudflare. Enable it with SNIP_CLOUD_ENGINE=<this file>.
 const fs = require("node:fs")
 const path = require("node:path")
+const SYNTHETIC = require("./synthetic.cjs")
 
 const argv = process.argv.slice(2)
 const command = argv[0] ?? "setup"
@@ -27,12 +28,14 @@ const emit = value => {
   process.stdout.write(`${JSON.stringify({ v: 1, ...value })}\n`)
 }
 
+// Synthetic test values: all zeros with a small tag, so a fixture id can never be
+// mistaken for a real account, database, namespace or library. See synthetic.cjs.
 const paths = { dir: path.join(dataRoot, ".snip"), state: path.join(dataRoot, ".snip", "cloud.json") }
 function readState() {
   try {
     return JSON.parse(fs.readFileSync(paths.state, "utf8"))
   } catch {
-    return { version: 1, mode: "local", library: { id: "8f3c2a1b4d5e6f70" }, cloud: null, snapshot: null, steps: [], error: null }
+    return { version: 1, mode: "local", library: { id: SYNTHETIC.LIBRARY_ID }, cloud: null, snapshot: null, steps: [], error: null }
   }
 }
 function writeState(state) {
@@ -183,10 +186,10 @@ async function setup() {
     if (id === "secrets" || id === "deploy") {
       state.cloud = {
         url: flag("domain") ? `https://${flag("domain")}` : CLOUD_URL,
-        accountId: flag("account") ?? "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+        accountId: flag("account") ?? SYNTHETIC.ACCOUNT_ID,
         workerName: "snip",
-        d1: { name: "snip", id: "6f5e4d3c-2b1a-4908-8776-655443322110" },
-        kv: { name: "OAUTH_KV", id: "1a2b3c4d5e6f708192a3b4c5d6e7f809" },
+        d1: { name: "snip", id: SYNTHETIC.DATABASE_ID },
+        kv: { name: "OAUTH_KV", id: SYNTHETIC.NAMESPACE_ID },
         bucket: "snip-files",
         ownerId: "max",
         detachedAt: null,

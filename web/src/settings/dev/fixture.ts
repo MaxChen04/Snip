@@ -29,10 +29,20 @@ const stopTimers = () => {
   timers.clear()
 }
 
-const library = { id: "8f3c2a1b4d5e6f70" }
+// Synthesised identifiers, all zeros with a small tag so they cannot be mistaken
+// for a real account, database, namespace or library. Nothing here is copied from
+// a live install.
+const SYNTHETIC = {
+  libraryId: "00000000000000a001",
+  accountId: "00000000000000000000000000000a01",
+  ownerNonce: "0000000000000a01",
+  cloudUrl: "https://snip.example.workers.dev",
+} as const
+
+const library = { id: SYNTHETIC.libraryId }
 const cloud = {
-  url: "https://snip.max.workers.dev",
-  accountId: "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+  url: SYNTHETIC.cloudUrl,
+  accountId: SYNTHETIC.accountId,
   workerName: "snip",
   bucket: "snip-files",
   ownerId: "max",
@@ -211,7 +221,9 @@ function set(next: CloudSnapshotState) {
 // Declared as a function so the state table above can call it while the module loads.
 function fakeLink(): OwnerLink {
   return {
-    url: `${cloud.url}/auth/owner?t=snip-owner-v1%7Cmax%7C1793600400%7C6f1c0a9e2b7d4c58%7C0.wY3kQ9m2Xr8sT1vP4nB6zL0hJ5gF7dA2cE`,
+    // A synthetic payload: the nonce and signature are obviously fake, so this can
+    // never be mistaken for a link a real install minted.
+    url: `${cloud.url}/auth/owner?t=snip-owner-v1%7Cmax%7C1793600400%7C${SYNTHETIC.ownerNonce}%7C0.${"a".repeat(43)}`,
     note: "Works once and expires in 10 minutes. The browser that opens it is signed in and can add a passkey.",
     expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
   }
@@ -389,7 +401,7 @@ export function createFixtureBridge(): CloudBridge {
           step: "guard",
           id: "existing-library",
           message: "This Cloudflare account already has a Snip library.",
-          data: { url: "https://snip.maxschen29.workers.dev", counts: { refs: 1284, pages: 9120, collections: 7 } },
+          data: { url: SYNTHETIC.cloudUrl, counts: { refs: 1284, pages: 9120, collections: 7 } },
           options: [
             { id: "adopt-existing", label: "Use that library", detail: "Switches this Mac to it. Your local library is kept and is not copied." },
             { id: "stop", label: "Stop", detail: "Changes nothing." },

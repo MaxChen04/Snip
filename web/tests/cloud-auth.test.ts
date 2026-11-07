@@ -17,6 +17,15 @@ const SECRETS = {
 
 const ctx0 = { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext
 
+// Synthetic object keys: an obviously fake ref id and attempt segment that satisfy
+// the transfer key pattern ([a-z0-9]{16} and [A-Za-z0-9._/-]+). Nothing here names a
+// real library.
+const REF_ID = "testref000000001"
+const ATTEMPT = "00000000000000000000000000000a01"
+const keyFor = (page = "p0/desktop.jpg") => `refs/${REF_ID}/${ATTEMPT}/${page}`
+// Distinct ref ids for the pagination and batching tests, same obviously-fake shape.
+const refIdFor = (n: number) => `testref${n.toString().padStart(9, "0")}`
+
 async function setup() {
   const mf = new Miniflare(convertV4MiniflareOptions({ modules: true, script: 'export default {fetch(){return new Response("ok")}}', d1Databases: ["DB"], r2Buckets: ["FILES"] }))
   const database = (await mf.getD1Database("DB")) as unknown as D1Database
@@ -71,10 +80,10 @@ async function cookie(env: Env, session: { ownerId: string; method?: string; epo
 
 test("a legacy login cookie still signs in and reports itself as GitHub", () =>
   withWorker(async ({ database, env, call }) => {
-    const legacy = `${SESSION_COOKIE}=${await sign(env.SESSION_SECRET, `MaxChen04|${Date.now() + 86_400_000}`)}`
+    const legacy = `${SESSION_COOKIE}=${await sign(env.SESSION_SECRET, `fixture-login|${Date.now() + 86_400_000}`)}`
     const me = await call("/api/me", { headers: { cookie: legacy } })
     assert.equal(me.status, 200, "a deploy must not sign existing sessions out")
-    assert.deepEqual(await me.json(), { login: "MaxChen04", ownerId: "MaxChen04", method: "github" })
+    assert.deepEqual(await me.json(), { login: "fixture-login", ownerId: "fixture-login", method: "github" })
     // No owners row yet: epoch 0 is the implicit value, so the legacy cookie is valid.
     assert.equal((await database.prepare("SELECT count(*) AS n FROM owners").first<{ n: number }>())!.n, 0)
   }))
@@ -162,7 +171,7 @@ test("an expired owner link is 410, an invalid one is 400, and neither sets a co
     assert.deepEqual(expired.headers.getSetCookie(), [])
 
     assert.equal((await call("/auth/owner?t=snip-owner-v1%7Cmax%7C9999999999%7Cnothex%7C0.forged")).status, 400)
-    assert.equal((await call("/auth/owner?t=snip-owner-v1%7Cmax%7C9999999999%7C00112233445566778899aabbccddeeff%7C0")).status, 400)
+    assert.equal((await call(`/auth/owner?t=snip-owner-v1%7Cmax%7C9999999999%7C${ATTEMPT}%7C0`)).status, 400)
   }))
 
 test("the owner link POST burns the nonce, creates the owner and hands the session to the loopback", () =>
@@ -283,7 +292,7 @@ test("transfer status and manifest describe the library, and files round-trip", 
   withWorker(async ({ files, call, localJson }) => {
     const uploadFiles = bufferedFiles(files)
     await localJson("/api/references", { url: "https://linear.app", mode: "single" })
-    const key = "refs/ab12cd34ef567890/00112233445566778899aabbccddeeff/p0/desktop.jpg"
+    const key = keyFor("p0/desktop.jpg")
     await files.put(key, "12345")
 
     const status = (await (await call("/transfer/status", { headers: bearer }, transfer)).json()) as { hasOwner: boolean; counts: { refs: number }; ownerSecretHash: string | null; version: string }
@@ -312,7 +321,7 @@ test("transfer status and manifest describe the library, and files round-trip", 
     const head = await call(`/transfer/file/${key}`, { method: "HEAD", headers: bearer }, transfer)
     assert.equal(head.status, 200)
 
-    const mobile = "refs/ab12cd34ef567890/00112233445566778899aabbccddeeff/p0/mobile.jpg"
+    const mobile = keyFor("p0/mobile.jpg")
     const transferPut = (path: string, body: string, init: RequestInit = {}) => call(path, { method: "PUT", body, headers: { ...bearer, "content-type": "image/jpeg" }, ...init }, { ...transfer, FILES: uploadFiles })
     const put = await transferPut(`/transfer/file/${mobile}`, "abcdef")
     assert.equal(put.status, 200)
@@ -329,7 +338,7 @@ test("transfer status and manifest describe the library, and files round-trip", 
 
 test("a transfer body declared over 100 MB is refused with 413", () =>
   withWorker(async ({ env }) => {
-    const key = "refs/ab12cd34ef567890/00112233445566778899aabbccddeeff/p0/huge.jpg"
+    const key = keyFor("p0/huge.jpg")
     const request = new Request(`https://snip.test/transfer/file/${key}`, {
       method: "PUT",
       body: "x",
@@ -341,7 +350,7 @@ test("a transfer body declared over 100 MB is refused with 413", () =>
 
 test("transfer download streams the object and never buffers it", () =>
   withWorker(async ({ env }) => {
-    const key = "refs/ab12cd34ef567890/00112233445566778899aabbccddeeff/p0/desktop.jpg"
+    const key = keyFor("p0/desktop.jpg")
     const chunks = [new Uint8Array([1, 2, 3]), new Uint8Array([4, 5])]
     let reads = 0
     // The stub has no arrayBuffer(): a route that buffered would fail here.
@@ -371,7 +380,7 @@ test("transfer download streams the object and never buffers it", () =>
 
     assert.equal((await app.fetch(new Request(`https://snip.test/transfer/file/${key}`, { headers: { authorization: "Bearer wrong" } }), { ...env, ...transfer, FILES: files } as Env, ctx0)).status, 401)
     assert.equal(
-      (await app.fetch(new Request("https://snip.test/transfer/file/refs/ab12cd34ef567890/x/p0/missing.jpg", { headers: bearer }), { ...env, ...transfer, FILES: files } as Env, ctx0)).status,
+      (await app.fetch(new Request(`https://snip.test/transfer/file/refs/${REF_ID}/x/p0/missing.jpg`, { headers: bearer }), { ...env, ...transfer, FILES: files } as Env, ctx0)).status,
       404,
     )
   }))
@@ -380,7 +389,7 @@ test("transfer upload keeps the contentType the manifest reported", () =>
   withWorker(async ({ files, call, localJson }) => {
     const uploadFiles = bufferedFiles(files)
     await localJson("/api/references", { url: "https://linear.app", mode: "single" })
-    const key = "refs/ab12cd34ef567890/00112233445566778899aabbccddeeff/p0/mobile.jpg"
+    const key = keyFor("p0/mobile.jpg")
     const put = await call(`/transfer/file/${key}`, { method: "PUT", body: "png-bytes", headers: { ...bearer, "content-type": "image/png" } }, { ...transfer, FILES: uploadFiles })
     assert.equal(put.status, 200)
 
@@ -395,7 +404,7 @@ test("the manifest lists every bucket page, orphans included, and never reads D1
   withWorker(async ({ database, env }) => {
     // 2,500 objects over three pages, including one that no row references.
     const objects = Array.from({ length: 2500 }, (_, i) => ({
-      key: `refs/${i.toString(16).padStart(8, "0")}/p/p0/desktop.jpg`,
+      key: `refs/${refIdFor(i)}/p/p0/desktop.jpg`,
       size: i + 1,
       // list() reports no httpMetadata here, so the route falls back to HEAD per key.
       httpMetadata: {},
@@ -469,7 +478,7 @@ test("the content-type fallback is batched, and costs nothing when the listing c
     let peak = 0
     let heads = 0
     const objects = Array.from({ length: 40 }, (_, i) => ({
-      key: `refs/fixture${i.toString(16).padStart(8, "0")}/p0/page.jpg`,
+      key: `refs/${refIdFor(i)}/p0/page.jpg`,
       size: 10,
       httpMetadata: {},
       httpEtag: `"${i}"`,
