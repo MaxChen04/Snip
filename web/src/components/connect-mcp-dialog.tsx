@@ -116,8 +116,12 @@ export function ConnectMcpDialog({ open, onOpenChange }: { open: boolean; onOpen
             <p className="flex items-start gap-2 rounded-xl bg-fill-2 px-3 py-2.5 text-xs leading-[1.5] text-muted-foreground">
               <LaptopIcon className="mt-px size-3.5 shrink-0" />
               <span>
-                This is your local Snip. Agents on this Mac can use it while Snip is running. For cloud agents such as Claude.ai, open your deployed Snip and copy
-                its URL instead.
+                This is your local Snip. Agents on this Mac can use it while Snip is running. For cloud agents such as Claude.ai, host Snip on Cloudflare and use
+                the deployed URL instead: see{" "}
+                <a href="/guide#cloud" className="font-medium text-foreground underline underline-offset-2">
+                  cloud mode
+                </a>
+                .
               </span>
             </p>
           )}

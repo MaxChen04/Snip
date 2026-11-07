@@ -5,6 +5,7 @@ import { BookmarkIcon, FolderPlusIcon, GlobeIcon, LogOutIcon, MonitorIcon, MoonI
 import { BookmarkletDialog } from "@/components/bookmarklet-dialog"
 import { api, type StorageUsage } from "@/lib/api"
 import { useAddFlow } from "@/components/add-flow"
+import { isLocalOrigin } from "@/lib/mcp"
 import { useTheme } from "next-themes"
 import { Logo } from "@/components/brand"
 import { Button } from "@/components/ui/button"
@@ -175,6 +176,16 @@ export function formatBytes(n: number) {
 
 function StorageMeter({ usage }: { usage: StorageUsage | null | "error" }) {
   if (usage === "error") return null
+  // Local mode has no quota: the bytes are files in the library folder. Only a hosted Snip
+  // counts against R2's free tier.
+  if (isLocalOrigin()) {
+    return (
+      <div className="flex items-center justify-between px-2 py-1.5 text-xs" title="Screenshots, GIFs, HTML snapshots and styles, stored in this Mac's Snip library.">
+        Storage
+        <span className="text-ink-11 tabular-nums">{usage ? `${usage.partial ? "over " : ""}${formatBytes(usage.bytes)} on disk` : "…"}</span>
+      </div>
+    )
+  }
   const share = usage ? Math.min(1, usage.bytes / usage.freeBytes) : 0
   return (
     <div className="flex flex-col gap-1.5 px-2 py-1.5 text-xs" title="Cloudflare R2's free tier includes 10 GB. Storage beyond it is billed.">

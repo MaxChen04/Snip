@@ -6,22 +6,38 @@ A private library of website design references. Paste a URL, choose **Single pag
 
 ![Browsing a collection, opening a captured site and a page in Snip](docs/media/browse.gif)
 
-Website: [usesnip.dev](https://usesnip.dev) · Latest release: [v0.1.0](https://github.com/MaxChen04/Snip/releases/tag/v0.1.0) (source only; Snip is self-hosted) · License: [source-available](#license)
+Website: [usesnip.dev](https://usesnip.dev) · Latest release: [v0.1.0](https://github.com/MaxChen04/Snip/releases/tag/v0.1.0) (source only) · License: [source-available](#license)
 
 ## Quick start
 
-You need **Node 22.18+**, a free **Cloudflare** account and a **GitHub** account. The capture agent runs wherever Node and Playwright do (tested on macOS and Linux).
+Snip runs on your machine. The gallery, the API and the capture agent all run from this checkout, and every capture is stored in its library folder. There is no account to create, no server to run and nothing to upload.
+
+You need **Node 22.18+**; the capture agent runs wherever Node and Playwright do (tested on macOS and Linux). Snip.app needs an **Apple Silicon Mac on macOS 14 or later**.
 
 ```bash
 git clone https://github.com/MaxChen04/Snip && cd Snip
 npm install
-npm run setup:cloudflare   # creates the database and storage, deploys, sets secrets
-npm run capture            # keep it running: it does the captures
+cp web/.dev.vars.example web/.dev.vars   # set SESSION_SECRET and CAPTURE_TOKEN, each from openssl rand -hex 32
+npm run db:migrate:local -w web
+cp capture/.env.example capture/.env      # SNIP_URL stays http://localhost:5173; paste the same CAPTURE_TOKEN
+npm run app                              # builds Snip.app and installs it in /Applications
 ```
 
-Open the URL the setup prints and sign in with GitHub. If something's off, `npm run doctor` says what and how to fix it. [Deploying to Cloudflare](docs/deploy.md) explains each step, how to do it by hand and how to upgrade.
+Open **Snip** from Applications or the menu bar. Paste a URL, pick **Single page** or **Crawl site**, and the capture agent starts working. `npm run doctor` checks both config files if something looks off.
 
-Prefer to try it on your laptop first? See [Local development](#local-development). On an Apple Silicon Mac you can also build [Snip.app](docs/mac-app.md), a menu-bar app that runs everything locally.
+Prefer a terminal and hot reload? Run `npm run dev`, then `npm run capture` in a second terminal, and open http://localhost:5173.
+
+## Use Snip on your other devices (cloud mode)
+
+Optional. Everything above works without this. To read the library from another Mac or a browser, or to let a cloud agent such as Claude.ai reach it, deploy the same Snip to your own Cloudflare account:
+
+```bash
+npm run setup:cloudflare
+```
+
+The setup signs you in to Cloudflare, creates the database, key-value store and storage bucket, deploys, and prints your URL. When it asks, create a GitHub OAuth app with the two URLs it prints and paste its Client ID and secret. Sign in at the printed URL with an allowed GitHub login.
+
+Today this creates a **separate** library: your local references are not copied into it, and the in-app **Enable cloud** button that will copy them is not released yet. [Cloud mode](docs/deploy.md) covers what it creates, R2 activation, upgrading and how to do it by hand.
 
 ## What it captures
 
@@ -44,7 +60,7 @@ The app is an infinite gallery (Websites / Pages / Animations) with search and s
 - **Select** pages, animations and tokens, then **Copy prompt** to hand exactly those to an agent.
 - **Export** a website as a .zip (screenshots, HTML, styles, GIFs, tokens) from its **More** menu.
 - **Connect MCP** in the top bar shows copy-ready setup for Claude, Codex, OpenCode, Cursor and other clients.
-- Press <kbd>/</kbd> to search. A banner tells you when captures are waiting on an offline capture agent, and the account menu shows how much of R2's free 10 GB you've used.
+- Press <kbd>/</kbd> to search. A banner tells you when captures are waiting on an offline capture agent, and the account menu shows how much storage your captures use: bytes on disk in the local app, and R2 usage against the 10 GB free tier in cloud mode.
 
 **Page viewer.** Drag the sidebar to resize it, switch between Tokens, HTML and CSS, and flip between desktop and mobile captures.
 
@@ -65,44 +81,46 @@ The app is an infinite gallery (Websites / Pages / Animations) with search and s
 ## How it works
 
 ```
-┌──────────── Cloudflare (free plan) ─────────────┐        ┌──── Your machine ────┐
-│ Worker: React gallery + API + /mcp (OAuth)      │◀─poll──│ capture agent        │
-│ D1: references, pages, animations, collections  │──job──▶│ (Playwright/Chromium)│
-│ R2: screenshots, GIFs, HTML snapshots, styles   │◀upload─│                      │
-│ KV: OAuth tokens                                │        └──────────────────────┘
-└─────────────────────────────────────────────────┘
+┌──────────────────── your Mac ────────────────────┐
+│ Snip.app                                         │
+│   Worker: gallery, API and /mcp, run by Wrangler │
+│   D1 · R2 · KV: files in the library folder      │
+│   capture agent: Playwright + Chromium           │
+└──────────────────────────────────────────────────┘
 ```
+
+Snip is one Worker in two places. Locally, Snip.app runs it from this checkout through Wrangler, with D1, R2 and KV as files in the library folder; the capture agent browses with Chromium on the same machine.
 
 Capture runs locally because the free plans can't crawl sites: Cloudflare's free Browser Rendering allows 10 browser-minutes a day, and Vercel Hobby functions stop after 5 minutes. Queued references wait until the agent is running.
 
-Only the GitHub logins in `ALLOWED_GITHUB_LOGINS` can sign in. See [SECURITY.md](SECURITY.md) for the full trust model.
+Cloud mode deploys the same Worker to your own Cloudflare account, with D1, R2 and KV in that account, so other devices and cloud agents can reach it. Capture still runs on a Mac: the agent follows `SNIP_URL`, so point it at the hosted copy or leave it local. See [SECURITY.md](SECURITY.md) for the full trust model.
 
-## Connect your agent (remote MCP)
+## Connect your agent (MCP)
 
-The MCP endpoint is `https://snip.<your-subdomain>.workers.dev/mcp`. Clients register themselves, send you through GitHub login, and show a consent screen.
+The MCP endpoint is `http://localhost:5173/mcp` when Snip runs on your Mac, and `https://snip.<your-subdomain>.workers.dev/mcp` in cloud mode. Locally, only agents on the same Mac can reach it while Snip is running; cloud clients such as Claude.ai need the deployed URL. Clients register themselves, ask for your approval, and show a consent screen.
 
 ```bash
-claude mcp add --transport http snip https://snip.<your-subdomain>.workers.dev/mcp
+claude mcp add --transport http snip http://localhost:5173/mcp
 ```
 
 Codex (the CLI, IDE extension and Codex desktop app share `~/.codex/config.toml`):
 
 ```bash
-codex mcp add snip --url https://snip.<your-subdomain>.workers.dev/mcp
+codex mcp add snip --url http://localhost:5173/mcp
 codex mcp login snip
 ```
 
 OpenCode (`~/.config/opencode/opencode.json` or a project `opencode.json`; note the `mcp` key and `type: "remote"`), then `opencode mcp auth snip`:
 
 ```json
-{ "mcp": { "snip": { "type": "remote", "url": "https://snip.<your-subdomain>.workers.dev/mcp" } } }
+{ "mcp": { "snip": { "type": "remote", "url": "http://localhost:5173/mcp" } } }
 ```
 
-For Claude.ai or Claude Desktop, add it as a custom connector with the same URL.
+For Claude.ai or Claude Desktop, add it as a custom connector with the same URL. In cloud mode, use your deployed URL in every command and connector above.
 
 <img src="docs/media/connect-mcp.png" alt="Connect MCP dialog" width="420">
 
-The **Connect MCP** button in the app's top bar shows these steps with your own URL filled in. In the local app or Snip.app the URL is `http://localhost:5173/mcp`, which only agents on the same Mac can reach while Snip is running; cloud agents such as Claude.ai need your deployed URL.
+The **Connect MCP** button in the app's top bar shows these steps with your own URL filled in.
 
 | Tool | What it does |
 | --- | --- |
@@ -131,8 +149,8 @@ File URLs returned by the MCP are signed and expire after 24 hours.
 
 | Variable | Default | |
 | --- | --- | --- |
-| `SNIP_URL` | | Worker URL |
-| `CAPTURE_TOKEN` | | Must match the Worker secret |
+| `SNIP_URL` | `http://localhost:5173` | Your local app. Set your Worker URL in cloud mode |
+| `CAPTURE_TOKEN` | | Must match `web/.dev.vars` (or the Worker secret when hosted) |
 | `CHROMIUM_PATH` | Playwright's Chromium | Use your installed Chrome instead |
 | `POLL_SECONDS` | `5` | Queue poll interval |
 | `HEADLESS` | `true` | `false` to watch the browser |
@@ -148,7 +166,7 @@ File URLs returned by the MCP are signed and expire after 24 hours.
 
 `npm run once -w capture` drains the queue and exits.
 
-## Local development
+## Running from source
 
 ```bash
 npm install
@@ -162,7 +180,7 @@ npm run capture
 npm run doctor                                    # checks the setup
 ```
 
-`DEV_LOGIN` in `web/.dev.vars` skips GitHub sign-in on localhost only. Never set it on a deployed Worker.
+`DEV_LOGIN` in `web/.dev.vars` replaces GitHub sign-in on localhost, so the app never asks you to log in while you work. It is the name you appear as. Never set it on a deployed Worker. [Snip.app](docs/mac-app.md) runs this same checkout as a menu-bar app.
 
 ## Updating
 

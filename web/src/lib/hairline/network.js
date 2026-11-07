@@ -169,7 +169,7 @@ function mount({ stage, svg, read }, value) {
 /** The figure, as the hairline-create skill declares it; guide-page.tsx mounts it. */
 export const network = {
   name: "network",
-  means: "Your laptop and your Cloudflare servers: the route to the part under the pointer lights, and a packet rides it.",
+  means: "Your Mac and the Worker it runs, with its stores: the route to the part under the pointer lights, and a packet rides it.",
   rules: [1, 4, 5, 6],
   range: [160, 280, 440],
   tour: [[235, 210], [85, 134], [135, 109], null],

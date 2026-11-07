@@ -11,7 +11,7 @@ Thanks for helping. Bug reports, ideas and pull requests are all welcome.
 ## Pull requests
 
 1. Fork the repo and branch from `main`.
-2. Set up local development as described in the [README](README.md#local-development). `npm run doctor` checks it.
+2. Set up local development as described in the [README](README.md#running-from-source). `npm run doctor` checks it.
 3. Keep each PR to one change. For anything large, open an issue first so we can agree on the approach.
 4. Run the same checks CI runs:
    ```bash
