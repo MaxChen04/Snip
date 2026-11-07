@@ -37,6 +37,15 @@ test("snapshot actions are positional subcommands", () => {
   assert.deepEqual(args.slice(1, 3), ["snapshot", "restore"])
 })
 
+test("an owner link run asks for no handoff and keeps --managed", () => {
+  // The link is for another browser or device, so the run must never open a loopback:
+  // on that device it would point at its own localhost (contracts v3.22 §1.4.2).
+  const args = engineArgs({ appDir: APP, root: "/repo", dataRoot: "/library", command: "owner", subcommand: "link", flags: { "no-handoff": true }, env: {} })
+  assert.deepEqual(args.slice(1, 3), ["owner", "link"])
+  assert.equal(args.includes("--managed"), true)
+  assert.equal(args[args.indexOf("--no-handoff") + 1], undefined, "a boolean flag takes no value")
+})
+
 test("SNIP_CLOUD_ENGINE replaces the packaged engine", () => {
   assert.equal(enginePath(APP, { SNIP_CLOUD_ENGINE: "/tmp/fake.cjs" }), "/tmp/fake.cjs")
   assert.equal(enginePath(APP, {}), path.join(APP, "provision", "cli.cjs"))

@@ -32,6 +32,8 @@ const snapshotModule = require('./snapshot.cjs');
 const deploy = require('./deploy.cjs');
 const local = require('./local.cjs');
 const { mintOwnerLink, ownerSecretHash, startLoopback } = require('./transfer.cjs');
+// context.cjs loads this module lazily, so this is never a cycle at load time.
+const { retryOf } = require('./context.cjs');
 
 // guard runs before resources: classification is read-only, so it must be able
 // to refuse a foreign Worker without creating a single resource first.
@@ -510,7 +512,7 @@ function schemaStep() {
     id: 'schema',
     title: 'Applying database migrations',
     async run(ctx) {
-      const result = await ctx.deps.deploy.applyMigrations(ctx.wrangler, { dataRoot: ctx.dataRoot, accountId: ctx.cloud.accountId, remote: true });
+      const result = await ctx.deps.deploy.applyMigrations(ctx.wrangler, { dataRoot: ctx.dataRoot, accountId: ctx.cloud.accountId, remote: true, retry: retryOf(ctx) });
       const text = `${result.stdout}${result.stderr}`;
       const applied = (text.match(/Migrations to be applied:/) ? text.split('Migrations to be applied:')[1] : '')
         .split('\n').map((line) => line.trim()).filter((line) => /^\d{4}_/.test(line));
@@ -529,7 +531,7 @@ function deployStep() {
     title: 'Deploying Snip',
     async run(ctx) {
       const hash = bundleHash(ctx.dataRoot);
-      await ctx.deps.deploy.deployWorker(ctx.wrangler, { dataRoot: ctx.dataRoot, accountId: ctx.cloud.accountId });
+      await ctx.deps.deploy.deployWorker(ctx.wrangler, { dataRoot: ctx.dataRoot, accountId: ctx.cloud.accountId, retry: retryOf(ctx) });
       const exists = await ctx.api.workerExists(ctx.cloud.accountId, WORKER_NAME);
       if (!exists) {
         throw new StepError('DEPLOY_MISSING', 'The deploy finished but the Worker was not found.', { hint: 'Run setup again; finished steps are skipped.' });
@@ -572,13 +574,13 @@ function secretsStep() {
       // value is unusable, so it is replaced (owner links are new in this design,
       // so a legacy install has nothing to preserve).
       if (!existing.has('OWNER_LINK_SECRET') || !stored.ownerLinkSecret) values.OWNER_LINK_SECRET = next.ownerLinkSecret;
-      if (Object.keys(values).length) await ctx.deps.cloud.putSecrets(ctx.wrangler, { dataRoot: ctx.dataRoot, accountId, secrets: values });
+      if (Object.keys(values).length) await ctx.deps.cloud.putSecrets(ctx.wrangler, { dataRoot: ctx.dataRoot, accountId, secrets: values, retry: retryOf(ctx) });
       ctx.saveSecrets(next);
 
       // TRANSFER_TOKEN is the engine's only cloud credential; it is set here and
       // deleted by finish.
       const transferToken = ctx.transferToken() || randomSecret();
-      await ctx.deps.cloud.putSecrets(ctx.wrangler, { dataRoot: ctx.dataRoot, accountId, secrets: { TRANSFER_TOKEN: transferToken } });
+      await ctx.deps.cloud.putSecrets(ctx.wrangler, { dataRoot: ctx.dataRoot, accountId, secrets: { TRANSFER_TOKEN: transferToken }, retry: retryOf(ctx) });
       ctx.setTransferToken(transferToken);
 
       const names = ['SESSION_SECRET', 'CAPTURE_TOKEN', 'OWNER_LINK_SECRET', 'TRANSFER_TOKEN'];

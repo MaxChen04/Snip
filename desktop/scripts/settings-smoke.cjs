@@ -154,6 +154,46 @@ async function main() {
     assert.equal(fsSync.existsSync(path.join(site.root, "capture/.env.local")), true, "the local capture settings were kept before retargeting")
     console.log("PASS cloud.json, .env.local and .env.cloud agree with the new mode")
 
+    // The Worker's /sign-in page sends a browser with no passkey here by name, so this
+    // action has to exist and hand over a URL a person can actually open.
+    await settings.getByRole("button", { name: "Create link…" }).click()
+    const linkDialog = settings.locator("[role=dialog]")
+    await linkDialog.getByText(/\/auth\/owner\?t=/).waitFor({ timeout: 30000 })
+    const linkText = (await linkDialog.locator("p.font-mono").innerText()).trim()
+    assert.ok(linkText.startsWith(`${cloudUrl}/auth/owner?t=`), `the link did not point at this library: ${linkText}`)
+    assert.match(await linkDialog.innerText(), /Works once and expires in 10 minutes\. The browser that opens it is signed in and can add a passkey\./)
+    // The run cannot see the other device, so it reports the link, never a sign-in.
+    assert.match(await linkDialog.innerText(), /Link ready/)
+    assert.doesNotMatch(await linkDialog.innerText(), /Signed in/)
+    // Both actions a person needs: copy it, or open it here.
+    assert.equal(await linkDialog.getByRole("button", { name: "Copy", exact: true }).count(), 1)
+    assert.equal(await linkDialog.getByRole("button", { name: "Open in browser" }).count(), 1)
+    assert.equal(await linkDialog.getByRole("button", { name: "Create a new link" }).count(), 1)
+    console.log("PASS Settings mints an owner link with Copy and Open in browser")
+
+    // The link is for the other browser. Main must never write it to a log, so read
+    // every file the app has produced and look for the signature.
+    const token = new URL(linkText).searchParams.get("t")
+    assert.ok(token && token.length > 10, "the link carried no token")
+    const logsDir = await application.evaluate(({ app }) => app.getPath("logs"))
+    const stray = []
+    const walk = dir => {
+      for (const entry of fsSync.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name)
+        if (entry.isDirectory()) walk(full)
+        else if (fsSync.statSync(full).size < 8 * 1024 * 1024 && fsSync.readFileSync(full, "utf8").includes(token)) stray.push(full)
+      }
+    }
+    walk(logsDir)
+    assert.deepEqual(stray, [], `the owner link was written to ${stray.join(", ")}`)
+    // A second click must mint a fresh link rather than replay the first one, and it
+    // must pass `--no-handoff` again: the fixture refuses any run without it.
+    await linkDialog.getByRole("button", { name: "Create a new link" }).click()
+    await linkDialog.getByRole("button", { name: "Create a new link" }).waitFor()
+    await linkDialog.getByText(/\/auth\/owner\?t=/).waitFor({ timeout: 30000 })
+    await linkDialog.getByRole("button", { name: "Close" }).click()
+    console.log("PASS the owner link never reaches a log file")
+
     // The gallery is recreated on the cloud origin, and that window has no bridge.
     await until(async () => application.windows().some(candidate => candidate.url().startsWith(cloudUrl)), "the gallery never moved to the cloud origin")
     const cloud = application.windows().find(candidate => candidate.url().startsWith(cloudUrl))

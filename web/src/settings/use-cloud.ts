@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
-import type { CloudError, CloudSnapshotState, EngineChoiceEvent, EngineEvent } from "./types"
+import type { CloudError, CloudSnapshotState, EngineChoiceEvent, EngineEvent, OwnerLink } from "./types"
 
 export type LiveStatus = "pending" | "running" | "waiting" | "done" | "skipped" | "failed"
 export interface LiveStep {
@@ -65,8 +65,23 @@ export function useCloud(bridge = window.snipCloud) {
   const [choice, setChoice] = useState<EngineChoiceEvent | null>(null)
   const [needed, setNeeded] = useState<NeededInput[] | null>(null)
   const [busy, setBusy] = useState(false)
+  const [link, setLink] = useState<OwnerLink | null>(null)
+  const [linkPending, setLinkPending] = useState(false)
+  const [linkError, setLinkError] = useState<string | null>(null)
+  // The log callback is installed once; this ref says whether a mint is waiting, so a
+  // failure can be shown in the sheet that asked for it instead of as a loose toast.
+  const minting = useRef(false)
+  // The link arrives on its own channel. These let the wait end the moment it does,
+  // rather than after the next `state()` round trip.
+  const linkSettled = useRef(false)
+  const linkLatest = useRef<OwnerLink | null>(null)
   const [note, setNote] = useState<{ level: "info" | "warn" | "error"; message: string; id: number } | null>(null)
   const runId = useRef(0)
+
+  // A snapshot read can be older than the link event; keep a link that is still valid
+  // rather than blanking it, and drop one that has run out.
+  const keepLink = useCallback((current: OwnerLink | null, next: OwnerLink | null | undefined) =>
+    next ?? (current && Date.parse(current.expiresAt) > Date.now() ? current : null), [])
 
   const refresh = useCallback(async () => {
     if (!bridge) return
@@ -75,6 +90,7 @@ export function useCloud(bridge = window.snipCloud) {
       if (next) {
         setSnapshot(next)
         setBusy(next.busy)
+        setLink(current => keepLink(current, next.link))
         setError(next.state?.error ?? null)
         if (!next.busy) {
           setSteps(previous => {
@@ -90,7 +106,7 @@ export function useCloud(bridge = window.snipCloud) {
     } finally {
       setLoaded(true)
     }
-  }, [bridge])
+  }, [bridge, keepLink])
 
   useEffect(() => {
     void refresh()
@@ -190,14 +206,69 @@ export function useCloud(bridge = window.snipCloud) {
       }
     })
     const offLog = bridge.onLog(entry => {
+      if (entry.level === "error" && minting.current) {
+        // One reason, in the sheet that asked for it, next to its own Try again.
+        linkSettled.current = true
+        setLinkError(entry.message)
+        setLinkPending(false)
+        return
+      }
       setNote({ level: entry.level, message: entry.message, id: Date.now() })
       if (entry.level === "error") toast.error(entry.message)
+    })
+    // The link is not a "step" event: it arrives on its own channel so the window never
+    // flips into the progress view for it.
+    const offLink = bridge.onLink(next => {
+      linkLatest.current = next
+      linkSettled.current = true
+      setLink(next)
+      setLinkPending(false)
     })
     return () => {
       offProgress()
       offLog()
+      offLink()
     }
   }, [bridge, refresh])
+
+  const requestLink = useCallback(async () => {
+    if (!bridge) return null
+    minting.current = true
+    linkSettled.current = false
+    linkLatest.current = null
+    setLinkPending(true)
+    setLinkError(null)
+    try {
+      const reply = await bridge.ownerLink()
+      if (reply?.error) {
+        setLinkError(reply.error)
+        return null
+      }
+      // The mint lands on its own channel. This loop is the fallback for a link that
+      // arrived before anyone was listening, and the way to notice a run that ended
+      // without one. `settled` keeps it from waiting on a slow read it doesn't need.
+      for (let attempt = 0; attempt < 60; attempt++) {
+        if (linkSettled.current) return linkLatest.current
+        await new Promise(resolve => window.setTimeout(resolve, 250))
+        if (linkSettled.current) return linkLatest.current
+        const next = await bridge.state()
+        if (next?.link) {
+          linkLatest.current = next.link
+          setLink(next.link)
+          return next.link
+        }
+        if (!next?.running) {
+          // Main logs the reason; without one, say the plain thing.
+          setLinkError(current => current ?? "Snip couldn’t create a sign-in link. Try again.")
+          return null
+        }
+      }
+      return null
+    } finally {
+      minting.current = false
+      setLinkPending(false)
+    }
+  }, [bridge])
 
   const begin = useCallback(async (call: () => Promise<{ started?: true; error?: string }>) => {
     const ticket = ++runId.current
@@ -236,6 +307,10 @@ export function useCloud(bridge = window.snipCloud) {
     progress,
     error,
     note,
+    link,
+    linkPending,
+    linkError,
+    requestLink,
     refresh,
     begin,
     clearChoice: () => setChoice(null),

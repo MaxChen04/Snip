@@ -28,7 +28,7 @@ const VALUE_FLAGS = new Set(['root', 'data-root', 'login', 'domain', 'account', 
 // `resume` is accepted and deliberately never read: every step re-verifies, so a
 // run always resumes where the last one stopped and the flag cannot change that.
 // The desktop app and the docs spell `setup --resume`, so it must stay accepted.
-const BOOLEAN_FLAGS = new Set(['json', 'yes', 'check', 'resume', 'no-open', 'managed', 'adopt-existing', 'help', 'version']);
+const BOOLEAN_FLAGS = new Set(['json', 'yes', 'check', 'resume', 'no-open', 'managed', 'adopt-existing', 'no-handoff', 'help', 'version']);
 
 const EXIT = { OK: 0, FAILED: 1, NEEDS_INPUT: 2, LOCKED: 3, UNSUPPORTED: 4, CANCELLED: 1 };
 
@@ -69,7 +69,7 @@ function normalizeFlags(flags) {
   if (flags['data-root'] === undefined && flags.root !== undefined) flags['data-root'] = flags.root;
   // Steps read camelCase; the flags arrive dashed. Keep both so the documented
   // spelling works and nothing has to remember which one a step uses.
-  const camel = { 'data-root': 'dataRoot', 'no-open': 'noOpen', 'adopt-existing': 'adoptExisting', 'capture-env': 'captureEnv' };
+  const camel = { 'data-root': 'dataRoot', 'no-open': 'noOpen', 'adopt-existing': 'adoptExisting', 'capture-env': 'captureEnv', 'no-handoff': 'noHandoff' };
   for (const [dashed, name] of Object.entries(camel)) {
     if (flags[dashed] !== undefined) flags[name] = flags[dashed];
   }
@@ -108,9 +108,13 @@ function helpText() {
     '',
     'Flags: --root --data-root --json --yes --check --resume --login --domain',
     '       --account --capture-env <replace|separate|keep> --no-open --managed',
-    '       --adopt-existing --confirm <basename|host>',
+    '       --adopt-existing --no-handoff --confirm <basename|host>',
     '',
     '--resume is optional; setup always resumes where it stopped.',
+    '',
+    '--no-handoff is for `owner link` when the link is for another browser or',
+    'device: the link carries port 0, no handoff is attempted, and the command',
+    'ends as soon as the link is minted. `setup` always uses the handoff.',
   ].join('\n');
 }
 
@@ -141,16 +145,35 @@ function retryableFor(error) {
   return RETRYABLE.has(error.code);
 }
 
+/**
+ * One failure shape for a bad invocation. `retryable` is explicit rather than
+ * missing: an agent branches on that field, and "absent" would read as unknown
+ * instead of "fix your arguments". Nothing was attempted, so nothing can be
+ * retried as-is.
+ */
+function usageFailure(emit, message) {
+  // The result event carries `data` rather than the prose, so the reason an
+  // argument was rejected is `data.reason` in --json and the message in a shell.
+  emit.result({ ok: false, code: 'USAGE', mode: null, data: { reason: message }, message, retryable: false });
+}
+
 async function main(argv, io = {}) {
+  // Whether stdout must be NDJSON is decided before parsing, because a parse
+  // failure has no flags to read it from.
+  const jsonRequested = argv.includes('--json');
   let parsed;
+  let flags;
   try {
     parsed = parseArgs(argv);
+    // normalizeFlags validates values too (`--capture-env`), so it belongs here:
+    // a bad value is a usage error, not an uncaught throw with a stack trace.
+    flags = normalizeFlags(parsed.flags);
   } catch (error) {
-    const emit = createEmitter({ json: argv.includes('--json'), stdout: io.stdout, stderr: io.stderr });
-    emit.result({ ok: false, code: 'USAGE', mode: null, data: {}, message: error.message });
+    if (!(error instanceof UsageError)) throw error;
+    const emit = createEmitter({ json: jsonRequested, stdout: io.stdout, stderr: io.stderr });
+    usageFailure(emit, error.message);
     return { code: 1 };
   }
-  const flags = normalizeFlags(parsed.flags);
   if (flags.help) {
     (io.stdout || process.stdout).write(`${helpText()}\n`);
     return { code: 0 };
@@ -161,8 +184,13 @@ async function main(argv, io = {}) {
     return { code: 0 };
   }
   if (!COMMANDS.has(command)) {
-    (io.stderr || process.stderr).write(`Unknown command ${command}.\n\n${helpText()}\n`);
-    return { code: 1 };
+    // Exit 4 is what `npm run setup:cloudflare -- nonsense` has always returned,
+    // and the help stays off stdout so `--json` remains pure NDJSON.
+    const message = `Unknown command ${command}.`;
+    (io.stderr || process.stderr).write(`${message}\n\n${helpText()}\n`);
+    const emit = createEmitter({ json: Boolean(flags.json), stdout: io.stdout, stderr: io.stderr });
+    usageFailure(emit, message);
+    return { code: 4 };
   }
   const sub = parsed.positional[1] || null;
   if (command === 'snapshot') flags.snapshotAction = sub;
@@ -291,7 +319,10 @@ async function main(argv, io = {}) {
       // The specific code names the failure; `code` stays inside the contract's set.
       data: { code: specific, ...(error.data || {}) },
       message: error.message,
-      retryable: code === 4 ? retryableFor(error) : false,
+      // A failure says whether running the same command again can work: exit 4
+      // uses the contract's table, and a step failure only when it names itself
+      // retryable (a transient Cloudflare problem, an unreachable surface).
+      retryable: retryableFor(error),
     });
     return { code };
   } finally {

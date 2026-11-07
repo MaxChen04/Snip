@@ -85,11 +85,24 @@ export interface CloudAppInfo {
   captureEnv: string | null
 }
 
+/**
+ * A one-time URL that signs one browser in. It is the only secret-shaped value that
+ * reaches this window, because a person has to open it (contracts §4.2). Main never
+ * writes it to a log, and the session token it leads to never comes here at all.
+ */
+export interface OwnerLink {
+  url: string
+  note: string
+  expiresAt: string
+}
+
 export interface CloudSnapshotState {
   mode: CloudMode
   state: CloudFile | null
   busy: boolean
   running: { command: string; step: string | null } | null
+  /** The last link minted on this Mac, while it is still worth anything. */
+  link?: OwnerLink | null
   engine?: { available: boolean }
   /** From the Worker's /api/cloud-status; null when it can't be reached. */
   cloudStatus?: { methods: ("passkey" | "github")[]; ownerId: string | null } | null
@@ -190,8 +203,11 @@ export interface CloudBridge {
   deleteResources(confirm: string): Promise<CloudReply>
   /** `confirm` is the basename of the directory being deleted: a stale-record interlock. */
   snapshot(action: "restore" | "delete" | "delete-export", confirm?: string): Promise<CloudReply>
+  /** Mints a one-time link for another browser. Resolves once the run starts. */
+  ownerLink(): Promise<CloudReply>
   onProgress(callback: (event: EngineEvent) => void): () => void
   onLog(callback: (entry: { level: "info" | "warn" | "error"; message: string }) => void): () => void
+  onLink(callback: (link: OwnerLink) => void): () => void
 }
 
 export interface CloudReply {

@@ -28,7 +28,7 @@ The main window is the cloud gallery in cloud mode and no longer has the local p
 
 **Sign in another browser** is the way into a device that has no passkey yet: it creates a one-time owner link that you copy or open there, so that device can register its own passkey. The browser sign-in page points to it when a device has none. [Cloud mode](deploy.md) explains what moves, the Cloudflare approvals, turning it off and the command-line path.
 
-An instance that was set up by an earlier version and already has GitHub credentials keeps that sign-in on the Worker's `/sign-in` page; Settings has no GitHub row, and a new install never configures GitHub.
+An instance set up by an earlier version that already has GitHub credentials keeps signing in with GitHub on the sign-in page, but Settings is passkeys-only for every install: it lists devices and never mentions GitHub, so a legacy owner manages devices there exactly like a new one. A new install never configures GitHub.
 
 ## Release app and updates
 

@@ -13,7 +13,7 @@ const local = require('./local.cjs');
 const { localWorker, withLocalWorker } = require('./library.cjs');
 const { randomSecret, splitSqlStatements, canonicalOrigin, captureEnvText } = require('./lib.cjs');
 const { mintOwnerLink, ownerSecretHash, startLoopback } = require('./transfer.cjs');
-const { createContext } = require('./context.cjs');
+const { createContext, retryOf } = require('./context.cjs');
 const setupSteps = require('./setup.cjs');
 const snapshotModule = require('./snapshot.cjs');
 
@@ -99,7 +99,7 @@ async function commandPull(ctx) {
       });
     }
     const minted = randomSecret();
-    await cloud.putSecrets(ctx.wrangler, { dataRoot: ctx.dataRoot, accountId: record.accountId, secrets: { TRANSFER_TOKEN: minted } });
+    await cloud.putSecrets(ctx.wrangler, { dataRoot: ctx.dataRoot, accountId: record.accountId, secrets: { TRANSFER_TOKEN: minted }, retry: retryOf(ctx) });
     ctx.setTransferToken(minted);
     // A secret write is not instantly live at the edge; wait for the new token
     // to answer instead of reporting the library as closed.
@@ -467,7 +467,7 @@ async function commandDeploy(ctx) {
       id: 'deploy-schema',
       title: 'Applying database migrations',
       async run(ctx2) {
-        await ctx2.deps.deploy.applyMigrations(ctx2.wrangler, { dataRoot: ctx2.dataRoot, accountId: record.accountId, remote: true });
+        await ctx2.deps.deploy.applyMigrations(ctx2.wrangler, { dataRoot: ctx2.dataRoot, accountId: record.accountId, remote: true, retry: retryOf(ctx2) });
         return { message: 'Database is up to date' };
       },
       async verify() { return true; },
@@ -488,7 +488,7 @@ async function commandDeploy(ctx) {
         });
         void stored;
         void layout;
-        await ctx2.deps.deploy.deployWorker(ctx2.wrangler, { dataRoot: ctx2.dataRoot, accountId: record.accountId });
+        await ctx2.deps.deploy.deployWorker(ctx2.wrangler, { dataRoot: ctx2.dataRoot, accountId: record.accountId, retry: retryOf(ctx2) });
         ctx2.setCloud({ lastDeployedAt: NOW(), bundleHash: setupSteps.bundleHash(ctx2.dataRoot) });
         return { message: `Live at ${record.url}` };
       },
@@ -499,7 +499,7 @@ async function commandDeploy(ctx) {
       title: 'Checking the deployment',
       async run(ctx2) {
         const token = randomSecret();
-        await cloud.putSecrets(ctx2.wrangler, { dataRoot: ctx2.dataRoot, accountId: record.accountId, secrets: { TRANSFER_TOKEN: token } });
+        await cloud.putSecrets(ctx2.wrangler, { dataRoot: ctx2.dataRoot, accountId: record.accountId, secrets: { TRANSFER_TOKEN: token }, retry: retryOf(ctx2) });
         ctx2.setTransferToken(token);
         // A secret write is not live at the edge instantly: the Worker answers
         // its status route a moment after the deploy, not during it.
@@ -551,7 +551,7 @@ async function commandMigrate(ctx) {
       id: 'migrate-apply',
       title: 'Applying database migrations',
       async run(ctx2) {
-        await ctx2.deps.deploy.applyMigrations(ctx2.wrangler, { dataRoot: ctx2.dataRoot, accountId: record.accountId, remote: true });
+        await ctx2.deps.deploy.applyMigrations(ctx2.wrangler, { dataRoot: ctx2.dataRoot, accountId: record.accountId, remote: true, retry: retryOf(ctx2) });
         return { message: 'Database is up to date' };
       },
       async verify() { return true; },
@@ -984,6 +984,7 @@ async function commandOwner(ctx) {
           dataRoot: ctx2.dataRoot,
           accountId: record.accountId,
           secrets: { OWNER_LINK_SECRET: secret },
+          retry: retryOf(ctx2),
         });
         ctx2.saveSecrets({ ...stored, ownerLinkSecret: secret });
         ctx2.setCloud({ ownerSecretRotatedAt: NOW() });
@@ -1014,9 +1015,14 @@ async function commandOwner(ctx) {
       // `--managed` means the Electron app is driving and can receive the
       // session over its loopback; on a bare CLI the browser keeps the cookie,
       // so the link carries port 0 and no handoff is attempted.
+      //
+      // `--no-handoff` overrides both, because the link is then for another
+      // machine: its `127.0.0.1:<port>` redirect would reach that machine's own
+      // loopback, where nothing is listening, while this Mac held the port open
+      // for nothing. Port 0 keeps the redirect at `/`.
       let loopback = null;
       let port = 0;
-      if (ctx2.flags.managed) {
+      if (ctx2.flags.managed && !ctx2.flags.noHandoff) {
         loopback = startLoopback({ timeoutMs: 10 * 60_000 });
         try { port = await loopback.listening; } catch (error) {
           throw new StepError('LOOPBACK_FAILED', 'Could not open the local sign-in handoff.', { hint: 'Try again.', data: { cause: error.message } });
@@ -1025,7 +1031,10 @@ async function commandOwner(ctx) {
       const stored = ctx2.secrets();
       const minted = mintOwnerLink({ secret: stored.ownerLinkSecret, url: record.url, ownerId: record.ownerId || 'owner', port });
       ctx2.setWork({ ownerLink: minted.link, ownerLoopback: loopback });
-      return { message: 'Link ready', data: { url: minted.link } };
+      // `url` is also on the step result's top level because the step event
+      // carries that object as its `data` (§1.4.1): a client that reads steps
+      // rather than actions finds the link at `data.url`, not `data.data.url`.
+      return { message: 'Link ready', url: minted.link, data: { url: minted.link } };
     },
     async verify() { return true; },
   });
@@ -1036,6 +1045,15 @@ async function commandOwner(ctx) {
       const link = ctx2.work.ownerLink;
       const loopback = ctx2.work.ownerLoopback || null;
       ctx2.emit.human('owner-open', 'open_url', link, 'Sign in to your Snip in the browser');
+      if (ctx2.flags.noHandoff) {
+        // The link is for another browser or device, so this run cannot observe
+        // whether it is ever used: it mints, hands the URL over and stops. No
+        // token to wait for, no `hasOwner` poll, and no `session` event — this
+        // Mac has no session to receive, and reporting "signed in" would be a
+        // claim about someone else's browser. It does not open the link here
+        // either, because the browser that needs it is not this one.
+        return { message: 'Link ready; open it in the browser on the other device to sign it in' };
+      }
       if (!ctx2.flags.noOpen && ctx2.openUrl) await ctx2.openUrl(link).catch(() => {});
       try {
         if (loopback) {
