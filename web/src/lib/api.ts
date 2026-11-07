@@ -42,8 +42,17 @@ const qs = (o: Record<string, string | number | undefined | null>) => {
   return p.toString()
 }
 
+export type SessionMethod = "owner" | "passkey" | "github"
+export type Me = { login: string; ownerId: string; method: SessionMethod }
+
+export type PasskeyDevice = { id: string; label: string | null; createdAt: string; lastUsedAt: string | null }
+
 export const api = {
-  me: () => request<{ login: string }>("/api/me"),
+  me: () => request<Me>("/api/me"),
+  passkeys: () => request<{ devices: PasskeyDevice[] }>("/api/passkeys"),
+  removePasskey: (id: string) => request<{ ok: true }>(`/api/passkeys/${id}`, { method: "DELETE" }),
+  /** Signs out every browser and the desktop app. MCP tokens are a separate credential and stay valid. */
+  signOutAll: () => request<{ ok: true; epoch: number }>("/api/sign-out-all", { method: "POST", body: "{}" }),
   references: (f: Filters, cursor?: string | null) =>
     request<Paged<Reference>>(`/api/references?${qs({ ...f, cursor, limit: 24 })}`),
   pages: (f: Filters, cursor?: string | null) => request<Paged<PageWithRef>>(`/api/pages?${qs({ ...f, cursor, limit: 30 })}`),

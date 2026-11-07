@@ -37,7 +37,7 @@ async function rpc(method: string, params: unknown) {
     headers: { host: "localhost", "content-type": "application/json", accept: "application/json, text/event-stream" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
   })
-  const response = await mcpApiHandler.fetch(request, env, { waitUntil() {} } as unknown as ExecutionContext)
+  const response = await mcpApiHandler.fetch(request, env, { waitUntil() {}, props: { ownerId: "max" } } as unknown as ExecutionContext)
   assert.equal(response.status, 200)
   const body = await response.text()
   const data = body.split("\n").find((line) => line.startsWith("data: "))

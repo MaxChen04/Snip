@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 export const REPOSITORY = 'MaxChen04/Snip'
-export const APP_FILES = Object.freeze(['package.json', 'main.cjs', 'local-server.cjs', 'runtime-layout.cjs', 'updates.cjs', 'source-updates.cjs', 'node-runtime.cjs', 'rotating-log.cjs', 'service.cjs', 'preload.cjs', 'loading.html'])
+export const APP_FILES = Object.freeze(['package.json', 'main.cjs', 'local-server.cjs', 'runtime-layout.cjs', 'updates.cjs', 'source-updates.cjs', 'node-runtime.cjs', 'rotating-log.cjs', 'service.cjs', 'preload.cjs', 'preload-settings.cjs', 'loading.html', 'cloud-unreachable.html', 'cloud-state.cjs', 'cloud-engine.cjs', 'cloud-session.cjs', 'cloud-confirm.cjs', 'window-origin.cjs', 'settings-assets.cjs', 'provision'])
 export const stableVersion = value => typeof value === 'string' && /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(value) && value.split('.').every(n => Number.isSafeInteger(Number(n)))
 export function releaseCredentials(env) {
   const { SNIP_SIGN_IDENTITY: identity, APPLE_ID: appleId, APPLE_APP_SPECIFIC_PASSWORD: appleIdPassword, APPLE_TEAM_ID: teamId, APPLE_NOTARY_KEYCHAIN_PROFILE: keychainProfile } = env

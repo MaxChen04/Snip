@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && vite build --config vite.settings.config.ts",
+    "build:settings": "vite build --config vite.settings.config.ts",
+    "dev:settings": "vite --config vite.settings.config.ts --port 5174 --strictPort --open /settings.html",
     "preview": "npm run build && vite preview",
     "deploy": "node ../scripts/cloudflare.mjs deploy",
     "build:site": "vite build --config vite.site.config.ts",
@@ -22,6 +24,7 @@
     "@hugeicons/react": "^1.1.10",
     "@modelcontextprotocol/sdk": "^1.32.2",
     "@modelcontextprotocol/server": "^2.4.0",
+    "@simplewebauthn/server": "^14.1.0",
     "agents": "^0.32.0",
     "class-variance-authority": "^0.7.1",
     "cn": "^0.5.2",

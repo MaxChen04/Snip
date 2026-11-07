@@ -61,6 +61,10 @@ try {
   copy(license, path.join(stage, 'node/LICENSE'))
   fs.mkdirSync(app)
   for (const file of APP_FILES) copy(path.join(here, file), path.join(app, file))
+  // The Settings window is a static Vite bundle built from the staged source, not from
+  // the checkout; it must exist next to main.cjs so it loads with no local Worker.
+  copy(path.join(stage, 'web/dist-settings'), path.join(app, 'settings'))
+  fs.rmSync(path.join(stage, 'web/dist-settings'), { recursive: true, force: true })
   fs.writeFileSync(path.join(app, 'release.json'), JSON.stringify({ channel: 'stable', repository: REPOSITORY, updatesEnabled: release }) + '\n')
   const icon = path.join(here, 'assets/Snip.icns')
   const electronVersion = JSON.parse(fs.readFileSync(path.join(here, 'node_modules/electron/package.json'))).version

@@ -1,7 +1,7 @@
 import { useId, useState } from "react"
 import { Link } from "wouter"
 import { motion, useReducedMotion } from "motion/react"
-import { BookmarkIcon, FolderPlusIcon, GlobeIcon, LogOutIcon, MonitorIcon, MoonIcon, PlugIcon, PlusIcon, SearchIcon, SunIcon, TerminalIcon, XIcon } from "@/components/icons"
+import { BookmarkIcon, FolderPlusIcon, GlobeIcon, KeyRound, LogOutIcon, MonitorIcon, MoonIcon, PlugIcon, PlusIcon, SearchIcon, SunIcon, TerminalIcon, XIcon } from "@/components/icons"
 import { BookmarkletDialog } from "@/components/bookmarklet-dialog"
 import { api, type StorageUsage } from "@/lib/api"
 import { useAddFlow } from "@/components/add-flow"
@@ -253,6 +253,9 @@ function AccountMenu({ login }: { login: string }) {
         <DropdownMenuSeparator />
         <StorageMeter usage={usage} />
         <DropdownMenuSeparator />
+        <DropdownMenuItem render={<a href="/passkeys" />}>
+          <KeyRound /> Passkeys and devices
+        </DropdownMenuItem>
         <DropdownMenuItem onClick={() => setBookmarklet(true)}>
           <BookmarkIcon /> Browser bookmarklet
         </DropdownMenuItem>
