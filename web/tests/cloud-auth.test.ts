@@ -469,7 +469,7 @@ test("the content-type fallback is batched, and costs nothing when the listing c
     let peak = 0
     let heads = 0
     const objects = Array.from({ length: 40 }, (_, i) => ({
-      key: `refs/ab12cd34ef567890/${i.toString(16).padStart(32, "0")}/p0/page.jpg`,
+      key: `refs/fixture${i.toString(16).padStart(8, "0")}/p0/page.jpg`,
       size: 10,
       httpMetadata: {},
       httpEtag: `"${i}"`,
