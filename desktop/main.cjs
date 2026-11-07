@@ -312,7 +312,10 @@ function showApp() {
 // ---------- Settings window ----------
 
 const SETTINGS_DIR = [path.join(__dirname, "settings"), path.join(ROOT, "web/dist-settings")].find(dir => fs.existsSync(path.join(dir, "index.html"))) ?? path.join(__dirname, "settings")
-const SETTINGS_CSP = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'"
+// Settings never makes a network request of its own: every action is IPC. The two font
+// hosts are the same Inter stylesheet the gallery loads, so the window keeps its
+// typography online and falls back to the system face offline.
+const SETTINGS_CSP = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 function serveSettings() {
   protocol.handle("snip", async request => {
     const file = resolveSettingsAsset(SETTINGS_DIR, request.url)
