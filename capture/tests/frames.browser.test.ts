@@ -1,0 +1,87 @@
+import { test } from "node:test"
+import assert from "node:assert/strict"
+import { chromium } from "playwright"
+import sharp from "sharp"
+import type { SnipApi } from "../src/api"
+import { recordScroll } from "../src/capture"
+import type { Frame } from "../src/gif"
+import { buildStills, closeRenderer, pickStills, sampleIndexes } from "../src/sheet"
+
+const BAND = 400
+const COLORS = [[230, 30, 30], [30, 160, 60], [40, 70, 220], [240, 200, 20], [150, 40, 200], [20, 190, 200], [250, 120, 20], [90, 90, 90], [200, 60, 140], [60, 120, 40]] as const
+const frame = (still: boolean): Frame => ({ png: Buffer.alloc(0), delay: 33, ...(still ? { still: { jpeg: Buffer.alloc(0), width: 1440, height: 900 } } : {}) })
+
+test("pickStills samples evenly, and uses the nearest full-size still when stills are sparse", () => {
+  assert.deepEqual(pickStills(Array.from({ length: 30 }, () => frame(false))), sampleIndexes(30))
+  const planned = new Set(sampleIndexes(30))
+  assert.deepEqual(pickStills(Array.from({ length: 30 }, (_, i) => frame(planned.has(i)))), sampleIndexes(30))
+  // The page grew while recording: stills were planned for 20 frames, then the last frame got one too.
+  const early = new Set([...sampleIndexes(20), 39])
+  const picks = pickStills(Array.from({ length: 40 }, (_, i) => frame(early.has(i))))
+  assert.equal(picks[0], 0)
+  assert.equal(picks.at(-1), 39)
+  assert.ok(picks.every((i) => early.has(i)), "only frames that have a still are picked")
+  assert.equal(new Set(picks).size, picks.length, "no duplicates")
+})
+
+test("stills converted together keep each frame's own image, in order", { timeout: 60_000 }, async () => {
+  const browser = await chromium.launch({ headless: true })
+  try {
+    const solid = ([r, g, b]: readonly number[]) => sharp({ create: { width: 120, height: 80, channels: 3, background: { r: r!, g: g!, b: b! } } }).png().toBuffer()
+    const frames: Frame[] = await Promise.all(Array.from({ length: 20 }, async (_, i) => ({ png: await solid(COLORS[i % COLORS.length]!), delay: 33, offsetMs: i * 33, phase: "enter" as const })))
+    const uploads = new Map<string, Buffer>()
+    const api = { upload: async (key: string, body: Buffer) => { uploads.set(key, body); return key } } as unknown as SnipApi
+    const { meta, sheetKey } = await buildStills(browser, api, "t", frames, "measured", null)
+    assert.equal(meta.frames.length, sampleIndexes(20).length)
+    assert.ok(sheetKey && uploads.get(sheetKey)?.[0] === 0xff, "contact sheet is a JPEG")
+    const page = await browser.newPage()
+    for (const f of meta.frames) {
+      const center = await page.evaluate(async (src) => {
+        const img = new Image()
+        img.src = src
+        await img.decode()
+        const canvas = Object.assign(document.createElement("canvas"), { width: img.width, height: img.height })
+        const g = canvas.getContext("2d")!
+        g.drawImage(img, 0, 0)
+        return [...g.getImageData(img.width >> 1, img.height >> 1, 1, 1).data].slice(0, 3)
+      }, `data:image/jpeg;base64,${uploads.get(f.key)!.toString("base64")}`)
+      const expected = COLORS[f.sourceIndex % COLORS.length]!
+      assert.ok(center.every((v, c) => Math.abs(v - expected[c]!) < 12), `still for frame ${f.sourceIndex} shows ${center}, expected ${expected}`)
+    }
+  } finally {
+    await closeRenderer()
+    await browser.close()
+  }
+})
+
+test("scroll recording streams frames into a half-size GIF and keeps full-size stills where sampled", { timeout: 60_000 }, async () => {
+  const browser = await chromium.launch({ headless: true })
+  try {
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
+    await page.setContent(`<style>body{margin:0}div{height:${BAND}px}</style>${COLORS.map(([r, g, b]) => `<div style="background:rgb(${r},${g},${b})"></div>`).join("")}`)
+    const { frames, gif } = await recordScroll(page, true)
+    const travel = COLORS.length * BAND - 900
+    assert.equal(frames.length, Math.ceil(travel / 40) + 1)
+    assert.deepEqual(frames.flatMap((f, i) => (f.still ? [i] : [])), sampleIndexes(frames.length))
+    assert.ok(frames.every((f) => !f.png), "frames are dropped once encoded")
+    assert.deepEqual([frames[0]!.delay, frames.at(-1)!.delay], [700, 1200])
+    assert.deepEqual([gif?.width, gif?.height, gif?.bytes.toString("latin1", 0, 6)], [720, 450, "GIF89a"])
+    // Each still shows the page at its frame's scroll position: the band at scrollY + 20 CSS px.
+    for (const f of frames.filter((f) => f.still)) {
+      assert.deepEqual([f.still!.width, f.still!.height], [1440, 900])
+      const px = await page.evaluate(async (src) => {
+        const img = new Image()
+        img.src = src
+        await img.decode()
+        const canvas = Object.assign(document.createElement("canvas"), { width: img.width, height: img.height })
+        const g = canvas.getContext("2d")!
+        g.drawImage(img, 0, 0)
+        return [...g.getImageData(20, 20, 1, 1).data].slice(0, 3)
+      }, `data:image/jpeg;base64,${f.still!.jpeg.toString("base64")}`)
+      const expected = COLORS[Math.floor((f.scrollY! + 20) / BAND)]!
+      assert.ok(px.every((v, c) => Math.abs(v - expected[c]!) < 12), `still at y=${f.scrollY} shows ${px}, expected ${expected}`)
+    }
+  } finally {
+    await browser.close()
+  }
+})
