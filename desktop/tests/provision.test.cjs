@@ -2212,3 +2212,56 @@ test('every deploy uploads the bundle again instead of replaying a journaled run
   assert.deepEqual(started, ['deploy-preflight', 'deploy-schema', 'deploy-worker', 'deploy-verify']);
   assert.equal(stateModule.readState(library.root).cloud.workerVersion, '1.1.3');
 });
+
+test('setup --resume behaves exactly like setup', async () => {
+  // `--resume` is accepted for compatibility but never read: every step
+  // re-verifies, so a run always resumes where the last one stopped. The two
+  // invocations must therefore be indistinguishable, not merely both successful.
+  // Created ids and timestamps are generated per run, so they are normalized;
+  // every decision, message and count is compared as-is.
+  const normalize = (value) => {
+    if (Array.isArray(value)) return value.map(normalize);
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, normalize(inner)]));
+    }
+    if (typeof value === 'string') {
+      return value
+        .replace(/\b[0-9a-f]{32,}\b/g, '<id>')
+        .replace(/\d{4}-\d{2}-\d{2}T[\d:.-]+Z/g, '<ts>');
+    }
+    return value;
+  };
+  const summary = (outcome) => normalize({
+    result: { ok: outcome.result.ok, code: outcome.result.code, mode: outcome.result.mode, data: outcome.result.data },
+    steps: outcome.events
+      .filter((event) => event.event === 'step')
+      .map((event) => `${event.step}:${event.status}:${event.message}`),
+    state: (({ mode, cloud, snapshot, transfer, steps }) => ({
+      mode,
+      cloud: { url: cloud.url, accountId: cloud.accountId, d1: cloud.d1?.name, kv: cloud.kv?.name, bucket: cloud.bucket, move: { status: cloud.move?.status, reason: cloud.move?.reason } },
+      snapshot: snapshot && { kind: snapshot.kind, path: snapshot.path, refs: snapshot.refs, files: snapshot.files, bytes: snapshot.bytes, hasExport: Boolean(snapshot.export) },
+      transfer: transfer && { keys: transfer.keys, tables: transfer.tables },
+      steps: steps.map((step) => `${step.id}:${step.status}`),
+    }))(stateModule.readState(outcome.model.root)),
+  });
+
+  const plain = summary(await runSetup(buildModel()));
+  const resumed = summary(await runSetup(buildModel(), { resume: true }));
+  assert.deepEqual(resumed.steps, plain.steps, 'every step reports the same outcome');
+  assert.deepEqual(resumed.state, plain.state, 'the recorded state is identical');
+  assert.deepEqual(resumed.result, plain.result);
+  assert.equal(plain.result.ok, true);
+  assert.equal(plain.state.mode, 'cloud');
+});
+
+test('the help lists snapshot restore once, scoped to a pull backup, and explains --resume', () => {
+  const help = cli.helpText();
+  const restore = help.split('\n').filter((line) => /^\s+snapshot restore\b/.test(line));
+  assert.equal(restore.length, 1, 'restore is listed exactly once');
+  assert.match(restore[0], /pull/, 'and says which backup it switches back to');
+  assert.match(help, /snapshot delete .*--confirm/);
+  assert.match(help, /snapshot delete-export .*--confirm/);
+  assert.match(help, /--resume is optional; setup always resumes where it stopped\./);
+  // The retired pre-cloud snapshot wording must not survive anywhere.
+  assert.doesNotMatch(help, /pre-cloud snapshot/);
+});

@@ -25,6 +25,9 @@ const { createContext } = require('./context.cjs');
 
 const COMMANDS = new Set(['setup', 'pull', 'deploy', 'migrate', 'status', 'detach', 'delete-resources', 'snapshot', 'abort', 'owner']);
 const VALUE_FLAGS = new Set(['root', 'data-root', 'login', 'domain', 'account', 'capture-env', 'confirm']);
+// `resume` is accepted and deliberately never read: every step re-verifies, so a
+// run always resumes where the last one stopped and the flag cannot change that.
+// The desktop app and the docs spell `setup --resume`, so it must stay accepted.
 const BOOLEAN_FLAGS = new Set(['json', 'yes', 'check', 'resume', 'no-open', 'managed', 'adopt-existing', 'help', 'version']);
 
 const EXIT = { OK: 0, FAILED: 1, NEEDS_INPUT: 2, LOCKED: 3, UNSUPPORTED: 4, CANCELLED: 1 };
@@ -96,9 +99,8 @@ function helpText() {
     '  status               Print the cloud state (see --json)',
     '  detach               Go back to local; the cloud library stays live',
     '  delete-resources     Delete the cloud Worker, database, KV and bucket',
-    '  snapshot restore     Restore this Mac’s pre-cloud snapshot',
-    '  snapshot restore     Switch back to the previous library after a pull',
-    '  snapshot delete      Delete the previous library (needs --confirm <name>)',
+    '  snapshot restore     Switch back to the library a `pull` replaced',
+    '  snapshot delete      Delete that previous library (needs --confirm <name>)',
     '  snapshot delete-export  Delete setup\'s portable backup files (needs --confirm <name>)',
     '  abort                Clean up an interrupted setup',
     '  owner link           Mint and open a sign-in link',
@@ -107,6 +109,8 @@ function helpText() {
     'Flags: --root --data-root --json --yes --check --resume --login --domain',
     '       --account --capture-env <replace|separate|keep> --no-open --managed',
     '       --adopt-existing --confirm <basename|host>',
+    '',
+    '--resume is optional; setup always resumes where it stopped.',
   ].join('\n');
 }
 
