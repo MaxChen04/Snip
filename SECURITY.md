@@ -14,8 +14,8 @@ Knowing the trust model helps tell a bug from a configuration choice:
 
 - **Local by default.** Snip.app runs the gallery and the API on your Mac, and D1, R2 and KV are files in the library folder. Nothing is uploaded unless you turn on cloud mode.
 - **`DEV_LOGIN` is for localhost only.** It replaces GitHub login when the request is to `localhost` or `127.0.0.1`. Never set it on a deployed Worker.
-- **Cloud mode is optional and yours.** A hosted Snip lives in your own Cloudflare account. The owner signs in with a passkey registered from a single-use owner link; GitHub sign-in is optional and, when enabled, only the logins in `ALLOWED_GITHUB_LOGINS` get in.
-- **Sessions and revocation.** Sessions are signed cookies that last 30 days. **Sign out all devices** bumps a per-install session epoch, which invalidates every browser session and the app's session at their next request. It does not revoke MCP OAuth tokens; those live in the OAuth store and expire after 7 days.
+- **Cloud mode is optional and yours.** A hosted Snip lives in your own Cloudflare account. The owner signs in with a passkey registered from a single-use owner link, or at `/sign-in` with a passkey already on the device. GitHub sign-in is optional and, when enabled, only the logins in `ALLOWED_GITHUB_LOGINS` get in.
+- **Sessions and revocation.** Sessions are signed cookies that last 30 days. **Sign out all devices** bumps a per-install session epoch, which invalidates every browser session and the app's session at their next request. Passkeys stay registered, and agents connected over MCP keep their own tokens until those expire. Removing a single passkey is a separate action on `/passkeys`.
 - **The capture agent runs on your machine.** It refuses private-network URLs unless you set `ALLOW_PRIVATE_URLS=true` in `capture/.env`.
 - **MCP clients** approve access through a consent screen; a hosted Snip sends them through GitHub login first. Their tokens last 7 days. File URLs they receive are signed and expire after 24 hours.
 - **Captured HTML** is served with a sandboxing CSP and no scripts.

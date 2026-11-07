@@ -38,9 +38,11 @@ In Snip.app, open **Settings → Cloud → Enable cloud**. The app says what wil
 
 Snip creates the Worker, database, key-value store and bucket, deploys, copies the library and checks the result. A one-time owner link then opens in your browser and registers a passkey (Touch ID), which signs Snip.app back in. There are no IDs to copy, no secrets to paste and no GitHub OAuth app to create.
 
+After that, every other browser or device signs in at **/sign-in** with its passkey; **Passkeys and devices** in the account menu adds or removes them. A passkey is owner-only, not an invitation: a second person signs in with GitHub.
+
 Capture stays on this Mac. A capture started from another device waits in the queue and shows **Waiting for your Mac** until this Mac's capture agent checks in. The gallery card and every agent status use those exact words, whether the agent is busy or the Mac is asleep.
 
-What moves and what stays: [Cloud mode](docs/deploy.md) covers the copy, the two approvals, the command-line path, turning cloud off, the snapshot and the free-tier limits.
+Already deployed Snip before this button existed? The setup recognises your own library. An empty one is adopted silently; one with references asks first and offers **Use that library** or **Stop**, and your local library is kept as the snapshot either way. [Cloud mode](docs/deploy.md) covers the copy, the two approvals, adoption, the command-line path, turning cloud off and the free-tier limits.
 
 ### Command line and agents
 
@@ -51,26 +53,26 @@ npm run setup:cloudflare -- --check --json   # preflight only; changes nothing
 npm run setup:cloudflare -- --yes --json     # enable cloud, never prompt
 ```
 
-Each line of output is a JSON event. A `human` event carries a URL that only a person can open (Cloudflare's allow page, the R2 page, the owner link); the run pauses there. A `needs_input` event exits 2 and names the flags to add. Nothing prompts, and no secret is ever typed into a chat.
+Each line of output is a JSON event. A `human` event carries a URL that only a person can open (Cloudflare's allow page, the R2 page, the owner link); the run pauses there. A `choice` event is a decision with consequences and exits 2 until you pick, so `--yes` never adopts an existing library: pass `--adopt-existing` when that is what you mean. A `needs_input` event exits 2 and names the flags to add. Nothing prompts, and no secret is ever typed into a chat.
 
-The `setup:cloudflare` npm script includes the `setup` command, so the other commands are run through the engine directly:
+The bare `npm run setup:cloudflare` means `setup`. Add any other command after `--`:
 
 ```bash
-node desktop/provision/cli.cjs status --json
-node desktop/provision/cli.cjs detach --json
-node desktop/provision/cli.cjs pull --json
-node desktop/provision/cli.cjs delete-resources --confirm snip.<your-subdomain>.workers.dev
+npm run setup:cloudflare -- status --json
+npm run setup:cloudflare -- detach --json
+npm run setup:cloudflare -- pull --json
+npm run setup:cloudflare -- delete-resources --confirm snip.<your-subdomain>.workers.dev
 ```
 
 ### Turning cloud off
 
 **Settings → Cloud → Turn off cloud** points this Mac back at the copy from before the move. The cloud library is **not** deleted: it stays live at its address, and devices and agents signed in to it keep working. The dialog says that, and offers **Bring the cloud library back to this Mac** (or **Copy back now** later) to copy the cloud library down first.
 
-**Delete cloud resources** is separate and destructive. **Sign out all devices** ends browser sessions and the app's session, but not MCP tokens: agents already authorized keep access until their token expires after seven days.
+**Delete cloud resources** is separate and destructive. **Sign out all devices** ends every browser session and the app's session. Passkeys stay registered, and agents connected over MCP keep their own tokens until those expire.
 
 ### One Snip per account, workers.dev only
 
-Snip keeps one library per Cloudflare account. If the account already has a Snip that this Mac does not own, setup stops before changing anything and offers **Open that library** or **Choose another account**. There is no replace option and no second Worker name.
+Snip keeps one library per Cloudflare account. An empty older Snip is adopted silently. One with references asks first: **Use that library** switches to it and keeps your local library as the snapshot, and **Stop** changes nothing. A Worker named `snip` that is not a Snip is refused, with instructions to rename or delete it or choose another account. There is no replace option and no second Worker name.
 
 The address is always `https://snip.<your-subdomain>.workers.dev`. Custom domains are not supported in this release: the address is what the passkey and MCP connections are bound to.
 
@@ -234,7 +236,7 @@ When new changes land on `main`, one command brings a local copy (and Snip.app) 
 npm run update
 ```
 
-It quits Snip.app gracefully (active captures finish first), fast-forwards `main`, runs `npm ci` when dependencies changed, installs the capture browser, backs up and migrates the local database, rebuilds the web app, rebuilds Snip.app when `desktop/` changed, and reopens the app. In cloud mode it then applies the remote database migrations and deploys the new Worker before capture restarts. It never touches untracked files such as `.env` files, `.snip/` or your library. npm lockfile churn is reset automatically; any other local edit, or a terminal `npm run dev` or `npm run capture` still using the database, stops the update before anything changes (`npm run update -- --stash` sets edits aside instead). If a step fails, fix the error and run `npm run update` again to finish. `--full` reruns every step even when you're already up to date.
+It quits Snip.app gracefully (active captures finish first), fast-forwards `main`, runs `npm ci` when dependencies changed, installs the capture browser, backs up and migrates the local database, rebuilds the web app, rebuilds Snip.app when `desktop/` changed, and reopens the app. In cloud mode it then applies the remote database migrations and deploys the new Worker before capture restarts. Snip records the version it deployed; if the deployed Worker no longer matches, it reports that the deployment changed outside Snip and asks you to deploy again instead of redeploying on its own. It never touches untracked files such as `.env` files, `.snip/` or your library. npm lockfile churn is reset automatically; any other local edit, or a terminal `npm run dev` or `npm run capture` still using the database, stops the update before anything changes (`npm run update -- --stash` sets edits aside instead). If a step fails, fix the error and run `npm run update` again to finish. `--full` reruns every step even when you're already up to date.
 
 To run it from any folder, add an alias to `~/.zshrc`:
 

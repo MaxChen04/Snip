@@ -36,13 +36,25 @@ When the Worker is up, Snip opens a **one-time owner link** in your browser. It 
 - The passkey is what you use to sign in to the cloud library from another browser or device.
 - The app stores the secret that mints these links on this Mac. If it is ever lost, `owner rotate` sets a new one and mints a fresh link.
 
+### Signing in later
+
+At the cloud address, **/sign-in** is the everyday door: **Sign in with a passkey**, with nothing to type. If this device has no passkey yet, the page offers **Use GitHub** when the library allows it, or you can add a passkey from a device that is already signed in.
+
+**/passkeys** (also **Passkeys and devices** in the account menu) lists every passkey that can open the library:
+
+- **Add this device** names the device and asks for Touch ID, your device PIN or a security key. The passkey stays on the device; Snip keeps only the public half.
+- **Remove** retires one device, which is the recovery path for a lost laptop or phone. If it was your only passkey, you sign in again with the owner link or GitHub.
+- **Sign out all devices** ends every browser session and the app's session. Passkeys stay registered, and agents connected over MCP keep their own tokens until those expire.
+
+A passkey is owner-only. It is not an invitation: a second person signs in with GitHub.
+
 ### While it copies
 
 Snip creates the database, key-value store, bucket and Worker, applies the schema, deploys, copies the library and checks the result. The sheet shows one step at a time and keeps later steps dimmed.
 
 - A capture that is running **pauses first** and continues on the cloud side after the move, instead of restarting from scratch.
 - A failed step stays on screen with a **Retry** button. Retrying re-checks the steps that already passed, so it resumes rather than starting over.
-- **Cancel** stops the run safely. The install stays recorded as `enabling`, so running it again resumes; `abort` is the command that returns an interrupted install to local and cleans up the partial resources. Your local library is never changed by either.
+- **Cancel** stops safely after the current action and leaves the install recorded as `enabling`, so running it again resumes. **Undo setup** is the separate action that returns this Mac to local and deletes only the resources this run created. Your local library is never changed by either.
 - When it finishes, the window reloads on your cloud URL, Settings moves to the menu bar, and the capture agent serves the cloud library.
 
 ### Waiting for your Mac
@@ -60,11 +72,13 @@ npm run setup:cloudflare -- --check --json   # preflight only; changes nothing
 npm run setup:cloudflare -- --yes --json     # enable cloud, never prompt
 ```
 
-With `--json`, stdout carries one JSON object per line and human text goes to stderr. Each line is a `step`, `log`, `human`, `needs_input`, `session` or `result`; the last is always `result`, and exit code 0 means success. A `human` event carries a URL the person must open (Cloudflare's allow page, the R2 page, the owner link); the run waits until they finish. A `needs_input` event exits 2: rerun with the missing flag instead of prompting. Never log the `session` line.
+With `--json`, stdout carries one JSON object per line and human text goes to stderr. Each line is a `step`, `log`, `human`, `choice`, `needs_input`, `session` or `result`; the last is always `result`, and exit code 0 means success. A `human` event carries a URL the person must open (Cloudflare's allow page, the R2 page, the owner link); the run waits until they finish. A `choice` event describes a decision with consequences and exits 2 with `data.resumeWith`; `--yes` does not answer it. A `needs_input` event also exits 2 and names the missing flags. Never log the `session` line.
+
+Exit 4 means this machine or this library cannot be provisioned right now. It covers every preflight refusal, each with its own `result.code`: `NOT_A_LIBRARY`, `NO_NODE`, `NO_WRANGLER`, `NO_BUILD`, `BAD_CONFIG`, `NOT_AN_ACCOUNT`, `LOCAL_SERVER_RUNNING`, `UNSUPPORTED_PLATFORM` and `FOREIGN_SNIP`. Every failed result carries `retryable`; `true` means the same command works once something outside Snip changes, and `false` means repeating it cannot help. Agents branch on `retryable`, not the code string.
 
 | Flag | Meaning |
 | --- | --- |
-| `--yes` | Never prompt. Missing values exit 2 instead of waiting for input. |
+| `--yes` | Never prompt. Missing values exit 2 instead of waiting for input. It suppresses questions, not consequences: it never adopts an existing library. |
 | `--check` | Preflight only: report what is missing and exit. Safe to run first. |
 | `--json` | One JSON event per line on stdout; nothing else. |
 | `--resume` | Continue an interrupted run. Automatic when the app is mid-enable. |
@@ -72,9 +86,10 @@ With `--json`, stdout carries one JSON object per line and human text goes to st
 | `--domain <host>` | Override the public URL. workers.dev only in this release. |
 | `--login <github-login>` | Add a GitHub login to the allowed list. |
 | `--capture-env <replace\|separate\|keep>` | Where the capture agent points afterwards. The app defaults to `replace`; the CLI defaults to `keep`. |
+| `--adopt-existing` | Take **Use that library** when the account already holds a Snip library with data. Without it the run emits a `choice` and exits 2. Required in any unattended run that should adopt. |
 | `--no-open` | Print URLs instead of opening a browser. |
 
-Exit codes: `0` success, `1` failed, `2` missing input, `3` another run holds the lock, `4` this library cannot be provisioned (no build, no wrangler, or a local Snip server is already using it).
+Exit codes: `0` success, `1` failed, `2` missing input or an unanswered choice, `3` another run holds the lock, `4` this machine or library cannot be provisioned right now (see the `result.code` list above).
 
 The CLI leaves `capture/.env` alone by default and writes the cloud settings to `capture/.env.cloud`. Run the agent against the hosted copy with:
 
@@ -86,20 +101,20 @@ Pass `--capture-env replace` to point `capture/.env` at the cloud copy, or use t
 
 ### Other commands
 
-The `setup:cloudflare` npm script runs the `setup` command. For everything else, call the engine directly, from the repository root (or from the app bundle's runtime in a release build):
+`npm run setup:cloudflare` runs `setup` when no command is given. Add a command after `--` for everything else:
 
 | Command | Does |
 | --- | --- |
-| `node desktop/provision/cli.cjs status --json` | Print the saved install: mode, URL, account, snapshot. |
-| `node desktop/provision/cli.cjs detach --json` | Turn off cloud on this Mac. No Cloudflare calls. |
-| `node desktop/provision/cli.cjs pull --json` | Copy the cloud library back to a new local library, verify it and switch. |
-| `node desktop/provision/cli.cjs snapshot restore --json` | Put the pre-cloud snapshot back as the live local library. |
-| `node desktop/provision/cli.cjs snapshot delete --json` | Delete the snapshot. |
-| `node desktop/provision/cli.cjs delete-resources --confirm <host>` | Delete the Worker, D1, KV and R2 for this install. Destructive. |
-| `node desktop/provision/cli.cjs owner link` | Mint and open a fresh one-time sign-in link. |
-| `node desktop/provision/cli.cjs owner rotate` | Replace the owner-link secret and mint a new link. Recovery path. |
-| `node desktop/provision/cli.cjs abort` | Clean up an interrupted enable. |
-| `node desktop/provision/cli.cjs migrate --json` / `deploy --json` | Apply remote migrations or deploy the current build. Used by updates. |
+| `npm run setup:cloudflare -- status --json` | Print the saved install: mode, URL, account, snapshot. |
+| `npm run setup:cloudflare -- detach --json` | Turn off cloud on this Mac. No Cloudflare calls. |
+| `npm run setup:cloudflare -- pull --json` | Copy the cloud library back to a new local library, verify it and switch. |
+| `npm run setup:cloudflare -- snapshot restore --json` | Put the pre-cloud snapshot back as the live local library. |
+| `npm run setup:cloudflare -- snapshot delete --json` | Delete the snapshot. |
+| `npm run setup:cloudflare -- delete-resources --confirm <host>` | Delete the Worker, D1, KV and R2 for this install. Destructive. |
+| `npm run setup:cloudflare -- owner link` | Mint and open a fresh one-time sign-in link. |
+| `npm run setup:cloudflare -- owner rotate` | Replace the owner-link secret and mint a new link. Recovery path. |
+| `npm run setup:cloudflare -- abort` | Clean up an interrupted enable. |
+| `npm run setup:cloudflare -- migrate --json` / `deploy --json` | Apply remote migrations or deploy the current build. Used by updates. |
 
 `delete-resources` requires `--confirm` to equal the cloud URL's host exactly, for example `snip.max.workers.dev`. The app asks for the same value, typed by hand.
 
@@ -121,7 +136,7 @@ Nothing is copied back automatically. If you worked in the cloud copy and want t
 
 ### Copy back
 
-**Copy back now** (or `node desktop/provision/cli.cjs pull --json`) downloads a manifest, exports the cloud database, stages a **new** local library, downloads every file, checks counts and a digest, and only then swaps it in. The local library from before the move is kept as a backup, so a pull leaves one live local library plus one backup.
+**Copy back now** (or `npm run setup:cloudflare -- pull --json`) downloads a manifest, exports the cloud database, stages a **new** local library, downloads every file, checks counts and a digest, and only then swaps it in. The local library from before the move is kept as a backup, so a pull leaves one live local library plus one backup.
 
 When it finishes, this Mac is in local mode. The cloud copy still exists and is still reachable; detaching and copying back are separate from deleting.
 
@@ -141,19 +156,46 @@ The local library and its snapshot are not touched. Deleting cannot be undone; t
 
 ### Sign out all devices
 
-**Settings → Cloud → Sign out all devices** ends every browser session and the app's session for this install. Use it if a laptop or browser with access is lost.
+**/passkeys → Sign out all devices** (also in Settings → Cloud) ends every browser session and the app's session for this install. Use it if a laptop or browser with access is lost.
 
-It does **not** revoke MCP access tokens. Agents that were already authorized keep the access they were granted until their token expires, seven days after issue. Passkeys are not deleted, so you can sign in again with yours.
+The page says exactly what it does: passkeys stay registered, and agents connected over MCP keep their own tokens until those expire. A passkey is a credential, not a session, so removing one from the list is a separate action, and signing out never removes devices.
 
 ## One Snip per Cloudflare account
 
-Snip keeps one library per Cloudflare account. Before changing anything, the setup checks whether the account already has a Worker named `snip` or a non-empty Snip database. If it finds one that does not belong to this Mac's recorded install, it stops before creating or changing anything:
+Snip keeps one library per Cloudflare account. Before changing anything, setup looks at what is already there and takes one of five paths:
 
-> This Cloudflare account already has a Snip library at snip.max.workers.dev. Snip keeps one library per account. Sign in to the account that owns it, choose a different Cloudflare account, or delete the existing Snip first.
+| What it finds | What happens |
+| --- | --- |
+| Nothing | Normal setup. |
+| This Mac's own interrupted install | Resumes it, re-checking the steps that already passed. |
+| An **empty** Snip from an older install | Adopts it silently, redeploys over it, and continues. Nothing is asked, because there is nothing to lose. |
+| A Snip from an older install **with data** | Asks. Nothing has changed yet. |
+| Another Worker named `snip` that is not a Snip | Refuses before touching anything. |
 
-The next actions are **Open that library** and **Choose another account**. There is no replace option and no second name: the Worker name is the address your passkey and agent connections are bound to, so it cannot be varied per install.
+### Adopting a library you already had
 
-An older standalone Worker that Snip.app did not create counts as another library. Snip will not take it over; delete it from the Cloudflare dashboard first if you want this account for a new cloud library.
+If you deployed Snip before the Settings button existed, the account has a Worker, database and bucket but no record on this Mac that they are yours. Because it can tell a Snip from anything else by its schema, bindings and deploy config, Snip recognises that install. An empty one is simply adopted.
+
+One **with references** needs a decision:
+
+> This Cloudflare account already has a Snip library.
+> **Use that library** — Switches this Mac to it. Your local library is kept and is not copied.
+> **Stop** — Changes nothing.
+
+- **Use that library** adopts the existing URL, account, database, KV namespace and bucket. Your local library stays exactly where it is, untouched, and Snip records it as the snapshot; it is not copied or renamed, because nothing needs to be duplicated for ceremony. The status line reads **adopted · 1,284 references**, never "verified", because no copy was verified. Existing browser sessions keep working, and `CAPTURE_TOKEN` is regenerated for this Mac's capture agent.
+- **Stop** leaves the account and this Mac exactly as they were.
+- From the CLI, use `npm run setup:cloudflare -- --adopt-existing --json`. The choice event exits 2 with `data.resumeWith` set to that flag. **`--yes` alone never adopts**: it suppresses questions, not consequences, so an unattended run that should adopt must pass `--adopt-existing` explicitly. Leaving it out is not an error, it is the safe default.
+- After adoption, Settings states both halves, because you need to know where each library is: the cloud library's size, and that this Mac's library is kept and was not copied.
+
+### When the account has something else
+
+A Worker named `snip` that does not look like Snip is refused, before anything is created:
+
+> This account has a Worker called `snip` that is not a Snip library. Snip keeps one library per account; rename or delete it, or choose another account.
+
+That refusal is exit 4 with `code: "FOREIGN_SNIP"` and `retryable: false`: repeating the command cannot help. Rename or delete the Worker in the Cloudflare dashboard, or choose another account.
+
+There is no replace option and no second Worker name. The name is the address your passkey and agent connections are bound to, so it cannot vary per install.
 
 ## workers.dev only
 
@@ -175,11 +217,13 @@ An empty allowlist refuses GitHub sign-in entirely. That is the safe default; it
 
 A release build does the same on its first launch after a version change, before the window loads. If that deploy fails, Snip shows it as a blocking step instead of running a new app against an old Worker.
 
+Snip records the Worker version it deployed. If the deployed Worker no longer matches that record, Snip reports the deployment as changed outside Snip and asks you to deploy again; it does not redeploy on its own, because someone may have changed the Worker deliberately.
+
 To do it by hand, apply migrations before deploying:
 
 ```bash
-node desktop/provision/cli.cjs migrate --json
-node desktop/provision/cli.cjs deploy --json
+npm run setup:cloudflare -- migrate --json
+npm run setup:cloudflare -- deploy --json
 ```
 
 ## If the cloud library can't be reached
@@ -193,7 +237,7 @@ The supported ways to turn on cloud mode are **Settings → Cloud** and the CLI.
 When a setup stops:
 
 ```bash
-node desktop/provision/cli.cjs status --json       # mode, URL, account, snapshot, last error
+npm run setup:cloudflare -- status --json          # mode, URL, account, snapshot, last error
 npm run setup:cloudflare -- --check --json         # what is missing, without changing anything
 npm run setup:cloudflare -- --yes --json           # resume; completed steps re-verify and skip
 npm run doctor                                     # local config and capture-agent checks

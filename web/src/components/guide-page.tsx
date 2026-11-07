@@ -352,7 +352,7 @@ function CloudSection() {
     },
     {
       t: "Register your passkey",
-      b: "A one-time owner link opens in your browser, registers a passkey (Touch ID on a Mac) and signs Snip.app back in. The link works once and expires after ten minutes. The passkey is how you sign in from another browser or device.",
+      b: "A one-time owner link opens in your browser, registers a passkey (Touch ID on a Mac) and signs Snip.app back in. The link works once and expires after ten minutes. From then on, every other browser or device signs in at /sign-in with its own passkey; Passkeys and devices in the account menu adds or removes them. A passkey is owner-only, not an invitation: a second person signs in with GitHub.",
     },
   ]
   return (
@@ -378,7 +378,7 @@ function CloudSection() {
       <div className="grid max-w-[760px] grid-cols-1 gap-4 md:grid-cols-2">
         {[
           { t: "Waiting for your Mac", b: "A capture started from another device waits in the cloud queue until this Mac's capture agent checks in. The card and every agent status say Waiting for your Mac, whether the agent is busy or the Mac is asleep." },
-          { t: "One Snip per account", b: "If the account already has a Snip this Mac doesn't own, setup stops before changing anything and offers to open it or pick another account. There is no replace option and no second name." },
+          { t: "One Snip per account", b: "An older Snip you already deployed is recognised, not refused: if it's empty it's adopted, and if it has references you choose Use that library or Stop. A Worker named snip that isn't a Snip is refused, with instructions to rename or delete it or pick another account." },
           { t: "workers.dev only", b: "The address is https://snip.<your-subdomain>.workers.dev. Custom domains aren't supported in this release, because the address is what your passkey and agent connections are bound to." },
           { t: "GitHub is optional", b: "You sign in with your passkey. GitHub is how a second person or a cloud MCP client authorizes, registered in one click from Settings. There is no OAuth app to create and no secret to paste." },
         ].map(({ t, b }) => (
@@ -395,10 +395,13 @@ function CloudSection() {
         </p>
         <CodeBlock label="Preflight, then enable without prompts" lines={["npm run setup:cloudflare -- --check --json", "npm run setup:cloudflare -- --yes --json"]} />
         <p className="max-w-[640px] text-sm leading-[1.6] text-muted-foreground">
-          Output is one JSON event per line; the last is always result. Exit 0 means success, 2 means a flag is missing, 3 means another run holds the lock, 4 means this library can't be provisioned. The agent stops for the Cloudflare Allow page, the R2 page and the owner link, and never types a secret into a chat.
+          Output is one JSON event per line; the last is always result. Exit 0 means success, 2 means a flag or a choice is unanswered, 3 means another run holds the lock, 4 means this machine or library can't be provisioned right now. The agent stops for the Cloudflare Allow page, the R2 page and the owner link, and never types a secret into a chat.
         </p>
         <p className="max-w-[640px] text-sm leading-[1.6] text-muted-foreground">
-          The CLI leaves capture/.env alone and writes capture/.env.cloud. Serve the cloud library with SNIP_CAPTURE_ENV_FILE=capture/.env.cloud npm run capture. The app's button instead points capture/.env at the copy, which is the intended end state.
+          --yes never adopts an existing library: pass --adopt-existing when Use that library is the intended answer. The CLI also leaves capture/.env alone and writes capture/.env.cloud; serve the cloud library with SNIP_CAPTURE_ENV_FILE=capture/.env.cloud npm run capture. The app's button instead points capture/.env at the copy, which is the intended end state.
+        </p>
+        <p className="max-w-[640px] text-sm leading-[1.6] text-muted-foreground">
+          The bare npm run setup:cloudflare means setup. Put any other command after --: status, detach, pull, snapshot restore, snapshot delete, delete-resources, owner link, owner rotate, abort, migrate or deploy.
         </p>
       </div>
       <div className="flex max-w-[760px] items-start gap-3 rounded-2xl bg-note p-5 text-note-ink">
@@ -466,8 +469,8 @@ function TurningOffSection() {
         <div className="flex flex-col gap-1.5">
           <p className="text-[15px] font-medium">Sign out all devices</p>
           <p className="text-[15px] leading-[1.6] text-muted-foreground">
-            Ends every browser session and the app's session for this install. It does not revoke MCP access tokens: agents that were already authorized keep their access until the token
-            expires, seven days after issue. Passkeys are kept, so you can sign back in with yours.
+            Ends every browser session and this app's session for the install. Passkeys stay registered, and agents connected over MCP keep their own tokens until those expire.
+            Removing a device is separate, on the Passkeys and devices page: a passkey is a credential, not a session.
           </p>
         </div>
       </div>
@@ -575,7 +578,7 @@ function LimitsSection() {
   ]
   const limits = [
     ["Local storage", "Only limited by your disk. Every capture is a file in the library folder, and the account menu shows the bytes used."],
-    ["Sign-in", "None locally: DEV_LOGIN names you. Cloud mode signs you in with a passkey from the owner link; GitHub is optional and only needed for a second person or a cloud MCP client."],
+    ["Sign-in", "None locally: DEV_LOGIN names you. Cloud mode signs you in with a passkey at /sign-in; GitHub is optional and only needed for a second person or a cloud MCP client."],
     ["Address", "Cloud mode uses https://snip.<your-subdomain>.workers.dev. Custom domains are not supported in this release."],
     ["Page height", "Full-page screenshots stop at 16,000 px, Chromium’s texture limit."],
     ["Crawl scope", "Crawls stay on one hostname, with or without www, and ignore query strings."],
