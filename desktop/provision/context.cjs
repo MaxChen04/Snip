@@ -14,6 +14,7 @@ const { createTransfer } = require('./transfer.cjs');
 function createContext({ root, dataRoot, flags = {}, emit, api, wrangler, release = false, lock = null, deps = {} }) {
   let current = state.readState(dataRoot);
   const work = {};
+  let libraryFactsPromise = null;
   const cancels = new Set();
   let cancelled = false;
   let transferToken = null;
@@ -68,6 +69,49 @@ function createContext({ root, dataRoot, flags = {}, emit, api, wrangler, releas
       return current.cloud;
     },
     setWork(patch) { Object.assign(work, patch); },
+    /**
+     * True when guard decided not to copy: the cloud library is adopted as-is
+     * (an existing one, or this Mac's own detached copy). Read from cloud.json,
+     * not from memory, because a skipped step never runs again on a later
+     * invocation and its in-memory flags would be lost.
+     */
+    isMoveSkipped() {
+      const record = current.cloud || {};
+      return Boolean(record.move && record.move.status === 'skipped');
+    },
+    /**
+     * Cheap local facts, computed once per run. A resumed run skips `preflight`,
+     * so anything a later step needs must be derivable here rather than only
+     * stashed in `work` by an earlier step.
+     */
+    libraryFacts() {
+      if (!libraryFactsPromise) {
+        libraryFactsPromise = (async () => {
+          const localConfig = ctx.deps.local.localConfig(dataRoot);
+          const localOrigin = ctx.deps.local.localOrigin(dataRoot);
+          let empty = false;
+          if (localConfig) {
+            try {
+              const rows = await ctx.deps.deploy.localQuery(ctx.wrangler, {
+                dataRoot,
+                sql: 'SELECT COUNT(*) AS rows FROM refs',
+                config: localConfig,
+                persistTo: ctx.deps.local.localStatePath(dataRoot),
+              });
+              empty = Number(rows[0] && rows[0].rows) === 0;
+            } catch {
+              // An unreadable library is never treated as empty: the empty path is
+              // the one that skips the copy, so it has to be proven.
+              empty = false;
+            }
+          }
+          const facts = { empty, localConfig, localOrigin };
+          Object.assign(work, { libraryEmpty: empty, localConfig, localOrigin });
+          return facts;
+        })();
+      }
+      return libraryFactsPromise;
+    },
     runningStep: null,
     setCurrentStep(id) { ctx.runningStep = id; },
     journal(id, status, detail = '') { current = state.journalStep(dataRoot, id, status, detail); return current; },

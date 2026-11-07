@@ -68,13 +68,13 @@ async function commandSetup(ctx, { steps = setupSteps.setupSteps() } = {}) {
   ctx.clearTransferToken();
   const record = ctx.state().cloud || {};
   const snapshot = ctx.state().snapshot || null;
-  const transfer = record.transfer || null;
+  const transferRecord = ctx.state().transfer || null;
   const data = {
     url: record.url,
     accountId: record.accountId,
-    refs: (transfer && transfer.tables && transfer.tables.refs) || (snapshot && snapshot.refs) || 0,
-    files: (transfer && transfer.keys) || (snapshot && snapshot.files) || 0,
-    bytes: (transfer && transfer.bytes) || (snapshot && snapshot.bytes) || 0,
+    refs: (transferRecord && transferRecord.tables && transferRecord.tables.refs) || (snapshot && snapshot.refs) || 0,
+    files: (transferRecord && transferRecord.keys) || (snapshot && snapshot.files) || 0,
+    bytes: (transferRecord && transferRecord.bytes) || (snapshot && snapshot.bytes) || 0,
     ownerId: record.ownerId || null,
   };
   return { ok: true, code: 'OK', mode: 'cloud', data, message: `Snip is live at ${record.url}` };

@@ -216,12 +216,17 @@ function fakeCloud(model) {
     if (target.origin !== new URL(PROVIDED).origin) {
       throw new Error(`unexpected host ${target.origin}`);
     }
-    if (route === 'POST /agent/ping') {
+    // The Worker's ping is a GET with the capture protocol header.
+    if (route === 'GET /agent/ping') {
       const ok = token && token === model.secretValues.CAPTURE_TOKEN;
       return jsonResponse(ok ? 200 : 401, { ok: Boolean(ok) });
     }
     if (!model.secretValues.TRANSFER_TOKEN || token !== model.secretValues.TRANSFER_TOKEN) {
       return jsonResponse(404, { error: 'not found' });
+    }
+    if (route === 'POST /agent/ping') {
+      calls.push({ route: 'WRONG METHOD' });
+      return jsonResponse(405, { error: 'method not allowed' });
     }
     if (route === 'GET /transfer/status') {
       return jsonResponse(200, {
@@ -233,16 +238,18 @@ function fakeCloud(model) {
       });
     }
     if (route === 'GET /transfer/manifest') {
+      // A listing of the bucket, exactly like the Worker's: whatever was PUT.
+      const keys = [...objects.entries()].map(([key, value]) => ({
+        key,
+        size: value.length,
+        contentType: (model.uploadedContentTypes || {})[key] || 'application/octet-stream',
+      }));
       return jsonResponse(200, {
         version: 1,
         tables: { ...LIBRARY },
-        keys: [
-          { key: 'refs/aaaaaaaaaaaaaaaa/11111111111111111111111111111111/desktop.png', size: 11, contentType: 'image/png' },
-          { key: 'refs/bbbbbbbbbbbbbbbb/22222222222222222222222222222222/snapshot.html', size: 7, contentType: 'text/html' },
-        ],
-        totalBytes: 18,
+        keys,
+        totalBytes: keys.reduce((sum, entry) => sum + entry.size, 0),
         excluded: ['owner_nonces', 'webauthn_challenges'],
-        version: '1.1.0',
       });
     }
     if (route === 'GET /transfer/manifest-empty') return jsonResponse(200, { version: 1, tables: {}, keys: [], totalBytes: 0 });
@@ -568,16 +575,19 @@ test('the transfer client streams uploads, respects 409 and lists the manifest',
   model.secretValues.TRANSFER_TOKEN = 'transfer-token';
   model.secretValues.OWNER_LINK_SECRET = 'owner-secret';
   const client = transfer.createTransfer({ url: PROVIDED, token: 'transfer-token', fetchImpl: cloud.fetch });
-  const manifest = await client.manifest();
-  assert.equal(manifest.keys.length, 2);
+  const empty = await client.manifest();
+  assert.deepEqual(empty.keys, [], 'a fresh bucket lists nothing until something is uploaded');
   const { Readable } = require('node:stream');
-  const put = await client.put(manifest.keys[0].key, Readable.from([Buffer.from('hello world')]), { size: 11, contentType: 'image/png' });
+  const key = 'refs/aaaaaaaaaaaaaaaa/11111111111111111111111111111111/desktop.png';
+  const put = await client.put(key, Readable.from([Buffer.from('hello world')]), { size: 11, contentType: 'image/png' });
   assert.equal(put.ok, true);
-  assert.equal(cloud.objects.get(manifest.keys[0].key).toString(), 'hello world');
-  assert.equal(model.uploadedContentTypes[manifest.keys[0].key], 'image/png');
-  const again = await client.put(manifest.keys[0].key, Readable.from([Buffer.from('hello world')]), { size: 11 });
+  assert.equal(cloud.objects.get(key).toString(), 'hello world');
+  assert.equal(model.uploadedContentTypes[key], 'image/png');
+  const again = await client.put(key, Readable.from([Buffer.from('hello world')]), { size: 11 });
   assert.equal(again.skipped, true);
-  assert.equal(await client.head(manifest.keys[0].key), 11);
+  const listed = await client.manifest();
+  assert.deepEqual(listed.keys.map((entry) => [entry.key, entry.size, entry.contentType]), [[key, 11, 'image/png']]);
+  assert.equal(await client.head(key), 11);
   assert.equal(await client.head('refs/cccccccccccccccc/33333333333333333333333333333333/missing.png'), null);
   const resumed = await client.resume(['aaaaaaaaaaaaaaaa', 'aaaaaaaaaaaaaaaa', 'bbbbbbbbbbbbbbbb']);
   assert.equal(resumed.resumed, 2);
@@ -615,8 +625,8 @@ test('a full setup runs every step against fakes and never succeeds on an empty 
   assert.equal(state.mode, 'cloud');
   assert.equal(state.cloud.url, PROVIDED);
   assert.equal(state.cloud.detachedAt, null);
-  assert.ok(state.cloud.transfer.digest.startsWith('snip-digest-v1:'));
-  assert.equal(state.cloud.snapshot.refs, LIBRARY.refs);
+  assert.ok(state.transfer.digest.startsWith('snip-digest-v1:'));
+  assert.equal(state.snapshot.refs, LIBRARY.refs);
 });
 
 test('the guard refuses a foreign Snip before creating anything', async () => {
@@ -1095,4 +1105,277 @@ test('the choice path leaves no resource behind when the caller stops', async ()
   await assert.rejects(() => commands.commandSetup(ctx), (error) => error.code === 'NEEDS_INPUT');
   const creates = wrangler.calls.map((call) => call.line).filter((line) => /^(d1 create|kv namespace create|r2 bucket create|deploy|secret|d1 migrations apply)/.test(line));
   assert.deepEqual(creates, [], 'Stop must change nothing');
+});
+
+test('import batches are staged to a private file and removed afterwards', async () => {
+  const library = fakeLibrary();
+  const seen = [];
+  const wrangler = {
+    bin: '/fake/wrangler.js',
+    async run(args) {
+      seen.push({ args: [...args] });
+      const index = args.indexOf('--file');
+      const file = args[index + 1];
+      assert.ok(file && file !== '-', 'a real file path is required: --file - is rejected by wrangler');
+      assert.equal(fs.existsSync(file), true, 'the batch file must exist while wrangler runs');
+      assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+      assert.match(fs.readFileSync(file, 'utf8'), /INSERT INTO/);
+      return { ok: true, code: 0, stdout: '', stderr: '' };
+    },
+  };
+  await deploy.importRemote(wrangler, {
+    dataRoot: library.root,
+    accountId: 'acct',
+    statements: ['INSERT INTO "refs" (id) VALUES (\'a\')', 'INSERT INTO "refs" (id) VALUES (\'b\')'],
+  });
+  assert.equal(seen.length, 1);
+  for (const call of seen) {
+    const file = call.args[call.args.indexOf('--file') + 1];
+    assert.equal(fs.existsSync(file), false, 'the staged file must be removed');
+  }
+  const leftover = fs.existsSync(path.join(library.root, '.snip/sql')) ? fs.readdirSync(path.join(library.root, '.snip/sql')) : [];
+  assert.deepEqual(leftover, []);
+});
+
+test('a streamed upload sends duplex: half, as Node fetch requires', async () => {
+  const seen = [];
+  const fetchImpl = async (url, options) => {
+    seen.push({ url: String(url), duplex: options.duplex, method: options.method });
+    const chunks = [];
+    for await (const chunk of options.body) chunks.push(Buffer.from(chunk));
+    return new Response(JSON.stringify({ ok: true, size: Buffer.concat(chunks).length }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  const client = transfer.createTransfer({ url: PROVIDED, token: 't', fetchImpl });
+  const { Readable } = require('node:stream');
+  await client.put('refs/abcdabcdabcdabcd/0123456789abcdef0123456789abcdef/a.png', Readable.from([Buffer.from('x')]), { size: 1 });
+  assert.equal(seen[0].duplex, 'half');
+  // A web ReadableStream (what a local GET returns) must get it too.
+  const web = new Response(Buffer.from('hello')).body;
+  await client.put('refs/abcdabcdabcdabcd/0123456789abcdef0123456789abcdef/b.png', web, { size: 5 });
+  assert.equal(seen[1].duplex, 'half');
+});
+
+test('facts survive a resumed run, where preflight is skipped', async () => {
+  const library = fakeLibrary();
+  const emitter = collectedEmitter();
+  let queries = 0;
+  const ctx = createContext({
+    root: library.root,
+    dataRoot: library.root,
+    flags: {},
+    emit: emitter.emit,
+    api: {},
+    wrangler: { bin: '/x', run: async () => ({ ok: true }) },
+    deps: {
+      fetch: async () => { throw new Error('no network'); },
+      local: LOCAL_FAKE,
+      deploy: {
+        ...deploy,
+        localQuery: async (_wrangler, options) => {
+          queries++;
+          assert.ok(options.config, 'the local config must be discovered, not stashed by a skipped step');
+          return [{ rows: 3 }];
+        },
+      },
+    },
+  });
+  // No preflight ran: the facts must still be derivable.
+  const first = await ctx.libraryFacts();
+  assert.equal(first.empty, false);
+  assert.match(first.localConfig, /web\/wrangler\.jsonc$/);
+  assert.equal(ctx.work.localConfig, first.localConfig);
+  // Cached: one query per run, not one per step.
+  await ctx.libraryFacts();
+  assert.equal(queries, 1);
+
+  // A step that skips when the library is empty sees the same answer.
+  const emptyCtx = createContext({
+    root: library.root,
+    dataRoot: library.root,
+    flags: {},
+    emit: emitter.emit,
+    api: {},
+    wrangler: { bin: '/x', run: async () => ({ ok: true }) },
+    deps: {
+      local: LOCAL_FAKE,
+      deploy: { ...deploy, localQuery: async () => [{ rows: 0 }] },
+    },
+  });
+  assert.equal((await emptyCtx.libraryFacts()).empty, true);
+});
+
+test('SQLite internals are never compared across a copy', () => {
+  const dump = "INSERT INTO \"refs\" (id) VALUES ('a');\nINSERT INTO \"sqlite_sequence\" (name, seq) VALUES ('refs', 7);\n";
+  const counts = lib.countsFromDump(dump);
+  assert.deepEqual(Object.keys(counts).sort(), ['refs', 'sqlite_sequence']);
+  // The copy merges only real library tables into the manifest.
+  const tables = { refs: 1 };
+  for (const [table, count] of Object.entries(counts)) {
+    if (/^(sqlite_|_cf_|_mf_)/.test(table)) continue;
+    if (!(table in tables)) tables[table] = count;
+  }
+  assert.deepEqual(tables, { refs: 1 });
+});
+
+test('--no-open is honoured, and dashed flags reach steps in camelCase', () => {
+  const { flags, positional } = cli.parseArgs(['setup', '--no-open', '--adopt-existing', '--capture-env', 'separate', '--data-root', '/tmp/x']);
+  cli.normalizeFlags(flags);
+  assert.deepEqual(positional, ['setup']);
+  assert.equal(flags.noOpen, true);
+  assert.equal(flags.adoptExisting, true);
+  assert.equal(flags.captureEnv, 'separate');
+  assert.equal(flags.dataRoot, '/tmp/x');
+  // A dashless command must still mean setup.
+  assert.deepEqual(cli.parseArgs([]).positional, []);
+});
+
+test('the owner step never opens a browser with --no-open', async () => {
+  const library = fakeLibrary();
+  stateModule.setMode(library.root, 'enabling');
+  let opened = 0;
+  const emitter = collectedEmitter();
+  const cloudFake = fakeCloud(buildModel({ hasOwner: false }));
+  const model = buildModel({ hasOwner: false });
+  cloudFake.setOwner(true);
+  void model;
+  const ctx = createContext({
+    root: library.root,
+    dataRoot: library.root,
+    flags: { noOpen: true },
+    emit: emitter.emit,
+    api: {},
+    wrangler: { bin: '/x', run: async () => ({ ok: true }) },
+    deps: {
+      fetch: cloudFake.fetch,
+      local: LOCAL_FAKE,
+      transferOf: () => ({ status: async () => ({ hasOwner: true, counts: {} }) }),
+    },
+  });
+  ctx.openUrl = async () => { opened++; return { opened: true }; };
+  stateModule.updateState(library.root, (next) => {
+    next.cloud = { url: PROVIDED, ownerId: 'tester', accountId: 'acct' };
+    return next;
+  });
+  stateModule.writeSecrets(library.root, { ownerLinkSecret: 'a'.repeat(64), captureToken: 'b'.repeat(64), transferToken: 'c'.repeat(64) });
+  await setup.ownerStep().run(ctx);
+  assert.equal(opened, 0, 'a browser must not be opened when --no-open is set');
+});
+
+test('re-enabling after detach adopts the detached copy instead of re-importing', async () => {
+  const library = fakeLibrary();
+  const liveRefs = path.join(library.root, 'web/.wrangler/state');
+  fs.mkdirSync(liveRefs, { recursive: true });
+  // This Mac's own detached install: same account, same worker, same URL.
+  stateModule.updateState(library.root, (next) => {
+    next.mode = 'local';
+    next.cloud = {
+      url: PROVIDED, accountId: 'acct_0123456789', workerName: 'snip',
+      d1: { name: 'snip', id: 'd1-own' }, kv: { name: 'OAUTH_KV', id: 'kv-own' }, bucket: 'snip-files',
+      detachedAt: '2026-11-06T10:00:00.000Z', ownerId: 'tester',
+    };
+    return next;
+  });
+  const model = buildModel({ deployed: true, schema: true, bindings: [{ name: 'DB' }, { name: 'FILES' }, { name: 'OAUTH_KV' }], d1: [{ id: 'd1-own', name: 'snip', tables: 6 }], hasOwner: true });
+  const emitter = collectedEmitter();
+  const cloudFake = fakeCloud(model);
+  const wrangler = fakeWrangler(model);
+  const ctx = createContext({
+    root: library.root,
+    dataRoot: library.root,
+    flags: { login: 'tester', domain: 'tester', noOpen: true },
+    emit: emitter.emit,
+    api: fakeApi(model),
+    wrangler,
+    deps: {
+      fetch: cloudFake.fetch,
+      library: fakeLibraryModule(model),
+      local: LOCAL_FAKE,
+      transferOf: (context) => ({ status: async () => ({
+        version: '1.1.0', hasOwner: true, counts: { refs: 99, pages: 5, collections: 2 },
+        ownerSecretHash: transfer.ownerSecretHash(context.secrets().ownerLinkSecret),
+      }) }),
+    },
+  });
+  await commands.commandSetup(ctx);
+  const state = stateModule.readState(library.root);
+  assert.equal(state.mode, 'cloud');
+  assert.equal(state.cloud.adoptedFrom, 'detached');
+  assert.equal(state.cloud.move.reason, 'detached');
+  assert.equal(state.cloud.detachedAt, null, 're-enabling clears the detach mark');
+  assert.equal(wrangler.calls.some((call) => call.args[0] === 'd1' && call.args[1] === 'export'), false, 'no copy is made');
+  assert.equal(cloudFake.calls.some((call) => call.route.startsWith('PUT /transfer/file/')), false, 'nothing is uploaded');
+});
+
+test('a new enable starts a clean journal; an interrupted run keeps it', () => {
+  const dir = tempDir();
+  const first = stateModule.beginEnabling(dir);
+  assert.equal(first.mode, 'enabling');
+  stateModule.journalStep(dir, 'deploy', 'done');
+  stateModule.journalStep(dir, 'import', 'failed');
+  // A second invocation while still `enabling` is a resume: journal intact.
+  stateModule.beginEnabling(dir);
+  assert.equal(stateModule.readState(dir).steps.length, 2);
+  // Going back to local and enabling again is a new run: nothing is claimed done.
+  stateModule.setMode(dir, 'local');
+  const third = stateModule.beginEnabling(dir);
+  assert.equal(third.mode, 'enabling');
+  assert.deepEqual(third.steps, []);
+});
+
+test('a skipped guard still lets a later invocation skip the copy it decided against', async () => {
+  const library = fakeLibrary();
+  const snapshotDir = path.join(library.root, 'backups/cloud-move-test');
+  fs.mkdirSync(snapshotDir, { recursive: true });
+  fs.writeFileSync(path.join(snapshotDir, 'dump.sql'), '');
+  fs.writeFileSync(path.join(snapshotDir, 'manifest.json'), JSON.stringify({ tables: {} }));
+  fs.writeFileSync(path.join(snapshotDir, 'files.json'), JSON.stringify({ keys: [], excluded: [] }));
+  stateModule.beginEnabling(library.root);
+  for (const id of ['preflight', 'cloudflare-auth', 'account', 'url', 'r2', 'guard']) stateModule.journalStep(library.root, id, 'done');
+  stateModule.updateState(library.root, (next) => {
+    next.cloud = {
+      url: PROVIDED, accountId: 'acct', workerName: 'snip', outcome: 'adopt-existing', adoptedFrom: 'legacy',
+      adoptedAt: '2026-11-06T09:00:00.000Z', move: { status: 'skipped', reason: 'adopted-existing' },
+      d1: { name: 'snip', id: 'd1' }, kv: { name: 'OAUTH_KV', id: 'kv' }, bucket: 'snip-files',
+    };
+    next.snapshot = { path: 'backups/cloud-move-test', keptLocal: true };
+    return next;
+  });
+  const emitter = collectedEmitter();
+  const model = buildModel({ deployed: true });
+  const wrangler = fakeWrangler(model);
+  const ctx = createContext({
+    root: library.root,
+    dataRoot: library.root,
+    flags: { noOpen: true },
+    emit: emitter.emit,
+    api: fakeApi(model),
+    wrangler,
+    deps: {
+      fetch: async () => { throw new Error('no network in this test'); },
+      local: LOCAL_FAKE,
+      transferOf: (context) => ({ status: async () => ({
+        version: '1.1.0', hasOwner: true, counts: { refs: 5, pages: 2, collections: 1 },
+        ownerSecretHash: transfer.ownerSecretHash(context.secrets().ownerLinkSecret),
+      }) }),
+    },
+  });
+  await commands.commandSetup(ctx);
+  const skipped = emitter.events.filter((event) => event.event === 'step' && event.status === 'skipped').map((event) => event.step);
+  for (const id of ['quiesce', 'release', 'export', 'import']) assert.ok(skipped.includes(id), `${id} must skip even though guard never ran`);
+  assert.equal(wrangler.calls.some((call) => call.args[0] === 'd1' && call.args[1] === 'export'), false);
+});
+
+test('step messages name an adopted library, not an empty one', async () => {
+  const library = fakeLibrary();
+  const state = stateModule.beginEnabling(library.root);
+  void state;
+  stateModule.updateState(library.root, (next) => {
+    next.cloud = { url: PROVIDED, accountId: 'acct', workerName: 'snip', outcome: 'adopt-existing', adoptedFrom: 'legacy', move: { status: 'skipped' }, d1: { name: 'snip', id: 'd1' }, kv: { name: 'OAUTH_KV', id: 'kv' }, bucket: 'snip-files' };
+    return next;
+  });
+  const emitter = collectedEmitter();
+  const ctx = createContext({ root: library.root, dataRoot: library.root, flags: {}, emit: emitter.emit, api: {}, wrangler: { bin: '/x', run: async () => ({ ok: true }) }, deps: { local: LOCAL_FAKE, deploy: { ...deploy, localQuery: async () => [{ rows: 4 }] } } });
+  const step = setup.setupSteps().find((entry) => entry.id === 'export');
+  assert.equal(await step.skip(ctx), true);
+  assert.match(step.skipMessage(ctx), /existing cloud library/);
 });
