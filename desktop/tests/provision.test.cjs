@@ -822,6 +822,116 @@ test('adopting an existing library copies nothing, keeps SESSION_SECRET and rota
   for (const id of ['quiesce', 'release', 'export', 'import']) assert.ok(skipped.includes(id), `${id} should skip`);
 });
 
+test('adoption rotates OWNER_LINK_SECRET when the Worker has one and this Mac has no copy', {
+  // The case a real second machine hits: the cloud install already carries an
+  // OWNER_LINK_SECRET minted elsewhere, and this Mac's .snip/cloud-secrets.json
+  // does not exist. Keeping the cloud value would leave this Mac unable to mint
+  // a single valid owner link, because a Worker secret can never be read back.
+}, async () => {
+  const previous = crypto.randomBytes(32).toString('hex');
+  const model = buildModel({
+    deployed: true,
+    schema: true,
+    bindings: [{ name: 'DB' }, { name: 'FILES' }, { name: 'OAUTH_KV' }],
+    d1: [{ id: 'legacy-d1', name: 'snip', tables: 6 }],
+    remoteRows: { refs: 4, pages: 9, collections: 1 },
+    // The Worker holds an owner secret this Mac has never seen.
+    secrets: new Set(['SESSION_SECRET', 'CAPTURE_TOKEN', 'OWNER_LINK_SECRET']),
+    secretValues: { SESSION_SECRET: 'keep-me', CAPTURE_TOKEN: 'old-capture', OWNER_LINK_SECRET: previous },
+  });
+  assert.equal(stateModule.readSecrets(model.root), null, 'no local secrets file to start from');
+
+  const emitter = collectedEmitter();
+  const cloudFake = fakeCloud(model);
+  const wrangler = fakeWrangler(model);
+  emitter.emit.human = (step, action, url, message) => {
+    if (step === 'owner') cloudFake.setOwner(true);
+    return createEmitter({ json: true, stdout: { write: (line) => { emitter.events.push(JSON.parse(line)); return true; } }, stderr: { write: () => true } }).human(step, action, url, message);
+  };
+  const ctx = createContext({
+    root: model.root,
+    dataRoot: model.root,
+    flags: { login: 'tester', domain: 'tester', noOpen: true, adoptExisting: true },
+    emit: emitter.emit,
+    api: fakeApi(model),
+    wrangler,
+    deps: {
+      fetch: cloudFake.fetch,
+      library: fakeLibraryModule(model),
+      local: LOCAL_FAKE,
+      // What the Worker really holds, so a secret this Mac saved but never sent
+      // would fail the drift check instead of passing silently.
+      transferOf: () => ({ status: async () => ({
+        version: '1.1.4',
+        counts: { refs: 4, pages: 9, collections: 1 },
+        hasOwner: true,
+        ownerId: 'tester',
+        ownerSecretHash: transfer.ownerSecretHash(model.secretValues.OWNER_LINK_SECRET || ''),
+      }) }),
+    },
+  });
+  const result = await commands.commandSetup(ctx);
+  assert.equal(result.ok, true);
+
+  const stored = stateModule.readSecrets(model.root);
+  assert.match(stored.ownerLinkSecret, /^[0-9a-f]{64}$/, 'this Mac now holds an owner secret');
+  assert.notEqual(stored.ownerLinkSecret, previous, 'the cloud value cannot be kept: it was never readable');
+  assert.equal(model.secretValues.OWNER_LINK_SECRET, stored.ownerLinkSecret, 'and the Worker was given the same one');
+  assert.equal(stored.captureToken, model.secretValues.CAPTURE_TOKEN, 'the capture token follows the same rule');
+  // The drift check passed against the Worker's real value, not a value the test
+  // echoed back: a run that kept the old secret would have thrown SECRET_DRIFT.
+  const secretsStep = emitter.events.find((event) => event.event === 'step' && event.step === 'secrets' && event.status === 'ok');
+  assert.equal(JSON.parse(secretsStep.data.detail).ownerLinkSecret, true);
+  assert.equal(stateModule.readState(model.root).cloud.adoptedFrom, 'legacy', 'this was the adoption path');
+});
+
+test('adoption keeps OWNER_LINK_SECRET when this Mac already holds the matching one', async () => {
+  // The other direction: a re-run on the machine that minted it must not rotate,
+  // because rotating would invalidate owner links already handed out.
+  const model = buildModel({
+    deployed: true,
+    schema: true,
+    bindings: [{ name: 'DB' }, { name: 'FILES' }, { name: 'OAUTH_KV' }],
+    d1: [{ id: 'legacy-d1', name: 'snip', tables: 6 }],
+    remoteRows: { refs: 4, pages: 9, collections: 1 },
+    secrets: new Set(['SESSION_SECRET', 'CAPTURE_TOKEN', 'OWNER_LINK_SECRET']),
+    secretValues: { SESSION_SECRET: 'keep-me', CAPTURE_TOKEN: 'old-capture' },
+  });
+  const mine = crypto.randomBytes(32).toString('hex');
+  model.secretValues.OWNER_LINK_SECRET = mine;
+  stateModule.writeSecrets(model.root, { version: 1, ownerLinkSecret: mine, captureToken: 'old-capture' });
+
+  const emitter = collectedEmitter();
+  const cloudFake = fakeCloud(model);
+  emitter.emit.human = (step, action, url, message) => {
+    if (step === 'owner') cloudFake.setOwner(true);
+    return createEmitter({ json: true, stdout: { write: (line) => { emitter.events.push(JSON.parse(line)); return true; } }, stderr: { write: () => true } }).human(step, action, url, message);
+  };
+  const ctx = createContext({
+    root: model.root,
+    dataRoot: model.root,
+    flags: { login: 'tester', domain: 'tester', noOpen: true, adoptExisting: true },
+    emit: emitter.emit,
+    api: fakeApi(model),
+    wrangler: fakeWrangler(model),
+    deps: {
+      fetch: cloudFake.fetch,
+      library: fakeLibraryModule(model),
+      local: LOCAL_FAKE,
+      transferOf: () => ({ status: async () => ({
+        version: '1.1.4',
+        counts: { refs: 4, pages: 9, collections: 1 },
+        hasOwner: true,
+        ownerId: 'tester',
+        ownerSecretHash: transfer.ownerSecretHash(model.secretValues.OWNER_LINK_SECRET),
+      }) }),
+    },
+  });
+  await commands.commandSetup(ctx);
+  assert.equal(model.secretValues.OWNER_LINK_SECRET, mine, 'the shared secret was kept, not replaced');
+  assert.equal(stateModule.readSecrets(model.root).ownerLinkSecret, mine);
+});
+
 test('an empty existing Snip is adopted silently and the move still runs', async () => {
   const model = buildModel({
     deployed: true,
