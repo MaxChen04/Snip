@@ -295,6 +295,7 @@ test("transfer status and manifest describe the library, and files round-trip", 
     const manifest = (await (await call("/transfer/manifest", { headers: bearer }, transfer)).json()) as {
       version: number
       tables: Record<string, number>
+      excluded: string[]
       keys: { key: string; size: number; contentType: string }[]
       totalBytes: number
     }
@@ -303,6 +304,8 @@ test("transfer status and manifest describe the library, and files round-trip", 
     assert.deepEqual(manifest.keys, [{ key, size: 5, contentType: "application/octet-stream" }])
     assert.equal(manifest.totalBytes, 5)
     assert.equal(manifest.tables.owner_nonces, undefined, "ephemeral tables are not counted")
+    assert.deepEqual(manifest.excluded, ["owner_nonces", "webauthn_challenges"], "and the omission is named, not silent")
+    assert.ok("owners" in manifest.tables && "passkeys" in manifest.tables, "owner data is part of the library")
 
     const head = await call(`/transfer/file/${key}`, { method: "HEAD", headers: bearer }, transfer)
     assert.equal(head.status, 200)
@@ -500,6 +503,16 @@ test("transfer resume un-pauses through db.resumeReference and is idempotent", (
 
 // ---------- Cloud status and passkeys ----------
 
+test("one Worker version, reported identically by the transfer and app status routes", () =>
+  withWorker(async ({ call, local }) => {
+    const { WORKER_VERSION } = await import("../worker/version")
+    // Contracts §5.4 + §4.6: the engine records this at deploy and compares against its record.
+    const status = (await (await call("/transfer/status", { headers: bearer }, transfer)).json()) as { version: string }
+    assert.equal(status.version, WORKER_VERSION)
+    const cloud = (await (await local("/api/cloud-status", {}, { DEV_LOGIN: "max" })).json()) as { version: string }
+    assert.equal(cloud.version, WORKER_VERSION)
+  }))
+
 test("cloud status reports the owner, methods, counts and the capture agent", () =>
   withWorker(async ({ database, local }) => {
     const initial = (await (await local("/api/cloud-status", {}, { DEV_LOGIN: "max" })).json()) as Record<string, unknown>
@@ -562,10 +575,18 @@ test("passkey sign-in needs a registered credential and devices never expose the
     assert.equal((await local("/api/passkeys/k1", { method: "DELETE" }, { DEV_LOGIN: "max" })).status, 404)
   }))
 
-test("GitHub mounts only with credentials and keeps its allowlist behaviour", () =>
-  withWorker(async ({ call }) => {
+test("GitHub mounts only with both credentials and keeps its allowlist behaviour", () =>
+  withWorker(async ({ call, local }) => {
     assert.equal((await call("/auth/login")).status, 404)
     assert.equal((await call("/auth/callback")).status, 404)
+
+    // Contracts §5.2: a client id without its secret cannot complete a sign-in, so the routes do
+    // not mount and cloud-status does not advertise GitHub as a method.
+    const halfConfigured = { GITHUB_CLIENT_ID: "id", ALLOWED_GITHUB_LOGINS: "max" }
+    assert.equal((await call("/auth/login", {}, halfConfigured)).status, 404)
+    assert.equal((await call("/auth/callback", {}, halfConfigured)).status, 404)
+    const methods = (await (await local("/api/cloud-status", {}, { DEV_LOGIN: "max", ...halfConfigured })).json()) as { methods: string[] }
+    assert.deepEqual(methods.methods, [], "a method that cannot finish must not be offered")
 
     const github = { GITHUB_CLIENT_ID: "id", GITHUB_CLIENT_SECRET: "secret", ALLOWED_GITHUB_LOGINS: "max, second-person" }
     const login = await call("/auth/login", {}, github)

@@ -69,7 +69,7 @@ transfer.post("/resume", async (c) => {
  * Pull-based so the listing runs as the consumer reads, which keeps a library with tens of
  * thousands of objects inside the Worker's memory budget and needs no background writer.
  */
-function manifestStream(bucket: R2Bucket, tables: Record<string, number>) {
+function manifestStream(bucket: R2Bucket, tables: Record<string, number>, excluded: string[]) {
   const encoder = new TextEncoder()
   let cursor: string | undefined
   let listing = true
@@ -107,7 +107,7 @@ function manifestStream(bucket: R2Bucket, tables: Record<string, number>) {
 
   return new ReadableStream<Uint8Array>({
     start(controller) {
-      controller.enqueue(encoder.encode(`{"version":1,"tables":${JSON.stringify(tables)},"keys":[`))
+      controller.enqueue(encoder.encode(`{"version":1,"tables":${JSON.stringify(tables)},"excluded":${JSON.stringify(excluded)},"keys":[`))
     },
     async pull(controller) {
       try {
@@ -136,8 +136,8 @@ function manifestStream(bucket: R2Bucket, tables: Record<string, number>) {
 }
 
 transfer.get("/manifest", async (c) => {
-  const tables = await db.tableCounts(c.env.DB)
-  return new Response(manifestStream(c.env.FILES, tables), {
+  const { tables, excluded } = await db.tableCounts(c.env.DB)
+  return new Response(manifestStream(c.env.FILES, tables, excluded), {
     headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
   })
 })

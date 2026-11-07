@@ -312,19 +312,17 @@ export const sameOriginWrites: MiddlewareHandler<AppEnv> = async (c, next) => {
 // ---------- GitHub (the second-person path) ----------
 
 /**
- * The routes mount as soon as a client id exists, so an install that is missing the secret still
- * explains itself instead of 404ing. Both are needed to complete a sign-in.
+ * Mounted only when both halves exist (contracts §5.2). A client id without its secret cannot
+ * complete a sign-in, and reporting GitHub as an available method in that state would send a
+ * second person to a dead end.
  */
-export const githubEnabled = (env: Env) => !!env.GITHUB_CLIENT_ID
-
-const GITHUB_INCOMPLETE = "GitHub sign-in is not configured on this Snip instance: GITHUB_CLIENT_SECRET is missing. Deploy again with it, or sign in with a passkey."
+export const githubEnabled = (env: Env) => !!(env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET)
 
 const safeNext = (next: string | undefined | null) => (next && next.startsWith("/") && !next.startsWith("//") ? next : "/")
 
 export async function startLogin(c: Context<AppEnv>) {
   if (!githubEnabled(c.env)) return c.notFound()
   if (!allowedLogins(c.env).length) return c.text(NO_LOGINS, 503)
-  if (!c.env.GITHUB_CLIENT_SECRET) return c.text(GITHUB_INCOMPLETE, 503)
   const next = safeNext(c.req.query("next"))
   const state = b64url(crypto.getRandomValues(new Uint8Array(16)))
   setCookie(c, STATE_COOKIE, await sign(c.env.SESSION_SECRET, `${state}|${next}`), {
@@ -348,7 +346,6 @@ export async function startLogin(c: Context<AppEnv>) {
 export async function finishLogin(c: Context<AppEnv>) {
   if (!githubEnabled(c.env)) return c.notFound()
   if (!allowedLogins(c.env).length) return c.text(NO_LOGINS, 503)
-  if (!c.env.GITHUB_CLIENT_SECRET) return c.text(GITHUB_INCOMPLETE, 503)
   const payload = await verify(c.env.SESSION_SECRET, getCookie(c, STATE_COOKIE))
   deleteCookie(c, STATE_COOKIE, { path: "/auth" })
   const [state, next] = (payload ?? "").split("|")
