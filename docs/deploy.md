@@ -39,7 +39,13 @@ When the Worker is up, Snip opens a **one-time owner link** in your browser. It 
 
 ### Signing in later
 
-At the cloud address, **/sign-in** is the everyday door: **Sign in with a passkey**, with nothing to type. If this device has no passkey yet, add one from a device that is already signed in. A library that was set up by an earlier version and already had GitHub sign-in configured also offers **Use GitHub**; a new install never does.
+At the cloud address, **/sign-in** is the everyday door: **Sign in with a passkey**, with nothing to type.
+
+A device with no passkey yet still gets in. **/sign-in** sends you to **Settings → Cloud → Sign in another browser** on a Mac that is already signed in. That button creates a one-time owner link you can copy or open: open it on the new device, register a passkey, and the device is signed in from then on. The link works once and expires after ten minutes, so create a fresh one if you leave it too long.
+
+A cloud MCP client that lands on **/sign-in** returns to its approval screen once you sign in with a passkey, so approving the client carries on where it stopped.
+
+A library that was set up by an earlier version and already had GitHub sign-in configured also offers **Use GitHub**; a new install never does.
 
 **/passkeys** (also **Passkeys and devices** in the account menu) lists every passkey that can open the library:
 
@@ -241,7 +247,7 @@ Cloud mode has exactly one owner: the person who enabled it. They sign in with a
 
 Sharing a library with a second person is planned for later. When it ships, it will not change how you sign in today.
 
-**Installs that already configured GitHub keep working.** An install set up by an earlier version that has `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` set on its Worker still mounts GitHub sign-in, still honours its existing allowlist, and still offers **Use GitHub** on the sign-in page. Setup leaves those secrets alone, and Settings shows a **GitHub sign-in** row only when the Worker reports that method. A fresh install never provisions it, so the row is absent there.
+**Installs that already configured GitHub keep working.** An install set up by an earlier version that has `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` set on its Worker still mounts GitHub sign-in, still honours its existing allowlist, and still offers **Use GitHub** on the sign-in page. Setup leaves those secrets alone. That path lives on the Worker's **/sign-in** page only: Settings has no GitHub row, and a fresh install never provisions the credentials.
 
 ## Updating a cloud install
 
