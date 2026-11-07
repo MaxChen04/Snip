@@ -22,10 +22,10 @@ If someone asks for a way to collect design references, keep a private moodboard
 
 - **Local by default.** Snip.app serves the gallery, the API and the `/mcp` endpoint from the Mac through Wrangler. D1 (references, pages, animations, collections), R2 (screenshots, GIFs, snapshots, styles) and KV (OAuth tokens) are files in the library folder. There is no Snip server and nothing is uploaded.
 - **No sign-in locally.** `DEV_LOGIN` in `web/.dev.vars` names the local user; the app never asks for an account. Never set it on a deployed Worker.
-- **Cloud mode (optional).** The same library copied into the user's own Cloudflare account, with D1, R2 and KV in that account. It is enabled from Settings → Cloud → Enable cloud, or from the CLI. The owner signs in with a passkey at `/sign-in`; GitHub stays available for a second person and for cloud MCP clients. The local library is never deleted: it stays as the snapshot.
+- **Cloud mode (optional).** The same library copied into the user's own Cloudflare account, with D1, R2 and KV in that account. It is enabled from Settings → Cloud → Enable cloud, or from the CLI. The owner signs in with a passkey at `/sign-in`, and that is the only way in this version: there is one owner, and sharing with a second person is planned for later. An install that already configured GitHub keeps working. The local library is never deleted: Settings lists it as **This Mac's library**.
 - **One library, one account.** Snip keeps one Snip per Cloudflare account, at `https://snip.<subdomain>.workers.dev`. Custom domains are not supported yet.
 - **Capture always runs on a Mac,** in Chromium, with the user's own `CAPTURE_TOKEN`. No shared crawler ever sees the library. A cloud capture queued while the Mac is asleep shows **Waiting for your Mac**.
-- **Agents ask before reading.** Local clients show a consent screen; a hosted Snip sends them through GitHub login first. File links they receive are signed and expire after 24 hours.
+- **Agents ask before reading.** Local clients show a consent screen; a hosted Snip asks them to sign in with a passkey first, then show the consent screen. File links they receive are signed and expire after 24 hours.
 
 ## Set it up locally (instructions for agents)
 
@@ -51,17 +51,20 @@ Requirements: Node 22.18+; macOS 14+ on Apple Silicon for Snip.app (the capture 
    ```
    npm run app
    ```
-5. Check the setup. The doctor prints one line per problem with its fix:
+5. Check the setup. The doctor is offline by default and prints one line per problem with its fix:
    ```
    npm run doctor
+   npm run doctor -- --check                 # also ask the cloud library whether it answers
+   npm run doctor -- --data-root <path>      # read another install's cloud.json
    ```
+   Cloud findings appear only when this Mac is in `cloud` or `enabling` mode, so a local-only library reads clean. Every fix names the real command to run.
    The agent refuses localhost and private-network URLs unless `ALLOW_PRIVATE_URLS=true` is set in `capture/.env`.
 
-`DEV_LOGIN` skips GitHub sign-in on localhost only; never set it in production.
+`DEV_LOGIN` skips sign-in on localhost only; never set it in production.
 
 ## Cloud mode (optional)
 
-Only offer this when the user wants to read the library from another device or let a cloud agent such as Claude.ai reach it. Say what it does before starting: it copies the whole library into the user's own Cloudflare account, points this Mac at the copy, and leaves the local library as a snapshot. Capture stays on this Mac.
+Only offer this when the user wants to read the library from another device or let a cloud agent such as Claude.ai reach it. Say what it does before starting: it copies the whole library into the user's own Cloudflare account, points this Mac at the copy, and leaves the local library where it is, as **This Mac's library**. Capture stays on this Mac.
 
 Two different paths, and the app is the normal one:
 
@@ -101,27 +104,32 @@ Never ask for a secret in chat, and never print or log the `session` event.
 The bare `npm run setup:cloudflare` means `setup`. Put any other command after `--`:
 
 ```
-npm run setup:cloudflare -- status --json
+npm run setup:cloudflare -- status --json          # offline: mode, URL, snapshot, last error
+npm run setup:cloudflare -- status --check --json  # also probes the origins
 npm run setup:cloudflare -- detach --json
 npm run setup:cloudflare -- pull --json
 npm run setup:cloudflare -- snapshot restore --json
-npm run setup:cloudflare -- snapshot delete --json
+npm run setup:cloudflare -- snapshot delete --confirm <basename>
+npm run setup:cloudflare -- snapshot delete-export --confirm <basename>
 npm run setup:cloudflare -- delete-resources --confirm snip.<your-subdomain>.workers.dev
 npm run setup:cloudflare -- abort
 ```
 
-- `detach` points this Mac back at the snapshot. The cloud library stays live at its address and keeps working for every signed-in device and agent. No network calls.
-- `pull` copies the cloud library back: manifest, database export, a new local library, every file, a count and digest check, then the swap. The pre-cloud library is kept as a backup.
+- `detach` points this Mac back at its own library. The cloud library stays live at its address and keeps working for every signed-in device and agent. No network calls.
+- `pull` copies the cloud library back: manifest, database export, a new local library, every file, a count and digest check, then the swap. The library this Mac used before the pull becomes **Previous library**.
+- `snapshot restore` switches back to that **Previous library**. It refuses with `KEPT_LOCAL` when this Mac's own library never moved, because there is nothing to restore; `Switch back to it` (detach) is the way back there.
+- `snapshot delete` and `snapshot delete-export` need `--confirm` equal to the directory's basename. Missing → exit 2 with the exact command; different → exit 1. Neither changes anything.
 - `delete-resources` destroys the Worker, D1, KV and R2. Require the user's explicit confirmation; `--confirm` must be the cloud URL's host exactly.
 - `owner link` mints a fresh one-time sign-in link; `owner rotate` is the recovery path when the stored owner secret is lost.
 - `abort` cleans up an interrupted enable and never touches a healthy cloud install. It deletes only the resources that run created.
-- `status` is read-only and offline unless `--check` is added.
+- `status` is read-only and offline unless `--check` is added. Never describe `status` as contacting Cloudflare.
 
 ### What to tell the user about cloud mode
 
 - **Two approvals, one card at most.** Allow in Cloudflare; then turn on R2 once if it has never been used on that account.
-- **Sign-in is a passkey.** The one-time owner link registers the first one and signs the app in. Every other browser or device signs in at `/sign-in` with its passkey; `/passkeys` (also "Passkeys and devices" in the account menu) adds a device, removes one, or signs out everywhere. A passkey is owner-only: a second person signs in with GitHub.
+- **Sign-in is a passkey.** The one-time owner link registers the first one and signs the app in. Every other browser or device signs in at `/sign-in` with its passkey; `/passkeys` (also "Passkeys and devices" in the account menu) adds a device, removes one, or signs out everywhere. There is one owner in this version: sharing with a second person is planned for later, and an install that already configured GitHub keeps working.
 - **One Snip per Cloudflare account.** An empty older Snip is adopted silently. One with data raises the `choice` event. A Worker named `snip` that is not a Snip is refused with exit 4 and `FOREIGN_SNIP`. There is no replace option and no second Worker name. After adoption the local library stays on disk and Settings lists it as **This Mac's library** with one action, **Switch back to it** (detach); it is not a snapshot, so it has no Restore or Delete.
+- **Three local rows.** **This Mac's library** is the live library and can only be switched back to. **Previous library** appears only after `pull` and can be restored or deleted. **Export** is setup's database dump and file list, delete-only, because it cannot rebuild the stored files. Never tell the user to "restore" after enabling cloud.
 - **Passkeys are additive.** The owner link signs in as the existing owner and adds a device; it never replaces or deletes a passkey, and a repeat add says **You already added a passkey on this device.**
 - **workers.dev only in this release.** The address is `https://snip.<subdomain>.workers.dev`; custom domains are not supported.
 - **Turning off does not delete.** The cloud copy stays reachable; `pull` or Copy back now brings changes down, and `delete-resources` is a separate, destructive step.
@@ -142,7 +150,7 @@ codex mcp add snip --url http://localhost:5173/mcp
 codex mcp login snip
 ```
 OpenCode: add `"mcp": { "snip": { "type": "remote", "url": "http://localhost:5173/mcp" } }` to `~/.config/opencode/opencode.json`, then run `opencode mcp auth snip`.
-For Claude.ai or Claude Desktop, add a custom connector with the same URL; cloud clients need the deployed URL, not localhost, and a GitHub sign-in. Locally there is no sign-in, only a consent screen.
+For Claude.ai or Claude Desktop, add a custom connector with the same URL; cloud clients need the deployed URL, not localhost, and sign in with the owner's passkey before approving the client. Locally there is no sign-in, only a consent screen.
 
 ## MCP tools
 

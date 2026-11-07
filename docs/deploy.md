@@ -13,11 +13,11 @@ In Snip.app, open **Settings → Cloud → Enable cloud**. The app shows a sheet
 ### What the sheet says
 
 - **Copies:** every reference, page, animation, collection, note, extracted token, screenshot, GIF, HTML snapshot and style file in the library.
-- **Stays:** the local library itself, exactly where it is. It becomes the snapshot you can go back to, and the app never renames or deletes it.
+- **Stays:** the local library itself, exactly where it is. Settings lists it as **This Mac's library**, with one action, **Switch back to it**; the app never renames or deletes it.
 - **Doesn't move:** browser sessions and MCP grants. Agents sign in again at the new address.
 - **Capture:** stays on this Mac. The capture agent is pointed at the new address after the copy finishes.
 
-An **empty library** takes the same path. There is nothing to copy, the data steps are skipped, no snapshot is recorded, and the sheet says so.
+An **empty library** takes the same path. There is nothing to copy, the data steps are skipped, no local row is recorded, and the sheet says so.
 
 ### The two Cloudflare approvals
 
@@ -39,15 +39,17 @@ When the Worker is up, Snip opens a **one-time owner link** in your browser. It 
 
 ### Signing in later
 
-At the cloud address, **/sign-in** is the everyday door: **Sign in with a passkey**, with nothing to type. If this device has no passkey yet, the page offers **Use GitHub** when the library allows it, or you can add a passkey from a device that is already signed in.
+At the cloud address, **/sign-in** is the everyday door: **Sign in with a passkey**, with nothing to type. If this device has no passkey yet, add one from a device that is already signed in. A library that was set up by an earlier version and already had GitHub sign-in configured also offers **Use GitHub**; a new install never does.
 
 **/passkeys** (also **Passkeys and devices** in the account menu) lists every passkey that can open the library:
 
+<img src="media/passkeys.png" alt="The Passkeys and devices page: Add this device, the device list, and Sign out all devices" width="620">
+
 - **Add this device** names the device and asks for Touch ID, your device PIN or a security key. The passkey stays on the device; Snip keeps only the public half.
-- **Remove** retires one device, which is the recovery path for a lost laptop or phone. If it was your only passkey, you sign in again with the owner link or GitHub.
+- **Remove** retires one device, which is the recovery path for a lost laptop or phone. If it was your only passkey, you sign in again with the owner link.
 - **Sign out all devices** ends every browser session and the app's session. Passkeys stay registered, and agents connected over MCP keep their own tokens until those expire.
 
-A passkey is owner-only. It is not an invitation: a second person signs in with GitHub.
+**One owner in this release.** The person who enabled cloud is the only person who can sign in, on their own devices. There is no invitation, no allowlist and no second account to set up; sharing a library with a second person is planned for later.
 
 ### While it copies
 
@@ -82,13 +84,16 @@ Exit 4 means this machine or this library cannot be provisioned right now. It co
 | `--yes` | Never prompt. Missing values exit 2 instead of waiting for input. It suppresses questions, not consequences: it never adopts an existing library. |
 | `--check` | Preflight only: report what is missing and exit. Safe to run first. |
 | `--json` | One JSON event per line on stdout; nothing else. |
-| `--resume` | Continue an interrupted run. Automatic when the app is mid-enable. |
+| `--resume` | Accepted, and resuming is what happens anyway: every step re-checks its own result, so rerunning `setup` continues an interrupted one instead of starting over. |
 | `--account <id>` | Choose the Cloudflare account instead of the first membership. |
 | `--domain <host>` | Override the public URL. workers.dev only in this release. |
-| `--login <github-login>` | Add a GitHub login to the allowed list. |
+| `--login <name>` | Record the sign-in name for this install. It fills the legacy GitHub allowlist in the generated config, which stays inert because a new install never provisions GitHub credentials. |
 | `--capture-env <replace\|separate\|keep>` | Where the capture agent points afterwards. The app defaults to `replace`; the CLI defaults to `keep`. |
 | `--adopt-existing` | Take **Use that library** when the account already holds a Snip library with data. Without it the run emits a `choice` and exits 2. Required in any unattended run that should adopt. |
+| `--managed` | The app's own mode: it replaces the capture environment and can use its loopback handoff. Not needed from a terminal. |
 | `--no-open` | Print URLs instead of opening a browser. |
+| `--root <path>` / `--data-root <path>` | Run against a different checkout or library. `--root` also sets `--data-root` when the latter is absent. |
+| `--confirm <name>` | The interlock the destructive commands check. See [Other commands](#other-commands). |
 
 Exit codes: `0` success, `1` failed, `2` missing input or an unanswered choice, `3` another run holds the lock, `4` this machine or library cannot be provisioned right now (see the `result.code` list above).
 
@@ -106,56 +111,71 @@ Pass `--capture-env replace` to point `capture/.env` at the cloud copy, or use t
 
 | Command | Does |
 | --- | --- |
-| `npm run setup:cloudflare -- status --json` | Print the saved install: mode, URL, account, snapshot. |
+| `npm run setup:cloudflare -- status --json` | Print the saved install: mode, URL, account, snapshot, last error. Reads `cloud.json` only, so it works offline and takes no lock. |
+| `npm run setup:cloudflare -- status --check --json` | The one form that uses the network: ask the local and cloud origins whether they answer, and name which surface answered. |
 | `npm run setup:cloudflare -- detach --json` | Turn off cloud on this Mac. No Cloudflare calls. |
-| `npm run setup:cloudflare -- pull --json` | Copy the cloud library back to a new local library, verify it and switch. |
-| `npm run setup:cloudflare -- snapshot restore --json` | Put the pre-cloud snapshot back as the live local library. |
-| `npm run setup:cloudflare -- snapshot delete --json` | Delete the snapshot. |
+| `npm run setup:cloudflare -- pull --json` | Copy the cloud library back to a new local library, verify it and switch. What was here becomes the **Previous library**. |
+| `npm run setup:cloudflare -- snapshot restore --json` | Switch back to the **Previous library** left by a `pull`. Refuses when this Mac's own library never moved. |
+| `npm run setup:cloudflare -- snapshot delete --confirm <basename>` | Delete the **Previous library**. Destructive. |
+| `npm run setup:cloudflare -- snapshot delete-export --confirm <basename>` | Delete setup's portable dump and file list. It cannot restore anything on its own. |
 | `npm run setup:cloudflare -- delete-resources --confirm <host>` | Delete the Worker, D1, KV and R2 for this install. Destructive. |
 | `npm run setup:cloudflare -- owner link` | Mint and open a fresh one-time sign-in link. |
 | `npm run setup:cloudflare -- owner rotate` | Replace the owner-link secret and mint a new link. Recovery path. |
 | `npm run setup:cloudflare -- abort` | Clean up an interrupted enable. |
 | `npm run setup:cloudflare -- migrate --json` / `deploy --json` | Apply remote migrations or deploy the current build. Used by updates. |
 
-`delete-resources` requires `--confirm` to equal the cloud URL's host exactly, for example `snip.max.workers.dev`. The app asks for the same value, typed by hand.
+The three destructive commands share one interlock. `--confirm` must equal the basename of the item being deleted: the directory name for `snapshot delete` and `snapshot delete-export`, and the cloud URL's host (for example `snip.max.workers.dev`) for `delete-resources`. Leave it out and the run exits 2 with the exact command to repeat; give a different value and it exits 1. Neither path changes anything. The app asks for the same value, typed by hand.
 
 ## Turning cloud off
 
-**Settings → Cloud → Turn off cloud** detaches this Mac. It does not delete the cloud copy. The confirmation says exactly what stays:
+**Settings → Cloud → Turn off cloud** detaches this Mac. It does not delete the cloud copy. In Settings the panel is **Leave the cloud copy where it is and go back to this Mac. Nothing is deleted.**, with the row **Use this Mac's library again** and the note that the cloud library stays reachable for other devices and agents.
 
-> Changes made in your cloud library stay there. This Mac goes back to the copy from 6 Nov. Your cloud library is still reachable at snip.max.workers.dev, and devices and agents signed in to it keep working.
+The dialog asks first and says exactly what stays:
 
-For a library that started empty, the second sentence is "This Mac goes back to an empty library", and there is no snapshot row. For an adopted install it is "This Mac goes back to its own library"; the row is **This Mac's library**, not a snapshot.
+> **Turn off cloud?**
+> Changes made in your cloud library stay there. This Mac goes back to its library from 6 Nov, 10:12 (812 MB). Your cloud library is still reachable at snip.max.workers.dev, and devices and agents signed in to it keep working.
+
+The date and size come from this Mac's own row. For a library that started empty there is no row, and the second sentence is **This Mac goes back to an empty library**.
 
 The dialog offers three outcomes:
 
-- **Stay in cloud** (cancel).
-- **Turn off and keep local** — detach now. This Mac opens its local library (for an adopted install) or the snapshot from before the move. The cloud copy stays live, and anything signed in to it keeps working.
-- **Bring the cloud library back to this Mac** — copies the cloud library down first, verifies it, then switches this Mac to it. Also available later as **Copy back now**.
+- **Stay in cloud** — "Keep using the cloud library. Nothing changes." The default; the confirm button stays disabled.
+- **Turn off and keep local** — "This Mac goes back to its own library. Nothing is deleted, on this Mac or on Cloudflare." Detach happens now, and the cloud copy stays live.
+- **Bring the cloud library back to this Mac** — "Downloads the cloud library, checks every reference, then switches this Mac to it. This Mac's current library is kept." Marked **Recommended if you made changes**, with **Copy prompt for your agent** beside it. The confirm button becomes **Copy back now**.
 
 Nothing is copied back automatically. If you worked in the cloud copy and want those changes here, use **Copy back now** or `pull`.
 
 ### Copy back
 
-**Copy back now** (or `npm run setup:cloudflare -- pull --json`) downloads a manifest, exports the cloud database, stages a **new** local library, downloads every file, checks counts and a digest, and only then swaps it in. The local library from before the move is kept as a backup, so a pull leaves one live local library plus one backup.
+**Copy back now** (or `npm run setup:cloudflare -- pull --json`) downloads a manifest, exports the cloud database, stages a **new** local library, downloads every file, checks counts and a digest, and only then swaps it in. The library this Mac used before the pull is kept as **Previous library**, so a pull leaves one live library plus one restorable copy.
 
 When it finishes, this Mac is in local mode. The cloud copy still exists and is still reachable; detaching and copying back are separate from deleting.
 
-### The snapshot
+### What Settings lists
 
-After a **completed move**, **Settings → Cloud** lists the pre-cloud copy with its date and size, for example **Snapshot from 6 Nov, 10:12 — 812 MB**.
+Two kinds of local copy exist, and only one of them can be restored. **Settings → Cloud** shows whichever this Mac has:
 
-- **Restore** puts the snapshot back as this Mac's live library. In cloud mode, use **Copy back now** instead.
-- **Delete** removes the snapshot and its backups.
-- The row is hidden when the library was empty at the time of the move.
+<img src="media/settings-cloud.png" alt="Settings → Cloud in cloud mode: the Cloud library panel with This Mac's library and Export rows" width="620">
 
-An **adopted** library is not a snapshot, because there is no separate copy: the local library was never moved. It shows as **This Mac's library** with one action, **Switch back to it**, and no Restore or Delete. See [Adopting a library you already had](#adopting-a-library-you-already-had).
+| Row | When it appears | Actions |
+| --- | --- | --- |
+| **This Mac's library · 312 references** | The library never moved: after enabling cloud, and after adopting an existing one. Subtitle: **Kept on this Mac and not updated while you use your cloud library. Changes you make in the cloud stay in the cloud.** | **Switch back to it** only |
+| **Previous library · 312 references** | Only after **Copy back now** or `pull` replaced this Mac's library. Subtitle: **Snapshot from 6 Nov, 10:12 — 812 MB. This Mac used it before the copy came back.** | **Switch back to previous library**, or delete it |
+| **Export from 6 Nov — 812 MB** | After setup exported a library that had data. Subtitle: **A copy of the database and file list made during setup. It can't be restored on its own.** | Delete only |
+
+Enabling cloud never moves the local library, so after a move there is no Restore and no delete on **This Mac's library**: it is still the live library, and **Switch back to it** is the way back. The CLI refuses both commands rather than guessing, with **Your library is still on this Mac, so there is nothing to restore.** for `snapshot restore` and **This Mac's own library is not a snapshot, so it cannot be deleted.** for `snapshot delete`.
+
+A real second copy appears only when `pull` swaps the cloud library in. That is what **Previous library** is: a complete library that can be swapped back, counted by reading it rather than assumed. If the count cannot be read, the pull puts the original back and fails instead of recording something untrue.
+
+<img src="media/settings-previous-library.png" alt="Settings in local mode after a copy-back: Previous library with Switch back to previous library, plus the detached copy still live" width="620">
+
+**Export** is insurance, not a restore point. It is the database dump and file list setup wrote before the copy, and it cannot rebuild the stored files, so it has no restore action at all. `snapshot delete-export --confirm <basename>` and the trash button on that row delete only the dump; the live library and the previous library are untouched. An install that still has a record written by an older version, where the dump was recorded without a kind, is refused by `snapshot restore` with **These are this Mac's backup files, not a library that can be swapped in.** and a pointer to `delete-export`.
 
 ### Delete cloud resources
 
 Deleting the cloud copy is separate, destructive and never offered inside the turn-off dialog. **Settings → Cloud → Delete cloud resources** removes the Worker, D1 database, KV namespace and R2 bucket after you type the library's address.
 
-The local library and its snapshot are not touched. Deleting cannot be undone; the next enable starts a new install and copies the local library up again.
+The local library and any previous library on this Mac are not touched. Deleting cannot be undone; the next enable starts a new install and copies the local library up again.
 
 ### Sign out all devices
 
@@ -191,9 +211,13 @@ One **with references** needs a decision:
 
 After adoption, Settings states both halves, because you need to know where each library is:
 
-> Your cloud library already had 1,284 references, so Snip switched to it. **This Mac's library (312 references) is kept and was not copied.**
+> Your cloud library already had 1,284 references, so Snip switched to it. **This Mac's library (312 references) is kept here and was not copied.**
 
-The local library is listed as **This Mac's library · 312 references**, with the subtitle **Kept on this Mac. Not copied to the cloud.** It has exactly one action, **Switch back to it**, which detaches this Mac and returns to the local library. It is not a snapshot: there is no copy to restore, so it offers no Restore and no Delete, and Snip never offers to delete your only local library from a status row. Before it runs, the action says what stays: **Changes made in your cloud library stay there. This Mac goes back to its own library.**
+The panel above it reads **adopted · 1,284 references. Nothing was copied from this Mac.** and never claims the copy was verified, because it wasn't.
+
+The local library is listed as **This Mac's library · 312 references**, with the subtitle **Kept on this Mac. Not copied to the cloud.** It has exactly one action, **Switch back to it**, which detaches this Mac and returns to the local library. It is not a snapshot: there is no copy to restore, so it offers no Restore and no Delete, and Snip never offers to delete your only local library from a status row. Before it runs, the turn-off dialog says what stays: **Changes made in your cloud library stay there. This Mac goes back to its library from 6 Nov, 10:12 (812 MB).**
+
+<img src="media/settings-adopted.png" alt="Settings after adopting an existing library: the adopted status line, and This Mac's library with Switch back to it" width="620">
 
 The owner link on an adopted library signs in as the **same owner** and adds this device's passkey. It never replaces or deletes a passkey that was already there, so a re-enabled install keeps every device it had. Adding a device that already has a passkey shows **You already added a passkey on this device.**
 
@@ -211,15 +235,13 @@ There is no replace option and no second Worker name. The name is the address yo
 
 Cloud mode uses the Worker name `snip` on your account's workers.dev subdomain, for example `https://snip.max.workers.dev`. Custom domains are not supported in this release: they would change the address that passkeys and MCP connections are bound to. Use the URL Snip prints everywhere you connect a client.
 
-## GitHub sign-in
+## One owner in this release
 
-There is no OAuth App to create, no Client ID and no client secret to paste. GitHub sign-in is optional:
+Cloud mode has exactly one owner: the person who enabled it. They sign in with a passkey on each device they use, and so does an agent they connect to the cloud address. Nothing in setup asks for GitHub, there is no OAuth app to register, no Client ID and no client secret to paste, and no allowlist to keep up to date.
 
-- **For you**, the passkey from the owner link is the default way in. GitHub is not needed.
-- **For a second person**, turn on GitHub sign-in in Settings → Cloud. GitHub asks you to approve Snip's app in one click using the App Manifest flow, then you add the GitHub logins allowed to sign in. Passkeys stay owner-only.
-- **For MCP clients**, GitHub is how a client authorizes at the cloud address. If you plan to connect a cloud agent such as Claude.ai, keep GitHub sign-in on and add at least your own login.
+Sharing a library with a second person is planned for later. When it ships, it will not change how you sign in today.
 
-An empty allowlist refuses GitHub sign-in entirely. That is the safe default; it does not affect the owner's passkey.
+**Installs that already configured GitHub keep working.** An install set up by an earlier version that has `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` set on its Worker still mounts GitHub sign-in, still honours its existing allowlist, and still offers **Use GitHub** on the sign-in page. Setup leaves those secrets alone, and Settings shows a **GitHub sign-in** row only when the Worker reports that method. A fresh install never provisions it, so the row is absent there.
 
 ## Updating a cloud install
 
@@ -238,7 +260,7 @@ npm run setup:cloudflare -- deploy --json
 
 ## If the cloud library can't be reached
 
-If the Worker is deleted in the Cloudflare dashboard, the account changes, or the URL stops resolving, Snip says **This Mac's cloud library can't be reached** and offers the snapshot or a new enable. It does not quietly open the empty local library instead.
+If the Worker is deleted in the Cloudflare dashboard, the account changes, or the URL stops resolving, Snip says **This Mac's cloud library can't be reached** and offers this Mac's own library or a new enable. It does not quietly open the empty local library instead.
 
 ## Debugging a setup
 
@@ -247,18 +269,28 @@ The supported ways to turn on cloud mode are **Settings → Cloud** and the CLI.
 When a setup stops:
 
 ```bash
-npm run setup:cloudflare -- status --json          # mode, URL, account, snapshot, last error
-npm run setup:cloudflare -- --check --json         # what is missing, without changing anything
-npm run setup:cloudflare -- --yes --json           # resume; completed steps re-verify and skip
-npm run doctor                                     # local config and capture-agent checks
+npm run setup:cloudflare -- status --json          # mode, URL, account, snapshot, last error; offline
+npm run setup:cloudflare -- status --check --json  # the same, plus whether the origins answer
+npm run setup:cloudflare -- --check --json         # preflight: what is missing, without changing anything
+npm run setup:cloudflare -- setup --resume --json   # resume; completed steps re-verify and skip
+npm run doctor                                     # offline checkout and capture checks
+```
+
+`status` reads `cloud.json` and nothing else: no Cloudflare call, no Worker, no lock, so it works offline and for an agent that only needs to know the mode. `--check` is the one form that goes to the network, and then it says which surface answered.
+
+`npm run doctor` is offline by default too. It checks Node, dependencies, both config files, the capture browser and the capture token against the local Worker, and prints one line per problem with the command that fixes it. Cloud checks are read from `cloud.json` alone and are reported only when this Mac is in **cloud** or **enabling** mode, so a local-only library never sees a cloud warning. Add `--check` to let the doctor probe the cloud library as well, and `--data-root <path>` to read another install's record:
+
+```bash
+npm run doctor -- --check
+npm run doctor -- --data-root /path/to/another/library
 ```
 
 - `.snip/cloud.json` holds `mode`, the cloud record and the per-step journal, including `error` with the failing step and a hint. It is safe to read; do not edit it.
 - A partial install stays at `mode: "enabling"`, so the next run resumes instead of starting over. `abort` is the only command that returns an interrupted enable to local.
-- The built Worker, its client assets and the migrations are copied into `<library>/cloud/` on every deploy. That directory is disposable; the next deploy overwrites it from the build.
+- The built Worker, its client assets and the migrations are copied into `<library>/cloud/` on every deploy. That directory is disposable; the next deploy overwrites it from the build. `web/wrangler.deploy.jsonc` is not written by setup any more; it is read only to recognise an install made by an older version.
 - Nothing is ever written inside Snip.app's bundle, so a failed deploy cannot corrupt a release build.
 
-If the Worker is healthy but the app shows the wrong library, check `status` before touching anything: `mode` decides whether the window opens the local snapshot or the cloud URL, and editing Cloudflare resources by hand does not change it.
+If the Worker is healthy but the app shows the wrong library, check `status` before touching anything: `mode` decides whether the window opens this Mac's library or the cloud URL, and editing Cloudflare resources by hand does not change it.
 
 ## Free-tier headroom
 

@@ -223,12 +223,12 @@ function PrivacySection() {
     },
     {
       t: "Cloud is your own account",
-      b: "If you enable it, the library is copied into Cloudflare resources you create. There is no Snip server in either mode, and the local copy is kept as a snapshot.",
+      b: "If you enable it, the library is copied into Cloudflare resources you create. There is no Snip server in either mode, and the local copy stays where it is.",
       Icon: Server,
     },
     {
       t: "Agents ask before reading",
-      b: "Clients approve access first: a consent screen locally, GitHub login and a consent screen when hosted. File links they receive are signed and expire after 24 hours.",
+      b: "Clients approve access first: a consent screen locally, a passkey sign-in and a consent screen when hosted. File links they receive are signed and expire after 24 hours.",
       Icon: Lock,
     },
   ]
@@ -340,7 +340,7 @@ function CloudSection() {
   const steps = [
     {
       t: "Settings → Cloud → Enable cloud",
-      b: "Snip shows what copies first: every reference, page, animation, collection, note, token and file. Your local library stays exactly where it is and becomes the snapshot you can go back to. Browser sessions and MCP grants don't move; agents sign in again at the new address. Then the copy starts, one step at a time, with a Retry button on any failure.",
+      b: "Snip shows what copies first: every reference, page, animation, collection, note, token and file. Your local library stays exactly where it is, listed as This Mac's library, and switching back to it is one action. Browser sessions and MCP grants don't move; agents sign in again at the new address. Then the copy starts, one step at a time, with a Retry button on any failure.",
     },
     {
       t: "Allow it in Cloudflare",
@@ -352,7 +352,7 @@ function CloudSection() {
     },
     {
       t: "Register your passkey",
-      b: "A one-time owner link opens in your browser, registers a passkey (Touch ID on a Mac) and signs Snip.app back in. The link works once and expires after ten minutes, and it always signs in as the library's one owner: re-enabling or adopting an existing library reuses that identity and keeps every passkey it had. From then on, every other browser or device signs in at /sign-in with its own passkey; Passkeys and devices in the account menu adds or removes them, and adding one twice says You already added a passkey on this device. A passkey is owner-only, not an invitation: a second person signs in with GitHub.",
+      b: "A one-time owner link opens in your browser, registers a passkey (Touch ID on a Mac) and signs Snip.app back in. The link works once and expires after ten minutes, and it always signs in as the library's one owner: re-enabling or adopting an existing library reuses that identity and keeps every passkey it had. From then on, every other browser or device signs in at /sign-in with its own passkey; Passkeys and devices in the account menu adds or removes them, and adding one twice says You already added a passkey on this device.",
     },
   ]
   return (
@@ -378,9 +378,9 @@ function CloudSection() {
       <div className="grid max-w-[760px] grid-cols-1 gap-4 md:grid-cols-2">
         {[
           { t: "Waiting for your Mac", b: "A capture started from another device waits in the cloud queue until this Mac's capture agent checks in. The card and every agent status say Waiting for your Mac, whether the agent is busy or the Mac is asleep." },
-          { t: "One Snip per account", b: "An older Snip you already deployed is recognised, not refused: if it's empty the setup adopts it, and if it has references you choose Use that library or Stop. Your local library stays on disk either way. A Worker named snip that isn't a Snip is refused, with instructions to rename or delete it or pick another account." },
+          { t: "One Snip per account", b: "An older Snip you already deployed is recognised, not refused: if it's empty the setup adopts it, and if it has references you choose Use that library or Stop. Your local library stays on disk either way, listed as This Mac's library with one action, Switch back to it. A Worker named snip that isn't a Snip is refused, with instructions to rename or delete it or pick another account." },
           { t: "workers.dev only", b: "The address is https://snip.<your-subdomain>.workers.dev. Custom domains aren't supported in this release, because the address is what your passkey and agent connections are bound to." },
-          { t: "GitHub is optional", b: "You sign in with your passkey. GitHub is how a second person or a cloud MCP client authorizes, registered in one click from Settings. There is no OAuth app to create and no secret to paste." },
+          { t: "One owner for now", b: "You sign in with a passkey on each device you use, and that's the only way in: no GitHub app to register, no allowlist to maintain. Sharing a library with a second person is planned for later, and installs that already configured GitHub keep working." },
         ].map(({ t, b }) => (
           <div key={t} className="flex flex-col gap-1.5 rounded-2xl bg-card p-5 ring-1 ring-border">
             <p className="text-[15px] font-medium">{t}</p>
@@ -401,7 +401,7 @@ function CloudSection() {
           --yes never adopts an existing library: pass --adopt-existing when Use that library is the intended answer. The CLI also leaves capture/.env alone and writes capture/.env.cloud; serve the cloud library with SNIP_CAPTURE_ENV_FILE=capture/.env.cloud npm run capture. The app's button instead points capture/.env at the copy, which is the intended end state.
         </p>
         <p className="max-w-[640px] text-sm leading-[1.6] text-muted-foreground">
-          The bare npm run setup:cloudflare means setup. Put any other command after --: status, detach, pull, snapshot restore, snapshot delete, delete-resources, owner link, owner rotate, abort, migrate or deploy.
+          The bare npm run setup:cloudflare means setup. Put any other command after --: status, detach, pull, snapshot restore, snapshot delete, snapshot delete-export, delete-resources, owner link, owner rotate, abort, migrate or deploy. status stays offline unless you add --check, and the three destructive commands need --confirm with the item's own name.
         </p>
       </div>
       <div className="flex max-w-[760px] items-start gap-3 rounded-2xl bg-note p-5 text-note-ink">
@@ -412,7 +412,7 @@ function CloudSection() {
             <a href={`${REPO_URL}/blob/main/docs/deploy.md`} target="_blank" rel="noreferrer" className="font-medium underline underline-offset-2">
               Cloud mode
             </a>{" "}
-            covers every command, upgrading, the snapshot, deleting cloud resources and what to do if the cloud library can't be reached.
+            covers every command, upgrading, the local rows, deleting cloud resources and what to do if the cloud library can't be reached.
           </p>
         </div>
       </div>
@@ -422,9 +422,9 @@ function CloudSection() {
 
 function TurningOffSection() {
   const outcomes = [
-    { t: "Stay in cloud", b: "Cancel. Nothing changes." },
-    { t: "Turn off and keep local", b: "This Mac goes back to its local library or the copy from before the move. The cloud library stays live at its address, and every device and agent signed in to it keeps working." },
-    { t: "Bring the cloud library back", b: "Copies the cloud library down first, verifies it, then switches this Mac to it. The same action is available later as Copy back now." },
+    { t: "Stay in cloud", b: "Keep using the cloud library. Nothing changes." },
+    { t: "Turn off and keep local", b: "This Mac goes back to its own library. Nothing is deleted, on this Mac or on Cloudflare." },
+    { t: "Bring the cloud library back", b: "Downloads the cloud library, checks every reference, then switches this Mac to it. This Mac's current library is kept." },
   ]
   return (
     <Section
@@ -433,8 +433,8 @@ function TurningOffSection() {
       intro="Turning off detaches this Mac. It does not delete the cloud copy, and nothing is carried back automatically."
     >
       <p className="max-w-[760px] text-[15px] leading-[1.6] text-muted-foreground">
-        Settings → Cloud → Turn off cloud asks first, and says what stays: changes made in the cloud library remain there, this Mac returns to its local library or snapshot, and the cloud library is
-        still reachable by anything signed in to it.
+        Settings → Cloud → Turn off cloud asks first, and says what stays: changes made in the cloud library remain there, this Mac goes back to its own library (or, for an empty
+        one, to an empty library), and the cloud library is still reachable by anything signed in to it.
       </p>
       <dl className="flex max-w-[760px] flex-col">
         {outcomes.map(({ t, b }) => (
@@ -449,22 +449,23 @@ function TurningOffSection() {
           <p className="text-[15px] font-medium">Copy back now</p>
           <p className="text-[15px] leading-[1.6] text-muted-foreground">
             Downloads a manifest, exports the cloud database, stages a new local library, downloads every file, checks the counts and a digest, then swaps it in. The library from
-            before the move is kept as a backup.
+            before the pull is kept as Previous library.
           </p>
         </div>
         <div className="flex flex-col gap-1.5">
-          <p className="text-[15px] font-medium">The snapshot</p>
+          <p className="text-[15px] font-medium">This Mac's library, Previous library, Export</p>
           <p className="text-[15px] leading-[1.6] text-muted-foreground">
-            After a completed move, Settings lists the pre-cloud copy with its date and size, for example “Snapshot from 6 Nov, 10:12 — 812 MB”. Restore puts it back; Delete
-            removes it. The row is hidden when the library was empty. An adopted library is different: it is still here, listed as This Mac's library with one action, Switch back
-            to it, and no Restore or Delete, because nothing was copied.
+            Your library never moves, so after a move Settings lists it as This Mac's library with one action, Switch back to it. There is no Restore, because nothing was left
+            behind, and no Delete on the only copy of your library. A real second copy appears only after Copy back now or pull, as Previous library, with the line “Snapshot from
+            6 Nov, 10:12 — 812 MB. This Mac used it before the copy came back.” It can be switched back to or deleted. Setup's export is separate and can only be deleted, because a
+            database dump can't rebuild the stored files. An install with nothing to copy has no rows at all.
           </p>
         </div>
         <div className="flex flex-col gap-1.5">
           <p className="text-[15px] font-medium">Delete cloud resources</p>
           <p className="text-[15px] leading-[1.6] text-muted-foreground">
             Separate, destructive and never offered inside the turn-off dialog. Removes the Worker, database, key-value store and bucket after you type the library's address. The local
-            library and snapshot are untouched.
+            library and any previous library are untouched.
           </p>
         </div>
         <div className="flex flex-col gap-1.5">
@@ -547,8 +548,8 @@ function ConnectSection() {
           lines={['{ "mcp": { "snip": { "type": "remote", "url": "http://localhost:5173/mcp" } } }']}
         />
         <p className="text-sm leading-[1.6] text-muted-foreground">
-          For Claude.ai or Claude Desktop, add a custom connector with the same URL. In cloud mode, use your deployed URL in every command and connector above, and keep GitHub sign-in on
-          with at least your own login listed: a cloud client authorizes through GitHub, while you sign in with your passkey.
+          For Claude.ai or Claude Desktop, add a custom connector with the same URL. In cloud mode, use your deployed URL in every command and connector above: the client signs
+          in with your passkey when it connects, then asks for your approval.
         </p>
       </div>
       <div className="grid max-w-[760px] grid-cols-1 items-start gap-6 md:grid-cols-2">
@@ -579,7 +580,7 @@ function LimitsSection() {
   ]
   const limits = [
     ["Local storage", "Only limited by your disk. Every capture is a file in the library folder, and the account menu shows the bytes used."],
-    ["Sign-in", "None locally: DEV_LOGIN names you. Cloud mode signs you in with a passkey at /sign-in; GitHub is optional and only needed for a second person or a cloud MCP client."],
+    ["Sign-in", "None locally: DEV_LOGIN names you. Cloud mode signs you in with a passkey at /sign-in. There is one owner in this version; sharing with a second person is planned for later."],
     ["Address", "Cloud mode uses https://snip.<your-subdomain>.workers.dev. Custom domains are not supported in this release."],
     ["Page height", "Full-page screenshots stop at 16,000 px, Chromium’s texture limit."],
     ["Crawl scope", "Crawls stay on one hostname, with or without www, and ignore query strings."],

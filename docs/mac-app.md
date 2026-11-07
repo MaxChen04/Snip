@@ -20,9 +20,13 @@ The app runs this repo in place; `npm run update` keeps its web build and the ap
 
 ## Settings and cloud mode
 
-**Snip → Settings** (also in the menu-bar menu) opens a small window that stays available in both modes. Its **Cloud** tab holds **Enable cloud**, the snapshot row, **Copy back now**, **Turn off cloud**, **Sign out all devices** and **Delete cloud resources**. After adopting a library that was already deployed, the local row is instead **This Mac's library**, with one action, **Switch back to it**, and no Restore or Delete.
+**Snip → Settings** (also in the menu-bar menu) opens a small window that stays available in both modes. In local mode its **Cloud** tab offers **Enable cloud** beside this Mac's library, shows any **Previous library** left by a copy-back, and can hand the job to an agent with **Copy prompt**.
 
-In cloud mode the main window is the cloud gallery and no longer has the local preload bridge; Settings stays reachable from the menu bar, and its Cloud tab shows the cloud address, the install steps and the pre-cloud snapshot. Capture stays on this Mac and is pointed at the cloud library. Passkeys and devices are managed in the browser at `/passkeys`, linked from Settings. [Cloud mode](deploy.md) explains what moves, the Cloudflare approvals, turning it off and the command-line path.
+In cloud mode the same tab is organised as panels: **Cloud library** with the address, **This Mac's library**, **Previous library** and **Export** rows; **Access** with **Passkeys** and **Sign out all devices**; **Turn off cloud**; **Let your agent do it**; and **Delete cloud resources**. The local row is **This Mac's library** with one action, **Switch back to it**, because enabling cloud never moves it; **Previous library** appears only after **Copy back now** or `pull`, and **Export** is setup's dump, which can only be deleted. Adopting a library that was deployed earlier lands in the same shape. [Cloud mode](deploy.md#what-settings-lists) lists every row and its actions.
+
+The main window is the cloud gallery in cloud mode and no longer has the local preload bridge; Settings stays reachable from the menu bar, and its Cloud tab shows the cloud address, the install steps and the local rows. Capture stays on this Mac and is pointed at the cloud library. Passkeys and devices are managed in the browser at `/passkeys`, linked from Settings. [Cloud mode](deploy.md) explains what moves, the Cloudflare approvals, turning it off and the command-line path.
+
+An instance that was set up by an earlier version and already has GitHub credentials reports a **GitHub sign-in** row in **Access**; a new install never configures GitHub and never shows it.
 
 ## Release app and updates
 

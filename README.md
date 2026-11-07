@@ -23,7 +23,7 @@ cp capture/.env.example capture/.env      # SNIP_URL stays http://localhost:5173
 npm run app                              # builds Snip.app and installs it in /Applications
 ```
 
-Open **Snip** from Applications or the menu bar. Paste a URL, pick **Single page** or **Crawl site**, and the capture agent starts working. `npm run doctor` checks both config files if something looks off.
+Open **Snip** from Applications or the menu bar. Paste a URL, pick **Single page** or **Crawl site**, and the capture agent starts working. `npm run doctor` checks the checkout, the two config files and the capture browser if something looks off; add `--check` to have it ask the cloud library whether it answers.
 
 Prefer a terminal and hot reload? Run `npm run dev`, then `npm run capture` in a second terminal, and open http://localhost:5173.
 
@@ -36,9 +36,11 @@ In Snip.app, open **Settings → Cloud → Enable cloud**. The app says what wil
 1. **Sign in and Allow.** Your browser opens on Cloudflare. Pick the account that should own the library.
 2. **Turn on R2** if it has never been used there. Cloudflare asks for a card once; storage is still free up to 10 GB. Snip waits while you do it.
 
-Snip creates the Worker, database, key-value store and bucket, deploys, copies the library and checks the result. A one-time owner link then opens in your browser and registers a passkey (Touch ID), which signs Snip.app back in. There are no IDs to copy, no secrets to paste and no GitHub OAuth app to create.
+Snip creates the Worker, database, key-value store and bucket, deploys, copies the library and checks the result. A one-time owner link then opens in your browser and registers a passkey (Touch ID), which signs Snip.app back in. There are no IDs to copy and no secrets to paste.
 
-After that, every other browser or device signs in at **/sign-in** with its passkey; **Passkeys and devices** in the account menu adds or removes them. A passkey is owner-only, not an invitation: a second person signs in with GitHub.
+After that, every other browser or device signs in at **/sign-in** with its passkey; **Passkeys and devices** in the account menu adds or removes them.
+
+**One owner in this version.** The person who enabled cloud is the only person who can sign in, on their own devices. Sharing a library with a second person is planned for later, so there is no invitation, no allowlist and no second account to set up. Nothing in the setup asks for GitHub.
 
 Capture stays on this Mac. A capture started from another device waits in the queue and shows **Waiting for your Mac** until this Mac's capture agent checks in. The gallery card and every agent status use those exact words, whether the agent is busy or the Mac is asleep.
 
@@ -58,15 +60,20 @@ Each line of output is a JSON event. A `human` event carries a URL that only a p
 The bare `npm run setup:cloudflare` means `setup`. Add any other command after `--`:
 
 ```bash
-npm run setup:cloudflare -- status --json
+npm run setup:cloudflare -- status --json          # mode, URL, snapshot, last error; offline
+npm run setup:cloudflare -- status --check --json  # also ask the cloud library whether it answers
 npm run setup:cloudflare -- detach --json
 npm run setup:cloudflare -- pull --json
+npm run setup:cloudflare -- snapshot delete --confirm <basename>
+npm run setup:cloudflare -- snapshot delete-export --confirm <basename>
 npm run setup:cloudflare -- delete-resources --confirm snip.<your-subdomain>.workers.dev
 ```
 
+`status` never calls the network; `--check` is the one form that does, and then it says which surface answered. `--confirm` is the basename of the item being deleted (for `delete-resources`, the cloud URL's host), and a missing or different value changes nothing.
+
 ### Turning cloud off
 
-**Settings → Cloud → Turn off cloud** points this Mac back at the copy from before the move. The cloud library is **not** deleted: it stays live at its address, and devices and agents signed in to it keep working. The dialog says that, and offers **Bring the cloud library back to this Mac** (or **Copy back now** later) to copy the cloud library down first.
+**Settings → Cloud → Turn off cloud** points this Mac back at its own local library, which stayed on disk the whole time. The cloud library is **not** deleted: it stays live at its address, and devices and agents signed in to it keep working. The dialog says that, and offers **Bring the cloud library back to this Mac** (or **Copy back now** later) to copy the cloud library down first.
 
 **Delete cloud resources** is separate and destructive. **Sign out all devices** ends every browser session and the app's session. Passkeys stay registered, and agents connected over MCP keep their own tokens until those expire.
 
@@ -76,7 +83,9 @@ Snip keeps one library per Cloudflare account. An empty older Snip is adopted si
 
 The address is always `https://snip.<your-subdomain>.workers.dev`. Custom domains are not supported in this release: the address is what the passkey and MCP connections are bound to.
 
-GitHub sign-in is optional. You sign in with your passkey; GitHub is how a second person, or a cloud MCP client, authorizes. The app registers it in one click, and the manual OAuth App steps are gone.
+**One owner, passkeys only.** You sign in with a passkey on each device you use, and so does an agent you connect to the cloud address. Sharing with a second person is planned for later, so v1 has no allowlist to maintain and no OAuth app to register.
+
+Installs that were set up before this version and already have GitHub sign-in configured keep working: their secrets are left in place and their extra GitHub logins can still sign in. A new install never configures GitHub.
 
 ## What it captures
 
@@ -143,7 +152,7 @@ Cloud mode deploys the same Worker to your own Cloudflare account and copies the
 
 ## Connect your agent (MCP)
 
-The MCP endpoint is `http://localhost:5173/mcp` when Snip runs on your Mac, and `https://snip.<your-subdomain>.workers.dev/mcp` in cloud mode. Locally, only agents on the same Mac can reach it while Snip is running. Cloud clients such as Claude.ai need the deployed URL and a GitHub sign-in; locally there is no sign-in, just a consent screen.
+The MCP endpoint is `http://localhost:5173/mcp` when Snip runs on your Mac, and `https://snip.<your-subdomain>.workers.dev/mcp` in cloud mode. Locally, only agents on the same Mac can reach it while Snip is running. A cloud client such as Claude.ai needs the deployed URL, then signs in with your passkey and asks for your approval; locally there is no sign-in, just a consent screen.
 
 ```bash
 claude mcp add --transport http snip http://localhost:5173/mcp
@@ -162,7 +171,7 @@ OpenCode (`~/.config/opencode/opencode.json` or a project `opencode.json`; note 
 { "mcp": { "snip": { "type": "remote", "url": "http://localhost:5173/mcp" } } }
 ```
 
-For Claude.ai or Claude Desktop, add it as a custom connector with the same URL. In cloud mode, use your deployed URL in every command and connector above, and keep GitHub sign-in on with at least your own login listed.
+For Claude.ai or Claude Desktop, add it as a custom connector with the same URL. In cloud mode, use your deployed URL in every command and connector above; the client signs in with your passkey when it connects.
 
 <img src="docs/media/connect-mcp.png" alt="Connect MCP dialog" width="420">
 
@@ -223,10 +232,10 @@ npm run dev                                       # http://localhost:5173
 # second terminal
 cp capture/.env.example capture/.env              # SNIP_URL=http://localhost:5173, CAPTURE_TOKEN from .dev.vars
 npm run capture
-npm run doctor                                    # checks the setup
+npm run doctor                                    # offline checks, plus --check to probe the cloud library
 ```
 
-`DEV_LOGIN` in `web/.dev.vars` replaces GitHub sign-in on localhost, so the app never asks you to log in while you work. It is the name you appear as. Never set it on a deployed Worker. [Snip.app](docs/mac-app.md) runs this same checkout as a menu-bar app.
+`DEV_LOGIN` in `web/.dev.vars` skips sign-in on localhost, so the app never asks you to log in while you work. It is the name you appear as. Never set it on a deployed Worker. [Snip.app](docs/mac-app.md) runs this same checkout as a menu-bar app.
 
 ## Updating
 
