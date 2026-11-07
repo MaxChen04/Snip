@@ -5,7 +5,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { CancelledError, NeedsInputError, StepError } = require('./engine.cjs');
+const { CancelledError, NeedsInputError, StepError, runSteps } = require('./engine.cjs');
 const state = require('./state.cjs');
 const cloud = require('./cloud.cjs');
 const deploy = require('./deploy.cjs');
@@ -86,20 +86,34 @@ async function commandPull(ctx) {
   ctx.reload();
   const record = requireCloud(ctx);
   if (!record.accountId) throw new StepError('NOT_PROVISIONED', 'This cloud install is incomplete.', { hint: 'Run `setup` again, or use Settings → Cloud.' });
-  const token = ctx.transferToken() || ctx.secrets()?.transferToken;
-  if (!token) {
-    throw new StepError('TRANSFER_TOKEN_MISSING', 'This Mac no longer holds the transfer credential for its cloud library.', {
-      hint: 'Run `owner rotate` from the Mac that set the library up, or enable cloud again.',
-    });
-  }
 
   const stagedRoot = path.join(ctx.dataRoot, 'backups', `pull-${NOW().replace(/[:.]/g, '-')}`);
   const stagedState = path.join(stagedRoot, 'state');
-  // pull mints its own transfer token; finish deleted the setup one.
-  if (!ctx.transferToken() && deploy.configExists(ctx.dataRoot)) {
+  // pull mints its own transfer token: setup deletes it at the end of a move,
+  // so a detached install holds no credential until a pull needs one.
+  if (!ctx.transferToken()) {
+    if (!deploy.configExists(ctx.dataRoot)) {
+      throw new StepError('TRANSFER_TOKEN_MISSING', 'This Mac has no cloud deploy configuration to pull with.', {
+        hint: 'Run `setup` once from this library, then `pull`.',
+      });
+    }
     const minted = randomSecret();
     await cloud.putSecrets(ctx.wrangler, { dataRoot: ctx.dataRoot, accountId: record.accountId, secrets: { TRANSFER_TOKEN: minted } });
     ctx.setTransferToken(minted);
+    // A secret write is not instantly live at the edge; wait for the new token
+    // to answer instead of reporting the library as closed.
+    const deadline = Date.now() + 30_000;
+    let ready = false;
+    while (!ready && Date.now() < deadline) {
+      ctx.checkCancel();
+      ready = Boolean(await ctx.transfer().status().catch(() => null));
+      if (!ready) await new Promise((resolve) => setTimeout(resolve, 1500));
+    }
+    if (!ready) {
+      throw new StepError('TRANSFER_DISABLED', 'The cloud library did not accept the new transfer credential.', {
+        hint: 'Deploy the latest Snip Worker from Settings, then run `pull` again.',
+      });
+    }
   }
   const steps = pullSteps({ stagedRoot, stagedState });
   await runSteps(steps, ctx);
@@ -108,7 +122,7 @@ async function commandPull(ctx) {
     ok: true,
     code: 'OK',
     mode: 'local',
-    data: { stagedRoot: path.relative(ctx.dataRoot, stagedRoot), keptAt: ctx.state().cloud?.snapshot?.path || null },
+    data: { stagedRoot: path.relative(ctx.dataRoot, stagedRoot), keptAt: ctx.state().snapshot?.path || null },
     message: 'The cloud library was copied back to this Mac.',
   };
 }
@@ -133,9 +147,12 @@ function pullSteps({ stagedRoot, stagedState }) {
       }
       if (deploy.runtimeProblem(ctx.root)) throw new StepError('NO_BUILD', deploy.runtimeProblem(ctx.root).message, { hint: deploy.runtimeProblem(ctx.root).hint });
       fs.mkdirSync(stagedRoot, { recursive: true, mode: 0o700 });
+      // The checks are cheap and must run again on a resumed pull, so the mark
+      // lives in this invocation's work, never in the step journal.
+      ctx.setWork({ pullPreflight: true });
       return { message: 'Ready' };
     },
-    async verify() { return true; },
+    async verify(ctx) { return Boolean(ctx.work.pullPreflight); },
   };
 
   const manifestStep = {
@@ -195,9 +212,13 @@ function pullSteps({ stagedRoot, stagedState }) {
         void statement;
       }
       void columns;
-      await deploy.applyMigrations(ctx.wrangler, { dataRoot: ctx.dataRoot, accountId: record.accountId, remote: false, local: true, persistTo: stagedState });
+      // The staged copy must land under the identity the local app itself opens:
+      // the cloud deploy config names a different database id, so importing with
+      // it would leave the swapped-in data in a file the app never reads.
+      const localConfig = (await ctx.libraryFacts()).localConfig || deploy.localConfigPath(ctx.dataRoot);
+      await deploy.applyMigrations(ctx.wrangler, { dataRoot: ctx.dataRoot, accountId: record.accountId, remote: false, local: true, persistTo: stagedState, config: localConfig });
       const { importLocal } = require('./deploy.cjs');
-      await importLocal(ctx.wrangler, { dataRoot: ctx.dataRoot, persistTo: stagedState, statements, tables, config: deploy.configPath(ctx.dataRoot) });
+      await importLocal(ctx.wrangler, { dataRoot: ctx.dataRoot, persistTo: stagedState, statements, tables, config: localConfig });
       ctx.setWork({ pullStagedState: stagedState });
       return { message: 'Database loaded into a new library' };
     },
@@ -260,12 +281,13 @@ function pullVerifyStep({ stagedState, manifest }) {
       const tables = (manifest.value && manifest.value.tables) || {};
       const dump = path.join(path.dirname(stagedState), 'dump.sql');
       const columns = require('./lib.cjs').columnsFromDump(fs.readFileSync(dump, 'utf8'));
+      const localConfig = (await ctx.libraryFacts()).localConfig || deploy.localConfigPath(ctx.dataRoot);
       const remotePerTable = {};
       const localPerTable = {};
       for (const table of Object.keys(tables)) {
         const sql = require('./lib.cjs').digestSql(table, columns[table] || []);
         const remoteRow = (await deploy.remoteQuery(ctx.wrangler, { dataRoot: ctx.dataRoot, accountId: record.accountId, sql }))[0] || {};
-        const localRow = (await deploy.localQuery(ctx.wrangler, { dataRoot: ctx.dataRoot, sql, config: deploy.configPath(ctx.dataRoot), persistTo: stagedState }))[0] || {};
+        const localRow = (await deploy.localQuery(ctx.wrangler, { dataRoot: ctx.dataRoot, sql, config: localConfig, persistTo: stagedState }))[0] || {};
         remotePerTable[table] = { rows: Number(remoteRow.rows) || 0, sig: Number(remoteRow.sig) || 0 };
         localPerTable[table] = { rows: Number(localRow.rows) || 0, sig: Number(localRow.sig) || 0 };
         if (remotePerTable[table].rows !== localPerTable[table].rows) {
@@ -283,14 +305,19 @@ function pullVerifyStep({ stagedState, manifest }) {
       if (Number(tables.refs || 0) > 0 && keys.length === 0) {
         throw new StepError('EXPORT_EMPTY', 'The cloud library reports references but no files.', { hint: 'Check the cloud library in a browser, then run `pull` again.' });
       }
-      let present = 0;
-      for (const entry of keys) {
-        const response = await withLocalWorker({ root: ctx.root, dataRoot: ctx.dataRoot, token: randomSecret(), persist: stagedState, log: () => {} }, async (handle) => handle.transfer.head(entry.key));
-        if (response === null) {
-          throw new StepError('VERIFY_FILES_MISSING', 'A file did not arrive in the downloaded copy.', { data: { key: entry.key } });
+      // One worker for the whole check: starting one per key would take minutes.
+      const present = await withLocalWorker({ root: ctx.root, dataRoot: ctx.dataRoot, token: randomSecret(), persist: stagedState, log: () => {} }, async (handle) => {
+        let seen = 0;
+        for (const entry of keys) {
+          ctx.checkCancel();
+          const response = await handle.transfer.head(entry.key);
+          if (response === null) {
+            throw new StepError('VERIFY_FILES_MISSING', 'A file did not arrive in the downloaded copy.', { data: { key: entry.key } });
+          }
+          seen++;
         }
-        present++;
-      }
+        return seen;
+      });
       ctx.setWork({ pullVerified: { digest: remoteDigest, keys: present, tables } });
       return { message: `${present} file${present === 1 ? '' : 's'}, all verified`, detail: remoteDigest };
     },

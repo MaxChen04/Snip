@@ -11,6 +11,12 @@ const { patchDeployConfig, BUCKET_NAME } = require('./lib.cjs');
 
 const cloudDir = (dataRoot) => path.join(dataRoot, 'cloud');
 const configPath = (dataRoot) => path.join(cloudDir(dataRoot), 'snip/wrangler.json');
+/** The config the local app opens its own library with (never the cloud one). */
+function localConfigPath(dataRoot) {
+  const local = path.join(dataRoot, 'web/wrangler.local.jsonc');
+  if (fs.existsSync(local)) return local;
+  return path.join(dataRoot, 'web/wrangler.jsonc');
+}
 
 function runtimeSources(root) {
   return {
@@ -141,8 +147,8 @@ async function dryRunDeploy(wrangler, { dataRoot, accountId, outdir }) {
   return wrangler.run(args, { cwd: path.dirname(file), env: { CLOUDFLARE_ACCOUNT_ID: accountId } });
 }
 
-async function applyMigrations(wrangler, { dataRoot, accountId, remote = true, local = false, persistTo }) {
-  const file = configPath(dataRoot);
+async function applyMigrations(wrangler, { dataRoot, accountId, remote = true, local = false, persistTo, config }) {
+  const file = config || configPath(dataRoot);
   const args = ['d1', 'migrations', 'apply', 'DB', '--config', file];
   if (remote) args.push('--remote');
   if (local) args.push('--local');
@@ -217,6 +223,24 @@ async function exportLocal(wrangler, { dataRoot, output, config }) {
   return output;
 }
 
+
+/**
+ * A dump carries bookkeeping the destination already has or never had:
+ * `sqlite_sequence` does not exist in a fresh database, and the migration
+ * ledger is written by applying migrations first. Replaying either aborts the
+ * whole batch on a missing table or a primary-key clash, so those rows are
+ * dropped at import. Everything else the move copies is imported verbatim.
+ */
+function libraryStatements(statements) {
+  return statements.filter((statement) => {
+    const match = statement.match(/^\s*(?:INSERT\s+INTO|DELETE\s+FROM|UPDATE)\s+"?([A-Za-z0-9_]+)"?/i);
+    if (!match) return false;
+    const table = match[1];
+    if (/^(sqlite_|_cf_|_mf_|__)/i.test(table)) return false;
+    return table !== 'd1_migrations';
+  });
+}
+
 /**
  * Write one batch to a private file and return its path. `wrangler d1 execute`
  * has no stdin form (`--file -` is rejected as an unknown argument), so every
@@ -235,7 +259,7 @@ function stageBatch(dataRoot, index, sql) {
 async function importRemote(wrangler, { dataRoot, accountId, statements, batchBytes = 900_000, onBatch }) {
   const file = configPath(dataRoot);
   const { batchStatements } = require('./lib.cjs');
-  const batches = batchStatements(statements, batchBytes);
+  const batches = batchStatements(libraryStatements(statements), batchBytes);
   const staged = [];
   try {
     for (let index = 0; index < batches.length; index++) {
@@ -269,7 +293,7 @@ async function importRemote(wrangler, { dataRoot, accountId, statements, batchBy
  */
 async function importLocal(wrangler, { dataRoot, persistTo, statements, config }) {
   const { batchStatements } = require('./lib.cjs');
-  const batches = batchStatements(statements);
+  const batches = batchStatements(libraryStatements(statements));
   const defaultConfig = config || configPath(dataRoot);
   for (let index = 0; index < batches.length; index++) {
     const sql = `${batches[index].join(';\n')};`;
@@ -288,6 +312,7 @@ async function importLocal(wrangler, { dataRoot, persistTo, statements, config }
 
 module.exports = {
   applyMigrations,
+  libraryStatements,
   bucketName: BUCKET_NAME,
   classifyWranglerFailure,
   cloudDir,
@@ -300,6 +325,7 @@ module.exports = {
   importRemote,
   inspectRuntime,
   listMigrations,
+  localConfigPath,
   localQuery,
   prepareDeployLayout,
   readDeployConfig,

@@ -1379,3 +1379,20 @@ test('step messages name an adopted library, not an empty one', async () => {
   assert.equal(await step.skip(ctx), true);
   assert.match(step.skipMessage(ctx), /existing cloud library/);
 });
+
+test('imports drop SQLite internals a fresh database does not have', () => {
+  const statements = [
+    'PRAGMA defer_foreign_keys=TRUE;',
+    "INSERT INTO \"refs\" (id) VALUES ('a')",
+    "INSERT INTO \"sqlite_sequence\" (name, seq) VALUES ('refs', 7)",
+    "DELETE FROM \"_cf_METADATA\"",
+    "INSERT INTO \"owners\" (id) VALUES ('c')",
+    "INSERT INTO \"d1_migrations\" (id, name) VALUES (1, '0001_init.sql')",
+    "INSERT INTO \"sessions\" (id) VALUES ('b')",
+  ];
+  assert.deepEqual(deploy.libraryStatements(statements), [
+    "INSERT INTO \"refs\" (id) VALUES ('a')",
+    "INSERT INTO \"owners\" (id) VALUES ('c')",
+    "INSERT INTO \"sessions\" (id) VALUES ('b')",
+  ]);
+});
