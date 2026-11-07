@@ -30,7 +30,6 @@ const {
 const cloud = require('./cloud.cjs');
 const deploy = require('./deploy.cjs');
 const local = require('./local.cjs');
-const { withLocalWorker } = require('./library.cjs');
 const { mintOwnerLink, ownerSecretHash, startLoopback } = require('./transfer.cjs');
 
 const ENABLE_STEPS = [
