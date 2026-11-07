@@ -14,6 +14,7 @@ const windowOrigin = require("./window-origin.cjs")
 const { readCloudState, cloudMode, selectCaptureEnvFile, keepLocalCaptureEnv } = require("./cloud-state.cjs")
 const { engineAvailable, runEngine } = require("./cloud-engine.cjs")
 const { sessionCookie, externalUrl } = require("./cloud-session.cjs")
+const { snapshotFlags } = require("./cloud-confirm.cjs")
 const { resolveSettingsAsset, contentType, settingsUrl, SETTINGS_ORIGIN } = require("./settings-assets.cjs")
 
 // Settings is a static Vite bundle served from the app, so it keeps working while the
@@ -612,11 +613,9 @@ function registerCloudIpc() {
   ipcMain.handle("snip:cloud-snapshot", guard(payload => {
     // `delete-export` is a separate action because setup's dump is not a backup: it can
     // never be swapped in, so it is delete-only (contracts §1.11).
-    if (!["restore", "delete", "delete-export"].includes(payload.action)) return { error: "Unknown snapshot action." }
-    // A backup delete needs the directory name as its confirmation.
-    const confirm = payload.action === "delete" ? path.basename(String(cloudState?.snapshot?.path ?? "")) : undefined
-    if (payload.action === "delete" && !confirm) return { error: "There is no previous library to delete." }
-    return startCloudRun("snapshot", confirm ? { confirm } : {}, payload.action)
+    const reply = snapshotFlags(payload.action, payload.confirm)
+    if (!reply.ok) return { error: reply.error, code: reply.code }
+    return startCloudRun("snapshot", reply.flags, payload.action)
   }))
 }
 registerCloudIpc()

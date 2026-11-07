@@ -5,6 +5,7 @@ import { cn } from "cn"
 import logo from "../../public/logo.png"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import {
   ArrowUpRightIcon,
   CheckIcon,
@@ -26,7 +27,7 @@ import {
 } from "@/components/icons"
 import { Meta, Panel, Row, references } from "./bits"
 import { AbortSetupDialog, DeleteResourcesDialog, EnableDialog, ExportDeleteDialog, SignOutDialog, SnapshotDeleteDialog, TurnOffDialog, type TurnOffChoice } from "./dialogs"
-import { formatBytes, hostOf, shortDate, snapshotLabel, snapshotPhrase } from "./format"
+import { dirName, formatBytes, hostOf, shortDate, snapshotLabel, snapshotPhrase } from "./format"
 import { copyText, pullPrompt, setupPrompt } from "./prompts"
 import { commandFor, stepTitle, stepsFor } from "./steps"
 import type { CloudRecord } from "./types"
@@ -84,14 +85,16 @@ export function SettingsApp() {
   }
 
   const confirmSnapshotDelete = async () => {
+    const name = dirName(cloud.snapshotRecord?.path)
     setDialog(null)
-    await cloud.begin(() => cloud.bridge!.snapshot("delete"))
+    await cloud.begin(() => cloud.bridge!.snapshot("delete", name))
   }
 
   const confirmExportDelete = async () => {
+    const name = dirName(cloud.snapshotRecord?.export?.path)
     setDialog(null)
     // The export is delete-only; there is no restore path for it by design.
-    await cloud.begin(() => cloud.bridge!.snapshot("delete-export"))
+    await cloud.begin(() => cloud.bridge!.snapshot("delete-export", name))
   }
 
   const signOut = async () => {
@@ -568,10 +571,25 @@ function ProgressView({
 
       {cloud.choice ? (
         <ChoiceCard choice={cloud.choice} onAdopt={onAdopt} onStop={onStopChoice} />
+      ) : cloud.needed ? (
+        <NeedsInputCard
+          needed={cloud.needed}
+          onContinue={async values => {
+            for (const [key, value] of Object.entries(values)) await cloud.bridge!.answer(key, value)
+            await cloud.begin(() => cloud.bridge!.retryStep(""))
+          }}
+          onCancel={cloud.clearNeeded}
+        />
       ) : cloud.action ? (
         <HumanActionCard action={cloud.action} onOpen={url => void cloud.bridge?.openUrl(url)} />
       ) : null}
-      {error && !cloud.choice ? <ErrorCard error={error} onRetry={() => void cloud.begin(() => cloud.bridge!.retryStep(error.step ?? ""))} /> : null}
+      {error && !cloud.choice ? (
+        <ErrorCard
+          error={error}
+          onRetry={() => void cloud.begin(() => cloud.bridge!.retryStep(error.step ?? ""))}
+          onRefresh={() => void cloud.refresh()}
+        />
+      ) : null}
 
       <ol className="flex flex-col">
         {ids.map(id => {
@@ -605,7 +623,7 @@ function ProgressView({
             <Button variant="ghost" size="sm" onClick={() => void cloud.bridge?.cancel()}>
               Cancel
             </Button>
-          ) : !cloud.choice ? (
+          ) : !cloud.choice && !cloud.needed ? (
             <>
               <Button variant="outline" size="sm" onClick={onResume}>
                 Resume
@@ -696,6 +714,58 @@ function ChoiceCard({ choice, onAdopt, onStop }: { choice: NonNullable<ReturnTyp
   )
 }
 
+/**
+ * `needs_input` is terminal: the engine does not read stdin. Ask here, then re-run;
+ * completed steps re-verify in seconds, so re-entry is cheap.
+ */
+function NeedsInputCard({
+  needed,
+  onContinue,
+  onCancel,
+}: {
+  needed: NonNullable<ReturnType<typeof useCloud>["needed"]>
+  onContinue: (values: Record<string, string>) => Promise<void>
+  onCancel: () => void
+}) {
+  const [values, setValues] = useState<Record<string, string>>({})
+  useEffect(() => {
+    setValues({})
+  }, [needed])
+  const ready = needed.every(entry => (values[entry.key] ?? "").trim().length > 0)
+  return (
+    <div className="rounded-xl bg-card p-4 shadow-[inset_0_0_0_1px_var(--ink-6)]">
+      <p className="flex items-start gap-2 text-sm leading-5">
+        <InfoIcon className="mt-0.5 size-4 shrink-0 text-ink-10" />
+        Snip needs one more thing before it can continue.
+      </p>
+      <div className="mt-3 flex flex-col gap-2.5">
+        {needed.map(entry => (
+          <label key={entry.key} className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium text-muted-foreground">{entry.label}</span>
+            <Input
+              autoFocus={entry === needed[0]}
+              type={entry.secret ? "password" : "text"}
+              value={values[entry.key] ?? ""}
+              onChange={event => setValues(current => ({ ...current, [entry.key]: event.target.value }))}
+              spellCheck={false}
+              autoComplete="off"
+              aria-label={entry.label}
+            />
+          </label>
+        ))}
+      </div>
+      <div className="mt-3 flex items-center justify-end gap-1.5">
+        <Button variant="ghost" size="sm" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button size="sm" disabled={!ready} onClick={() => void onContinue(values)}>
+          Continue
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 function HumanActionCard({ action, onOpen }: { action: NonNullable<ReturnType<typeof useCloud>["action"]>; onOpen: (url: string) => void }) {
   const r2 = action.action === "enable_r2"
   return (
@@ -717,7 +787,8 @@ function HumanActionCard({ action, onOpen }: { action: NonNullable<ReturnType<ty
   )
 }
 
-function ErrorCard({ error, onRetry }: { error: NonNullable<ReturnType<typeof useCloud>["error"]>; onRetry: () => void }) {
+function ErrorCard({ error, onRetry, onRefresh }: { error: NonNullable<ReturnType<typeof useCloud>["error"]>; onRetry: () => void; onRefresh: () => void }) {
+  const stale = error.code === "CONFIRM_MISSING" || error.code === "CONFIRM_MISMATCH"
   return (
     <div className="rounded-xl bg-(--red-3) px-4 py-3.5">
       <p className="flex items-center gap-2 text-sm leading-5 text-(--red-11)">
@@ -725,8 +796,15 @@ function ErrorCard({ error, onRetry }: { error: NonNullable<ReturnType<typeof us
         {error.message}
       </p>
       {error.hint ? <p className="mt-1 text-xs leading-[1.5] text-ink-11">{error.hint}</p> : null}
-      {/* A preflight refusal that retrying cannot fix gets an explanation, not a button. */}
-      {error.retryable === false ? null : (
+      {/* A stale record is fixed by reading it again, not by repeating the same request. */}
+      {stale ? (
+        <div className="mt-2.5">
+          <Button size="sm" variant="outline" onClick={onRefresh}>
+            <RefreshCwIcon data-icon="inline-start" />
+            Refresh
+          </Button>
+        </div>
+      ) : error.retryable === false ? null : (
         <div className="mt-2.5">
           <Button size="sm" variant="outline" onClick={onRetry}>
             <RefreshCwIcon data-icon="inline-start" />

@@ -188,7 +188,8 @@ export interface CloudBridge {
   openUrl(url: string): Promise<{ opened: boolean }>
   signOutAll(): Promise<{ ok?: true; epoch?: number; error?: string }>
   deleteResources(confirm: string): Promise<CloudReply>
-  snapshot(action: "restore" | "delete" | "delete-export"): Promise<CloudReply>
+  /** `confirm` is the basename of the directory being deleted: a stale-record interlock. */
+  snapshot(action: "restore" | "delete" | "delete-export", confirm?: string): Promise<CloudReply>
   onProgress(callback: (event: EngineEvent) => void): () => void
   onLog(callback: (entry: { level: "info" | "warn" | "error"; message: string }) => void): () => void
 }

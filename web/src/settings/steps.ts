@@ -3,7 +3,9 @@ const ORDER: Record<string, string[]> = {
   setup: [
     // guard classifies the account before anything is created (contracts v3.10 §1.5).
     "preflight", "cloudflare-auth", "account", "url", "r2", "guard", "resources", "config",
-    "schema", "deploy", "secrets", "quiesce", "export", "release", "import", "verify", "owner", "finish",
+    // The local server stops before the library is read: export starts its own Worker
+    // on the quiescent persist dir (contracts §1.8).
+    "schema", "deploy", "secrets", "quiesce", "release", "export", "import", "verify", "owner", "finish",
   ],
   pull: [
     "pull-preflight", "pull-manifest", "pull-d1", "pull-stage", "pull-files",

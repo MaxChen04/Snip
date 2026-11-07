@@ -92,6 +92,43 @@ test("cancel sends SIGINT exactly once the child is alive", () => {
   assert.equal(run.cancelled, true)
 })
 
+test("a snapshot delete without the rendered basename stops before deleting", async t => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "snip-cloud-confirm-"))
+  t.after(() => fs.rmSync(dataRoot, { recursive: true, force: true }))
+  fs.mkdirSync(path.join(dataRoot, ".snip"), { recursive: true })
+  const state = {
+    version: 1, mode: "cloud", library: { id: "x" }, cloud: { url: "https://snip.max.workers.dev" },
+    snapshot: { kind: "backup", path: "backups/replaced-2026-11-06T10-12-00", takenAt: "2026-11-06T10:12:00Z", refs: 42, files: 311, bytes: 1, keptLocal: false, export: null },
+    steps: [], error: null,
+  }
+  fs.writeFileSync(path.join(dataRoot, ".snip/cloud.json"), JSON.stringify(state))
+  const run = async flags => {
+    const events = []
+    const exit = await new Promise(resolve => {
+      runEngine({
+        appDir: APP, root: dataRoot, dataRoot, command: "snapshot", subcommand: "delete", flags,
+        baseEnv: { ...process.env }, env: { ...process.env, SNIP_CLOUD_ENGINE: FIXTURE, SNIP_FAKE_DELAY: "0" },
+        onEvent: event => events.push(event), onExit: resolve,
+      })
+    })
+    return { exit, events, result: events.at(-1) }
+  }
+
+  const missing = await run({})
+  assert.equal(missing.exit.code, 2)
+  assert.equal(missing.result.code, "NEEDS_INPUT")
+  assert.equal(missing.events.some(event => event.event === "needs_input" && event.keys[0].key === "confirm"), true)
+
+  const wrong = await run({ confirm: "some-other-directory" })
+  assert.equal(wrong.result.code, "FAILED")
+  assert.equal(wrong.result.data.code, "CONFIRM_MISMATCH")
+  assert.ok(JSON.parse(fs.readFileSync(path.join(dataRoot, ".snip/cloud.json"), "utf8")).snapshot, "the backup was kept")
+
+  const right = await run({ confirm: "replaced-2026-11-06T10-12-00" })
+  assert.equal(right.result.code, "OK")
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dataRoot, ".snip/cloud.json"), "utf8")).snapshot, null)
+})
+
 test("a real setup run speaks the contract and writes a usable cloud.json", async t => {
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "snip-cloud-engine-"))
   t.after(() => fs.rmSync(dataRoot, { recursive: true, force: true }))

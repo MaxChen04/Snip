@@ -52,6 +52,12 @@ export function snapshotPhrase(snapshot: SnapshotRecord | null): string | null {
   return `its library from ${day}, ${time}${size ? ` (${size})` : ""}`
 }
 
+/** The directory name the engine checks a delete against. Never built in main. */
+export function dirName(value: string | null | undefined): string {
+  if (!value) return ""
+  return value.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? ""
+}
+
 /** A short date for the detached row: "6 Nov". */
 export function shortDate(iso: string | null): string | null {
   return date(iso, { day: "numeric", month: "short" })

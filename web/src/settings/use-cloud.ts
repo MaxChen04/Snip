@@ -22,6 +22,11 @@ export interface Progress {
   total?: number
   unit?: string
 }
+export interface NeededInput {
+  key: string
+  label: string
+  secret: boolean
+}
 
 const EMPTY: CloudSnapshotState = { mode: "local", state: null, busy: false, running: null }
 
@@ -33,12 +38,18 @@ function resultMessage(code: string): string {
       return "Another Snip setup is already running."
     case "UNSUPPORTED":
       return "This Mac can’t run cloud setup yet."
+    case "CONFIRM_MISSING":
+    case "CONFIRM_MISMATCH":
+      // The record the person saw no longer matches what is on disk.
+      return "This item changed. Refresh and try again."
     case "FAILED":
       return "Setup stopped before it finished."
     default:
       return "Setup didn’t finish."
   }
 }
+
+const CONFIRM_CODES = new Set(["CONFIRM_MISSING", "CONFIRM_MISMATCH"])
 
 /**
  * One source of truth for Settings: a disk snapshot plus the live engine events.
@@ -52,6 +63,7 @@ export function useCloud(bridge = window.snipCloud) {
   const [progress, setProgress] = useState<Progress | null>(null)
   const [error, setError] = useState<CloudError | null>(null)
   const [choice, setChoice] = useState<EngineChoiceEvent | null>(null)
+  const [needed, setNeeded] = useState<NeededInput[] | null>(null)
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState<{ level: "info" | "warn" | "error"; message: string; id: number } | null>(null)
   const runId = useRef(0)
@@ -135,8 +147,19 @@ export function useCloud(bridge = window.snipCloud) {
         return
       }
       if (event.event === "needs_input") {
-        const label = event.keys?.[0]?.label ?? "one more choice"
-        setNote({ level: "warn", message: `Snip needs ${label} to continue.`, id: Date.now() })
+        // Terminal: the engine never reads stdin. Collect the value here and re-invoke.
+        const keys = (event.keys ?? [])
+          .filter(entry => entry && typeof entry.key === "string")
+          .map(entry => ({ key: entry.key, label: entry.label ?? entry.key, secret: entry.secret === true }))
+          .slice(0, 4)
+        if (keys.some(entry => entry.key === "confirm")) {
+          // `confirm` is never typed by a person: the record the shell rendered is stale.
+          setError({ step: null, code: "CONFIRM_MISMATCH", message: "This item changed. Refresh and try again.", hint: null, at: null, retryable: false })
+          setNeeded(null)
+        } else {
+          setNeeded(keys.length ? keys : null)
+        }
+        setBusy(false)
         return
       }
       if (event.event === "result") {
@@ -145,16 +168,21 @@ export function useCloud(bridge = window.snipCloud) {
         setProgress(null)
         if (!event.ok && event.code !== "CANCELLED") {
           const retryable = event.retryable !== false
-          setError(previous => previous
-            ? { ...previous, retryable }
-            : {
-                step: typeof event.data?.step === "string" ? event.data.step : null,
-                code: event.code,
-                message: typeof event.data?.message === "string" ? event.data.message : resultMessage(event.code),
-                hint: typeof event.data?.hint === "string" ? event.data.hint : null,
-                at: null,
-                retryable,
-              })
+          const code = typeof event.data?.code === "string" ? event.data.code : event.code
+          if (CONFIRM_CODES.has(code)) {
+            setError({ step: null, code, message: "This item changed. Refresh and try again.", hint: null, at: null, retryable: false })
+          } else {
+            setError(previous => previous
+              ? { ...previous, retryable }
+              : {
+                  step: typeof event.data?.step === "string" ? event.data.step : null,
+                  code,
+                  message: typeof event.data?.message === "string" ? event.data.message : resultMessage(code),
+                  hint: typeof event.data?.hint === "string" ? event.data.hint : null,
+                  at: null,
+                  retryable,
+                })
+          }
         }
         void refresh()
         // The child may still be exiting when the result lands; read the final mode once more.
@@ -178,6 +206,7 @@ export function useCloud(bridge = window.snipCloud) {
     setProgress(null)
     setError(null)
     setChoice(null)
+    setNeeded(null)
     setBusy(true)
     const reply = await call()
     if (reply?.error) {
@@ -203,12 +232,14 @@ export function useCloud(bridge = window.snipCloud) {
     steps,
     action,
     choice,
+    needed,
     progress,
     error,
     note,
     refresh,
     begin,
     clearChoice: () => setChoice(null),
+    clearNeeded: () => setNeeded(null),
     clearNote: () => setNote(null),
   }
 }

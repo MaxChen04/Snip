@@ -62,8 +62,9 @@ const SETUP_STEPS = [
   ["deploy", "Deploy your Snip"],
   ["secrets", "Set the cloud secrets"],
   ["quiesce", "Pause captures"],
-  ["export", "Read this Mac's library"],
+  // The local server stops first; export starts its own Worker on the quiescent dir.
   ["release", "Stop the local server"],
+  ["export", "Read this Mac's library"],
   ["import", "Copy the library to Cloudflare"],
   ["verify", "Check every reference arrived"],
   ["owner", "Sign this Mac in"],
@@ -149,7 +150,7 @@ async function setup() {
       await step(id, title)
       continue
     }
-    if (empty && ["quiesce", "export", "release", "import", "verify"].includes(id)) {
+    if (empty && ["quiesce", "release", "export", "import", "verify"].includes(id)) {
       skip(id)
       continue
     }
@@ -287,6 +288,22 @@ async function deleteResources() {
 async function snapshot() {
   const action = ["delete", "delete-export"].includes(argv[1]) ? argv[1] : "restore"
   const state = readState()
+  // delete and delete-export carry a basename interlock (contracts v3.13 §1.11).
+  const target = action === "delete" ? state.snapshot?.path : action === "delete-export" ? state.snapshot?.export?.path : null
+  const expected = target ? path.basename(String(target).replace(/[\\/]+$/, "")) : null
+  if (action !== "restore") {
+    if (!flag("confirm")) {
+      emit({ event: "needs_input", keys: [{ key: "confirm", label: "Confirm the item to delete", secret: false }] })
+      emit({ event: "result", ok: false, code: "NEEDS_INPUT", mode: state.mode, data: { needs: "confirm" } })
+      process.exitCode = 2
+      return
+    }
+    if (!expected || flag("confirm") !== expected) {
+      emit({ event: "result", ok: false, code: "FAILED", mode: state.mode, data: { code: "CONFIRM_MISMATCH", message: "This item changed. Refresh and try again." } })
+      process.exitCode = 1
+      return
+    }
+  }
   if (action === "restore" && state.snapshot?.kind !== "backup") {
     emit({ event: "step", command, step: "snapshot-preflight", status: "failed", message: "Your library is still on this Mac. Use Switch back to it.", at: now() })
     emit({ event: "result", ok: false, code: "FAILED", mode: state.mode, data: { code: "KEPT_LOCAL" } })

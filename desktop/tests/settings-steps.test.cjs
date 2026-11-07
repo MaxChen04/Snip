@@ -19,10 +19,13 @@ test("setup renders guard before resources (contracts v3.10 §1.5)", () => {
   const steps = order("setup")
   assert.deepEqual(steps, [
     "preflight", "cloudflare-auth", "account", "url", "r2", "guard", "resources", "config",
-    "schema", "deploy", "secrets", "quiesce", "export", "release", "import", "verify", "owner", "finish",
+    "schema", "deploy", "secrets", "quiesce", "release", "export", "import", "verify", "owner", "finish",
   ])
   assert.ok(steps.indexOf("guard") < steps.indexOf("resources"))
   assert.ok(steps.indexOf("guard") < steps.indexOf("schema"))
+  // The local server stops before the library is read (§1.8): export owns its own Worker.
+  assert.ok(steps.indexOf("release") < steps.indexOf("export"))
+  assert.ok(steps.indexOf("quiesce") < steps.indexOf("release"))
 })
 
 test("every command's order matches the published step ids", () => {

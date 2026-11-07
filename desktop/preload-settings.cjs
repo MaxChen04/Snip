@@ -26,7 +26,7 @@ contextBridge.exposeInMainWorld("snipCloud", {
   openUrl: url => ipcRenderer.invoke("snip:cloud-open-url", { url }),
   signOutAll: () => ipcRenderer.invoke("snip:cloud-sign-out-all", {}),
   deleteResources: confirmName => ipcRenderer.invoke("snip:cloud-delete-resources", { confirm: confirmName }),
-  snapshot: action => ipcRenderer.invoke("snip:cloud-snapshot", { action }),
+  snapshot: (action, confirm) => ipcRenderer.invoke("snip:cloud-snapshot", { action, confirm }),
   onProgress: callback => subscribe("snip:cloud-progress", callback),
   onLog: callback => subscribe("snip:cloud-log", callback),
 })
