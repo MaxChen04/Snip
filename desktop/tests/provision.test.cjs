@@ -1848,3 +1848,35 @@ test('pull with no previous library records no snapshot at all', async () => {
   assert.equal(stateModule.readState(library.root).snapshot, null);
   assert.equal(fs.existsSync(path.join(library.root, 'web/.wrangler/state/v3/d1/marker')), true);
 });
+
+test('the snapshot command runs the contract step ids, in order', async () => {
+  const library = fakeLibrary();
+  stateDir(path.join(library.root, 'web/.wrangler/state'), 'live');
+  const backup = path.join(library.root, 'backups/cloud-pull-2026-11-06T10-12-00');
+  stateDir(backup, 'previous');
+  stateModule.updateState(library.root, (next) => {
+    next.mode = 'local';
+    next.snapshot = { kind: 'backup', path: 'backups/cloud-pull-2026-11-06T10-12-00', keptLocal: false, takenAt: new Date().toISOString(), refs: 2 };
+    return next;
+  });
+  for (const [action, expected] of [
+    ['restore', ['snapshot-preflight', 'snapshot-restore', 'snapshot-finish']],
+    ['delete', ['snapshot-preflight', 'snapshot-delete', 'snapshot-finish']],
+    ['delete-export', ['snapshot-preflight', 'snapshot-delete-export', 'snapshot-finish']],
+  ]) {
+    stateModule.updateState(library.root, (next) => {
+      next.snapshot = {
+        kind: 'backup', path: 'backups/cloud-pull-2026-11-06T10-12-00', keptLocal: false, takenAt: new Date().toISOString(), refs: 2,
+        export: { path: 'backups/cloud-export-x', takenAt: new Date().toISOString(), refs: 2 },
+      };
+      return next;
+    });
+    fs.mkdirSync(backup, { recursive: true });
+    stateDir(backup, 'previous');
+    fs.mkdirSync(path.join(library.root, 'backups/cloud-export-x'), { recursive: true });
+    const { ctx, emitter } = snapshotContext(library, { action, confirm: action === 'restore' ? undefined : action === 'delete' ? 'cloud-pull-2026-11-06T10-12-00' : 'cloud-export-x' });
+    await commands.commandSnapshot(ctx);
+    const started = emitter.events.filter((event) => event.event === 'step' && event.status === 'started').map((event) => event.step);
+    assert.deepEqual(started, expected, `${action} runs the documented steps`);
+  }
+});

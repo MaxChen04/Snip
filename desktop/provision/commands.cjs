@@ -835,7 +835,16 @@ async function commandSnapshot(ctx) {
   };
 
   const step = action === 'restore' ? restoreStep : action === 'delete' ? deleteStep : deleteExportStep;
-  const steps = [preflight, step];
+  const finish = {
+    id: 'snapshot-finish',
+    title: 'Finishing',
+    async run(ctx2) {
+      ctx2.save((next) => { next.error = null; return next; });
+      return { message: ctx2.state().mode === 'local' ? 'Done' : 'Done' };
+    },
+    async verify() { return true; },
+  };
+  const steps = [preflight, step, finish];
   await require('./engine.cjs').runSteps(steps, ctx, { journal: false });
   const message = action === 'restore' ? 'Switched back to the previous library' : action === 'delete' ? 'Previous library deleted' : 'Backup files deleted';
   return { ok: true, code: 'OK', mode: ctx.state().mode, data: { action }, message };
