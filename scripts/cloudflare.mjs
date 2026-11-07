@@ -9,6 +9,13 @@
 // The engine defaults to `setup` when no command is given, which is why this
 // file must never add one: npm appends `--` arguments after the whole script
 // string, so a hardcoded `setup` would silently swallow the real command.
+//
+// This file used to re-export the old setup script's config helpers
+// (`renderDeployConfig`, `preserveLocalConfig`, `TRACKED_CONFIG`, `DEPLOY_CONFIG`)
+// so a test could reach them. Nothing in the product used them: the engine patches
+// the emitted config itself, and the one helper it still reads (`readValues`) is
+// imported from `desktop/provision/lib.cjs` where the legacy L-C detection lives.
+// Keeping them here made the retired path look alive, so they are gone.
 
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -17,25 +24,6 @@ import { createRequire } from "node:module"
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const require = createRequire(import.meta.url)
 const cli = require(path.join(ROOT, "desktop/provision/cli.cjs"))
-
-// Kept for `scripts/doctor.mjs` and the existing tests, which read a legacy
-// deploy config. The engine itself stores config in <dataRoot>/cloud.
-export { readValues, renderDeployConfig, publicUrlFrom, parseCreatedId, PLACEHOLDERS } from "../desktop/provision/lib.cjs"
-export const TRACKED_CONFIG = path.join(ROOT, "web/wrangler.jsonc")
-export const DEPLOY_CONFIG = path.join(ROOT, "web/wrangler.deploy.jsonc")
-
-/** Preserve local storage identities before a legacy config reset. */
-export function preserveLocalConfig(root = ROOT) {
-  const fs = require("node:fs")
-  const web = path.join(root, "web")
-  const local = path.join(web, "wrangler.local.jsonc")
-  try {
-    fs.copyFileSync(path.join(web, "wrangler.jsonc"), local, fs.constants.COPYFILE_EXCL)
-  } catch (error) {
-    if (error.code !== "EEXIST") throw error
-  }
-  return local
-}
 
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
 if (isMain) {

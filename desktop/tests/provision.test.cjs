@@ -433,6 +433,8 @@ test('public URL, canonical origin and hosts', () => {
   assert.equal(lib.publicUrlFrom('octo'), 'https://snip.octo.workers.dev');
   assert.equal(lib.publicUrlFrom('snip.example.com'), 'https://snip.example.com');
   assert.equal(lib.publicUrlFrom('https://snip.example.com/path/'), 'https://snip.example.com');
+  // A blank or placeholder value is "not given", never a URL.
+  assert.equal(lib.publicUrlFrom(' '), null);
   assert.equal(lib.canonicalOrigin('https://snip.example.com/'), 'https://snip.example.com');
   // new URL normalizes the host, which is exactly the canonical form PUBLIC_URL needs.
   assert.equal(lib.canonicalOrigin('https://Snip.Example.com'), 'https://snip.example.com');
@@ -440,6 +442,25 @@ test('public URL, canonical origin and hosts', () => {
   assert.throws(() => lib.canonicalOrigin('https://user:pass@snip.example.com'), /credentials/);
   assert.throws(() => lib.canonicalOrigin('ftp://snip.example.com'), /http or https/);
   assert.equal(lib.originHost('https://snip.example.com/x'), 'snip.example.com');
+});
+
+// Relocated from the retired cloudflare-script test: `parseCreatedId` is live
+// (`cloud.cjs` parses `wrangler d1 create` / `kv namespace create` output with it),
+// so its coverage moves here rather than disappearing with the old script.
+test('ids printed by wrangler create commands', () => {
+  assert.equal(lib.parseCreatedId(`[[d1_databases]]\nbinding = "DB"\ndatabase_name = "snip"\ndatabase_id = "0f0e0d0c-0b0a-0908-0706-050403020100"`, 'database_id'), '0f0e0d0c-0b0a-0908-0706-050403020100');
+  assert.equal(lib.parseCreatedId(`{\n  "d1_databases": [{ "binding": "DB", "database_id": "0f0e0d0c-0b0a-0908-0706-050403020100" }]\n}`, 'database_id'), '0f0e0d0c-0b0a-0908-0706-050403020100');
+  assert.equal(lib.parseCreatedId(`"kv_namespaces": [{ "binding": "OAUTH_KV", "id": "a1b2c3d4e5f60718293a4b5c6d7e8f90" }]`, 'id'), 'a1b2c3d4e5f60718293a4b5c6d7e8f90');
+  // Nothing printable is "no id", never a guess.
+  assert.equal(lib.parseCreatedId('no ids here', 'database_id'), null);
+});
+
+// The tracked config is what a source build compiles against, so it must keep
+// shipping placeholders: a real database id committed here would point every
+// checkout at one Cloudflare account.
+test('the tracked wrangler config ships placeholders only', () => {
+  const tracked = fs.readFileSync(path.join(__dirname, '../../web/wrangler.jsonc'), 'utf8');
+  assert.deepEqual(lib.readValues(tracked), { d1: null, kv: null, login: null, url: null });
 });
 
 test('dump parsing handles quotes, comments and multi-line statements', () => {

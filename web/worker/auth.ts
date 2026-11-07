@@ -84,7 +84,7 @@ export function allowedLogins(env: Env) {
 }
 
 const NO_LOGINS =
-  "This Snip instance has no allowed GitHub logins yet. Set ALLOWED_GITHUB_LOGINS to your GitHub login (see the README's deploy steps), then deploy again."
+  "This Snip instance has no allowed GitHub logins yet. Set ALLOWED_GITHUB_LOGINS to your GitHub login in the Worker's variables, then deploy again. Only an install that already configured GitHub sign-in reaches this page; a new install signs in with a passkey."
 
 export function isLocalOrigin(url: string) {
   const h = new URL(url).hostname
