@@ -149,6 +149,9 @@ test("the owner link GET renders a form, sets no cookie and asks for no referrer
     const html = await res.text()
     assert.match(html, /<form id="snip-owner" method="post" action="\/auth\/owner">/)
     assert.ok(html.includes(token), "the form carries the signed token")
+    // The expiry/one-use note appears once; the body says what the button does.
+    assert.equal(html.match(/once/g)?.length, 1)
+    assert.match(html, /Continue to sign this browser in to your Snip library\./)
   }))
 
 test("an expired owner link is 410, an invalid one is 400, and neither sets a cookie", () =>

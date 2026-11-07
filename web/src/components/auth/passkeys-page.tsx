@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react"
 import { Link } from "wouter"
-import { CheckIcon, KeyRound, LaptopIcon, LogOutIcon, PlusIcon, ShieldCheckIcon, Trash2Icon } from "@/components/icons"
+import { CheckIcon, KeyRound, LaptopIcon, LogOutIcon, PlusIcon, ShieldCheckIcon, SmartphoneIcon, Trash2Icon } from "@/components/icons"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
@@ -16,7 +16,6 @@ import { AuthError, AuthShell } from "@/components/auth/auth-shell"
 import { notify } from "@/components/notify"
 import { api, type Me, type PasskeyDevice } from "@/lib/api"
 import { registerPasskey } from "@/lib/passkeys"
-import { cn } from "@/lib/utils"
 
 /**
  * The owner's devices. A passkey is per-device and owner-only: it is not an invite, and a second
@@ -196,7 +195,7 @@ export function PasskeysPage() {
           </span>
           <div className="min-w-0 flex-1">
             <h2 id="session-safety" className="text-[13px] font-medium text-foreground">
-              Signed out somewhere you don't recognize?
+              Signed in somewhere you don't recognize?
             </h2>
             <p className="mt-0.5 text-[12.5px] leading-relaxed text-muted-foreground">
               Signing out everywhere ends every browser session and this app's session. Passkeys stay registered, and agents connected over MCP keep their own tokens until those expire.
@@ -251,11 +250,12 @@ export function PasskeysPage() {
 }
 
 function DeviceIcon({ label }: { label: string | null }) {
-  const mobile = !!label && /iphone|ipad|phone|android|pixel|galaxy/i.test(label)
+  const name = label?.toLowerCase() ?? ""
+  const Phone = /iphone|ipad|phone|android|pixel|galaxy|mobile/.test(name)
+  const Desktop = /mac|windows|linux|desktop|imac/.test(name) && !Phone
   return (
-    <span className={cn("grid size-8 shrink-0 place-items-center rounded-lg bg-fill-2 text-muted-foreground")}>
-      <LaptopIcon className={cn("size-4", mobile && "hidden")} />
-      {mobile ? <span className="size-3.5 rounded-[4px] border-[1.5px] border-current" /> : null}
+    <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-fill-2 text-muted-foreground">
+      {Phone ? <SmartphoneIcon className="size-4" /> : Desktop ? <LaptopIcon className="size-4" /> : <KeyRound className="size-4" />}
     </span>
   )
 }

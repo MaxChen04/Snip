@@ -28,6 +28,9 @@ async function shoot(page, name, { fullPage = false, wait = 400 } = {}) {
 
 async function main() {
   const browser = await chromium.launch()
+  // Re-shoot a subset after a copy or layout change: ONLY=owner,passkeys leaves the rest alone.
+  const only = process.env.ONLY?.split(",").map((s) => s.trim()).filter(Boolean)
+  const want = (page) => !only || only.includes(page)
 
   for (const scheme of ["light", "dark"]) {
     // A fresh link per pass: a link works exactly once, which is the point of the nonce.
@@ -37,20 +40,26 @@ async function main() {
 
     // The owner landing auto-submits on load, so it is captured with scripting off: the page is
     // static HTML and CSS, and what a person sees before the redirect is exactly this.
-    const staticContext = await browser.newContext({ viewport: { width: 1100, height: 760 }, deviceScaleFactor: 2, javaScriptEnabled: false, colorScheme: scheme })
-    const staticPage = await staticContext.newPage()
-    await staticPage.goto(`${BASE}/auth/owner?t=${encodeURIComponent(token)}`)
-    await staticPage.waitForSelector("#snip-owner")
-    await shoot(staticPage, `owner-link-${scheme}`)
-    await staticContext.close()
+    if (want("owner")) {
+      const staticContext = await browser.newContext({ viewport: { width: 1100, height: 760 }, deviceScaleFactor: 2, javaScriptEnabled: false, colorScheme: scheme })
+      const staticPage = await staticContext.newPage()
+      await staticPage.goto(`${BASE}/auth/owner?t=${encodeURIComponent(token)}`)
+      await staticPage.waitForSelector("#snip-owner")
+      await shoot(staticPage, `owner-link-${scheme}`)
+      await staticContext.close()
+    }
 
     // Signed out first, for the passkey sign-in page.
-    const anon = await browser.newContext({ viewport: { width: 1100, height: 820 }, deviceScaleFactor: 2, colorScheme: scheme })
-    const anonPage = await anon.newPage()
-    await anonPage.goto(`${BASE}/sign-in`)
-    await anonPage.waitForFunction(() => !!document.querySelector("[data-slot=button]"), null, { timeout: 15_000 }).catch(() => {})
-    await shoot(anonPage, `passkey-sign-in-${scheme}`, { wait: 900 })
-    await anon.close()
+    if (want("sign-in")) {
+      const anon = await browser.newContext({ viewport: { width: 1100, height: 820 }, deviceScaleFactor: 2, colorScheme: scheme })
+      const anonPage = await anon.newPage()
+      await anonPage.goto(`${BASE}/sign-in`)
+      await anonPage.waitForFunction(() => !!document.querySelector("[data-slot=button]"), null, { timeout: 15_000 }).catch(() => {})
+      await shoot(anonPage, `passkey-sign-in-${scheme}`, { wait: 900 })
+      await anon.close()
+    }
+
+    if (!want("passkeys")) continue
 
     // Now sign in through the real owner link, which is what a browser does.
     const context = await browser.newContext({ viewport: { width: 1100, height: 820 }, deviceScaleFactor: 2, colorScheme: scheme })

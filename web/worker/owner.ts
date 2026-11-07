@@ -102,7 +102,7 @@ h1{font-size:17px;margin:0 0 6px}p{font-size:13.5px;color:#666;margin:0}</style>
 <p>${expired ? "Owner links work for 10 minutes. Run" : "Ask Snip to mint a new owner link. Run"} <code>npm run setup:cloudflare -- owner link</code> to get a fresh one.</p></main></body></html>`
     return new Response(html, { status: expired ? 410 : 400, headers: await linkHeaders() })
   }
-  return new Response(page(c.req.query("t")!, "This link signs this browser in for 10 minutes and can only be used once."), {
+  return new Response(page(c.req.query("t")!, "Continue to sign this browser in to your Snip library."), {
     status: 200,
     headers: await linkHeaders(),
   })
