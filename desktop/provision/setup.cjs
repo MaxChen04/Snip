@@ -86,13 +86,14 @@ async function classifyAccount(ctx) {
   const recorded = record.workerName === WORKER_NAME;
   if (recorded && sameAccount && (sameD1 || sameUrl)) return { ...base, outcome: 'resume' };
 
-  // L-C: a legacy deploy config on this Mac naming this install.
-  const legacy = readLegacyDeployConfig(ctx.dataRoot);
   // L-C: a legacy deploy config on this Mac naming this install. It is local
-  // evidence, so it is accepted only when it names the same database or origin
-  // the account actually has; a stale config cannot claim someone else's Worker.
+  // evidence, so it is accepted only when it names something the account
+  // actually has: the same database, the same KV namespace, or the same origin.
+  const legacy = readLegacyDeployConfig(ctx.dataRoot);
+  const namespaces = legacy && legacy.kv ? await ctx.deps.cloud.listKv(ctx.wrangler, { accountId }).catch(() => []) : [];
   const legacyMatches = Boolean(legacy && (
     (legacy.d1 && database && legacy.d1 === database.id)
+    || (legacy.kv && namespaces.some((entry) => entry.id === legacy.kv))
     || (legacy.url && ctx.cloud.url && legacy.url === ctx.cloud.url)
   ));
 
@@ -349,11 +350,16 @@ function resourcesStep() {
     title: 'Creating storage',
     async run(ctx) {
       const accountId = ctx.cloud.accountId;
-      // Classify before creating anything, so a foreign account is never touched
-      // and an existing Snip's resources are reused rather than duplicated.
-      const facts = await ctx.deps.classify(ctx);
+      // guard is the only classifier (invariant 19). Resources consumes its
+      // answer; the assert below can only refuse, never re-decide.
+      const facts = ctx.work.classification;
+      if (!facts) {
+        throw new StepError('GUARD_MISSING', 'The account was never classified.', {
+          hint: 'Run setup again; the guard step runs before anything is created.',
+          retryable: true,
+        });
+      }
       if (facts.outcome === 'foreign') throw foreignError(ctx, facts);
-      ctx.setWork({ classification: facts });
 
       const databases = await ctx.deps.cloud.listD1(ctx.wrangler, { accountId });
       let database = databases.find((entry) => entry.name === D1_NAME) || null;
@@ -394,7 +400,10 @@ function guardStep() {
     id: 'guard',
     title: 'Checking this Cloudflare account',
     async run(ctx) {
-      const facts = ctx.work.classification || await ctx.deps.classify(ctx);
+      // guard is the only classifier: it runs once, records the outcome in
+      // work.classification for the later steps, and names the install.
+      const facts = await ctx.deps.classify(ctx);
+      ctx.setWork({ classification: facts });
       if (facts.outcome === 'foreign') throw foreignError(ctx, facts);
 
       if (facts.outcome === 'adopt-existing') {
@@ -448,6 +457,9 @@ function guardStep() {
       }
 
       const record = ctx.state().cloud || {};
+      // Every non-resume outcome is this Mac's install from here on, so a later
+      // run recognises it instead of asking again. `resume` already has it.
+      if (facts.outcome !== 'resume') ctx.setCloud({ workerName: WORKER_NAME });
       if (!record.workerName) ctx.setCloud({ workerName: WORKER_NAME });
       if (!ctx.cloud.ownerId) ctx.setCloud({ ownerId: ctx.flags.login || guessLogin(ctx.root) || 'owner' });
       // Record what was found, so a resume can recognise its own install.
