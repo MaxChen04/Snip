@@ -3,13 +3,14 @@
 //   ?fake=local | local-empty | enabling&step=4 | enabling-error | cloud | cloud-empty
 //         | detached | pulling
 // Actions advance the same NDJSON-shaped events the real engine emits.
-import type { CloudBridge, CloudFile, CloudSnapshotState, EngineEvent } from "../types"
+import type { CloudBridge, CloudFile, CloudSnapshotState, EngineEvent, OwnerLink } from "../types"
 import { stepsFor } from "../steps"
 
 const params = new URLSearchParams(location.search)
 const scenario = params.get("fake") ?? "local"
 const requestedStep = Number(params.get("step"))
 const listeners = new Set<(event: EngineEvent) => void>()
+const linkListeners = new Set<(link: OwnerLink) => void>()
 const logListeners = new Set<(entry: { level: "info" | "warn" | "error"; message: string }) => void>()
 const timers = new Set<number>()
 
@@ -191,6 +192,9 @@ function initial(): { state: CloudSnapshotState; steps: Record<string, { id: str
   if (scenario === "pulling") return seeded("pull", 4)
   // A terminal decision from guard, shown before anything is copied.
   if (scenario === "choice") return seeded("setup", 5)
+  if (scenario === "link") return { state: { ...STATES.cloud, link: fakeLink() }, steps: {} }
+  // A link can only be minted in cloud mode, so the failed variant sits on that too.
+  if (scenario === "link-error") return { state: { ...STATES.cloud, link: null }, steps: {} }
   return { state: STATES[scenario] ?? STATES.local, steps: {} }
 }
 
@@ -200,6 +204,17 @@ const seededSteps = current.steps
 
 function set(next: CloudSnapshotState) {
   state = next
+}
+
+// The note and the shape are what desktop/main.cjs sends; the URL is the engine's
+// `/auth/owner?t=<payload>.<signature>` form, shortened the way it looks in a window.
+// Declared as a function so the state table above can call it while the module loads.
+function fakeLink(): OwnerLink {
+  return {
+    url: `${cloud.url}/auth/owner?t=snip-owner-v1%7Cmax%7C1793600400%7C6f1c0a9e2b7d4c58%7C0.wY3kQ9m2Xr8sT1vP4nB6zL0hJ5gF7dA2cE`,
+    note: "Works once and expires in 10 minutes. The browser that opens it is signed in and can add a passkey.",
+    expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+  }
 }
 
 function runCommand(command: string, onDone: () => void) {
@@ -324,6 +339,21 @@ export function createFixtureBridge(): CloudBridge {
     },
     async snapshot() {
       return { started: true }
+    },
+    async ownerLink() {
+      if (scenario === "link-error") {
+        // A run that ends without a link: main logs why, and the sheet offers a retry.
+        log("error", "This Mac holds no owner secret for its cloud library. Turn cloud off and on again to replace it.")
+        return { started: true }
+      }
+      const minted = fakeLink()
+      set({ ...state, link: minted })
+      later(() => linkListeners.forEach(listener => listener(minted)), 260)
+      return { started: true }
+    },
+    onLink(callback) {
+      linkListeners.add(callback)
+      return () => linkListeners.delete(callback)
     },
     onProgress(callback) {
       listeners.add(callback)

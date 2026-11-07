@@ -11,8 +11,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
-import { CopyIcon, GlobeIcon, HardDrive, LaptopIcon, ShieldCheckIcon, Trash2Icon, TriangleAlertIcon } from "@/components/icons"
+import { CheckIcon, CopyIcon, Clock, GlobeIcon, HardDrive, LaptopIcon, ShieldCheckIcon, Trash2Icon, TriangleAlertIcon } from "@/components/icons"
 import { references } from "./bits"
+import type { OwnerLink } from "./types"
 
 export function EnableDialog({
   open,
@@ -294,6 +295,82 @@ export function AbortSetupDialog({ open, onOpenChange, onConfirm }: { open: bool
           <Button variant="destructive" onClick={onConfirm}>
             Undo setup
           </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/**
+ * The owner link is the only way in for a browser that has no passkey yet, so this
+ * sheet shows the URL itself: it is meant to be opened, not hidden (contracts §4.2).
+ * The session token behind it never reaches this window.
+ */
+export function OwnerLinkDialog({
+  open,
+  onOpenChange,
+  link,
+  pending,
+  error,
+  copied,
+  onCreate,
+  onOpen,
+  onCopy,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  link: OwnerLink | null
+  pending: boolean
+  error: string | null
+  copied: boolean
+  onCreate: () => void
+  onOpen: (url: string) => void
+  onCopy: (url: string) => void
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[480px]">
+        <DialogHeader>
+          <DialogTitle>Sign in another browser</DialogTitle>
+          <DialogDescription>Open this link in the browser you want to sign in, on this Mac or any other device.</DialogDescription>
+        </DialogHeader>
+        {link ? (
+          <div className="flex flex-col gap-3">
+            <div className="rounded-lg bg-fill-2 px-3 py-2.5">
+              <div className="mb-1.5 flex items-center gap-2">
+                {/* "Link ready", never "Signed in": this run cannot see the other device. */}
+                <Badge variant="success">Link ready</Badge>
+              </div>
+              <p className="select-all break-all font-mono text-xs leading-[1.5] text-foreground">{link.url}</p>
+            </div>
+            <p className="flex items-start gap-2 text-xs leading-[1.5] text-muted-foreground">
+              <Clock className="mt-px size-3.5 shrink-0" />
+              {link.note}
+            </p>
+          </div>
+        ) : error ? (
+          <p className="rounded-lg bg-fill-2 px-3 py-2.5 text-sm leading-[1.5]">{error}</p>
+        ) : (
+          <p className="rounded-lg bg-fill-2 px-3 py-2.5 text-sm leading-[1.5] text-muted-foreground">
+            {pending ? "Creating a sign-in link…" : "No link yet."}
+          </p>
+        )}
+        <DialogFooter className="sm:justify-between">
+          <Button variant="ghost" onClick={onCreate} disabled={pending}>
+            {link ? "Create a new link" : "Try again"}
+          </Button>
+          <div className="flex gap-2">
+            {link ? (
+              <Button variant="outline" onClick={() => onCopy(link.url)} aria-live="polite">
+                {copied ? <CheckIcon data-icon="inline-start" /> : <CopyIcon data-icon="inline-start" />}
+                {copied ? "Copied" : "Copy"}
+              </Button>
+            ) : null}
+            <Button disabled={!link} onClick={() => link && onOpen(link.url)}>
+              <GlobeIcon data-icon="inline-start" />
+              Open in browser
+            </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>

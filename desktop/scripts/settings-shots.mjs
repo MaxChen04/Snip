@@ -30,6 +30,8 @@ const shots = [
   { name: "detached", query: "fake=detached" },
   { name: "turn-off", query: "fake=cloud&dialog=turn-off" },
   { name: "sign-out", query: "fake=cloud&dialog=sign-out" },
+  { name: "owner-link", query: "fake=link&dialog=owner-link" },
+  { name: "owner-link-error", query: "fake=link-error&dialog=owner-link" },
   { name: "delete-resources", query: "fake=cloud&dialog=delete" },
   { name: "delete-snapshot", query: "fake=cloud-backup&dialog=snapshot-delete" },
   { name: "delete-export", query: "fake=cloud&dialog=export-delete" },
@@ -44,7 +46,8 @@ try {
     for (const shot of shots) {
       await page.goto(url(shot.query), { waitUntil: "networkidle" })
       await page.locator("#root").waitFor()
-      // Let the fixture seed its first events and any enter transition settle.
+      // Let the fixture seed its first events and any enter transition settle. The
+      // link sheet mints after the window opens, so give that one its beat.
       await page.waitForTimeout(450)
       const file = path.join(out, `settings-${shot.name}-${theme}.png`)
       await page.screenshot({ path: file })

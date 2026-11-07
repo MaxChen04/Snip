@@ -26,19 +26,21 @@ import {
   TriangleAlertIcon,
 } from "@/components/icons"
 import { Meta, Panel, Row, references } from "./bits"
-import { AbortSetupDialog, DeleteResourcesDialog, EnableDialog, ExportDeleteDialog, SignOutDialog, SnapshotDeleteDialog, TurnOffDialog, type TurnOffChoice } from "./dialogs"
+import { AbortSetupDialog, DeleteResourcesDialog, EnableDialog, ExportDeleteDialog, OwnerLinkDialog, SignOutDialog, SnapshotDeleteDialog, TurnOffDialog, type TurnOffChoice } from "./dialogs"
 import { dirName, formatBytes, hostOf, shortDate, snapshotLabel, snapshotPhrase } from "./format"
 import { copyText, pullPrompt, setupPrompt } from "./prompts"
+import { errorAction } from "./retry"
 import { commandFor, stepTitle, stepsFor } from "./steps"
 import type { CloudRecord } from "./types"
 import { useCloud, type LiveStep } from "./use-cloud"
 
-type DialogName = "enable" | "turn-off" | "sign-out" | "delete" | "snapshot-delete" | "export-delete" | "abort" | null
+type DialogName = "enable" | "turn-off" | "sign-out" | "delete" | "snapshot-delete" | "export-delete" | "abort" | "owner-link" | null
 
 export function SettingsApp() {
   const cloud = useCloud()
   const [dialog, setDialog] = useState<DialogName>(null)
   const [turnOffChoice, setTurnOffChoice] = useState<TurnOffChoice>("stay")
+  const [linkCopied, setLinkCopied] = useState(false)
   const mode = cloud.mode
   const working = cloud.busy || mode === "enabling" || mode === "disabling"
   const adopted = cloud.file?.move?.status === "skipped"
@@ -55,7 +57,11 @@ export function SettingsApp() {
   // A screenshot or a support run may open a specific dialog; harmless in normal use.
   useEffect(() => {
     const requested = new URLSearchParams(location.search).get("dialog") as DialogName
-    if (requested && ["enable", "turn-off", "sign-out", "delete", "snapshot-delete", "export-delete", "abort"].includes(requested)) setDialog(requested)
+    if (!requested || !["enable", "turn-off", "sign-out", "delete", "snapshot-delete", "export-delete", "abort", "owner-link"].includes(requested)) return
+    setDialog(requested)
+    // The link sheet has nothing to show until a link exists.
+    if (requested === "owner-link" && !cloud.link) void cloud.requestLink()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const copyPrompt = async (kind: "setup" | "pull") => {
@@ -116,6 +122,24 @@ export function SettingsApp() {
     if (cloud.cloud?.url) void cloud.bridge!.openUrl(cloud.cloud.url)
   }
 
+  // One-time link for a browser that has no passkey yet: the Worker's /sign-in page
+  // sends people here by name, so this sheet has to exist and show the URL itself.
+  const createLink = () => void cloud.requestLink()
+
+  const copyOwnerLink = async (url: string) => {
+    if (!(await copyText(url))) {
+      toast.error("Couldn’t copy the link")
+      return
+    }
+    setLinkCopied(true)
+    window.setTimeout(() => setLinkCopied(false), 1800)
+  }
+
+  const showOwnerLink = () => {
+    setDialog("owner-link")
+    if (!cloud.link) createLink()
+  }
+
   return (
     <div className="flex min-h-svh flex-col bg-ground text-foreground">
       <Header />
@@ -153,6 +177,7 @@ export function SettingsApp() {
                 onDeleteSnapshot={() => setDialog("snapshot-delete")}
                 onDeleteExport={() => setDialog("export-delete")}
                 onSignOut={() => setDialog("sign-out")}
+                onOwnerLink={showOwnerLink}
                 onDeleteResources={() => setDialog("delete")}
                 onCopyPrompt={copyPrompt}
                 onPasskeys={() => void cloud.bridge!.openUrl(`${cloud.cloud?.url?.replace(/\/$/, "")}/passkeys`)}
@@ -206,6 +231,20 @@ export function SettingsApp() {
         open={dialog === "export-delete"}
         onOpenChange={open => setDialog(open ? "export-delete" : null)}
         onConfirm={() => void confirmExportDelete()}
+      />
+      <OwnerLinkDialog
+        open={dialog === "owner-link"}
+        onOpenChange={open => setDialog(open ? "owner-link" : null)}
+        link={cloud.link}
+        pending={cloud.linkPending}
+        error={cloud.linkError}
+        copied={linkCopied}
+        onCreate={() => {
+          setLinkCopied(false)
+          createLink()
+        }}
+        onCopy={url => void copyOwnerLink(url)}
+        onOpen={url => void cloud.bridge!.openUrl(url)}
       />
       <AbortSetupDialog open={dialog === "abort"} onOpenChange={open => setDialog(open ? "abort" : null)} onConfirm={() => void undoSetup()} />
     </div>
@@ -332,6 +371,7 @@ function CloudPanels({
   onDeleteSnapshot,
   onDeleteExport,
   onSignOut,
+  onOwnerLink,
   onDeleteResources,
   onCopyPrompt,
   onPasskeys,
@@ -343,6 +383,7 @@ function CloudPanels({
   onDeleteSnapshot: () => void
   onDeleteExport: () => void
   onSignOut: () => void
+  onOwnerLink: () => void
   onDeleteResources: () => void
   onCopyPrompt: (kind: "setup" | "pull") => Promise<void>
   onPasskeys: () => void
@@ -466,6 +507,16 @@ function CloudPanels({
             <Button variant="outline" size="sm" onClick={onPasskeys}>
               Manage
               <ArrowUpRightIcon data-icon="inline-end" />
+            </Button>
+          }
+        />
+        <Row
+          icon={<GlobeIcon className="size-4" />}
+          title="Sign in another browser"
+          body="Creates a one-time link that signs a browser in once. Use it before that browser has a passkey of its own."
+          action={
+            <Button variant="outline" size="sm" onClick={onOwnerLink}>
+              Create link…
             </Button>
           }
         />
@@ -815,7 +866,7 @@ function HumanActionCard({ action, onOpen }: { action: NonNullable<ReturnType<ty
 }
 
 function ErrorCard({ error, onRetry, onRefresh }: { error: NonNullable<ReturnType<typeof useCloud>["error"]>; onRetry: () => void; onRefresh: () => void }) {
-  const stale = error.code === "CONFIRM_MISSING" || error.code === "CONFIRM_MISMATCH"
+  const action = errorAction(error)
   return (
     <div className="rounded-xl bg-(--red-3) px-4 py-3.5">
       <p className="flex items-center gap-2 text-sm leading-5 text-(--red-11)">
@@ -823,19 +874,11 @@ function ErrorCard({ error, onRetry, onRefresh }: { error: NonNullable<ReturnTyp
         {error.message}
       </p>
       {error.hint ? <p className="mt-1 text-xs leading-[1.5] text-ink-11">{error.hint}</p> : null}
-      {/* A stale record is fixed by reading it again, not by repeating the same request. */}
-      {stale ? (
+      {action === "none" ? null : (
         <div className="mt-2.5">
-          <Button size="sm" variant="outline" onClick={onRefresh}>
+          <Button size="sm" variant="outline" onClick={action === "refresh" ? onRefresh : onRetry}>
             <RefreshCwIcon data-icon="inline-start" />
-            Refresh
-          </Button>
-        </div>
-      ) : error.retryable === false ? null : (
-        <div className="mt-2.5">
-          <Button size="sm" variant="outline" onClick={onRetry}>
-            <RefreshCwIcon data-icon="inline-start" />
-            Retry
+            {action === "refresh" ? "Refresh" : "Retry"}
           </Button>
         </div>
       )}
