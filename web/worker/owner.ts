@@ -42,7 +42,7 @@ async function linkHeaders(extra: Record<string, string> = {}) {
     "content-type": "text/html; charset=utf-8",
     "cache-control": "no-store",
     "referrer-policy": "no-referrer",
-    "content-security-policy": `default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-${await autoSubmitHash()}'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`,
+    "content-security-policy": `default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'sha256-${await autoSubmitHash()}'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`,
     "x-frame-options": "DENY",
     "x-content-type-options": "nosniff",
     ...extra,
@@ -60,9 +60,9 @@ function page(token: string, note: string) {
        font:15px/1.5 -apple-system,BlinkMacSystemFont,"Inter","Segoe UI",sans-serif}
   main{width:100%;max-width:380px;background:#fff;border:1px solid #00000014;border-radius:16px;
        padding:28px;box-shadow:0 10px 30px -12px #0000001f}
-  .mark{display:flex;align-items:center;gap:10px;margin-bottom:18px}
-  .mark span{width:30px;height:30px;border-radius:9px;background:oklch(0.585 0.233 277.117);
-       display:grid;place-items:center;color:#fff;font-weight:600;font-size:15px}
+  .mark{display:flex;align-items:center;gap:9px;margin-bottom:18px}
+  .mark img{width:30px;height:30px;object-fit:contain}
+  .mark strong{font-size:15px;letter-spacing:-0.025em}
   h1{font-size:17px;line-height:1.3;margin:0 0 6px;letter-spacing:-0.01em;font-weight:600}
   p{font-size:13.5px;color:#666;margin:0 0 20px}
   button{width:100%;height:38px;border-radius:9px;border:0;background:#1a1a1a;color:#fff;
@@ -77,7 +77,7 @@ function page(token: string, note: string) {
   }
 </style></head>
 <body><main>
-  <div class="mark"><span>S</span><strong>Snip</strong></div>
+  <div class="mark"><img src="/logo.png" alt=""><strong>Snip</strong></div>
   <h1>Sign in to your library</h1>
   <p>${escapeHtml(note)}</p>
   <form id="snip-owner" method="post" action="/auth/owner">
@@ -109,7 +109,9 @@ h1{font-size:17px;margin:0 0 6px}p{font-size:13.5px;color:#666;margin:0}</style>
 }
 
 export async function ownerLinkSubmit(c: Context<AppEnv>) {
-  const refused = crossSiteWrite(c.req.raw, { json: false })
+  // The landing page must keep `Referrer-Policy: no-referrer`, and Chromium then reports the form
+  // POST with `Origin: null`. The token itself is the credential here, so that is accepted.
+  const refused = crossSiteWrite(c.req.raw, { json: false, allowNullOrigin: true })
   if (refused) return c.text(refused, 403)
   const form = await c.req.formData().catch(() => null)
   const submitted = form ? String(form.get("t") ?? "") : ""

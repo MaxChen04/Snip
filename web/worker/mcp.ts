@@ -5,6 +5,7 @@ import type { Animation, DesignTokens, Page, Reference } from "../shared/types"
 import { isLocalOrigin, signFileUrl } from "./auth"
 import * as db from "./db"
 import { bounded, decodeCursor, encodeCursor } from "./mcp-bounds"
+import { MCP_SERVER_VERSION } from "./version"
 
 // Remote MCP server. Read tools let an agent pull references (screenshots, motion stills,
 // design tokens, computed styles, HTML snapshots); write tools let it add references and
@@ -179,7 +180,7 @@ function buildServer(env: Env, origin: string) {
 
   const listedAnimation = (a: Animation) => ({ id: a.id, pageId: a.pageId, kind: a.kind, label: a.label, representations: representations(a) })
 
-  const server = new McpServer({ name: "snip", version: "1.3.0" }, { instructions: INSTRUCTIONS })
+  const server = new McpServer({ name: "snip", version: MCP_SERVER_VERSION }, { instructions: INSTRUCTIONS })
 
   server.registerTool(
     "search_references",

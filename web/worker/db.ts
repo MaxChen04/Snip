@@ -879,6 +879,30 @@ export async function getPasskey(db: D1Database, id: string): Promise<PasskeyRec
   return row ? toPasskey(row) : null
 }
 
+/**
+ * Everything passkey sign-in needs before it verifies a signature: the credential, its owner, and
+ * the install's current revocation epoch. One round trip instead of three, because this runs on
+ * every sign-in and D1 latency is the whole cost of the route.
+ */
+export async function getPasskeyLogin(
+  db: D1Database,
+  id: string,
+): Promise<{ passkey: PasskeyRecord; owner: { id: string; label: string | null }; epoch: number } | null> {
+  const row = await db
+    .prepare(
+      `SELECT p.*, o.label AS owner_label, o.id AS owner_row_id, (SELECT max(sessions_epoch) FROM owners) AS epoch
+       FROM passkeys p LEFT JOIN owners o ON o.id = p.owner_id WHERE p.id = ?`,
+    )
+    .bind(id)
+    .first<PasskeyRow & { owner_label: string | null; owner_row_id: string | null; epoch: number | null }>()
+  if (!row || !row.owner_row_id) return null
+  return {
+    passkey: toPasskey(row),
+    owner: { id: row.owner_row_id, label: row.owner_label },
+    epoch: row.epoch ?? 0,
+  }
+}
+
 export async function addPasskey(
   db: D1Database,
   passkey: { id: string; ownerId: string; publicKey: ArrayBuffer; counter: number; transports?: string[]; deviceLabel?: string | null },

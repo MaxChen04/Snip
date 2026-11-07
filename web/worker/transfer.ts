@@ -1,14 +1,17 @@
 import { Hono } from "hono"
 import { ownerSecretHash, timingSafeEqual } from "./auth"
 import * as db from "./db"
+import { WORKER_VERSION } from "./version"
 
 // The transfer surface exists only while TRANSFER_TOKEN is set: the provisioning engine sets it
 // before a move or a pull and deletes it afterwards. It is mounted outside /api so it inherits
 // neither sameOriginWrites nor requireSession, and every body is streamed — a move can carry
 // gigabytes through it.
 
-export const WORKER_VERSION = "1.0.0"
 export const MAX_TRANSFER_BYTES = 100 * 1024 * 1024
+
+/** How many fallback `HEAD`s the manifest runs at once; see the content-type note below. */
+export const MANIFEST_HEAD_CONCURRENCY = 8
 
 const KEY_RE = /^refs\/[a-z0-9]+\/[A-Za-z0-9._\/-]+$/
 const validKey = (key: string) => KEY_RE.test(key) && !key.includes("..")
@@ -72,16 +75,34 @@ function manifestStream(bucket: R2Bucket, tables: Record<string, number>) {
   let listing = true
   let first = true
   let totalBytes = 0
+  const stats = { keys: 0, heads: 0 }
 
   /**
    * R2's list() carries httpMetadata, but some local runtimes return an empty object there.
    * A missing content type is looked up with HEAD so a local library still round-trips its
    * images, and only then; on R2 the listing already has the value and no extra call happens.
+   *
+   * The fallback is batched, never one await per object in the listing loop: a local export is
+   * one HEAD per key by design, and doing that serially would make a 300-file library crawl.
    */
-  const contentTypeOf = async (object: R2Object) => {
-    if (object.httpMetadata?.contentType) return object.httpMetadata.contentType
-    const head = await bucket.head(object.key)
-    return head?.httpMetadata?.contentType ?? "application/octet-stream"
+  const contentTypes = async (objects: readonly R2Object[]) => {
+    const out = new Array<string>(objects.length)
+    let next = 0
+    const worker = async () => {
+      for (let i = next++; i < objects.length; i = next++) {
+        const object = objects[i]!
+        const listed = object.httpMetadata?.contentType
+        if (listed) {
+          out[i] = listed
+          continue
+        }
+        stats.heads++
+        const head = await bucket.head(object.key)
+        out[i] = head?.httpMetadata?.contentType ?? "application/octet-stream"
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(MANIFEST_HEAD_CONCURRENCY, objects.length) }, worker))
+    return out
   }
 
   return new ReadableStream<Uint8Array>({
@@ -91,17 +112,19 @@ function manifestStream(bucket: R2Bucket, tables: Record<string, number>) {
     async pull(controller) {
       try {
         if (!listing) {
-          controller.enqueue(encoder.encode(`],"totalBytes":${totalBytes}}`))
+          controller.enqueue(encoder.encode(`],"totalBytes":${totalBytes},"heads":${stats.heads},"keyCount":${stats.keys}}`))
           controller.close()
           return
         }
         const page = await bucket.list({ cursor, limit: 1000 })
+        const types = await contentTypes(page.objects)
         let chunk = ""
-        for (const object of page.objects) {
+        page.objects.forEach((object, i) => {
           totalBytes += object.size
-          chunk += `${first ? "" : ","}${JSON.stringify({ key: object.key, size: object.size, contentType: await contentTypeOf(object) })}`
+          stats.keys++
+          chunk += `${first ? "" : ","}${JSON.stringify({ key: object.key, size: object.size, contentType: types[i] })}`
           first = false
-        }
+        })
         cursor = page.truncated ? page.cursor : undefined
         listing = !!cursor
         if (chunk) controller.enqueue(encoder.encode(chunk))

@@ -113,6 +113,16 @@ test("a cloud origin exposes neither the prompts nor the tool", async () => {
   assert.ok(called.error, "the tool does not exist on a cloud origin")
 })
 
+test("the Worker reports one version everywhere the engine compares it", async () => {
+  const { WORKER_VERSION, MCP_SERVER_VERSION } = await import("../worker/version")
+  assert.equal(MCP_SERVER_VERSION, WORKER_VERSION)
+  assert.match(WORKER_VERSION, /^\d+\.\d+\.\d+$/)
+
+  const initialize = await rpcRaw("http://localhost:5173", "initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "0" } })
+  const serverInfo = initialize.result?.serverInfo as { name: string; version: string } | undefined
+  assert.equal(serverInfo?.version, WORKER_VERSION, "the MCP handshake advertises the same version")
+})
+
 test("a token whose grant has no owner cannot read the library", async () => {
   const request = new Request("http://localhost/mcp", {
     method: "POST",
