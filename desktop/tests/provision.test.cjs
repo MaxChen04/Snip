@@ -1791,6 +1791,7 @@ test('pull keeps the replaced library as a backup with real counts read through 
   });
   const swap = commands.pullSteps({ stagedRoot, stagedState }).find((step) => step.id === 'pull-swap');
   await swap.run(ctx);
+  assert.equal(await swap.verify(ctx), true, 'verify passes when the copy is live and the backup is on disk');
   assert.equal(fs.readFileSync(path.join(live, 'v3/d1/marker'), 'utf8'), 'cloud-copy');
   const record = stateModule.readState(library.root);
   assert.equal(record.mode, 'local');

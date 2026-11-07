@@ -391,12 +391,14 @@ function pullSwapStep({ stagedRoot, stagedState }) {
       });
       return { message: hadLocal ? `Previous library kept at ${path.relative(ctx.dataRoot, previous)}` : 'Library switched' };
     },
+    // Both halves must be true: the cloud copy is live, and the library it
+    // replaced is still on disk under the backup the record names.
     async verify(ctx) {
       const live = local.localStatePath(ctx.dataRoot);
-      const snapshot = ctx.state().snapshot;
       if (!fs.existsSync(live)) return false;
-      if (snapshot && snapshot.kind === 'backup' && snapshot.path) return !fs.existsSync(path.join(ctx.dataRoot, snapshot.path));
-      return true;
+      const snapshot = ctx.state().snapshot;
+      if (!snapshot) return true;
+      return snapshot.kind === 'backup' && Boolean(snapshot.path) && fs.existsSync(path.join(ctx.dataRoot, snapshot.path));
     },
   };
 }
