@@ -11,6 +11,12 @@ const { patchDeployConfig, BUCKET_NAME } = require('./lib.cjs');
 
 const cloudDir = (dataRoot) => path.join(dataRoot, 'cloud');
 const configPath = (dataRoot) => path.join(cloudDir(dataRoot), 'snip/wrangler.json');
+/** The config the local app opens its own library with (never the cloud one). */
+function localConfigPath(dataRoot) {
+  const local = path.join(dataRoot, 'web/wrangler.local.jsonc');
+  if (fs.existsSync(local)) return local;
+  return path.join(dataRoot, 'web/wrangler.jsonc');
+}
 
 function runtimeSources(root) {
   return {
@@ -141,8 +147,8 @@ async function dryRunDeploy(wrangler, { dataRoot, accountId, outdir }) {
   return wrangler.run(args, { cwd: path.dirname(file), env: { CLOUDFLARE_ACCOUNT_ID: accountId } });
 }
 
-async function applyMigrations(wrangler, { dataRoot, accountId, remote = true, local = false, persistTo }) {
-  const file = configPath(dataRoot);
+async function applyMigrations(wrangler, { dataRoot, accountId, remote = true, local = false, persistTo, config }) {
+  const file = config || configPath(dataRoot);
   const args = ['d1', 'migrations', 'apply', 'DB', '--config', file];
   if (remote) args.push('--remote');
   if (local) args.push('--local');
@@ -217,28 +223,66 @@ async function exportLocal(wrangler, { dataRoot, output, config }) {
   return output;
 }
 
+
+/**
+ * A dump carries bookkeeping the destination already has or never had:
+ * `sqlite_sequence` does not exist in a fresh database, and the migration
+ * ledger is written by applying migrations first. Replaying either aborts the
+ * whole batch on a missing table or a primary-key clash, so those rows are
+ * dropped at import. Everything else the move copies is imported verbatim.
+ */
+function libraryStatements(statements) {
+  return statements.filter((statement) => {
+    const match = statement.match(/^\s*(?:INSERT\s+INTO|DELETE\s+FROM|UPDATE)\s+"?([A-Za-z0-9_]+)"?/i);
+    if (!match) return false;
+    const table = match[1];
+    if (/^(sqlite_|_cf_|_mf_|__)/i.test(table)) return false;
+    return table !== 'd1_migrations';
+  });
+}
+
+/**
+ * Write one batch to a private file and return its path. `wrangler d1 execute`
+ * has no stdin form (`--file -` is rejected as an unknown argument), so every
+ * batch goes through a 0600 file under the library's profile that is always
+ * removed again.
+ */
+function stageBatch(dataRoot, index, sql) {
+  const dir = path.join(dataRoot, '.snip/sql');
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const file = path.join(dir, `batch-${process.pid}-${index}.sql`);
+  fs.writeFileSync(file, sql, { mode: 0o600 });
+  return file;
+}
+
 /** Load a dump into the remote database. Batched; each batch is one request. */
 async function importRemote(wrangler, { dataRoot, accountId, statements, batchBytes = 900_000, onBatch }) {
   const file = configPath(dataRoot);
   const { batchStatements } = require('./lib.cjs');
-  const batches = batchStatements(statements, batchBytes);
-  for (let index = 0; index < batches.length; index++) {
-    const sql = batches[index].join(';\n') + ';';
-    const result = await wrangler.run(['d1', 'execute', 'DB', '--config', file, '--remote', '--file', '-'], {
-      cwd: path.dirname(file),
-      env: { CLOUDFLARE_ACCOUNT_ID: accountId },
-      input: sql,
-      timeoutMs: 10 * 60_000,
-    });
-    if (!result.ok) {
-      const known = classifyWranglerFailure(result);
-      if (known) throw known;
-      throw new StepError('IMPORT_FAILED', 'Loading the library into the cloud database failed.', {
-        hint: 'Run the same command again: the import restarts from a truncated database, so a partial import is never left behind.',
-        data: { batch: index + 1, batches: batches.length, output: failureMessage(result, 'wrangler d1 execute exited non-zero') },
+  const batches = batchStatements(libraryStatements(statements), batchBytes);
+  const staged = [];
+  try {
+    for (let index = 0; index < batches.length; index++) {
+      const sql = `${batches[index].join(';\n')};`;
+      const batchFile = stageBatch(dataRoot, index, sql);
+      staged.push(batchFile);
+      const result = await wrangler.run(['d1', 'execute', 'DB', '--config', file, '--remote', '--file', batchFile], {
+        cwd: path.dirname(file),
+        env: { CLOUDFLARE_ACCOUNT_ID: accountId },
+        timeoutMs: 10 * 60_000,
       });
+      if (!result.ok) {
+        const known = classifyWranglerFailure(result);
+        if (known) throw known;
+        throw new StepError('IMPORT_FAILED', 'Loading the library into the cloud database failed.', {
+          hint: 'Run the same command again: the import restarts from a truncated database, so a partial import is never left behind.',
+          data: { batch: index + 1, batches: batches.length, output: failureMessage(result, 'wrangler d1 execute exited non-zero') },
+        });
+      }
+      if (onBatch) onBatch({ index: index + 1, total: batches.length });
     }
-    if (onBatch) onBatch({ index: index + 1, total: batches.length });
+  } finally {
+    for (const batchFile of staged) { try { fs.unlinkSync(batchFile); } catch {} }
   }
   return { batches: batches.length };
 }
@@ -249,12 +293,13 @@ async function importRemote(wrangler, { dataRoot, accountId, statements, batchBy
  */
 async function importLocal(wrangler, { dataRoot, persistTo, statements, config }) {
   const { batchStatements } = require('./lib.cjs');
-  const batches = batchStatements(statements);
+  const batches = batchStatements(libraryStatements(statements));
   const defaultConfig = config || configPath(dataRoot);
   for (let index = 0; index < batches.length; index++) {
-    const sql = batches[index].join(';\n') + ';';
-    const args = ['d1', 'execute', 'DB', '--local', '--config', defaultConfig, '--file', '-', '--persist-to', persistTo];
-    const result = await wrangler.run(args, { cwd: dataRoot, input: sql, timeoutMs: 10 * 60_000 });
+    const sql = `${batches[index].join(';\n')};`;
+    const batchFile = stageBatch(dataRoot, index, sql);
+    const args = ['d1', 'execute', 'DB', '--local', '--config', defaultConfig, '--file', batchFile, '--persist-to', persistTo];
+    const result = await wrangler.run(args, { cwd: dataRoot, timeoutMs: 10 * 60_000 }).finally(() => { try { fs.unlinkSync(batchFile); } catch {} });
     if (!result.ok) {
       throw new StepError('IMPORT_FAILED', 'Loading the library into the new local database failed.', {
         hint: 'Run `pull` again; the staged copy is replaced, never half-used.',
@@ -267,6 +312,7 @@ async function importLocal(wrangler, { dataRoot, persistTo, statements, config }
 
 module.exports = {
   applyMigrations,
+  libraryStatements,
   bucketName: BUCKET_NAME,
   classifyWranglerFailure,
   cloudDir,
@@ -279,6 +325,7 @@ module.exports = {
   importRemote,
   inspectRuntime,
   listMigrations,
+  localConfigPath,
   localQuery,
   prepareDeployLayout,
   readDeployConfig,

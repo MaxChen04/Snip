@@ -350,16 +350,17 @@ function resourcesStep() {
     title: 'Creating storage',
     async run(ctx) {
       const accountId = ctx.cloud.accountId;
-      // guard is the only classifier (invariant 19). Resources consumes its
-      // answer; the assert below can only refuse, never re-decide.
-      const facts = ctx.work.classification;
-      if (!facts) {
+      // guard is the only classifier (invariant 19). Resources consumes the
+      // outcome guard persisted in cloud.json, because guard may have been
+      // verified-and-skipped on this invocation. The assert can only refuse.
+      const outcome = (ctx.state().cloud || {}).outcome;
+      if (!outcome) {
         throw new StepError('GUARD_MISSING', 'The account was never classified.', {
           hint: 'Run setup again; the guard step runs before anything is created.',
           retryable: true,
         });
       }
-      if (facts.outcome === 'foreign') throw foreignError(ctx, facts);
+      if (outcome === 'foreign') throw foreignError(ctx, { database: null });
 
       const databases = await ctx.deps.cloud.listD1(ctx.wrangler, { accountId });
       let database = databases.find((entry) => entry.name === D1_NAME) || null;
@@ -405,6 +406,9 @@ function guardStep() {
       const facts = await ctx.deps.classify(ctx);
       ctx.setWork({ classification: facts });
       if (facts.outcome === 'foreign') throw foreignError(ctx, facts);
+      // Persist the decision: a later invocation may skip this step entirely,
+      // and resources/verify/secrets must still know what was decided.
+      ctx.setCloud({ outcome: facts.outcome });
 
       if (facts.outcome === 'adopt-existing') {
         if (!ctx.flags.adoptExisting) {
@@ -439,10 +443,12 @@ function guardStep() {
       } else if (facts.outcome === 'adopt-empty') {
         ctx.setWork({ adopted: 'empty' });
         ctx.setCloud({ adoptedAt: new Date().toISOString(), adoptedFrom: 'legacy', adoptedLibrary: facts.counts });
-      } else if (facts.outcome === 'resume' && ctx.state().mode !== 'enabling') {
-        // Re-enabling a detached copy of this Mac's own library. The cloud copy
-        // is the one that kept running, so it is adopted rather than overwritten
-        // by a fresh import; the local library stays exactly where it is.
+      } else if (facts.outcome === 'resume' && ctx.cloud.detachedAt) {
+        // Re-enabling a detached copy of this Mac's own library. beginEnabling
+        // has already set mode `enabling`, so `detachedAt` is what distinguishes
+        // this from an interrupted run. The cloud copy is the one that kept
+        // running, so it is adopted rather than overwritten by a fresh import;
+        // the local library stays exactly where it is.
         ctx.setWork({ adopted: 'existing' });
         ctx.setCloud({
           adoptedAt: new Date().toISOString(),
@@ -467,6 +473,8 @@ function guardStep() {
       return {
         message: facts.outcome === 'fresh'
           ? 'This account is free'
+          : ctx.isMoveSkipped()
+            ? `Using this Mac’s existing cloud library (${facts.counts.refs} reference${facts.counts.refs === 1 ? '' : 's'})`
           : facts.outcome === 'resume'
             ? 'Continuing this Mac’s own setup'
             : facts.outcome === 'adopt-empty'
@@ -568,7 +576,7 @@ function secretsStep() {
       const accountId = ctx.cloud.accountId;
       const existing = new Set(await ctx.deps.cloud.listSecrets(ctx.wrangler, { dataRoot: ctx.dataRoot, accountId }));
       const stored = ctx.secrets() || {};
-      const adopted = Boolean(ctx.work.adopted);
+      const adopted = Boolean((ctx.state().cloud || {}).adoptedFrom);
       const next = { ...stored };
       // Adoption rules (§1.10): never overwrite SESSION_SECRET (it would log every
       // browser out), always rotate CAPTURE_TOKEN (its only holder is the capture
@@ -595,9 +603,11 @@ function secretsStep() {
       const names = ['SESSION_SECRET', 'CAPTURE_TOKEN', 'OWNER_LINK_SECRET', 'TRANSFER_TOKEN'];
       const proof = {};
       // Functional proof that the deployed Worker reads the values it was given.
+      // `/agent/ping` is a GET; a 426 there would mean the protocol header is
+      // missing, which is also a failure of this check.
       try {
         const ping = await ctx.deps.fetch(new URL('/agent/ping', ctx.cloud.url), {
-          method: 'POST',
+          method: 'GET',
           headers: { authorization: `Bearer ${next.captureToken}`, 'x-snip-capture-protocol': '3' },
           signal: AbortSignal.timeout(15000),
         });
@@ -608,8 +618,16 @@ function secretsStep() {
         ctx.emit.log('warn', `Could not reach ${ctx.cloud.url} yet (${error.message}); the secret check will run again on the next step.`);
         proof.captureToken = null;
       }
-      const transfer = ctx.transfer();
-      const status = await transfer.status().catch(() => undefined);
+      // A secret write is not instantly live at the edge, so the first status
+      // request right after `secret bulk` can still 404. Poll briefly rather
+      // than declaring a good deploy broken.
+      let status = null;
+      for (let attempt = 0; attempt < 12; attempt++) {
+        ctx.checkCancel();
+        status = await ctx.deps.transferOf(ctx).status().catch(() => undefined) || null;
+        if (status && typeof status.version === 'string' && status.version) break;
+        if (attempt < 11) await ctx.deps.sleep(1500);
+      }
       // One version constant lives in the Worker; record exactly what this deploy
       // reported so later checks compare against a record, not an engine constant.
       if (!status || typeof status.version !== 'string' || !status.version) {
@@ -639,10 +657,10 @@ function quiesceStep() {
   return {
     id: 'quiesce',
     title: 'Pausing captures',
-    skip: (ctx) => ctx.work.libraryEmpty === true || ctx.work.adopted === 'existing',
-    skipMessage: (ctx) => ctx.work.adopted === 'existing' ? 'Using the existing cloud library; nothing is paused' : 'This library is empty, so there is nothing to pause',
+    skip: async (ctx) => (await ctx.libraryFacts()).empty === true || ctx.isMoveSkipped(),
+    skipMessage: (ctx) => ctx.isMoveSkipped() ? 'Using the existing cloud library; nothing is paused' : 'This library is empty, so there is nothing to pause',
     async run(ctx) {
-      const origin = ctx.work.localOrigin;
+      const { localOrigin: origin } = await ctx.libraryFacts();
       const paused = new Set(ctx.state().pausedForMove || []);
       const api = origin ? ctx.deps.local.createLocalApi(origin) : null;
       if (api) {
@@ -666,7 +684,7 @@ function quiesceStep() {
       return { message: paused.size ? `Paused ${paused.size} capture${paused.size === 1 ? '' : 's'}` : 'Nothing was capturing', detail: JSON.stringify({ paused: [...paused] }) };
     },
     async verify(ctx) {
-      const origin = ctx.work.localOrigin;
+      const { localOrigin: origin } = await ctx.libraryFacts();
       if (!origin) return true;
       const agent = await ctx.deps.local.createLocalApi(origin).agent().catch(() => null);
       return !agent || agent.activity !== 'busy';
@@ -678,8 +696,8 @@ function exportStep() {
   return {
     id: 'export',
     title: 'Copying the library snapshot',
-    skip: (ctx) => ctx.work.libraryEmpty === true || ctx.work.adopted === 'existing',
-    skipMessage: (ctx) => ctx.work.adopted === 'existing' ? 'Using the existing cloud library; nothing is copied' : 'This library is empty, so there is nothing to copy',
+    skip: async (ctx) => (await ctx.libraryFacts()).empty === true || ctx.isMoveSkipped(),
+    skipMessage: (ctx) => ctx.isMoveSkipped() ? 'Using the existing cloud library; nothing is copied' : 'This library is empty, so there is nothing to copy',
     async run(ctx) {
       // Export runs after release, so this Worker is the only one on the persist
       // directory. It reads the bucket through the real FILES binding; the D1
@@ -690,8 +708,7 @@ function exportStep() {
       await ctx.deps.deploy.exportLocal(ctx.wrangler, {
         dataRoot: ctx.dataRoot,
         output: dump,
-        config: ctx.work.localConfig,
-        persistTo: ctx.deps.local.localStatePath(ctx.dataRoot),
+        config: (await ctx.libraryFacts()).localConfig,
       });
 
       const token = ctx.transferToken() || randomSecret();
@@ -701,7 +718,12 @@ function exportStep() {
         const sql = fs.readFileSync(dump, 'utf8');
         const tables = { ...(manifest.tables || {}) };
         const counts = countsFromDump(sql);
-        for (const [table, count] of Object.entries(counts)) if (!(table in tables)) tables[table] = count;
+        for (const [table, count] of Object.entries(counts)) {
+          // The dump mentions SQLite internals (`sqlite_sequence`) that carry no
+          // library meaning and legitimately differ between two databases.
+          if (/^(sqlite_|_cf_|_mf_)/.test(table)) continue;
+          if (!(table in tables)) tables[table] = count;
+        }
         const keys = (manifest.keys || []).map((entry) => ({
           key: entry.key,
           size: Number(entry.size) || 0,
@@ -724,14 +746,15 @@ function exportStep() {
       });
       fs.writeFileSync(path.join(directory, 'manifest.json'), `${JSON.stringify({ takenAt: new Date().toISOString(), tables: snapshot.tables, keys: snapshot.keys.length, bytes: snapshot.totalBytes }, null, 2)}\n`, { mode: 0o600 });
       ctx.setWork({ library: { ...snapshot, directory } });
-      ctx.setCloud({
-        snapshot: {
+      ctx.save((next) => {
+        next.snapshot = {
           path: path.relative(ctx.dataRoot, directory),
           takenAt: new Date().toISOString(),
           refs: snapshot.tables.refs || 0,
           files: snapshot.keys.length,
           bytes: snapshot.totalBytes,
-        },
+        };
+        return next;
       });
       return {
         message: `${snapshot.keys.length} file${snapshot.keys.length === 1 ? '' : 's'}, ${snapshot.tables.refs || 0} reference${(snapshot.tables.refs || 0) === 1 ? '' : 's'}`,
@@ -739,8 +762,8 @@ function exportStep() {
       };
     },
     async verify(ctx) {
-      const record = ctx.state().cloud || {};
-      return Boolean(record.snapshot && record.snapshot.path && fs.existsSync(path.join(ctx.dataRoot, record.snapshot.path, 'dump.sql')) && fs.existsSync(path.join(ctx.dataRoot, record.snapshot.path, 'files.json')));
+      const snapshot = ctx.state().snapshot || {};
+      return Boolean(snapshot.path && fs.existsSync(path.join(ctx.dataRoot, snapshot.path, 'dump.sql')) && fs.existsSync(path.join(ctx.dataRoot, snapshot.path, 'files.json')));
     },
   };
 }
@@ -749,10 +772,10 @@ function releaseStep() {
   return {
     id: 'release',
     title: 'Waiting for the local server to stop',
-    skip: (ctx) => ctx.work.libraryEmpty === true || ctx.work.adopted === 'existing',
-    skipMessage: (ctx) => ctx.work.adopted === 'existing' ? 'Using the existing cloud library; the local server stays up' : 'This library is empty, so nothing holds the library open',
+    skip: async (ctx) => (await ctx.libraryFacts()).empty === true || ctx.isMoveSkipped(),
+    skipMessage: (ctx) => ctx.isMoveSkipped() ? 'Using the existing cloud library; the local server stays up' : 'This library is empty, so nothing holds the library open',
     async run(ctx) {
-      const origin = ctx.work.localOrigin;
+      const { localOrigin: origin } = await ctx.libraryFacts();
       if (!origin) return { message: 'Nothing is serving this library' };
       const deadline = ctx.deps.now() + 30_000;
       while (ctx.deps.now() < deadline) {
@@ -766,7 +789,7 @@ function releaseStep() {
       });
     },
     async verify(ctx) {
-      const origin = ctx.work.localOrigin;
+      const { localOrigin: origin } = await ctx.libraryFacts();
       return !origin || !(await ctx.deps.local.reachable(origin));
     },
   };
@@ -776,11 +799,11 @@ function importStep() {
   return {
     id: 'import',
     title: 'Copying the library to Cloudflare',
-    skip: (ctx) => ctx.work.libraryEmpty === true || ctx.work.adopted === 'existing',
-    skipMessage: (ctx) => ctx.work.adopted === 'existing' ? 'Using the existing cloud library; nothing is uploaded' : 'This library is empty, so there is nothing to upload',
+    skip: async (ctx) => (await ctx.libraryFacts()).empty === true || ctx.isMoveSkipped(),
+    skipMessage: (ctx) => ctx.isMoveSkipped() ? 'Using the existing cloud library; nothing is uploaded' : 'This library is empty, so there is nothing to upload',
     async run(ctx) {
       const record = ctx.state().cloud || {};
-      const snapshot = record.snapshot;
+      const snapshot = ctx.state().snapshot;
       if (!snapshot) throw new StepError('IMPORT_FAILED', 'There is no snapshot to copy.', { hint: 'Run setup again; the snapshot step runs before this one.' });
       const directory = path.join(ctx.dataRoot, snapshot.path);
       const dump = path.join(directory, 'dump.sql');
@@ -807,6 +830,11 @@ function importStep() {
       });
 
       const transfer = ctx.transfer();
+      // Sizes come from one bucket listing. A HEAD is not usable for this: the
+      // edge strips content-length from a bodyless response, so every object
+      // would look empty.
+      const remote = await transfer.manifest();
+      const existing = new Map((remote.keys || []).map((entry) => [entry.key, Number(entry.size) || 0]));
       let uploaded = 0;
       let skipped = 0;
       const queue = [...files];
@@ -818,8 +846,7 @@ function importStep() {
             ctx.checkCancel();
             const entry = queue.shift();
             if (!entry) return;
-            const existing = await transfer.head(entry.key);
-            if (existing !== null && existing === entry.size) {
+            if (existing.get(entry.key) === entry.size) {
               skipped++;
               continue;
             }
@@ -843,12 +870,11 @@ function importStep() {
       };
     },
     async verify(ctx) {
-      const record = ctx.state().cloud || {};
-      if (!record.snapshot) return false;
-      const transfer = ctx.transfer();
-      const remote = await transfer.status().catch(() => null);
+      const snapshot = ctx.state().snapshot;
+      if (!snapshot) return false;
+      const remote = await ctx.transfer().status().catch(() => null);
       if (!remote || !remote.counts) return false;
-      return Number(remote.counts.refs || 0) === Number(record.snapshot.refs || 0);
+      return Number(remote.counts.refs || 0) === Number(snapshot.refs || 0);
     },
   };
 }
@@ -879,11 +905,11 @@ function verifyStep() {
     title: 'Checking the copy',
     // An adopted library was not copied, so it is still checked below; an empty
     // local library has nothing to compare.
-    skip: (ctx) => ctx.work.libraryEmpty === true && ctx.work.adopted !== 'existing',
+    skip: async (ctx) => (await ctx.libraryFacts()).empty === true && !ctx.isMoveSkipped(),
     skipMessage: () => 'This library is empty, so there is nothing to check',
     async run(ctx) {
       const record = ctx.state().cloud || {};
-      if (ctx.work.adopted === 'existing') {
+      if (ctx.isMoveSkipped()) {
         // No copy was made, so there is nothing to compare: check the adopted
         // library is reachable and readable, and record its real counts.
         const status = await ctx.deps.transferOf(ctx).status().catch(() => null);
@@ -893,9 +919,10 @@ function verifyStep() {
             data: { url: record.url },
           });
         }
-        ctx.setCloud({
-          transfer: { tables: status.counts, keys: 0, bytes: 0, verifiedAt: new Date().toISOString() },
-          lastVerifiedAt: new Date().toISOString(),
+        ctx.save((next) => {
+          next.transfer = { tables: status.counts, keys: 0, bytes: 0, verifiedAt: new Date().toISOString() };
+          next.cloud = { ...(next.cloud || {}), lastVerifiedAt: new Date().toISOString() };
+          return next;
         });
         return {
           message: `adopted · ${status.counts.refs} reference${Number(status.counts.refs) === 1 ? '' : 's'}`,
@@ -903,12 +930,15 @@ function verifyStep() {
         };
       }
 
-      const directory = path.join(ctx.dataRoot, record.snapshot.path);
+      const directory = path.join(ctx.dataRoot, ctx.state().snapshot.path);
       const files = JSON.parse(fs.readFileSync(path.join(directory, 'files.json'), 'utf8')).keys || [];
       const dump = path.join(directory, 'dump.sql');
       const columns = columnsFromDump(fs.readFileSync(dump, 'utf8'));
       const excluded = snapshotExcluded(directory);
-      const tables = Object.keys(snapshotTables(record.snapshot, directory)).filter((table) => !excluded.has(table));
+      const tables = Object.keys(snapshotTables(ctx.state().snapshot, directory))
+        .filter((table) => !excluded.has(table))
+        // Defensive: never compare SQLite internals, even with an old snapshot.
+        .filter((table) => !/^(sqlite_|_cf_|_mf_)/.test(table));
 
       const remotePerTable = {};
       const localPerTable = {};
@@ -918,7 +948,7 @@ function verifyStep() {
         const localRow = (await ctx.deps.deploy.localQuery(ctx.wrangler, {
           dataRoot: ctx.dataRoot,
           sql,
-          config: ctx.work.localConfig,
+          config: (await ctx.libraryFacts()).localConfig,
           persistTo: ctx.deps.local.localStatePath(ctx.dataRoot),
         }))[0] || {};
         remotePerTable[table] = { rows: Number(remoteRow.rows) || 0, sig: Number(remoteRow.sig) || 0 };
@@ -947,10 +977,12 @@ function verifyStep() {
       }))[0] : null) || null;
 
       const transfer = ctx.transfer();
+      const manifest = await transfer.manifest();
+      const remoteSizes = new Map((manifest.keys || []).map((entry) => [entry.key, Number(entry.size) || 0]));
       let present = 0;
       const missing = [];
       for (const entry of files) {
-        const size = await transfer.head(entry.key);
+        const size = remoteSizes.has(entry.key) ? remoteSizes.get(entry.key) : null;
         if (size === null) missing.push(entry.key);
         else if (size !== entry.size) {
           throw new StepError('VERIFY_SIZE_MISMATCH', 'A file in the cloud copy has a different size.', { data: { key: entry.key, local: entry.size, remote: size } });
@@ -969,26 +1001,26 @@ function verifyStep() {
         });
       }
 
-      const entries = Object.values(snapshotTables(record.snapshot, directory)).reduce((sum, count) => sum + (Number(count) || 0), 0);
-      ctx.setCloud({
-        transfer: {
-          tables: snapshotTables(record.snapshot, directory),
+      const entries = Object.values(snapshotTables(ctx.state().snapshot, directory)).reduce((sum, count) => sum + (Number(count) || 0), 0);
+      ctx.save((next) => {
+        next.transfer = {
+          tables: snapshotTables(next.snapshot, directory),
           keys: present,
           bytes: files.reduce((sum, entry) => sum + entry.size, 0),
           digest,
           verifiedAt: new Date().toISOString(),
-        },
-        lastVerifiedAt: new Date().toISOString(),
+        };
+        next.cloud = { ...(next.cloud || {}), lastVerifiedAt: new Date().toISOString() };
+        return next;
       });
       return {
         message: `${entries} row${entries === 1 ? '' : 's'}, ${present} file${present === 1 ? '' : 's'}, all verified`,
         detail: digest,
-        data: { digest, tables: snapshotTables(record.snapshot, directory), keys: present },
+        data: { digest, tables: snapshotTables(ctx.state().snapshot, directory), keys: present },
       };
     },
     async verify(ctx) {
-      const record = ctx.state().cloud || {};
-      return Boolean(record.transfer && record.transfer.verifiedAt);
+      return Boolean(ctx.state().transfer && ctx.state().transfer.verifiedAt);
     },
   };
 }
@@ -1000,7 +1032,7 @@ function ownerStep() {
     async run(ctx) {
       const stored = ctx.secrets() || {};
       if (!stored.ownerLinkSecret) throw new StepError('SECRET_MISSING', 'The owner sign-in secret is missing.', { hint: 'Run `owner rotate` to replace it.' });
-      const transfer = ctx.transfer();
+      const transfer = ctx.deps.transferOf(ctx);
       const status = await transfer.status().catch(() => null);
       if (status && status.hasOwner) return { message: `Owner ${status.ownerId || 'owner'} is already set up` };
 
@@ -1016,7 +1048,7 @@ function ownerStep() {
       ctx.setCloud({ ownerId, ownerLinkMintedAt: new Date().toISOString() });
 
       ctx.emit.human('owner', 'open_url', minted.link, 'Sign in to your Snip in the browser, then come back');
-      if (!ctx.flags.noOpen) await ctx.openUrl(minted.link).catch(() => {});
+      if (!ctx.flags.noOpen && !ctx.flags['no-open']) await ctx.openUrl(minted.link).catch(() => {});
 
       if (loopback) {
         try {
@@ -1049,7 +1081,7 @@ function ownerStep() {
       return { message: 'Signed in' };
     },
     async verify(ctx) {
-      const status = await ctx.transfer().status().catch(() => null);
+      const status = await ctx.deps.transferOf(ctx).status().catch(() => null);
       return Boolean(status && status.hasOwner);
     },
   };
@@ -1123,4 +1155,4 @@ function setupSteps() {
   ];
 }
 
-module.exports = { EMPTY_LIBRARY_STEPS, ENABLE_STEPS, classifyAccount, bundleHash, finishStep, guessLogin, preflightStep, readLegacyDeployConfig, setupSteps, ownerSecretHash };
+module.exports = { EMPTY_LIBRARY_STEPS, ENABLE_STEPS, classifyAccount, bundleHash, finishStep, guessLogin, ownerStep, preflightStep, readLegacyDeployConfig, setupSteps, ownerSecretHash };
