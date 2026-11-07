@@ -43,6 +43,20 @@ export function classifyChanges(porcelain) {
   return { lockfiles: files.filter(file => LOCKFILES.has(file)), edits: files.filter(file => !LOCKFILES.has(file)) }
 }
 
+/**
+ * True when this Mac is using its cloud library. Read from cloud.json only: the
+ * engine owns that file, and an unreadable one means "local", so an update never
+ * deploys on a guess.
+ */
+export function cloudMode(dataRoot = ROOT) {
+  try {
+    const state = JSON.parse(fs.readFileSync(path.join(dataRoot, ".snip/cloud.json"), "utf8"))
+    return state && state.mode === "cloud" && Boolean(state.cloud && state.cloud.url)
+  } catch {
+    return false
+  }
+}
+
 const log = message => console.log(`\x1b[1m›\x1b[0m ${message}`)
 const fail = message => { console.error(`\n\x1b[31m✗\x1b[0m ${message}`); process.exit(1) }
 const git = (...args) => execFileSync("git", args, { cwd: ROOT, encoding: "utf8" }).trim()
@@ -150,6 +164,12 @@ async function main(argv) {
   if (steps.browser) run("Installing the capture browser", process.execPath, [path.join(ROOT, "node_modules/playwright/cli.js"), "install", "chromium"], { cwd: path.join(ROOT, "capture") })
   if (steps.migrate) migrate()
   if (steps.buildWeb) npm("Building the web app", ["run", "build", "-w", "web"])
+  // Cloud mode: the hosted Worker runs the same bundle, so it must be migrated
+  // and redeployed before the new capture protocol starts. Migrations are
+  // additive, so an old Worker with the new schema is safe; the reverse is not.
+  if (steps.buildWeb && cloudMode()) {
+    run("Deploying the cloud Worker", process.execPath, [path.join(ROOT, "desktop/provision/cli.cjs"), "deploy", "--root", ROOT, "--data-root", ROOT, "--json"], { cwd: ROOT })
+  }
   const app = mac && installedApp()
   if (app && steps.rebuildApp) {
     npm("Installing Snip.app dependencies", ["ci", "--prefix", "desktop", "--no-audit", "--no-fund"])

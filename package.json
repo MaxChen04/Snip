@@ -17,7 +17,7 @@
     "app": "npm ci --prefix desktop && npm run build -w web && npm run build --prefix desktop",
     "app:dev": "npm start --prefix desktop -- --dev",
     "update": "node scripts/update.mjs",
-    "setup:cloudflare": "node scripts/cloudflare.mjs setup",
+    "setup:cloudflare": "node scripts/cloudflare.mjs",
     "db:migrate:remote": "node scripts/cloudflare.mjs migrate",
     "doctor": "node scripts/doctor.mjs"
   }
