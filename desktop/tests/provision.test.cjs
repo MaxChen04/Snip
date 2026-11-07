@@ -2166,3 +2166,49 @@ test('deploy still fails when the Worker never answers its status route', async 
   ctx.reload();
   await assert.rejects(() => commands.commandDeploy(ctx), (error) => error.code === 'DEPLOY_VERIFY_FAILED' && error.retryable === true);
 });
+
+test('every deploy uploads the bundle again instead of replaying a journaled run', async () => {
+  const library = fakeLibrary();
+  stateModule.setMode(library.root, 'cloud');
+  stateModule.updateState(library.root, (next) => {
+    next.cloud = { url: PROVIDED, accountId: 'acct', d1: { name: 'snip', id: 'd1' }, kv: { name: 'OAUTH_KV', id: 'kv' }, bucket: 'snip-files', workerVersion: '1.1.2' };
+    // A finished earlier deploy in the journal.
+    next.steps = [
+      { id: 'deploy-preflight', status: 'done', at: new Date().toISOString(), detail: '' },
+      { id: 'deploy-schema', status: 'done', at: new Date().toISOString(), detail: '' },
+      { id: 'deploy-worker', status: 'done', at: new Date().toISOString(), detail: '' },
+      { id: 'deploy-verify', status: 'done', at: new Date().toISOString(), detail: '' },
+    ];
+    return next;
+  });
+  let uploads = 0;
+  let migrations = 0;
+  const emitter = collectedEmitter();
+  const ctx = createContext({
+    root: library.root, dataRoot: library.root, flags: {}, emit: emitter.emit, api: {},
+    wrangler: { bin: '/x', run: async () => ({ ok: true, stdout: '', stderr: '' }) },
+    deps: {
+      fetch: async () => { throw new Error('no network'); },
+      sleep: async () => {},
+      cloud: { ...require('../provision/cloud.cjs'), putSecrets: async () => {}, deleteSecret: async () => {} },
+      deploy: {
+        ...deploy,
+        configExists: () => true,
+        runtimeProblem: () => null,
+        applyMigrations: async () => { migrations++; return { ok: true }; },
+        prepareDeployLayout: () => ({}),
+        deployWorker: async () => { uploads++; return { ok: true }; },
+        bundleHash: () => 'hash',
+      },
+      transferOf: () => ({ status: async () => ({ version: '1.1.3' }) }),
+    },
+  });
+  ctx.reload();
+  const result = await commands.commandDeploy(ctx);
+  assert.equal(result.ok, true);
+  assert.equal(uploads, 1, 'the bundle is uploaded even though the journal says it was done');
+  assert.equal(migrations, 1, 'migrations are re-applied too');
+  const started = emitter.events.filter((event) => event.event === 'step' && event.status === 'started').map((event) => event.step);
+  assert.deepEqual(started, ['deploy-preflight', 'deploy-schema', 'deploy-worker', 'deploy-verify']);
+  assert.equal(stateModule.readState(library.root).cloud.workerVersion, '1.1.3');
+});

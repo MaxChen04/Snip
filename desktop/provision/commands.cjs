@@ -526,7 +526,10 @@ async function commandDeploy(ctx) {
       async verify() { return true; },
     },
   ];
-  const result = await require('./engine.cjs').runSteps(steps, ctx);
+  // Never journaled: deploying is the action, so a second `deploy` must upload
+  // the bundle again rather than report a previous run as done. `update.mjs`
+  // calls this after every build.
+  const result = await require('./engine.cjs').runSteps(steps, ctx, { journal: false });
   ctx.reload();
   return { ok: true, code: 'OK', mode: ctx.state().mode, data: { url: record.url, steps: result.completed }, message: `Deployed ${record.url}` };
 }
@@ -554,7 +557,8 @@ async function commandMigrate(ctx) {
       async verify() { return true; },
     },
   ];
-  await require('./engine.cjs').runSteps(steps, ctx);
+  // Same reason as deploy: migrating is the action, so it always runs.
+  await require('./engine.cjs').runSteps(steps, ctx, { journal: false });
   return { ok: true, code: 'OK', mode: ctx.state().mode, data: {}, message: 'Migrations applied' };
 }
 
