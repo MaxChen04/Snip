@@ -332,7 +332,7 @@ export function OwnerLinkDialog({
       <DialogContent className="sm:max-w-[480px]">
         <DialogHeader>
           <DialogTitle>Sign in another browser</DialogTitle>
-          <DialogDescription>Open this link in the browser you want to sign in, on this Mac or on another one.</DialogDescription>
+          <DialogDescription>Open this link in the browser you want to sign in, on this Mac or any other device.</DialogDescription>
         </DialogHeader>
         {link ? (
           <div className="flex flex-col gap-3">
