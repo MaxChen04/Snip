@@ -513,6 +513,50 @@ test("one Worker version, reported identically by the transfer and app status ro
     assert.equal(cloud.version, WORKER_VERSION)
   }))
 
+test("ensureOwner upserts in place and never undoes sign-out-all or touches passkeys", () =>
+  withWorker(async ({ database, env }) => {
+    const { ensureOwner } = await import("../worker/auth")
+    await ensureOwner(env, "max", "max", "hash-1")
+    const created = await database.prepare(`SELECT * FROM owners WHERE id = 'max'`).first<{ sessions_epoch: number; label: string; owner_secret_hash: string }>()
+    assert.deepEqual([created!.sessions_epoch, created!.label, created!.owner_secret_hash], [0, "max", "hash-1"])
+
+    // The owner signs out everywhere, then signs in again through a fresh link.
+    await database.prepare(`UPDATE owners SET sessions_epoch = 3 WHERE id = 'max'`).run()
+    await database
+      .prepare(`INSERT INTO passkeys (id, owner_id, public_key, counter, created_at) VALUES ('k1', 'max', ?2, 0, '2026-01-01T00:00:00Z')`)
+      .bind("k1", new Uint8Array([1, 2, 3]))
+      .run()
+
+    await ensureOwner(env, "max", null, null)
+    const after = await database.prepare(`SELECT * FROM owners WHERE id = 'max'`).first<{ sessions_epoch: number; label: string; owner_secret_hash: string }>()
+    assert.equal(after!.sessions_epoch, 3, "signing in again must not restore sessions the owner ended")
+    assert.equal(after!.label, "max", "an existing label is kept")
+    assert.equal(after!.owner_secret_hash, "hash-1", "and so is the recorded secret hash")
+    assert.equal((await database.prepare(`SELECT count(*) AS n FROM passkeys`).first<{ n: number }>())!.n, 1, "passkeys are never touched")
+
+    // `owner rotate` supplies a new hash; that one replaces the old value.
+    await ensureOwner(env, "max", "Max", "hash-2")
+    assert.equal((await database.prepare(`SELECT owner_secret_hash FROM owners WHERE id = 'max'`).first<{ owner_secret_hash: string }>())!.owner_secret_hash, "hash-2")
+
+    // A brand-new identity inherits the current epoch instead of resetting the counter to 0.
+    await ensureOwner(env, "second", "second")
+    assert.equal((await database.prepare(`SELECT sessions_epoch FROM owners WHERE id = 'second'`).first<{ sessions_epoch: number }>())!.sessions_epoch, 3)
+  }))
+
+test("an adopted library's owner is the id the engine must mint links for", () =>
+  withWorker(async ({ database, call }) => {
+    const status = async () => {
+      const body = (await (await call("/transfer/status", { headers: bearer }, transfer)).json()) as { hasOwner: boolean; ownerId: string | null }
+      return { hasOwner: body.hasOwner, ownerId: body.ownerId }
+    }
+    assert.deepEqual(await status(), { hasOwner: false, ownerId: null }, "a legacy install with no owner row falls back to decision 15")
+
+    // Two rows, the later one created first in wall-clock terms: the install's first identity wins.
+    await database.prepare(`INSERT INTO owners (id, label, created_at) VALUES ('max', 'max', '2026-01-01T00:00:00Z')`).run()
+    await database.prepare(`INSERT INTO owners (id, label, created_at) VALUES ('second-person', 'second-person', '2026-02-01T00:00:00Z')`).run()
+    assert.deepEqual(await status(), { hasOwner: true, ownerId: "max" }, "§4.2.1: the exact ownerId, never a default")
+  }))
+
 test("cloud status reports the owner, methods, counts and the capture agent", () =>
   withWorker(async ({ database, local }) => {
     const initial = (await (await local("/api/cloud-status", {}, { DEV_LOGIN: "max" })).json()) as Record<string, unknown>

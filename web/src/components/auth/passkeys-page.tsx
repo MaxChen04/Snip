@@ -15,7 +15,7 @@ import {
 import { AuthError, AuthShell } from "@/components/auth/auth-shell"
 import { notify } from "@/components/notify"
 import { api, type Me, type PasskeyDevice } from "@/lib/api"
-import { registerPasskey } from "@/lib/passkeys"
+import { ALREADY_ADDED, registerPasskey } from "@/lib/passkeys"
 
 /**
  * The owner's devices. A passkey is per-device and owner-only: it is not an invite, and a second
@@ -59,9 +59,11 @@ export function PasskeysPage() {
     setAdding(true)
     setAddError(null)
     try {
-      await registerPasskey(label.trim() || defaultLabel())
+      const { duplicate } = await registerPasskey(label.trim() || defaultLabel())
       setLabel("")
-      notify("Passkey added")
+      // The server also reports a duplicate, for the stale-options case the browser's
+      // excludeCredentials cannot catch. Both paths say the same thing.
+      notify(duplicate ? ALREADY_ADDED : "Passkey added")
       await load()
     } catch (e) {
       setAddError((e as Error).message)

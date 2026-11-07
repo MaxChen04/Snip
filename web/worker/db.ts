@@ -798,6 +798,11 @@ export async function libraryCounts(db: D1Database): Promise<LibraryCounts> {
   return row ?? { refs: 0, pages: 0, animations: 0, collections: 0 }
 }
 
+/**
+ * The install's owner: its first identity. Contracts §4.2.1 requires the engine to mint the owner
+ * link for exactly this id when an adopted library already has one, so the ordering has to be
+ * stable and this must never invent a row.
+ */
 export async function firstOwner(db: D1Database): Promise<{ id: string; label: string | null } | null> {
   return db.prepare(`SELECT id, label FROM owners ORDER BY created_at, id LIMIT 1`).first<{ id: string; label: string | null }>()
 }
@@ -908,14 +913,42 @@ export async function getPasskeyLogin(
   }
 }
 
+/**
+ * Stores a credential, or refreshes the one row with that id.
+ *
+ * Registration can slip past `excludeCredentials` — a stale options blob, a second tab — and then
+ * the same credential arrives twice. A plain INSERT would hit the PRIMARY KEY and surface as a
+ * 500, so the second write upserts: the authenticator just proved possession again, so the key,
+ * counter, transports and last-used time are current. `owner_id`, `device_label` and `created_at`
+ * are deliberately untouched, so an existing credential is never reassigned to another owner and
+ * the device keeps the name it was given (contracts §4.2.1).
+ *
+ * `"other-owner"` is the one case that writes nothing: a credential id already held by a different
+ * owner is refused rather than silently overwritten. That cannot happen through the UI (an
+ * authenticator mints a distinct credential per user and per RP), but a corrupted or forged
+ * response must not be able to take over someone else's row.
+ */
 export async function addPasskey(
   db: D1Database,
   passkey: { id: string; ownerId: string; publicKey: ArrayBuffer; counter: number; transports?: string[]; deviceLabel?: string | null },
-): Promise<void> {
+): Promise<"created" | "refreshed" | "other-owner"> {
+  const existing = await db.prepare(`SELECT owner_id FROM passkeys WHERE id = ?`).bind(passkey.id).first<{ owner_id: string }>()
+  if (existing && existing.owner_id !== passkey.ownerId) return "other-owner"
   await db
-    .prepare(`INSERT INTO passkeys (id, owner_id, public_key, counter, transports, device_label, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+    .prepare(
+      `INSERT INTO passkeys (id, owner_id, public_key, counter, transports, device_label, created_at, last_used_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+       ON CONFLICT (id) DO UPDATE SET
+         public_key = excluded.public_key,
+         counter = excluded.counter,
+         transports = excluded.transports,
+         -- Re-registering is a fresh proof of possession, so it counts as a use. A brand-new row
+         -- keeps last_used_at NULL and reads "Never used" until the first sign-in.
+         last_used_at = excluded.created_at`,
+    )
     .bind(passkey.id, passkey.ownerId, passkey.publicKey, passkey.counter, JSON.stringify(passkey.transports ?? []), passkey.deviceLabel ?? null, now())
     .run()
+  return existing ? "refreshed" : "created"
 }
 
 export async function touchPasskey(db: D1Database, id: string, counter: number): Promise<void> {

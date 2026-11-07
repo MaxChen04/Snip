@@ -188,7 +188,15 @@ export const requireSession: MiddlewareHandler<AppEnv> = async (c, next) => {
   await next()
 }
 
-/** Creates the owner row on first sign-in and refreshes the recorded secret hash afterwards. */
+/**
+ * Creates the owner row on first sign-in, or updates the existing one in place.
+ *
+ * Contracts §4.2.1: this is an upsert on `id` that **never changes `sessions_epoch`** — signing in
+ * again must not un-revoke sessions the owner ended — and it never touches `passkeys` or any
+ * other table. A brand-new row inherits `max(sessions_epoch)` so it cannot reset a sign-out-all
+ * either, and an existing label or secret hash is only replaced when a new value is supplied
+ * (`owner rotate` sends one; a plain link does not).
+ */
 export async function ensureOwner(env: Env, ownerId: string, label?: string | null, secretHash?: string | null) {
   await env.DB.prepare(
     `INSERT INTO owners (id, label, created_at, sessions_epoch, owner_secret_hash)
