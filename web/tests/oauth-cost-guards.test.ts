@@ -73,7 +73,7 @@ test("hosted OAuth guards reject before KV and preserve normal OAuth and local r
     })
 
     await t.test("all expensive OAuth/auth paths stop before provider KV or login work", async () => {
-      for (const [path, method] of [["/register", "POST"], ["/token", "POST"], ["/auth/login", "GET"], ["/auth/callback", "GET"], ["/authorize", "GET"], ["/authorize", "POST"]]) {
+      for (const [path, method] of [["/register", "POST"], ["/token", "POST"], ["/auth/login", "GET"], ["/auth/callback", "GET"], ["/authorize", "GET"], ["/authorize", "POST"], ["/auth/passkey/login/options", "GET"], ["/auth/passkey/login/verify", "POST"], ["/auth/owner", "POST"]]) {
         const response = await request(path, method, "deny", { headers: { origin: "https://mcp-client.test" } })
         assert.equal(response.status, 429, path)
         assert.equal(response.headers.get("x-test-kv-calls"), "0", path)

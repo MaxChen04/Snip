@@ -12,7 +12,7 @@ The application Worker uses Cloudflare's native [Rate Limiting binding](https://
 | --- | --- | --- |
 | `OAUTH_REGISTER_LIMITER` | `/register` | 10 attempts / 60 seconds |
 | `OAUTH_TOKEN_LIMITER` | `/token` | 60 attempts / 60 seconds |
-| `OAUTH_LOGIN_LIMITER` | `/auth/login`, `/auth/callback` | 30 attempts / 60 seconds for each endpoint |
+| `OAUTH_LOGIN_LIMITER` | `/auth/login`, `/auth/callback`, `/auth/passkey/login/options`, `/auth/passkey/login/verify`, `/auth/owner` | 30 attempts / 60 seconds for each endpoint |
 | `OAUTH_AUTHORIZE_LIMITER` | `/authorize` (GET and POST share a bucket) | 30 attempts / 60 seconds |
 
 These are starting thresholds for a personal instance, not measured capacity limits. A typical MCP connection registers once, completes sign-in and consent, then exchanges a code for tokens. A token refresh shares the token endpoint's higher allowance. Change each binding's `simple.limit` in your deploy config to accommodate your actual number of clients. `simple.period` must be `10` or `60`; the response always asks clients to wait a conservative 60 seconds.
