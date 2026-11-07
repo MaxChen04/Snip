@@ -1,9 +1,10 @@
+import { EventEmitter } from "node:events"
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { chromium } from "playwright"
+import { chromium, type CDPSession } from "playwright"
 import sharp from "sharp"
 import type { SnipApi } from "../src/api"
-import { recordScroll } from "../src/capture"
+import { recordScroll, screencast } from "../src/capture"
 import type { Frame } from "../src/gif"
 import { buildStills, closeRenderer, pickStills, sampleIndexes } from "../src/sheet"
 
@@ -22,6 +23,34 @@ test("pickStills samples evenly, and uses the nearest full-size still when still
   assert.equal(picks.at(-1), 39)
   assert.ok(picks.every((i) => early.has(i)), "only frames that have a still are picked")
   assert.equal(new Set(picks).size, picks.length, "no duplicates")
+})
+
+test("screencast keeps the newest frame at a scroll offset, and stops between steps once a page animates", async () => {
+  const sent: string[] = []
+  const session = Object.assign(new EventEmitter(), { send: async (method: string) => { sent.push(method); return {} } })
+  const calls = () => sent.filter((m) => m !== "Page.screencastFrameAck")
+  const cast = await screencast(session as unknown as CDPSession, 720, 450, 50)
+  const paint = (y: number, n: number) => session.emit("Page.screencastFrame", { data: Buffer.from([n]).toString("base64"), metadata: { scrollOffsetY: y }, sessionId: n })
+  await cast.scrolled()
+  paint(0, 1)
+  paint(0, 2)
+  assert.deepEqual([...(await cast.frameAt(0))!], [2])
+  await cast.scrolled()
+  const next = cast.frameAt(40)
+  paint(0, 3) // painted before the scroll landed
+  paint(40, 4)
+  assert.deepEqual([...(await next)!], [4])
+  assert.equal(await cast.frameAt(80), null, "no frame at that offset in time")
+  assert.deepEqual(calls(), ["Page.startScreencast"], "a still page keeps one screencast running")
+  // An animation paints 12 frames per step: after 5 kept frames the screencast stops between steps.
+  for (let step = 0; step < 2; step++) {
+    for (let n = 0; n < 12; n++) paint(120, 10 + n)
+    await cast.frameAt(120)
+  }
+  await cast.scrolled()
+  await cast.stop()
+  assert.deepEqual(calls(), ["Page.startScreencast", "Page.stopScreencast", "Page.startScreencast", "Page.stopScreencast"])
+  assert.equal(sent.filter((m) => m === "Page.screencastFrameAck").length, 28, "every frame is acked")
 })
 
 test("stills converted together keep each frame's own image, in order", { timeout: 60_000 }, async () => {
@@ -66,6 +95,13 @@ test("scroll recording streams frames into a half-size GIF and keeps full-size s
     assert.ok(frames.every((f) => !f.png), "frames are dropped once encoded")
     assert.deepEqual([frames[0]!.delay, frames.at(-1)!.delay], [700, 1200])
     assert.deepEqual([gif?.width, gif?.height, gif?.bytes.toString("latin1", 0, 6)], [720, 450, "GIF89a"])
+    // Each GIF frame was painted at its own scroll position: the band at scrollY + 20 CSS px (10 GIF px).
+    for (const [i, f] of frames.entries()) {
+      const { data } = await sharp(gif!.bytes, { page: i }).removeAlpha().raw().toBuffer({ resolveWithObject: true })
+      const px = [...data.subarray((10 * 720 + 10) * 3, (10 * 720 + 10) * 3 + 3)]
+      const expected = COLORS[Math.floor((f.scrollY! + 20) / BAND)]!
+      assert.ok(px.every((v, c) => Math.abs(v - expected[c]!) < 12), `GIF frame ${i} at y=${f.scrollY} shows ${px}, expected ${expected}`)
+    }
     // Each still shows the page at its frame's scroll position: the band at scrollY + 20 CSS px.
     for (const f of frames.filter((f) => f.still)) {
       assert.deepEqual([f.still!.width, f.still!.height], [1440, 900])

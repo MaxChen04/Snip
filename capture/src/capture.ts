@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs"
-import type { Browser, BrowserContext, BrowserContextOptions, Page as PwPage } from "playwright"
+import type { Browser, BrowserContext, BrowserContextOptions, CDPSession, Page as PwPage } from "playwright"
 import type { CrawlState, DesignTokens, Job, PageUpload } from "../../web/shared/types"
 import { JobGoneError, type SnipApi } from "./api"
 import { encodeGif, gifWriter, type Frame } from "./gif"
@@ -111,6 +111,52 @@ const scrollState = (page: PwPage) =>
   page.evaluate(() => ({ y: Math.round(window.scrollY), height: Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight ?? 0) }))
 const docHeight = async (page: PwPage) => (await scrollState(page)).height
 
+/**
+ * Chromium's screencast, scaled to fit `width` x `height` on the GPU as frames are composited. Call scrolled()
+ * after each scroll step; frameAt(y) is then the newest frame painted at scroll offset y, else the next one to
+ * arrive, or null if none comes within `waitMs`.
+ */
+export async function screencast(cdp: CDPSession, width: number, height: number, waitMs = 250) {
+  let latest: { y: number; data: string } | null = null
+  let waiting: { y: number; done: (data: string) => void } | null = null
+  let running = false
+  let perStep = false
+  let received = 0
+  let kept = 0
+  const onFrame = ({ data, metadata, sessionId }: { data: string; metadata: { scrollOffsetY: number }; sessionId: number }) => {
+    cdp.send("Page.screencastFrameAck", { sessionId }).catch(() => {})
+    received++
+    latest = { y: metadata.scrollOffsetY, data }
+    if (waiting && Math.abs(waiting.y - latest.y) < 1) waiting.done(data)
+  }
+  cdp.on("Page.screencastFrame", onFrame)
+  const run = async (on: boolean) => {
+    if (on === running) return
+    running = on
+    if (on) await cdp.send("Page.startScreencast", { format: "png", maxWidth: width, maxHeight: height })
+    else await cdp.send("Page.stopScreencast").catch(() => {})
+  }
+  return {
+    scrolled: () => run(true),
+    frameAt: async (y: number) => {
+      const data = latest && Math.abs(latest.y - y) < 1 ? latest.data : await new Promise<string | null>((resolve) => {
+        const timer = setTimeout(() => { waiting = null; resolve(null) }, waitMs)
+        waiting = { y, done: (d) => { clearTimeout(timer); waiting = null; resolve(d) } }
+      })
+      // Left running, the screencast also captures every frame an animation paints between steps. Once those
+      // outnumber the kept frames 3 to 1, stop it after each step: every restart costs one extra capture, which
+      // is cheaper than a running animation but dearer than a still page.
+      if (++kept >= 5 && received > kept * 3) perStep = true
+      if (perStep) await run(false)
+      return data == null ? null : Buffer.from(data, "base64")
+    },
+    stop: async () => {
+      cdp.off("Page.screencastFrame", onFrame)
+      await run(false)
+    },
+  }
+}
+
 /** Scroll through the page recording a GIF; also triggers lazy loading and scroll-reveal content. */
 export async function recordScroll(page: PwPage, record: boolean) {
   const frames: Frame[] = []
@@ -121,16 +167,19 @@ export async function recordScroll(page: PwPage, record: boolean) {
   const step = record ? Math.max(SCROLL_STEP, Math.ceil(travel / (MAX_SCROLL_FRAMES - 1))) : 400
   const delay = Math.round(1000 / SCROLL_FPS)
   const frameCount = (h: number) => Math.min(MAX_SCROLL_FRAMES, Math.ceil(Math.max(0, Math.min(h, 40_000) - vh) / step) + 1)
-  // Raw CDP with optimizeForSpeed is ~3-4x faster than page.screenshot. Frames are captured at full size
-  // (asking Chromium for a smaller capture re-rasters the whole page every frame, which costs far more on
-  // real sites) and each one is encoded into the GIF on a worker thread while the next scroll paints, then
-  // dropped, so a long page never holds hundreds of full-size PNGs. Sampled frames keep a JPEG still.
+  // GIF frames come from the screencast, which scales each composited frame to GIF size on the GPU: on a real
+  // site about half the browser and GPU work of a full-size screenshot. A smaller captureScreenshot would
+  // re-raster the whole page every frame, so it is only the fallback when no frame arrives in time. Each frame
+  // is encoded into the GIF on a worker thread while the next scroll paints, then dropped. Sampled frames keep
+  // a full-size JPEG still.
   const cdp = record ? await page.context().newCDPSession(page) : null
   const shot = async (params: object) => {
     const { data } = await cdp!.send("Page.captureScreenshot", params as { format: "png" })
     return Buffer.from(data, "base64")
   }
-  const gif = gifWriter({ scale: SCROLL_GIF_SCALE })
+  const cast = cdp ? await screencast(cdp, Math.round(vw / SCROLL_GIF_SCALE), Math.round(vh / SCROLL_GIF_SCALE)) : null
+  let fallbacks = 0
+  const gif = gifWriter()
   const encode = async (frame: Frame | undefined, ms: number) => {
     if (!frame?.png) return
     const png = frame.png
@@ -140,12 +189,18 @@ export async function recordScroll(page: PwPage, record: boolean) {
   }
   for (let y = 0; ; y += step) {
     await page.evaluate((top) => window.scrollTo({ top, behavior: "instant" as ScrollBehavior }), y)
+    await cast?.scrolled()
     await Promise.all([encode(frames.at(-1), frames.length === 1 ? FIRST_FRAME_MS : delay), sleep(record ? 30 : 60)])
     const state = await scrollState(page)
     height = state.height // infinite/lazy pages can grow
     let frame: Frame | undefined
     if (record) {
-      frame = { png: await shot({ format: "png", optimizeForSpeed: true }), delay, scrollY: state.y, phase: "scroll" }
+      let png = await cast!.frameAt(state.y)
+      if (!png) {
+        fallbacks++
+        png = await shot({ format: "png", optimizeForSpeed: true, clip: { x: 0, y: state.y, width: vw, height: vh, scale: 1 / SCROLL_GIF_SCALE } })
+      }
+      frame = { png, delay, scrollY: state.y, phase: "scroll" }
       frames.push(frame)
     }
     const last = y >= Math.min(height, 40_000) - vh || (record && frames.length >= MAX_SCROLL_FRAMES)
@@ -155,7 +210,9 @@ export async function recordScroll(page: PwPage, record: boolean) {
     if (last) break
   }
   await encode(frames.at(-1), LAST_FRAME_MS)
+  await cast?.stop()
   await cdp?.detach().catch(() => {})
+  if (fallbacks) log(`  scroll: ${fallbacks}/${frames.length} frames fell back to screenshots`)
   await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" as ScrollBehavior }))
   await sleep(400)
   return { frames, gif: frames.length > 1 ? gif.finish() : null }
