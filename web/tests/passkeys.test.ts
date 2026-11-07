@@ -166,3 +166,78 @@ test("removing a device deletes only that passkey, and only for its owner", () =
     const options = (await (await ctx.call("/auth/passkey/login/options")).json()) as { allowCredentials: { id: string }[] }
     assert.deepEqual(options.allowCredentials.map((c) => c.id), [second.credential.id])
   }))
+
+test("registering the same credential twice refreshes that row instead of returning 500", () =>
+  withWorker(async (ctx) => {
+    const first = await register(ctx, "MacBook Pro")
+    const other = await register(ctx, "Phone")
+    const before = await ctx.db.prepare(`SELECT * FROM passkeys WHERE id = ?`).bind(first.credential.id).first<PasskeyDbRow>()
+    const otherBefore = await ctx.db.prepare(`SELECT * FROM passkeys WHERE id = ?`).bind(other.credential.id).first<PasskeyDbRow>()
+
+    // Same credential id, new key material and counter: what a stale options blob or a second tab
+    // produces when it gets past excludeCredentials.
+    const options = (await (await ctx.local("/auth/passkey/register/options")).json()) as { challenge: string }
+    const again = await createCredential({ rpID: RP_ID, origin: PUBLIC_URL, challenge: options.challenge, credentialId: first.credential.id, counter: 7 })
+    const res = await ctx.post("/auth/passkey/register/verify", { response: again.response, deviceLabel: "Renamed" })
+    assert.equal(res.status, 200, await res.clone().text())
+    assert.deepEqual(await res.json(), { ok: true, duplicate: true })
+
+    const rows = await ctx.db.prepare(`SELECT * FROM passkeys ORDER BY created_at`).all<PasskeyDbRow>()
+    assert.equal(rows.results.length, 2, "no second row, and the other device is still there")
+    const row = rows.results.find((r) => r.id === first.credential.id)!
+    assert.deepEqual([...new Uint8Array(row.public_key)], [...again.credential.publicKey], "the stored key is the one just registered")
+    assert.equal(row.counter, 7, "counter refreshed")
+    assert.equal(row.last_used_at !== null, true, "re-registering counts as a use")
+    assert.equal(row.created_at, before!.created_at, "created_at is kept")
+    assert.equal(row.device_label, "MacBook Pro", "the device keeps the name it was given")
+    assert.equal(row.owner_id, "max", "never reassigned")
+    assert.deepEqual(
+      rows.results.find((r) => r.id === other.credential.id),
+      otherBefore,
+      "the other device's row is untouched, last_used_at included",
+    )
+
+    // The refreshed key is the one that signs in; the superseded one no longer does.
+    const login = (await (await ctx.call("/auth/passkey/login/options")).json()) as { challenge: string }
+    const fresh = await createAssertion({ rpID: RP_ID, origin: PUBLIC_URL, challenge: login.challenge, credential: again.credential })
+    assert.equal((await ctx.call("/auth/passkey/login/verify", { method: "POST", body: JSON.stringify({ response: fresh.response }), headers: { "content-type": "application/json" } })).status, 200)
+
+    const stale = (await (await ctx.call("/auth/passkey/login/options")).json()) as { challenge: string }
+    const superseded = await createAssertion({ rpID: RP_ID, origin: PUBLIC_URL, challenge: stale.challenge, credential: first.credential })
+    assert.equal((await ctx.call("/auth/passkey/login/verify", { method: "POST", body: JSON.stringify({ response: superseded.response }), headers: { "content-type": "application/json" } })).status, 400)
+  }))
+
+type PasskeyDbRow = {
+  id: string
+  owner_id: string
+  public_key: ArrayBuffer | number[]
+  counter: number
+  transports: string
+  device_label: string | null
+  created_at: string
+  last_used_at: string | null
+}
+
+test("a credential id held by another owner is refused, not overwritten", () =>
+  withWorker(async (ctx) => {
+    // A second identity on the same library, which the owner link or GitHub can create.
+    await ctx.db.prepare(`INSERT INTO owners (id, label, created_at) VALUES ('second-person', 'second-person', '2026-01-02T00:00:00Z')`).run()
+    const first = await register(ctx, "MacBook Pro")
+    const original = await ctx.db.prepare(`SELECT * FROM passkeys WHERE id = ?`).bind(first.credential.id).first<PasskeyDbRow>()
+
+    const options = (await (await ctx.local("/auth/passkey/register/options", {}, "second-person")).json()) as { challenge: string }
+    const stolen = await createCredential({ rpID: RP_ID, origin: PUBLIC_URL, challenge: options.challenge, credentialId: first.credential.id, counter: 99 })
+    const res = await ctx.post("/auth/passkey/register/verify", { response: stolen.response }, "second-person")
+    assert.equal(res.status, 409)
+    assert.match(await res.text(), /belongs to another account/)
+
+    const after = await ctx.db.prepare(`SELECT * FROM passkeys WHERE id = ?`).bind(first.credential.id).first<PasskeyDbRow>()
+    assert.deepEqual(after, original, "the owner's row is exactly as it was")
+    assert.equal(after!.owner_id, "max")
+    assert.equal(after!.counter, 0, "not even the counter moved")
+
+    // The original credential still signs in.
+    const login = (await (await ctx.call("/auth/passkey/login/options")).json()) as { challenge: string }
+    const assertion = await createAssertion({ rpID: RP_ID, origin: PUBLIC_URL, challenge: login.challenge, credential: first.credential })
+    assert.equal((await ctx.call("/auth/passkey/login/verify", { method: "POST", body: JSON.stringify({ response: assertion.response }), headers: { "content-type": "application/json" } })).status, 200)
+  }))

@@ -16,6 +16,9 @@ const toBase64url = (value: ArrayBuffer) => {
 
 export class PasskeyError extends Error {}
 
+/** The copy for a credential this device already registered. */
+export const ALREADY_ADDED = "You already added a passkey on this device"
+
 async function postJson<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
   const data = (await res.json().catch(() => ({}))) as { error?: string }
@@ -32,16 +35,20 @@ const passkeyUnsupported = () =>
       )
     : null
 
-const describe = (error: unknown) => {
+/**
+ * Maps a WebAuthn failure to a sentence. InvalidStateError means the authenticator already holds a
+ * credential this library asked it to exclude, i.e. this device is already registered.
+ */
+export function passkeyError(error: unknown): PasskeyError {
   if (error instanceof PasskeyError) return error
   const name = (error as { name?: string })?.name
+  if (name === "InvalidStateError") return new PasskeyError(ALREADY_ADDED)
   if (name === "NotAllowedError") return new PasskeyError("Cancelled, or the prompt timed out. Try again or use a different device.")
-  if (name === "InvalidStateError") return new PasskeyError("This device already has a passkey for Snip.")
   return new PasskeyError((error as Error)?.message ?? "The passkey prompt failed.")
 }
 
-/** Adds this device's passkey to the signed-in owner. Returns nothing; throws PasskeyError. */
-export async function registerPasskey(deviceLabel?: string) {
+/** Adds this device's passkey to the signed-in owner. Returns whether it was already there. */
+export async function registerPasskey(deviceLabel?: string): Promise<{ duplicate: boolean }> {
   const unsupported = passkeyUnsupported()
   if (unsupported) throw unsupported
 
@@ -61,13 +68,13 @@ export async function registerPasskey(deviceLabel?: string) {
     } as unknown as PublicKeyCredentialCreationOptions
     credential = await navigator.credentials.create({ publicKey })
   } catch (error) {
-    throw describe(error)
+    throw passkeyError(error)
   }
   if (!credential || credential.type !== "public-key") throw new PasskeyError("No passkey was created.")
   const publicKey = credential as PublicKeyCredential
   const attestation = publicKey.response as AuthenticatorAttestationResponse
 
-  await postJson("/auth/passkey/register/verify", {
+  const verified = await postJson<{ ok: true; duplicate?: boolean }>("/auth/passkey/register/verify", {
     deviceLabel: deviceLabel?.trim() || undefined,
     response: {
       id: publicKey.id,
@@ -82,6 +89,7 @@ export async function registerPasskey(deviceLabel?: string) {
       },
     },
   })
+  return { duplicate: verified.duplicate === true }
 }
 
 /** Signs this browser in with a passkey and reloads so the app picks up the new session. */
@@ -104,7 +112,7 @@ export async function signInWithPasskey() {
     } as unknown as PublicKeyCredentialRequestOptions
     credential = await navigator.credentials.get({ publicKey })
   } catch (error) {
-    throw describe(error)
+    throw passkeyError(error)
   }
   if (!credential || credential.type !== "public-key") throw new PasskeyError("No passkey was returned.")
   const publicKey = credential as PublicKeyCredential

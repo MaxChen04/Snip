@@ -98,7 +98,7 @@ export async function registerVerify(c: Context<AppEnv>) {
   if (!verification.verified) return c.json(badRequest("Passkey registration could not be verified."), 400)
 
   const credential = verification.registrationInfo.credential
-  await db.addPasskey(c.env.DB, {
+  const outcome = await db.addPasskey(c.env.DB, {
     id: credential.id,
     ownerId: owner.id,
     publicKey: credential.publicKey.buffer.slice(credential.publicKey.byteOffset, credential.publicKey.byteOffset + credential.publicKey.byteLength) as ArrayBuffer,
@@ -106,7 +106,12 @@ export async function registerVerify(c: Context<AppEnv>) {
     transports: credential.transports,
     deviceLabel: label,
   })
-  return c.json({ ok: true })
+  if (outcome === "other-owner") return c.json(badRequest("This passkey already belongs to another account on this Snip library."), 409)
+  // `duplicate` is additive on top of the documented `{ ok: true }`: the browser normally stops
+  // this with excludeCredentials (InvalidStateError), but a stale options blob can get past it,
+  // and the page then needs to say "you already added a passkey on this device" rather than
+  // silently claiming a new one.
+  return c.json(outcome === "refreshed" ? { ok: true, duplicate: true } : { ok: true })
 }
 
 export async function loginOptions(c: Context<AppEnv>) {

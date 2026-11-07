@@ -58,6 +58,9 @@ export type Credential = {
 
 export type AuthenticatorOptions = { rpID: string; origin: string; counter?: number }
 
+/** A fixed credential id, so a test can register the same credential twice. */
+export type CreateOptions = AuthenticatorOptions & { challenge: string; credentialId?: string }
+
 async function cosePublicKey(publicKey: CryptoKey): Promise<Uint8Array> {
   const jwk = await crypto.subtle.exportKey("jwk", publicKey)
   const x = fromB64url(jwk.x!)
@@ -81,10 +84,10 @@ const clientData = (type: "webauthn.create" | "webauthn.get", challenge: string,
 const FLAGS_UP_UV = 0b0000_0101
 const FLAGS_UP_UV_AT = 0b0100_0101
 
-export async function createCredential(options: AuthenticatorOptions & { challenge: string }): Promise<{ response: unknown; credential: Credential }> {
+export async function createCredential(options: CreateOptions): Promise<{ response: unknown; credential: Credential }> {
   const pair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"])
   const publicKey = await cosePublicKey(pair.publicKey)
-  const rawId = crypto.getRandomValues(new Uint8Array(16))
+  const rawId = options.credentialId ? fromB64url(options.credentialId) : crypto.getRandomValues(new Uint8Array(16))
   const id = b64url(rawId)
   const counter = options.counter ?? 0
 
