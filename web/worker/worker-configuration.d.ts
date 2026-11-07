@@ -10,6 +10,8 @@ interface __BaseEnv_Env {
 	GITHUB_CLIENT_SECRET: string;
 	SESSION_SECRET: string;
 	CAPTURE_TOKEN: string;
+	OWNER_LINK_SECRET: string;
+	TRANSFER_TOKEN: string;
 	DEV_LOGIN: string;
 	PUBLIC_URL: string;
 }

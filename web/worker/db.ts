@@ -783,3 +783,118 @@ export async function getCaptureStatus(db: D1Database, ref: Reference): Promise<
     advice,
   }
 }
+
+// ---------- Owner and library counts (cloud status and the transfer surface) ----------
+
+export type LibraryCounts = { refs: number; pages: number; animations: number; collections: number }
+
+export async function libraryCounts(db: D1Database): Promise<LibraryCounts> {
+  const row = await db
+    .prepare(
+      `SELECT (SELECT count(*) FROM refs) AS refs, (SELECT count(*) FROM pages) AS pages,
+              (SELECT count(*) FROM animations) AS animations, (SELECT count(*) FROM collections) AS collections`,
+    )
+    .first<LibraryCounts>()
+  return row ?? { refs: 0, pages: 0, animations: 0, collections: 0 }
+}
+
+export async function firstOwner(db: D1Database): Promise<{ id: string; label: string | null } | null> {
+  return db.prepare(`SELECT id, label FROM owners ORDER BY created_at, id LIMIT 1`).first<{ id: string; label: string | null }>()
+}
+
+export async function hasPasskeys(db: D1Database): Promise<boolean> {
+  return !!(await db.prepare(`SELECT 1 AS present FROM passkeys LIMIT 1`).first<{ present: number }>())
+}
+
+// Challenges and link nonces are short-lived: they exist to be burned, and a pull that copied
+// them would compare numbers that legitimately move between the manifest and the dump.
+const EPHEMERAL_TABLES = new Set(["owner_nonces", "webauthn_challenges"])
+
+/** Row counts for every table a move or pull copies. */
+export async function tableCounts(db: D1Database): Promise<Record<string, number>> {
+  const { results } = await db
+    .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY name`)
+    .all<{ name: string }>()
+  const names = results.map((r) => r.name).filter((name) => !EPHEMERAL_TABLES.has(name))
+  if (!names.length) return {}
+  const counts = await db.batch(names.map((name) => db.prepare(`SELECT count(*) AS n FROM "${name.replace(/"/g, '""')}"`)))
+  const out: Record<string, number> = {}
+  names.forEach((name, i) => {
+    const rows = counts[i]?.results as { n: number }[] | undefined
+    out[name] = rows?.[0]?.n ?? 0
+  })
+  return out
+}
+
+// ---------- Owners and passkeys ----------
+
+export type OwnerRow = { id: string; label: string | null; created_at: string; sessions_epoch: number }
+
+export async function getOwner(db: D1Database, id: string): Promise<OwnerRow | null> {
+  return db.prepare(`SELECT id, label, created_at, sessions_epoch FROM owners WHERE id = ?`).bind(id).first<OwnerRow>()
+}
+
+export type PasskeyRecord = {
+  id: string
+  ownerId: string
+  publicKey: ArrayBuffer
+  counter: number
+  transports: string[]
+  deviceLabel: string | null
+  createdAt: string
+  lastUsedAt: string | null
+}
+
+type PasskeyRow = {
+  id: string
+  owner_id: string
+  public_key: ArrayBuffer | number[]
+  counter: number
+  transports: string | null
+  device_label: string | null
+  created_at: string
+  last_used_at: string | null
+}
+
+const toPasskey = (r: PasskeyRow): PasskeyRecord => ({
+  id: r.id,
+  ownerId: r.owner_id,
+  publicKey: r.public_key instanceof ArrayBuffer ? r.public_key : new Uint8Array(r.public_key as number[]).buffer,
+  counter: r.counter,
+  transports: parse<string[]>(r.transports) ?? [],
+  deviceLabel: r.device_label,
+  createdAt: r.created_at,
+  lastUsedAt: r.last_used_at,
+})
+
+export async function listPasskeys(db: D1Database, ownerId?: string): Promise<PasskeyRecord[]> {
+  const rows = ownerId
+    ? await db.prepare(`SELECT * FROM passkeys WHERE owner_id = ? ORDER BY created_at`).bind(ownerId).all<PasskeyRow>()
+    : await db.prepare(`SELECT * FROM passkeys ORDER BY created_at`).all<PasskeyRow>()
+  return rows.results.map(toPasskey)
+}
+
+export async function getPasskey(db: D1Database, id: string): Promise<PasskeyRecord | null> {
+  const row = await db.prepare(`SELECT * FROM passkeys WHERE id = ?`).bind(id).first<PasskeyRow>()
+  return row ? toPasskey(row) : null
+}
+
+export async function addPasskey(
+  db: D1Database,
+  passkey: { id: string; ownerId: string; publicKey: ArrayBuffer; counter: number; transports?: string[]; deviceLabel?: string | null },
+): Promise<void> {
+  await db
+    .prepare(`INSERT INTO passkeys (id, owner_id, public_key, counter, transports, device_label, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+    .bind(passkey.id, passkey.ownerId, passkey.publicKey, passkey.counter, JSON.stringify(passkey.transports ?? []), passkey.deviceLabel ?? null, now())
+    .run()
+}
+
+export async function touchPasskey(db: D1Database, id: string, counter: number): Promise<void> {
+  await db.prepare(`UPDATE passkeys SET counter = ?, last_used_at = ? WHERE id = ?`).bind(counter, now(), id).run()
+}
+
+/** Removes one device. Scoped by owner so a session can only delete its own owner's passkeys. */
+export async function deletePasskey(db: D1Database, ownerId: string, id: string): Promise<boolean> {
+  const result = await db.prepare(`DELETE FROM passkeys WHERE id = ? AND owner_id = ?`).bind(id, ownerId).run()
+  return result.meta.changes === 1
+}
