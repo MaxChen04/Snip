@@ -13,6 +13,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const http = require('node:http');
 
 const argv = process.argv.slice(2);
 const command = argv[0];
@@ -35,6 +36,8 @@ const state = require(path.join(root, 'desktop/provision/state.cjs'));
 const commands = require(path.join(root, 'desktop/provision/commands.cjs'));
 const { createContext } = require(path.join(root, 'desktop/provision/context.cjs'));
 const { NeedsInputError, StepError, ChoiceRequired } = require(path.join(root, 'desktop/provision/engine.cjs'));
+// The Worker exposes this hash so the engine can detect a drift instead of guessing.
+const { ownerSecretHash } = require(path.join(root, 'desktop/provision/transfer.cjs'));
 
 const emit = engine.createEmitter({ json: true, command: command === 'snapshot' ? 'snapshot' : command });
 const harnessDir = path.join(dataRoot, '.harness');
@@ -43,6 +46,11 @@ const accountFile = path.join(harnessDir, 'account.json');
 const LIBRARY = empty
   ? { refs: 0, pages: 0, animations: 0, collections: 0, reference_collections: 0, page_collections: 0 }
   : { refs: 2, pages: 3, animations: 1, collections: 1, reference_collections: 2, page_collections: 1 };
+
+const crypto = require('node:crypto');
+
+/** Cloudflare returns UUIDs, and the engine's parser requires that shape. */
+const uuid = () => crypto.randomUUID();
 
 function readAccount() {
   try {
@@ -85,14 +93,14 @@ const wrangler = {
     if (args[0] === 'whoami') return json({ loggedIn: true, email: 'harness@example.com', accounts: [{ id: account.accountId, name: 'Harness Account' }] });
     if (line === 'd1 list --json') return json(account.d1.map((db) => ({ uuid: db.id, name: db.name, num_tables: db.tables || 0 })));
     if (args[0] === 'd1' && args[1] === 'create') {
-      const db = { id: `db_${account.d1.length + 1}`, name: args[2], tables: 0 };
+      const db = { id: uuid(), name: args[2], tables: 0 };
       account.d1.push(db);
       writeAccount(account);
       return text(`database_id = "${db.id}"`);
     }
     if (line === 'kv namespace list') return json(account.kv.map((ns) => ({ id: ns.id, title: ns.title })));
     if (args[0] === 'kv' && args[1] === 'namespace' && args[2] === 'create') {
-      const ns = { id: `kv_${account.kv.length + 1}`, title: args[3] };
+      const ns = { id: crypto.randomBytes(16).toString('hex'), title: args[3] };
       account.kv.push(ns);
       writeAccount(account);
       return text(`id = "${ns.id}"`);
@@ -188,7 +196,7 @@ async function fetchImpl(url, options = {}) {
   if (!account.secrets.TRANSFER_TOKEN || auth !== account.secrets.TRANSFER_TOKEN) return jsonResponse(404, { error: 'not found' });
   const counts = { refs: LIBRARY.refs, pages: LIBRARY.pages, animations: LIBRARY.animations, collections: LIBRARY.collections };
   if (`${method} ${target.pathname}` === 'GET /transfer/status') {
-    return jsonResponse(200, { version: '1.1.2', hasOwner: account.owner, ownerId: account.owner ? 'harness' : null, counts, ownerSecretHash: '' });
+    return jsonResponse(200, { version: '1.1.2', hasOwner: account.owner, ownerId: account.owner ? 'harness' : null, counts, ownerSecretHash: ownerSecretHash(account.secrets.OWNER_LINK_SECRET || '') });
   }
   if (`${method} ${target.pathname}` === 'GET /transfer/manifest') {
     const keys = Object.entries(account.objects).map(([key, body]) => ({ key, size: Buffer.byteLength(body), contentType: 'image/png' }));
@@ -258,6 +266,14 @@ const local = {
 
 const libraryModule = {
   async withLocalWorker(_options, fn) {
+    // A real library with references also has objects; the engine refuses a copy of
+    // counts without files (EXPORT_EMPTY), so seed one screenshot per reference.
+    if (LIBRARY.refs > 0 && Object.keys(account.objects).length === 0) {
+      for (let index = 0; index < LIBRARY.refs; index++) {
+        account.objects[`refs/harness${String(index).padStart(8, '0')}/attempt/desktop.png`] = `screenshot-${index}`;
+      }
+      writeAccount(account);
+    }
     const manifest = {
       version: 1,
       tables: { ...LIBRARY },
@@ -301,18 +317,20 @@ const libraryModule = {
 };
 
 function buildContext() {
-  // The owner step's link would open a browser; record it and mark the account owner
-  // so a re-run is a resume rather than a second link.
+  // The owner step's link opens in a browser and hands the session back to the
+  // loopback listener the engine started. Nothing opens a browser here, so this
+  // plays the browser's part: read the port out of the link, then POST the session
+  // to /store exactly as the handoff page does.
   const baseEmit = emit;
   const wrapped = Object.assign(Object.create(baseEmit), baseEmit);
-  const human = (step, action, url, message) => {
+  wrapped.human = (step, action, url, message) => {
     if (step === 'owner') {
       account.owner = true;
       writeAccount(account);
+      completeOwnerLink(url);
     }
     return baseEmit.human(step, action, url, message);
   };
-  wrapped.human = human;
   return createContext({
     root,
     dataRoot,
@@ -338,6 +356,27 @@ function buildContext() {
       classify: (context) => require(path.join(root, 'desktop/provision/setup.cjs')).classifyAccount(context),
     },
   });
+}
+
+/** The browser half of the owner-link handoff: payload|ownerId|exp|nonce|port. */
+function completeOwnerLink(link) {
+  let port = 0;
+  try {
+    const token = new URL(link).searchParams.get('t') ?? '';
+    const portField = token.split('.')[0].split('|')[4];
+    port = Number(portField);
+  } catch {}
+  if (!Number.isInteger(port) || port <= 0) return;
+  // The page reads location.hash and POSTs it; give the listener a moment to bind.
+  setTimeout(() => {
+    const body = JSON.stringify({ token: 'harness-session-token' });
+    const request = http.request(
+      { host: '127.0.0.1', port, path: '/store', method: 'POST', headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) } },
+      (response) => response.resume(),
+    );
+    request.on('error', () => {});
+    request.end(body);
+  }, 150);
 }
 
 async function main() {

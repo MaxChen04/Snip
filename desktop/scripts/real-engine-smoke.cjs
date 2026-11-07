@@ -13,6 +13,7 @@
 // Set SNIP_HARNESS_PROFILE=empty for an empty library.
 
 const fs = require('node:fs');
+const assert = require('node:assert/strict');
 const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
@@ -105,16 +106,50 @@ async function main() {
       throw error
     })
     const state = JSON.parse(await fs.promises.readFile(path.join(site.root, '.snip/cloud.json'), 'utf8'))
-    console.log('MODE', state.mode, 'STEPS', state.steps.length, 'SNAPSHOT', JSON.stringify(state.snapshot && { kind: state.snapshot.kind, path: state.snapshot.path }))
-    console.log('PASS the real engine enabled cloud and Settings shows the cloud state')
+    assert.equal(state.mode, 'cloud')
+    assert.equal(state.cloud.url, 'https://snip.snip-harness.workers.dev')
+    assert.equal(state.steps.length, 18, 'every setup step ran')
+    // The step journal is the engine's, and the UI rendered it in the same order.
+    assert.deepEqual(state.steps.map(step => step.id), [
+      'preflight', 'cloudflare-auth', 'account', 'url', 'r2', 'guard', 'resources', 'config',
+      'schema', 'deploy', 'secrets', 'quiesce', 'release', 'export', 'import', 'verify', 'owner', 'finish',
+    ])
+    assert.equal(state.steps.some(step => step.status === 'failed'), false)
+    console.log('PASS the real engine enabled cloud, all 18 steps in order, and Settings shows the cloud state')
 
-    const local = await fs.promises.readFile(path.join(site.root, 'capture/.env.local'), 'utf8').catch(() => '')
-    const cloud = await fs.promises.readFile(path.join(site.root, 'capture/.env.cloud'), 'utf8').catch(() => '')
-    console.log('CAPTURE local:', JSON.stringify(local), 'cloud:', JSON.stringify(cloud))
-    console.log('PASS capture env files are in place')
+    // The capture agent follows the mode: local settings kept, cloud queue active.
+    const local = await fs.promises.readFile(path.join(site.root, 'capture/.env.local'), 'utf8')
+    const cloud = await fs.promises.readFile(path.join(site.root, 'capture/.env.cloud'), 'utf8')
+    assert.match(local, /^SNIP_URL=http:\/\/localhost:/m)
+    assert.match(cloud, /^SNIP_URL=https:\/\/snip\.snip-harness\.workers\.dev$/m)
+    assert.match(cloud, /^CAPTURE_TOKEN=\S+$/m)
+    console.log('PASS capture/.env.local keeps this Mac and .env.cloud points at the cloud queue')
+
+    // The harness's cloud host is deliberately unreachable, so this also proves the
+    // rule that matters most in cloud mode: never fall back to the empty local
+    // library. The window must say the cloud copy can't be reached instead.
+    await until(async () => application.windows().some(candidate => candidate.url().startsWith('file://') && candidate.url().includes('cloud-unreachable')), 'cloud mode did not show the unreachable state', 45000)
+    const failure = application.windows().find(candidate => candidate.url().includes('cloud-unreachable'))
+    await failure.waitForLoadState('domcontentloaded')
+    const text = await failure.locator('body').innerText()
+    console.log('FAILURE URL', failure.url())
+    console.log('FAILURE TEXT', JSON.stringify(text.slice(0, 300)))
+    assert.match(text, /cloud library can’t be reached/)
+    assert.match(text, /snip\.snip-harness\.workers\.dev/)
+    assert.equal(await failure.evaluate(() => document.querySelector('h1')?.textContent?.includes('reached')), true)
+    assert.equal(application.windows().some(candidate => candidate.url().startsWith(site.origin)), false, 'cloud mode fell back to the local library')
+    console.log('PASS an unreachable cloud origin says so and never falls back to the local library')
+
+    await settings.bringToFront()
 
     await settings.screenshot({ path: path.join(out, 'settings-real-engine-cloud-light.png') })
+    // One dark pass, in the same window, so both faces are from the same build.
+    await settings.emulateMedia({ colorScheme: 'dark' })
+    await settings.evaluate(() => document.documentElement.classList.add('dark'))
+    await sleep(300)
+    await settings.screenshot({ path: path.join(out, 'settings-real-engine-cloud-dark.png') })
     console.log('SHOT', path.join(out, 'settings-real-engine-cloud-light.png'))
+    console.log('SHOT', path.join(out, 'settings-real-engine-cloud-dark.png'))
   } finally {
     if (application) await application.close().catch(() => {})
     if (!process.env.SNIP_KEEP_HARNESS) await fs.promises.rm(site.temp, { recursive: true, force: true })
