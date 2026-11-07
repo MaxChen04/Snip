@@ -41,7 +41,7 @@ When the Worker is up, Snip opens a **one-time owner link** in your browser. It 
 
 At the cloud address, **/sign-in** is the everyday door: **Sign in with a passkey**, with nothing to type.
 
-A device with no passkey yet still gets in. **/sign-in** sends you to **Settings → Cloud → Sign in another browser** on a Mac that is already signed in. That button creates a one-time owner link you can copy or open: open it on the new device, register a passkey, and the device is signed in from then on. The link works once and expires after ten minutes, so create a fresh one if you leave it too long.
+A device with no passkey yet still gets in. **/sign-in** sends you to **Settings → Cloud → Sign in another browser** on a Mac that is already signed in. That button creates a one-time owner link you can copy or open: open it on the new device, register a passkey, and the device is signed in from then on. The link works once and expires after ten minutes, so create a fresh one if you leave it too long. From a terminal, `owner link --no-handoff` mints the same link.
 
 A cloud MCP client that lands on **/sign-in** returns to its approval screen once you sign in with a passkey, so approving the client carries on where it stopped.
 
@@ -83,7 +83,15 @@ npm run setup:cloudflare -- --yes --json     # enable cloud, never prompt
 
 With `--json`, stdout carries one JSON object per line and human text goes to stderr. Each line is a `step`, `log`, `human`, `choice`, `needs_input`, `session` or `result`; the last is always `result`, and exit code 0 means success. A `human` event carries a URL the person must open (Cloudflare's allow page, the R2 page, the owner link); the run waits until they finish. A `choice` event describes a decision with consequences and exits 2 with `data.resumeWith`; `--yes` does not answer it. A `needs_input` event also exits 2 and names the missing flags. Never log the `session` line.
 
-Exit 4 means this machine or this library cannot be provisioned right now. It covers every preflight refusal, each with its own `result.code`: `NOT_A_LIBRARY`, `NO_NODE`, `NO_WRANGLER`, `NO_BUILD`, `BAD_CONFIG`, `NOT_AN_ACCOUNT`, `LOCAL_SERVER_RUNNING`, `UNSUPPORTED_PLATFORM` and `FOREIGN_SNIP`. Every failed result carries `retryable`; `true` means the same command works once something outside Snip changes, and `false` means repeating it cannot help. Agents branch on `retryable`, not the code string.
+Exit 4 means this machine or this library cannot be provisioned right now. It covers every preflight refusal, each with its own `result.code`: `NOT_A_LIBRARY`, `NO_NODE`, `NO_WRANGLER`, `NO_BUILD`, `BAD_CONFIG`, `NOT_AN_ACCOUNT`, `LOCAL_SERVER_RUNNING`, `UNSUPPORTED_PLATFORM` and `FOREIGN_SNIP`.
+
+**Every failure reported after a run starts carries `retryable`, not only exit 4.** Branch on that field instead of the code string. `true` means the same command can work: something outside Snip changes, or the failure was temporary. `false` means repeating it cannot help. Inside exit 4, `NOT_AN_ACCOUNT` and `LOCAL_SERVER_RUNNING` are the retryable ones and the other seven are final. A step failure says so for itself when it is worth repeating, for example an unreachable surface or a Cloudflare hiccup. The one exception is a usage error: an unknown flag or a flag missing its value reports `code: "USAGE"` with no `retryable`, and an unknown command prints the help and emits no `result` at all. Treat a missing `retryable` as final.
+
+A Cloudflare hiccup gets its own code. Setup retries a transient failure on `deploy`, `d1 migrations apply` and the secret writes, up to four attempts with growing waits, and only then gives up:
+
+> Cloudflare had a temporary problem, try again.
+
+That result is `code: "CLOUDFLARE_TEMPORARY"` and `retryable: true`, and its `data` carries the reason, the attempt count and the last output. Only operations that are safe to repeat are retried: a `d1 create` never is, because repeating it could leave an orphan. A rate limit, a `5xx`, a dropped connection or one of Cloudflare's known transient API codes is retried; an authentication or permission failure is not, because waiting never grants access. Run the same command again in a minute.
 
 | Flag | Meaning |
 | --- | --- |
@@ -98,6 +106,7 @@ Exit 4 means this machine or this library cannot be provisioned right now. It co
 | `--adopt-existing` | Take **Use that library** when the account already holds a Snip library with data. Without it the run emits a `choice` and exits 2. Required in any unattended run that should adopt. |
 | `--managed` | The app's own mode: it replaces the capture environment and can use its loopback handoff. Not needed from a terminal. |
 | `--no-open` | Print URLs instead of opening a browser. |
+| `--no-handoff` | With `owner link`: mint the link for another browser or device. It carries port 0, no handoff is attempted, and the command ends as soon as the link is minted. `setup` always uses the handoff. |
 | `--root <path>` / `--data-root <path>` | Run against a different checkout or library. `--root` also sets `--data-root` when the latter is absent. |
 | `--confirm <name>` | The interlock the destructive commands check. See [Other commands](#other-commands). |
 
@@ -125,12 +134,23 @@ Pass `--capture-env replace` to point `capture/.env` at the cloud copy, or use t
 | `npm run setup:cloudflare -- snapshot delete --confirm <basename>` | Delete the **Previous library**. Destructive. |
 | `npm run setup:cloudflare -- snapshot delete-export --confirm <basename>` | Delete setup's portable dump and file list. It cannot restore anything on its own. |
 | `npm run setup:cloudflare -- delete-resources --confirm <host>` | Delete the Worker, D1, KV and R2 for this install. Destructive. |
-| `npm run setup:cloudflare -- owner link` | Mint and open a fresh one-time sign-in link. |
+| `npm run setup:cloudflare -- owner link` | Mint and open a fresh one-time sign-in link for this Mac. |
+| `npm run setup:cloudflare -- owner link --no-handoff` | Mint a link for another browser or device and print it. Settings' **Sign in another browser** runs exactly this. |
 | `npm run setup:cloudflare -- owner rotate` | Replace the owner-link secret and mint a new link. Recovery path. |
 | `npm run setup:cloudflare -- abort` | Clean up an interrupted enable. |
 | `npm run setup:cloudflare -- migrate --json` / `deploy --json` | Apply remote migrations or deploy the current build. Used by updates. |
 
 The three destructive commands share one interlock. `--confirm` must equal the basename of the item being deleted: the directory name for `snapshot delete` and `snapshot delete-export`, and the cloud URL's host (for example `snip.max.workers.dev`) for `delete-resources`. Leave it out and the run exits 2 with the exact command to repeat; give a different value and it exits 1. Neither path changes anything. The app asks for the same value, typed by hand.
+
+### Signing another device in from the CLI
+
+`owner link` opens the link on this Mac and, when the app is driving, waits for the browser to hand the session back. That is wrong for a device that is not this Mac, so pass `--no-handoff`:
+
+```bash
+npm run setup:cloudflare -- owner link --no-handoff
+```
+
+It mints the link, prints it in a `human` event and in the step result, and stops. Nothing is opened, no handoff is attempted, and no `session` event is emitted, because this Mac has no session to receive. Open the printed link on the other device within ten minutes and register a passkey there. This is the same command Settings runs when you press **Sign in another browser**.
 
 ## Turning cloud off
 

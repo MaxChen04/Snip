@@ -395,13 +395,13 @@ function CloudSection() {
         </p>
         <CodeBlock label="Preflight, then enable without prompts" lines={["npm run setup:cloudflare -- --check --json", "npm run setup:cloudflare -- --yes --json"]} />
         <p className="max-w-[640px] text-sm leading-[1.6] text-muted-foreground">
-          Output is one JSON event per line; the last is always result. Exit 0 means success, 2 means a flag or a choice is unanswered, 3 means another run holds the lock, 4 means this machine or library can't be provisioned right now. The agent stops for the Cloudflare Allow page, the R2 page and the owner link, and never types a secret into a chat.
+          Output is one JSON event per line; the last is always result. Exit 0 means success, 2 means a flag or a choice is unanswered, 3 means another run holds the lock, 4 means this machine or library can't be provisioned right now. Every failure reported after a run starts carries retryable, not just exit 4, so an agent can tell a failure worth repeating from a final one. A transient Cloudflare failure is retried four times first, then reported as CLOUDFLARE_TEMPORARY: "Cloudflare had a temporary problem, try again." The agent stops for the Cloudflare Allow page, the R2 page and the owner link, and never types a secret into a chat.
         </p>
         <p className="max-w-[640px] text-sm leading-[1.6] text-muted-foreground">
           --yes never adopts an existing library: pass --adopt-existing when Use that library is the intended answer. The CLI also leaves capture/.env alone and writes capture/.env.cloud; serve the cloud library with SNIP_CAPTURE_ENV_FILE=capture/.env.cloud npm run capture. The app's button instead points capture/.env at the copy, which is the intended end state.
         </p>
         <p className="max-w-[640px] text-sm leading-[1.6] text-muted-foreground">
-          The bare npm run setup:cloudflare means setup. Put any other command after --: status, detach, pull, snapshot restore, snapshot delete, snapshot delete-export, delete-resources, owner link, owner rotate, abort, migrate or deploy. status stays offline unless you add --check, and the three destructive commands need --confirm with the item's own name.
+          The bare npm run setup:cloudflare means setup. Put any other command after --: status, detach, pull, snapshot restore, snapshot delete, snapshot delete-export, delete-resources, owner link, owner rotate, abort, migrate or deploy. status stays offline unless you add --check, and the three destructive commands need --confirm with the item's own name. To sign another device in, owner link --no-handoff prints a one-time link without opening it here, which is what Settings' Sign in another browser does.
         </p>
       </div>
       <div className="flex max-w-[760px] items-start gap-3 rounded-2xl bg-note p-5 text-note-ink">

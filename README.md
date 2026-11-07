@@ -55,7 +55,7 @@ npm run setup:cloudflare -- --check --json   # preflight only; changes nothing
 npm run setup:cloudflare -- --yes --json     # enable cloud, never prompt
 ```
 
-Each line of output is a JSON event. A `human` event carries a URL that only a person can open (Cloudflare's allow page, the R2 page, the owner link); the run pauses there. A `choice` event is a decision with consequences and exits 2 until you pick, so `--yes` never adopts an existing library: pass `--adopt-existing` when that is what you mean. A `needs_input` event exits 2 and names the flags to add. Nothing prompts, and no secret is ever typed into a chat.
+Each line of output is a JSON event. A `human` event carries a URL that only a person can open (Cloudflare's allow page, the R2 page, the owner link); the run pauses there. A `choice` event is a decision with consequences and exits 2 until you pick, so `--yes` never adopts an existing library: pass `--adopt-existing` when that is what you mean. A `needs_input` event exits 2 and names the flags to add. Every failure reported after a run starts carries `retryable`, so a script can tell a failure worth repeating from a final one: a transient Cloudflare problem is retried four times first and then reported as `CLOUDFLARE_TEMPORARY`. Nothing prompts, and no secret is ever typed into a chat.
 
 The bare `npm run setup:cloudflare` means `setup`. Add any other command after `--`:
 
@@ -66,10 +66,11 @@ npm run setup:cloudflare -- detach --json
 npm run setup:cloudflare -- pull --json
 npm run setup:cloudflare -- snapshot delete --confirm <basename>
 npm run setup:cloudflare -- snapshot delete-export --confirm <basename>
+npm run setup:cloudflare -- owner link --no-handoff
 npm run setup:cloudflare -- delete-resources --confirm snip.<your-subdomain>.workers.dev
 ```
 
-`status` never calls the network; `--check` is the one form that does, and then it says which surface answered. `--confirm` is the basename of the item being deleted (for `delete-resources`, the cloud URL's host), and a missing or different value changes nothing.
+`status` never calls the network; `--check` is the one form that does, and then it says which surface answered. `--confirm` is the basename of the item being deleted (for `delete-resources`, the cloud URL's host), and a missing or different value changes nothing. `owner link --no-handoff` prints a one-time link for another device instead of opening it here, which is what Settings' **Sign in another browser** runs.
 
 ### Turning cloud off
 

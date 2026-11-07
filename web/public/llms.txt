@@ -89,7 +89,9 @@ Never ask for a secret in chat, and never print or log the `session` event.
 
    A `choice` event is a decision with consequences; it also exits 2. `--yes` does not answer it. The only current choice is an existing Snip library with data (`id: "existing-library"`): present both options to the user. **Use that library** means rerunning with `--adopt-existing`; **Stop** means not running anything. Never add `--adopt-existing` on the user's behalf.
 
-   Exit 4 carries `retryable`. `true` means the same command works after the user changes something outside Snip; `false` means repeating it cannot help. Branch on `retryable`, not the code string. Codes: `NOT_A_LIBRARY`, `NO_NODE`, `NO_WRANGLER`, `NO_BUILD`, `BAD_CONFIG`, `NOT_AN_ACCOUNT`, `LOCAL_SERVER_RUNNING`, `UNSUPPORTED_PLATFORM`, `FOREIGN_SNIP`.
+   Every failure reported after a run starts carries `retryable`, not only exit 4: branch on that field, never the code string. `true` means the same command can work after the user changes something outside Snip, or because the failure was temporary; `false` means repeating it cannot help. Within exit 4, `NOT_AN_ACCOUNT` and `LOCAL_SERVER_RUNNING` are retryable and the rest are final. A usage error is the exception: an unknown flag or a missing flag value reports `code: "USAGE"` with no `retryable`, and an unknown command emits no `result` at all, so treat a missing `retryable` as final. Codes: `NOT_A_LIBRARY`, `NO_NODE`, `NO_WRANGLER`, `NO_BUILD`, `BAD_CONFIG`, `NOT_AN_ACCOUNT`, `LOCAL_SERVER_RUNNING`, `UNSUPPORTED_PLATFORM`, `FOREIGN_SNIP`.
+
+   A transient Cloudflare failure is retried up to four times on `deploy`, `d1 migrations apply` and secret writes, and then reported as `CLOUDFLARE_TEMPORARY` with `retryable: true` and the message "Cloudflare had a temporary problem, try again." Nothing is wrong with the Mac or the library; rerun the same command in a minute. Rate limits, 5xx responses and dropped connections are retried; authentication and permission failures are not.
 
    R2 must be switched on once per account (Cloudflare dashboard → R2 → Get started; it asks for a card even though 10 GB is free). The run waits at the R2 step until it is on.
 
@@ -120,7 +122,8 @@ npm run setup:cloudflare -- abort
 - `snapshot restore` switches back to that **Previous library**. It refuses with `KEPT_LOCAL` when this Mac's own library never moved, because there is nothing to restore; `Switch back to it` (detach) is the way back there.
 - `snapshot delete` and `snapshot delete-export` need `--confirm` equal to the directory's basename. Missing → exit 2 with the exact command; different → exit 1. Neither changes anything.
 - `delete-resources` destroys the Worker, D1, KV and R2. Require the user's explicit confirmation; `--confirm` must be the cloud URL's host exactly.
-- `owner link` mints a fresh one-time sign-in link; `owner rotate` is the recovery path when the stored owner secret is lost.
+- `owner link` mints a fresh one-time sign-in link for this Mac; `owner rotate` is the recovery path when the stored owner secret is lost.
+- `owner link --no-handoff` mints a link for another browser or device: it prints the link, opens nothing and attempts no handoff, because this Mac has no session to receive. Open it on the other device within ten minutes. This is what Settings' **Sign in another browser** runs.
 - `abort` cleans up an interrupted enable and never touches a healthy cloud install. It deletes only the resources that run created.
 - `status` is read-only and offline unless `--check` is added. Never describe `status` as contacting Cloudflare.
 
