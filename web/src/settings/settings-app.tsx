@@ -163,6 +163,10 @@ export function SettingsApp() {
                 onEnable={() => setDialog("enable")}
                 onOpen={openCloud}
                 onCopyPrompt={copyPrompt}
+                onRestorePrevious={async () => {
+                  await cloud.begin(() => cloud.bridge!.snapshot("restore"))
+                }}
+                onDeleteSnapshot={() => setDialog("snapshot-delete")}
               />
             )}
           </>
@@ -238,11 +242,15 @@ function LocalPanels({
   onEnable,
   onOpen,
   onCopyPrompt,
+  onRestorePrevious,
+  onDeleteSnapshot,
 }: {
   cloud: ReturnType<typeof useCloud>
   onEnable: () => void
   onOpen: () => void
   onCopyPrompt: (kind: "setup" | "pull") => Promise<void>
+  onRestorePrevious: () => void
+  onDeleteSnapshot: () => void
 }) {
   const detached = cloud.cloud?.detachedAt ? cloud.cloud : null
   const local = cloud.local
@@ -260,7 +268,9 @@ function LocalPanels({
           title={empty ? "Nothing captured yet" : count != null ? references(count) : "Your local library"}
           body={
             local?.reachable === false
-              ? "The local server isn’t running, so Snip can’t count right now. Enabling cloud is still safe."
+              // Do not claim the server is stopped: this is also what a slow start
+              // or a refused request looks like. Say only what is known.
+              ? "Snip couldn’t read the count from this library just now. Enabling cloud is still safe."
               : empty
                 ? "Turn on cloud now and capture from any device, or capture here first and copy later."
                 : "Database and screenshots stay in your Snip library folder."
@@ -272,6 +282,28 @@ function LocalPanels({
           }
         />
       </Panel>
+
+      {cloud.snapshotRecord?.kind === "backup" ? (
+        // A pull replaces this Mac's library and keeps the old one. It is only
+        // reachable here, because after a pull the app is local, not cloud.
+        <Panel title="Previous library" description="The library this Mac used before the cloud copy came back.">
+          <Row
+            icon={<HardDrive className="size-4" />}
+            title={`${references(cloud.snapshotRecord.refs)} · ${shortDate(cloud.snapshotRecord.takenAt) ?? "from before the copy"}`}
+            body="Switch back to it, or delete it once you no longer need it."
+            action={
+              <>
+                <Button variant="outline" size="sm" onClick={onRestorePrevious}>
+                  Switch back to previous library
+                </Button>
+                <Button variant="ghost" size="sm" onClick={onDeleteSnapshot} aria-label="Delete previous library">
+                  <Trash2Icon />
+                </Button>
+              </>
+            }
+          />
+        </Panel>
+      ) : null}
 
       {detached ? <DetachedPanel cloud={detached} onOpen={onOpen} /> : null}
 

@@ -190,8 +190,10 @@ async function fetchImpl(url, options = {}) {
   const method = options.method || 'GET';
   const auth = String((options.headers && (options.headers.authorization || options.headers.Authorization)) || '').replace(/^Bearer\s+/i, '');
   if (target.origin !== new URL(cloudUrl).origin) throw new Error(`harness refuses host ${target.origin}`);
-  if (`${method} ${target.pathname}` === 'POST /agent/ping') {
-    return jsonResponse(auth && auth === account.secrets.CAPTURE_TOKEN ? 200 : 401, { ok: auth === account.secrets.CAPTURE_TOKEN });
+  // A GET: the engine proves the capture token functionally after writing secrets.
+  if (`${method} ${target.pathname}` === 'GET /agent/ping') {
+    const ok = Boolean(auth) && auth === account.secrets.CAPTURE_TOKEN;
+    return jsonResponse(ok ? 200 : 401, { ok });
   }
   if (!account.secrets.TRANSFER_TOKEN || auth !== account.secrets.TRANSFER_TOKEN) return jsonResponse(404, { error: 'not found' });
   const counts = { refs: LIBRARY.refs, pages: LIBRARY.pages, animations: LIBRARY.animations, collections: LIBRARY.collections };
@@ -264,7 +266,12 @@ const local = {
   },
 };
 
+// Only the Worker start is replaced. Everything else — reading the library config,
+// the persist dir, storage identities — is the real module, so preflight and export
+// see the same files a real library has.
+const realLibrary = require(path.join(root, 'desktop/provision/library.cjs'));
 const libraryModule = {
+  ...realLibrary,
   async withLocalWorker(_options, fn) {
     // A real library with references also has objects; the engine refuses a copy of
     // counts without files (EXPORT_EMPTY), so seed one screenshot per reference.
@@ -283,6 +290,11 @@ const libraryModule = {
     return fn({
       url: 'http://127.0.0.1:59999',
       transfer: {
+        // The swap reads the directory it moved aside through this surface, so it
+        // must answer like a Worker on a real library, not like an empty one.
+        async status() {
+          return { version: '1.1.2', hasOwner: true, ownerId: 'harness', counts: { refs: LIBRARY.refs, pages: LIBRARY.pages, animations: LIBRARY.animations, collections: LIBRARY.collections } };
+        },
         async manifest() {
           return manifest;
         },
@@ -311,9 +323,6 @@ const libraryModule = {
       async dispose() {},
     });
   },
-  async localWorker() {
-    throw new StepError('HARNESS_LOCAL_WORKER', 'The harness does not start a local Worker.');
-  },
 };
 
 function buildContext() {
@@ -341,6 +350,8 @@ function buildContext() {
       domain: flag('domain') ?? account.subdomain,
       account: flag('account') ?? account.accountId,
       confirm: flag('confirm'),
+      // The CLI stores the positional subcommand here; commands read it from flags.
+      snapshotAction: subcommand ?? undefined,
       'capture-env': flag('capture-env') ?? 'keep',
       noOpen: true,
       managed: true,
@@ -390,7 +401,7 @@ async function main() {
     if (command === 'setup') result = await commands.commandSetup(ctx);
     else if (command === 'pull') result = await commands.commandPull(ctx);
     else if (command === 'detach') result = await commands.commandDetach(ctx);
-    else if (command === 'snapshot') result = await commands.commandSnapshot(ctx, subcommand ?? 'restore');
+    else if (command === 'snapshot') result = await commands.commandSnapshot(ctx);
     else if (command === 'delete-resources') result = await commands.commandDeleteResources(ctx);
     else if (command === 'abort') result = await commands.commandAbort(ctx);
     else if (command === 'deploy') result = await commands.commandDeploy(ctx);
@@ -411,6 +422,7 @@ async function main() {
       return;
     }
     emit.log('error', error.message || String(error));
+    if (process.env.SNIP_HARNESS_TRACE) emit.log('info', String(error.stack || '').slice(0, 1500));
     if (error.hint) emit.log('warn', error.hint);
     const code = error.code === 'LOCKED' ? 'LOCKED' : error.code === 'UNSUPPORTED' ? 'UNSUPPORTED' : 'FAILED';
     emit.result({ ok: false, code, mode: current.mode, data: { code: error.code, message: error.message, hint: error.hint, step: error.step } });
