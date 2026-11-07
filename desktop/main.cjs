@@ -489,7 +489,7 @@ async function enterLocalMode() {
   start("web")
   recreateWindow()
 }
-async function finishCloudRun(run, { cancelled }) {
+async function finishCloudRun(run, { cancelled, code }) {
   const result = cloudResult
   cloudResult = null
   if (cloudRun === run) cloudRun = null
@@ -501,8 +501,13 @@ async function finishCloudRun(run, { cancelled }) {
   } else if (cancelled || result?.code === "CANCELLED") {
     sendToSettings("snip:cloud-log", { level: "info", message: "Stopped. Nothing on Cloudflare was changed." })
   } else {
-    const message = cloudState?.error?.message ?? (result?.code === "NEEDS_INPUT" ? "Snip needs one more choice before it can continue." : result?.code === "UNSUPPORTED" ? "This build can’t set up cloud Snip." : result?.code === "LOCKED" ? "Another Snip setup is already running." : "Setup stopped before it finished. Retry the step that failed.")
+    // A run that dies without a `result` still needs a sentence a person can act on.
+    const fallback = code === 2 ? "Snip needs one more choice before it can continue." : code === 3 ? "Another Snip setup is already running." : code === 4 ? "This build can’t run that part of cloud Snip." : "Setup stopped before it finished. Retry the step that failed."
+    const byCode = { NEEDS_INPUT: fallback, UNSUPPORTED: "This build can’t run that part of cloud Snip.", LOCKED: "Another Snip setup is already running." }
+    const message = cloudState?.error?.message ?? byCode[result?.code] ?? fallback
     sendToSettings("snip:cloud-log", { level: "error", message })
+    // Main's log is the one place a failed run is recorded; the renderer only shows copy.
+    makeLog("cloud").end(`${new Date().toISOString()} ${run.command} exited ${code ?? "?"} ${result?.code ?? "no result"}\n`)
   }
   refresh()
 }
