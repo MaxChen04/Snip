@@ -1,0 +1,18 @@
+/*
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Frame-Options: DENY
+  Content-Security-Policy: frame-ancestors 'none'
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
+
+# Vite fingerprints these filenames, so an update always gets a new URL.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# These filenames are stable: cache for one day, then check for updates.
+/landing/*
+  Cache-Control: public, max-age=86400
+
+/og.png
+  Cache-Control: public, max-age=86400

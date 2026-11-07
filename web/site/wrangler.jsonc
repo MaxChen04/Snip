@@ -3,19 +3,16 @@
   // The public site on usesnip.dev. Separate from the app Worker (../wrangler.jsonc):
   // static files only, no D1/R2/KV, no login. Deploy with `npm run deploy:site`.
   "name": "snip-site",
-  "main": "worker.ts",
   "compatibility_date": "2026-10-01",
   "assets": {
     "directory": "../dist-site",
-    "binding": "ASSETS",
     "not_found_handling": "404-page",
-    "html_handling": "drop-trailing-slash",
-    "run_worker_first": true
+    "html_handling": "drop-trailing-slash"
   },
   "routes": [
     { "pattern": "usesnip.dev", "custom_domain": true },
     { "pattern": "www.usesnip.dev", "custom_domain": true }
   ],
   "workers_dev": false,
-  "observability": { "enabled": true }
+  "observability": { "enabled": false }
 }
