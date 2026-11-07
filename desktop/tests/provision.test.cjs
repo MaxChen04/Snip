@@ -378,6 +378,7 @@ async function runSetup(model, flags = {}, options = {}) {
   const originalHuman = emitter.emit.human;
   emitter.emit.human = (step, action, url, message) => {
     if (step === 'owner') cloudFake.setOwner(true);
+    if (options.onHuman) options.onHuman({ step, action, url, message });
     return originalHuman(step, action, url, message);
   };
   const result = await commands.commandSetup(ctx);
@@ -1439,6 +1440,17 @@ test('--no-open is honoured, and dashed flags reach steps in camelCase', () => {
   assert.deepEqual(cli.parseArgs([]).positional, []);
 });
 
+test('--no-handoff is parsed and survives normalization', () => {
+  const { flags } = cli.parseArgs(['owner', 'link', '--no-handoff']);
+  assert.equal(flags['no-handoff'], true, 'the dashed name is accepted, so the CLI does not reject it');
+  cli.normalizeFlags(flags);
+  // The steps read camelCase. A flag that normalizes to nothing is silently
+  // lost, which is exactly the failure this guards: port 0 or a ten-minute wait.
+  assert.equal(flags.noHandoff, true);
+  assert.equal(cli.parseArgs(['owner', 'link', '--no-handoff=false']).flags['no-handoff'], false);
+  assert.equal(cli.parseArgs(['owner', 'link']).flags['no-handoff'], undefined, 'absent stays absent');
+});
+
 test('the owner step never opens a browser with --no-open', async () => {
   const library = fakeLibrary();
   stateModule.setMode(library.root, 'enabling');
@@ -1695,6 +1707,105 @@ test('owner link on a bare CLI does not wait when an owner already exists', asyn
   const open = emitter.events.find((event) => event.event === 'step' && event.step === 'owner-open' && event.status === 'ok');
   assert.match(open.message, /open it in the browser/);
   assert.equal(emitter.events.some((event) => event.event === 'session'), false, 'a bare CLI has no handoff');
+});
+
+/** The port an owner link hands its session to, read back out of the signed payload. */
+function ownerLinkPort(link) {
+  const payload = new URL(link).searchParams.get('t').split('.')[0];
+  return Number(payload.split('|').pop());
+}
+
+function ownerLibrary({ ownerId = 'tester' } = {}) {
+  const library = fakeLibrary();
+  stateModule.writeSecrets(library.root, { version: 1, ownerLinkSecret: crypto.randomBytes(32).toString('hex'), captureToken: 'c' });
+  stateModule.updateState(library.root, (next) => {
+    next.mode = 'cloud';
+    next.cloud = { url: PROVIDED, accountId: 'acct', ownerId };
+    return next;
+  });
+  return library;
+}
+
+test('owner link --no-handoff mints a port-0 link and ends at the mint', async () => {
+  const library = ownerLibrary();
+  const emitter = collectedEmitter();
+  const opened = [];
+  const ctx = createContext({
+    root: library.root, dataRoot: library.root, flags: { ownerAction: 'link', managed: true, noHandoff: true }, emit: emitter.emit, api: {},
+    wrangler: { bin: '/x', run: async () => ({ ok: true }) },
+    deps: {
+      // Neither call may happen: the run has nothing to wait for.
+      sleep: async () => { throw new Error('the command must not wait'); },
+      transferOf: () => ({ status: async () => { throw new Error('the command must not poll'); } }),
+    },
+  });
+  ctx.openUrl = async (url) => { opened.push(url); return { opened: true }; };
+
+  const result = await commands.commandOwner(ctx);
+
+  assert.equal(result.ok, true);
+  const human = emitter.events.find((event) => event.event === 'human' && event.step === 'owner-open');
+  assert.ok(human, 'the link is emitted even without --no-open');
+  assert.equal(ownerLinkPort(human.url), 0, 'another device gets a port-0 link, not this Mac\'s loopback');
+  assert.equal(opened.length, 0, 'the browser that needs the link is not this one');
+  const mint = emitter.events.find((event) => event.event === 'step' && event.step === 'owner-mint' && event.status === 'ok');
+  assert.equal(mint.data.url, human.url, 'the step carries the same URL as the human action, at data.url');
+  const open = emitter.events.find((event) => event.event === 'step' && event.step === 'owner-open' && event.status === 'ok');
+  assert.match(open.message, /Link ready/);
+  assert.doesNotMatch(open.message, /signed in/i, 'this run never observes the other browser signing in');
+  assert.equal(emitter.events.some((event) => event.event === 'session'), false, 'there is no session for this Mac to receive');
+});
+
+test('owner link --managed still hands off when --no-handoff is absent', async () => {
+  const library = ownerLibrary();
+  const emitter = collectedEmitter();
+  const ctx = createContext({
+    root: library.root, dataRoot: library.root, flags: { ownerAction: 'link', noOpen: true, managed: true }, emit: emitter.emit, api: {},
+    wrangler: { bin: '/x', run: async () => ({ ok: true }) },
+    deps: { transferOf: () => ({ status: async () => ({ hasOwner: true, ownerId: 'tester' }) }) },
+  });
+
+  const pending = commands.commandOwner(ctx).then((value) => value, (error) => ({ error }));
+  let link = null;
+  for (let attempt = 0; attempt < 200 && !link; attempt++) {
+    const human = emitter.events.find((event) => event.event === 'human' && event.step === 'owner-open');
+    if (human) link = human.url;
+    else await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.ok(link, 'the link is emitted before the run waits on the token');
+  const port = ownerLinkPort(link);
+  assert.ok(port > 0, 'the app\'s own link still carries a live loopback port');
+  const stored = await fetch(`http://127.0.0.1:${port}/store`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: 'session-value' }) });
+  assert.equal(stored.status, 200);
+
+  const settled = await Promise.race([pending, new Promise((resolve) => setTimeout(() => resolve('timeout'), 5000))]);
+  if (settled === 'timeout') ctx.cancel();
+  assert.notEqual(settled, 'timeout', 'the token finishes the command instead of waiting out the link');
+  assert.equal(settled.ok, true);
+  const session = emitter.events.find((event) => event.event === 'session');
+  assert.equal(session.token, 'session-value');
+  const open = emitter.events.find((event) => event.event === 'step' && event.step === 'owner-open' && event.status === 'ok');
+  assert.equal(open.message, 'Signed in');
+});
+
+test('setup ignores --no-handoff: its owner step is how this Mac signs itself in', async () => {
+  const model = buildModel({ hasOwner: false });
+  const ports = [];
+  const { events } = await runSetup(model, { managed: true, noHandoff: true }, {
+    onHuman: ({ step, url }) => {
+      if (step !== 'owner') return;
+      const port = ownerLinkPort(url);
+      ports.push(port);
+      if (port > 0) {
+        fetch(`http://127.0.0.1:${port}/store`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: 'app-session' }) }).catch(() => {});
+      }
+    },
+  });
+  assert.deepEqual(ports.length, 1);
+  assert.ok(ports[0] > 0, 'the setup link keeps its handoff, so the app can receive the session');
+  const session = events.find((event) => event.event === 'session');
+  assert.ok(session, 'the app is signed in by its own handoff');
+  assert.equal(session.token, 'app-session');
 });
 
 test('owner link waits for the first owner, then reports Signed in', async () => {
@@ -2264,4 +2375,12 @@ test('the help lists snapshot restore once, scoped to a pull backup, and explain
   assert.match(help, /--resume is optional; setup always resumes where it stopped\./);
   // The retired pre-cloud snapshot wording must not survive anywhere.
   assert.doesNotMatch(help, /pre-cloud snapshot/);
+});
+
+test('the help explains --no-handoff as the other-browser form', () => {
+  const help = cli.helpText();
+  assert.match(help, /--adopt-existing --no-handoff --confirm/, 'the flag is listed with the others');
+  assert.match(help, /--no-handoff is for `owner link`/);
+  assert.match(help, /another browser or/);
+  assert.match(help, /`setup` always uses the handoff/);
 });

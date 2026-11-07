@@ -1014,9 +1014,14 @@ async function commandOwner(ctx) {
       // `--managed` means the Electron app is driving and can receive the
       // session over its loopback; on a bare CLI the browser keeps the cookie,
       // so the link carries port 0 and no handoff is attempted.
+      //
+      // `--no-handoff` overrides both, because the link is then for another
+      // machine: its `127.0.0.1:<port>` redirect would reach that machine's own
+      // loopback, where nothing is listening, while this Mac held the port open
+      // for nothing. Port 0 keeps the redirect at `/`.
       let loopback = null;
       let port = 0;
-      if (ctx2.flags.managed) {
+      if (ctx2.flags.managed && !ctx2.flags.noHandoff) {
         loopback = startLoopback({ timeoutMs: 10 * 60_000 });
         try { port = await loopback.listening; } catch (error) {
           throw new StepError('LOOPBACK_FAILED', 'Could not open the local sign-in handoff.', { hint: 'Try again.', data: { cause: error.message } });
@@ -1025,7 +1030,10 @@ async function commandOwner(ctx) {
       const stored = ctx2.secrets();
       const minted = mintOwnerLink({ secret: stored.ownerLinkSecret, url: record.url, ownerId: record.ownerId || 'owner', port });
       ctx2.setWork({ ownerLink: minted.link, ownerLoopback: loopback });
-      return { message: 'Link ready', data: { url: minted.link } };
+      // `url` is also on the step result's top level because the step event
+      // carries that object as its `data` (§1.4.1): a client that reads steps
+      // rather than actions finds the link at `data.url`, not `data.data.url`.
+      return { message: 'Link ready', url: minted.link, data: { url: minted.link } };
     },
     async verify() { return true; },
   });
@@ -1036,6 +1044,15 @@ async function commandOwner(ctx) {
       const link = ctx2.work.ownerLink;
       const loopback = ctx2.work.ownerLoopback || null;
       ctx2.emit.human('owner-open', 'open_url', link, 'Sign in to your Snip in the browser');
+      if (ctx2.flags.noHandoff) {
+        // The link is for another browser or device, so this run cannot observe
+        // whether it is ever used: it mints, hands the URL over and stops. No
+        // token to wait for, no `hasOwner` poll, and no `session` event — this
+        // Mac has no session to receive, and reporting "signed in" would be a
+        // claim about someone else's browser. It does not open the link here
+        // either, because the browser that needs it is not this one.
+        return { message: 'Link ready; open it in the browser on the other device to sign it in' };
+      }
       if (!ctx2.flags.noOpen && ctx2.openUrl) await ctx2.openUrl(link).catch(() => {});
       try {
         if (loopback) {
