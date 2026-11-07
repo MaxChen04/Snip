@@ -42,7 +42,7 @@ After that, every other browser or device signs in at **/sign-in** with its pass
 
 Capture stays on this Mac. A capture started from another device waits in the queue and shows **Waiting for your Mac** until this Mac's capture agent checks in. The gallery card and every agent status use those exact words, whether the agent is busy or the Mac is asleep.
 
-Already deployed Snip before this button existed? The setup recognises your own library. An empty one is adopted silently; one with references asks first and offers **Use that library** or **Stop**, and your local library is kept as the snapshot either way. [Cloud mode](docs/deploy.md) covers the copy, the two approvals, adoption, the command-line path, turning cloud off and the free-tier limits.
+Already deployed Snip before this button existed? The setup recognises your own library. An empty one is adopted silently; one with references asks first and offers **Use that library** or **Stop**. Choosing to use it switches this Mac to the cloud library and leaves your local one on disk, listed as **This Mac's library** with a single **Switch back to it** action. The owner link signs in as the same owner and only adds this device's passkey; existing devices keep theirs. [Cloud mode](docs/deploy.md) covers the copy, the two approvals, adoption, the command-line path, turning cloud off and the free-tier limits.
 
 ### Command line and agents
 
@@ -72,7 +72,7 @@ npm run setup:cloudflare -- delete-resources --confirm snip.<your-subdomain>.wor
 
 ### One Snip per account, workers.dev only
 
-Snip keeps one library per Cloudflare account. An empty older Snip is adopted silently. One with references asks first: **Use that library** switches to it and keeps your local library as the snapshot, and **Stop** changes nothing. A Worker named `snip` that is not a Snip is refused, with instructions to rename or delete it or choose another account. There is no replace option and no second Worker name.
+Snip keeps one library per Cloudflare account. An empty older Snip is adopted silently. One with references asks first: **Use that library** switches to it and leaves this Mac's library in place, listed as **This Mac's library** with **Switch back to it**, and **Stop** changes nothing. A Worker named `snip` that is not a Snip is refused, with instructions to rename or delete it or choose another account. There is no replace option and no second Worker name.
 
 The address is always `https://snip.<your-subdomain>.workers.dev`. Custom domains are not supported in this release: the address is what the passkey and MCP connections are bound to.
 

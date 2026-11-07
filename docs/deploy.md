@@ -33,7 +33,8 @@ There are no IDs to copy, no secrets to paste and no dashboard steps besides tho
 When the Worker is up, Snip opens a **one-time owner link** in your browser. It registers a passkey there (Touch ID on a Mac) and hands the signed-in session back to Snip.app, so the app arrives signed in without a second login.
 
 - The link works once and expires after ten minutes.
-- The passkey is what you use to sign in to the cloud library from another browser or device.
+- The link always signs in as the library's one owner. On a fresh install that identity is created; on a re-enabled or adopted library it is reused, so a second owner row never appears.
+- The passkey is what you use to sign in to the cloud library from another browser or device. Registering one only adds a device: Snip never replaces or deletes an existing passkey, and adding the same device twice says **You already added a passkey on this device.**
 - The app stores the secret that mints these links on this Mac. If it is ever lost, `owner rotate` sets a new one and mints a fresh link.
 
 ### Signing in later
@@ -124,12 +125,12 @@ Pass `--capture-env replace` to point `capture/.env` at the cloud copy, or use t
 
 > Changes made in your cloud library stay there. This Mac goes back to the copy from 6 Nov. Your cloud library is still reachable at snip.max.workers.dev, and devices and agents signed in to it keep working.
 
-For a library that started empty, the second sentence is "This Mac goes back to an empty library", and there is no snapshot row.
+For a library that started empty, the second sentence is "This Mac goes back to an empty library", and there is no snapshot row. For an adopted install it is "This Mac goes back to its own library"; the row is **This Mac's library**, not a snapshot.
 
 The dialog offers three outcomes:
 
 - **Stay in cloud** (cancel).
-- **Turn off and keep local** — detach now. This Mac opens the snapshot from before the move. The cloud copy stays live, and anything signed in to it keeps working.
+- **Turn off and keep local** — detach now. This Mac opens its local library (for an adopted install) or the snapshot from before the move. The cloud copy stays live, and anything signed in to it keeps working.
 - **Bring the cloud library back to this Mac** — copies the cloud library down first, verifies it, then switches this Mac to it. Also available later as **Copy back now**.
 
 Nothing is copied back automatically. If you worked in the cloud copy and want those changes here, use **Copy back now** or `pull`.
@@ -142,11 +143,13 @@ When it finishes, this Mac is in local mode. The cloud copy still exists and is 
 
 ### The snapshot
 
-After a move, **Settings → Cloud** lists the pre-cloud library with its date and size, for example **Snapshot from 6 Nov, 10:12 — 812 MB**.
+After a **completed move**, **Settings → Cloud** lists the pre-cloud copy with its date and size, for example **Snapshot from 6 Nov, 10:12 — 812 MB**.
 
 - **Restore** puts the snapshot back as this Mac's live library. In cloud mode, use **Copy back now** instead.
 - **Delete** removes the snapshot and its backups.
 - The row is hidden when the library was empty at the time of the move.
+
+An **adopted** library is not a snapshot, because there is no separate copy: the local library was never moved. It shows as **This Mac's library** with one action, **Switch back to it**, and no Restore or Delete. See [Adopting a library you already had](#adopting-a-library-you-already-had).
 
 ### Delete cloud resources
 
@@ -182,10 +185,17 @@ One **with references** needs a decision:
 > **Use that library** — Switches this Mac to it. Your local library is kept and is not copied.
 > **Stop** — Changes nothing.
 
-- **Use that library** adopts the existing URL, account, database, KV namespace and bucket. Your local library stays exactly where it is, untouched, and Snip records it as the snapshot; it is not copied or renamed, because nothing needs to be duplicated for ceremony. The status line reads **adopted · 1,284 references**, never "verified", because no copy was verified. Existing browser sessions keep working, and `CAPTURE_TOKEN` is regenerated for this Mac's capture agent.
+- **Use that library** adopts the existing URL, account, database, KV namespace and bucket. Your local library stays exactly where it is, untouched: it is not moved, renamed or copied, because nothing needs to be duplicated for ceremony. The status line reads **adopted · 1,284 references**, never "verified", because no copy was verified. Existing passkeys and browser sessions keep working, and `CAPTURE_TOKEN` is regenerated for this Mac's capture agent.
 - **Stop** leaves the account and this Mac exactly as they were.
 - From the CLI, use `npm run setup:cloudflare -- --adopt-existing --json`. The choice event exits 2 with `data.resumeWith` set to that flag. **`--yes` alone never adopts**: it suppresses questions, not consequences, so an unattended run that should adopt must pass `--adopt-existing` explicitly. Leaving it out is not an error, it is the safe default.
-- After adoption, Settings states both halves, because you need to know where each library is: the cloud library's size, and that this Mac's library is kept and was not copied.
+
+After adoption, Settings states both halves, because you need to know where each library is:
+
+> Your cloud library already had 1,284 references, so Snip switched to it. **This Mac's library (312 references) is kept and was not copied.**
+
+The local library is listed as **This Mac's library · 312 references**, with the subtitle **Kept on this Mac. Not copied to the cloud.** It has exactly one action, **Switch back to it**, which detaches this Mac and returns to the local library. It is not a snapshot: there is no copy to restore, so it offers no Restore and no Delete, and Snip never offers to delete your only local library from a status row. Before it runs, the action says what stays: **Changes made in your cloud library stay there. This Mac goes back to its own library.**
+
+The owner link on an adopted library signs in as the **same owner** and adds this device's passkey. It never replaces or deletes a passkey that was already there, so a re-enabled install keeps every device it had. Adding a device that already has a passkey shows **You already added a passkey on this device.**
 
 ### When the account has something else
 

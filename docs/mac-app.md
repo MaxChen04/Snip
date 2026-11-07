@@ -20,7 +20,7 @@ The app runs this repo in place; `npm run update` keeps its web build and the ap
 
 ## Settings and cloud mode
 
-**Snip → Settings** (also in the menu-bar menu) opens a small window that stays available in both modes. Its **Cloud** tab holds **Enable cloud**, the snapshot row, **Copy back now**, **Turn off cloud**, **Sign out all devices** and **Delete cloud resources**.
+**Snip → Settings** (also in the menu-bar menu) opens a small window that stays available in both modes. Its **Cloud** tab holds **Enable cloud**, the snapshot row, **Copy back now**, **Turn off cloud**, **Sign out all devices** and **Delete cloud resources**. After adopting a library that was already deployed, the local row is instead **This Mac's library**, with one action, **Switch back to it**, and no Restore or Delete.
 
 In cloud mode the main window is the cloud gallery and no longer has the local preload bridge; Settings stays reachable from the menu bar, and its Cloud tab shows the cloud address, the install steps and the pre-cloud snapshot. Capture stays on this Mac and is pointed at the cloud library. Passkeys and devices are managed in the browser at `/passkeys`, linked from Settings. [Cloud mode](deploy.md) explains what moves, the Cloudflare approvals, turning it off and the command-line path.
 

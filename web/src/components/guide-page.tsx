@@ -352,7 +352,7 @@ function CloudSection() {
     },
     {
       t: "Register your passkey",
-      b: "A one-time owner link opens in your browser, registers a passkey (Touch ID on a Mac) and signs Snip.app back in. The link works once and expires after ten minutes. From then on, every other browser or device signs in at /sign-in with its own passkey; Passkeys and devices in the account menu adds or removes them. A passkey is owner-only, not an invitation: a second person signs in with GitHub.",
+      b: "A one-time owner link opens in your browser, registers a passkey (Touch ID on a Mac) and signs Snip.app back in. The link works once and expires after ten minutes, and it always signs in as the library's one owner: re-enabling or adopting an existing library reuses that identity and keeps every passkey it had. From then on, every other browser or device signs in at /sign-in with its own passkey; Passkeys and devices in the account menu adds or removes them, and adding one twice says You already added a passkey on this device. A passkey is owner-only, not an invitation: a second person signs in with GitHub.",
     },
   ]
   return (
@@ -378,7 +378,7 @@ function CloudSection() {
       <div className="grid max-w-[760px] grid-cols-1 gap-4 md:grid-cols-2">
         {[
           { t: "Waiting for your Mac", b: "A capture started from another device waits in the cloud queue until this Mac's capture agent checks in. The card and every agent status say Waiting for your Mac, whether the agent is busy or the Mac is asleep." },
-          { t: "One Snip per account", b: "An older Snip you already deployed is recognised, not refused: if it's empty it's adopted, and if it has references you choose Use that library or Stop. A Worker named snip that isn't a Snip is refused, with instructions to rename or delete it or pick another account." },
+          { t: "One Snip per account", b: "An older Snip you already deployed is recognised, not refused: if it's empty the setup adopts it, and if it has references you choose Use that library or Stop. Your local library stays on disk either way. A Worker named snip that isn't a Snip is refused, with instructions to rename or delete it or pick another account." },
           { t: "workers.dev only", b: "The address is https://snip.<your-subdomain>.workers.dev. Custom domains aren't supported in this release, because the address is what your passkey and agent connections are bound to." },
           { t: "GitHub is optional", b: "You sign in with your passkey. GitHub is how a second person or a cloud MCP client authorizes, registered in one click from Settings. There is no OAuth app to create and no secret to paste." },
         ].map(({ t, b }) => (
@@ -423,7 +423,7 @@ function CloudSection() {
 function TurningOffSection() {
   const outcomes = [
     { t: "Stay in cloud", b: "Cancel. Nothing changes." },
-    { t: "Turn off and keep local", b: "This Mac goes back to the copy from before the move. The cloud library stays live at its address, and every device and agent signed in to it keeps working." },
+    { t: "Turn off and keep local", b: "This Mac goes back to its local library or the copy from before the move. The cloud library stays live at its address, and every device and agent signed in to it keeps working." },
     { t: "Bring the cloud library back", b: "Copies the cloud library down first, verifies it, then switches this Mac to it. The same action is available later as Copy back now." },
   ]
   return (
@@ -433,7 +433,7 @@ function TurningOffSection() {
       intro="Turning off detaches this Mac. It does not delete the cloud copy, and nothing is carried back automatically."
     >
       <p className="max-w-[760px] text-[15px] leading-[1.6] text-muted-foreground">
-        Settings → Cloud → Turn off cloud asks first, and says what stays: changes made in the cloud library remain there, this Mac returns to its snapshot, and the cloud library is
+        Settings → Cloud → Turn off cloud asks first, and says what stays: changes made in the cloud library remain there, this Mac returns to its local library or snapshot, and the cloud library is
         still reachable by anything signed in to it.
       </p>
       <dl className="flex max-w-[760px] flex-col">
@@ -455,8 +455,9 @@ function TurningOffSection() {
         <div className="flex flex-col gap-1.5">
           <p className="text-[15px] font-medium">The snapshot</p>
           <p className="text-[15px] leading-[1.6] text-muted-foreground">
-            After a move, Settings lists the pre-cloud library with its date and size, for example “Snapshot from 6 Nov, 10:12 — 812 MB”. Restore puts it back; Delete removes it.
-            The row is hidden when the library was empty.
+            After a completed move, Settings lists the pre-cloud copy with its date and size, for example “Snapshot from 6 Nov, 10:12 — 812 MB”. Restore puts it back; Delete
+            removes it. The row is hidden when the library was empty. An adopted library is different: it is still here, listed as This Mac's library with one action, Switch back
+            to it, and no Restore or Delete, because nothing was copied.
           </p>
         </div>
         <div className="flex flex-col gap-1.5">
