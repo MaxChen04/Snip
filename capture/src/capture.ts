@@ -94,14 +94,23 @@ export function rankLinks<L extends { href: string; nav: boolean }>(links: L[]):
 }
 
 /**
- * The already-visited page this one duplicates, or null. A page is a duplicate when it redirected to, or
- * declares as canonical, a different same-site URL the crawl has already been through.
+ * The page this one duplicates, or null. Redirecting to a different same-site URL the crawl has already been
+ * through always counts. A canonical link counts only when the page it names was captured in this run with the
+ * same title (`titles`), because some sites declare one canonical on every route.
  */
-export function duplicateOf(url: string, finalUrl: string, canonical: string | null, root: URL, visited: string[]): string | null {
-  for (const href of [finalUrl, canonical]) {
-    const n = href && normalize(href, root)
-    if (n && n !== url && visited.includes(n)) return n
-  }
+export function duplicateOf(
+  url: string,
+  finalUrl: string,
+  canonical: string | null,
+  title: string | null,
+  root: URL,
+  visited: string[],
+  titles: Map<string, string>,
+): string | null {
+  const redirect = normalize(finalUrl, root)
+  if (redirect && redirect !== url && visited.includes(redirect)) return redirect
+  const target = canonical && normalize(canonical, root)
+  if (target && target !== url && titles.get(target) === title) return target
   return null
 }
 
@@ -534,6 +543,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
   const queue: string[] = resume ? [...resume.queue] : [normalize(root.href, root) ?? root.href]
   const visited: string[] = resume ? [...resume.visited] : []
   const seen = new Set([...visited, ...queue])
+  const titles = new Map<string, string>() // pages captured in this run, for duplicateOf; empty after a resume
   if (job.mode === "crawl" && !resume) {
     for (const u of await sitemapUrls(desktop, root)) {
       const n = normalize(u, root)
@@ -615,7 +625,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       await load(dPage, url, network)
       const pageMeta = await run<{ canonical: string | null; title: string | null; description: string | null; favicon: string | null; links: { href: string; nav: boolean }[] }>(dPage, META_JS)
       // Before any screenshots or recordings. The URL stays in `visited`, so it is not queued again, and it is not counted as captured.
-      const duplicate = duplicateOf(url, dPage.url(), pageMeta.canonical, root, visited)
+      const duplicate = duplicateOf(url, dPage.url(), pageMeta.canonical, pageMeta.title, root, visited, titles)
       if (duplicate) {
         log(`  - ${path} duplicates ${duplicate}, skipped`)
         continue
@@ -727,6 +737,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       coverKey ??= upload.desktopThumbKey
       allTokens.push(styles.tokens)
       captured++
+      if (pageMeta.title) titles.set(url, pageMeta.title)
       log(`  ✓ ${path} (${animations.length} recordings)`)
     } catch (e) {
       network?.assertAllowed()

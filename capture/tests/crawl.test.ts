@@ -5,17 +5,31 @@ import { duplicateOf, rankLinks } from "../src/capture"
 const root = new URL("https://vercel.com")
 const visited = ["https://vercel.com/", "https://vercel.com/pricing", "https://vercel.com/home"]
 
-test("a page whose canonical URL was already visited is a duplicate", () => {
-  assert.equal(duplicateOf("https://vercel.com/home", "https://vercel.com/home", "https://vercel.com", root, visited), "https://vercel.com/")
-  assert.equal(duplicateOf("https://vercel.com/home", "https://www.vercel.com/home", "https://vercel.com/pricing/?ref=x#top", root, visited), "https://vercel.com/pricing")
+const titles = new Map([
+  ["https://vercel.com/", "Vercel: Build and deploy"],
+  ["https://vercel.com/pricing", "Pricing - Vercel"],
+])
+
+test("a page whose canonical page was captured with the same title is a duplicate", () => {
+  const home = "Vercel: Build and deploy"
+  assert.equal(duplicateOf("https://vercel.com/home", "https://vercel.com/home", "https://vercel.com", home, root, visited, titles), "https://vercel.com/")
+  assert.equal(duplicateOf("https://vercel.com/home", "https://www.vercel.com/home", "https://vercel.com/?ref=x#top", home, root, visited, titles), "https://vercel.com/")
 })
 
-test("a page that redirected to an already visited URL is a duplicate", () => {
-  assert.equal(duplicateOf("https://vercel.com/old", "https://vercel.com/pricing/", null, root, visited), "https://vercel.com/pricing")
+test("a canonical shared by pages with different titles does not make them duplicates", () => {
+  assert.equal(duplicateOf("https://vercel.com/about", "https://vercel.com/about", "https://vercel.com/", "About - Vercel", root, visited, titles), null)
+  assert.equal(duplicateOf("https://vercel.com/about", "https://vercel.com/about", "https://vercel.com/", null, root, visited, titles), null)
+  // After a resume the titles are gone, so a canonical alone never skips a page.
+  assert.equal(duplicateOf("https://vercel.com/home", "https://vercel.com/home", "https://vercel.com/", "Vercel: Build and deploy", root, visited, new Map()), null)
 })
 
-test("a page is kept when its canonical is itself, unvisited, off-site or missing", () => {
-  const keep = (final: string, canonical: string | null) => duplicateOf("https://vercel.com/about", final, canonical, root, visited)
+test("a page that redirected to an already visited URL is a duplicate, whatever its title", () => {
+  assert.equal(duplicateOf("https://vercel.com/old", "https://vercel.com/pricing/", null, "Old", root, visited, titles), "https://vercel.com/pricing")
+  assert.equal(duplicateOf("https://vercel.com/old", "https://vercel.com/pricing/", null, "Old", root, visited, new Map()), "https://vercel.com/pricing")
+})
+
+test("a page is kept when its canonical is itself, uncaptured, off-site or missing", () => {
+  const keep = (final: string, canonical: string | null) => duplicateOf("https://vercel.com/about", final, canonical, "Pricing - Vercel", root, visited, titles)
   assert.equal(keep("https://vercel.com/about", "https://vercel.com/about/"), null)
   assert.equal(keep("https://vercel.com/about", "https://vercel.com/company"), null)
   assert.equal(keep("https://vercel.com/about", "https://example.com/"), null)
