@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs"
+import sharp from "sharp"
 import type { Browser, BrowserContext, BrowserContextOptions, CDPSession, Page as PwPage } from "playwright"
 import type { CrawlState, DesignTokens, Job, PageUpload } from "../../web/shared/types"
 import { JobGoneError, type SnipApi } from "./api"
@@ -22,6 +23,9 @@ const DESKTOP = { width: 1440, height: 900 }
 const MOBILE = { width: 390, height: 844 }
 const MOBILE_DPR = 1.5
 const MAX_SHOT_PX = 16000 // Chromium texture limit for full-page screenshots
+// Gallery thumbnails render 230-600 css px wide (950 device px at 2x on the large grid); the mobile one is a ~210 css px tall inset.
+const THUMB_WIDTH = { desktop: 960, mobile: 320 }
+const thumbnail = (jpeg: Buffer, width: number) => sharp(jpeg).resize({ width, withoutEnlargement: true }).jpeg({ quality: 75 }).toBuffer()
 // Scroll recording: frames are captured at fixed scroll increments and played back at a fixed rate,
 // so playback is smooth no matter how long each screenshot took.
 const SCROLL_FPS = Math.min(50, Math.max(5, Number(process.env.SCROLL_FPS ?? 30)))
@@ -72,6 +76,82 @@ function normalize(href: string, root: URL): string | null {
   }
 }
 
+const LOW_VALUE = /^\/(log-?(in|out)|sign-?(in|up)|register|dashboard|account|cart|checkout|legal|careers|jobs|new|(terms|privacy|cookies?)[\w-]*)(\/|$)/i
+// Only the top-level page itself: /customers is boosted, its case studies under /customers/x are not.
+const HIGH_VALUE = /^\/(pricing|enterprise|products?|features|about|customers|solutions)\/?$/i
+
+/**
+ * A page's links in the order to capture them, so a crawl that hits max_pages has seen the pages worth
+ * keeping: well-known pages first, login/legal/careers pages last (but still queued), then nav/header/footer
+ * links before the rest and shallow paths before deep ones. Ties keep DOM order.
+ */
+export function rankLinks<L extends { href: string; nav: boolean }>(links: L[]): L[] {
+  const score = ({ href, nav }: L) => {
+    const path = new URL(href).pathname
+    return tierOf(href) * 1000 + (nav ? 0 : 100) + Math.min(path.split("/").filter(Boolean).length, 99)
+  }
+  return links.map((l) => ({ l, s: score(l) })).sort((a, b) => a.s - b.s).map(({ l }) => l)
+}
+
+/** 0 for well-known pages, 2 for login/legal/careers pages, 1 otherwise. */
+const tierOf = (href: string) => {
+  const path = new URL(href).pathname
+  return LOW_VALUE.test(path) ? 2 : HIGH_VALUE.test(path) ? 0 : 1
+}
+
+/**
+ * The queue once the first page's links are known: those links, already ranked, go ahead of everything queued
+ * so far (a sitemap's order says little about which pages matter) and the rest follows in its old order.
+ * A link that is already queued moves up from its place. Visited URLs are never added. Low-value links stay
+ * behind the other queued pages, or go last if they were not queued.
+ */
+export function promoteLinks(queue: string[], links: string[], visited: string[]): string[] {
+  const fresh = [...new Set(links)].filter((u) => !visited.includes(u))
+  const front = fresh.filter((u) => tierOf(u) < 2)
+  const moved = new Set(front)
+  const rest = queue.filter((u) => !moved.has(u))
+  const queued = new Set(rest)
+  return [...front, ...rest, ...fresh.filter((u) => tierOf(u) === 2 && !queued.has(u))]
+}
+
+/** The host a page ended up on if it redirected off the site, else null. */
+export function leftSite(finalUrl: string, root: URL): string | null {
+  try {
+    const u = new URL(finalUrl)
+    return /^https?:$/.test(u.protocol) && !sameSite(u, root) ? u.hostname : null
+  } catch {
+    return null
+  }
+}
+
+/** Why a crawled link is not a page of the site (it errored, or redirected off it), or null. */
+export function skipReason(finalUrl: string, status: number | null, root: URL): string | null {
+  if (status !== null && status >= 400) return `returned ${status}`
+  const host = leftSite(finalUrl, root)
+  return host ? `left the site (${host})` : null
+}
+
+/**
+ * The page this one duplicates, or null. `titles` holds every page captured in this run (a failed or skipped
+ * URL is not in it) with its title. Redirecting to a different same-site URL in it always counts. A canonical
+ * link counts only when the page it names also has the same title, because some sites declare one canonical on
+ * every route.
+ */
+export function duplicateOf(
+  url: string,
+  finalUrl: string,
+  canonical: string | null,
+  title: string | null,
+  root: URL,
+  titles: Map<string, string | null>,
+): string | null {
+  const redirect = normalize(finalUrl, root)
+  if (redirect && redirect !== url && titles.has(redirect)) return redirect
+  const target = canonical && normalize(canonical, root)
+  if (target && target !== url && title !== null && titles.get(target) === title) return target
+  return null
+}
+
 async function sitemapUrls(context: BrowserContext, root: URL): Promise<string[]> {
   try {
     const res = await context.request.get(new URL("/sitemap.xml", root).href, { timeout: 10_000 })
@@ -85,9 +165,11 @@ async function sitemapUrls(context: BrowserContext, root: URL): Promise<string[]
 
 type CaptureNetwork = Awaited<ReturnType<typeof createCaptureNetwork>> | null
 
+/** Loads the page and returns the HTTP status of the document it landed on, or null if there was no response. */
 async function load(page: PwPage, url: string, network: CaptureNetwork) {
+  let status: number | null = null
   try {
-    await page.goto(url, { waitUntil: "load", timeout: 45_000 })
+    status = (await page.goto(url, { waitUntil: "load", timeout: 45_000 }))?.status() ?? null
   } catch (error) {
     network?.assertAllowed()
     throw error
@@ -97,6 +179,7 @@ async function load(page: PwPage, url: string, network: CaptureNetwork) {
   await dismissBanners(page)
   await page.evaluate(() => document.fonts?.ready).catch(() => {})
   await sleep(600)
+  return status
 }
 
 /** Close cookie banners and popups in the page and its frames. Banners often animate in late, so try twice. */
@@ -498,15 +581,17 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
   const recordingFormat = Array.isArray(job.recordingFormats) && job.recordingFormats.includes("webm") ? "webm" : "gif"
 
   const resume = job.resume
-  const queue: string[] = resume ? [...resume.queue] : [normalize(root.href, root) ?? root.href]
+  const start = normalize(root.href, root) ?? root.href
+  const queue: string[] = resume ? [...resume.queue] : [start]
   const visited: string[] = resume ? [...resume.visited] : []
   const seen = new Set([...visited, ...queue])
+  const titles = new Map<string, string | null>() // every page captured in this run, for duplicateOf; empty after a resume
   if (job.mode === "crawl" && !resume) {
-    for (const u of await sitemapUrls(desktop, root)) {
-      const n = normalize(u, root)
-      if (n && !seen.has(n)) {
-        seen.add(n)
-        queue.push(n)
+    const urls = (await sitemapUrls(desktop, root)).flatMap((u) => normalize(u, root) ?? [])
+    for (const { href } of rankLinks(urls.map((href) => ({ href, nav: false })))) {
+      if (!seen.has(href)) {
+        seen.add(href)
+        queue.push(href)
       }
     }
   }
@@ -579,26 +664,29 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
     try {
       // ---- Desktop ----
       const dPage = await newPage(desktop)
-      await load(dPage, url, network)
-      const pageMeta = await run<{ title: string | null; description: string | null; favicon: string | null; links: { href: string; nav: boolean }[] }>(dPage, META_JS)
+      const status = await load(dPage, url, network)
+      const pageMeta = await run<{ canonical: string | null; title: string | null; description: string | null; favicon: string | null; links: { href: string; nav: boolean }[] }>(dPage, META_JS)
+      // Both checks run before any screenshots or recordings. A skipped URL stays in `visited`, so it is not queued again, and it is not counted as captured.
+      // A crawled link that errored or redirected off the site (e.g. to a Slack invite) is not a page of it. The start page and single-page captures keep whatever they get.
+      const skip = job.mode === "crawl" && url !== start ? skipReason(dPage.url(), status, root) : null
+      if (skip) {
+        log(`  - ${path} ${skip}, skipped`)
+        continue
+      }
+      const duplicate = duplicateOf(url, dPage.url(), pageMeta.canonical, pageMeta.title, root, titles)
+      if (duplicate) {
+        log(`  - ${path} duplicates ${duplicate}, skipped`)
+        continue
+      }
       if (!meta) meta = pageMeta
 
       if (job.mode === "crawl") {
-        // Nav/header/footer links first (they are the site's main pages), then the rest.
-        const links = [...pageMeta.links].sort((a, b) => Number(b.nav) - Number(a.nav))
-        const fresh: string[] = []
-        for (const l of links) {
-          const n = normalize(l.href, root)
-          if (n && !seen.has(n)) {
-            seen.add(n)
-            fresh.push(n)
-          }
-        }
-        // Links from the first page outrank sitemap order.
+        const links = rankLinks(pageMeta.links).flatMap((l) => normalize(l.href, root) ?? [])
         if (!navLinksQueued) {
-          queue.unshift(...fresh)
+          queue.splice(0, queue.length, ...promoteLinks(queue, links, visited))
           navLinksQueued = true
-        } else queue.push(...fresh)
+        } else queue.push(...new Set(links.filter((n) => !seen.has(n))))
+        for (const n of links) seen.add(n)
       }
 
       // ---- Mobile, alongside the desktop recordings ----
@@ -608,7 +696,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
           await load(mPage, url, network)
           await recordScroll(mPage, false)
           const shot = await fullPageShot(mPage, MOBILE_DPR)
-          const thumb = await mPage.screenshot({ type: "jpeg", quality: 75 })
+          const thumb = await thumbnail(await mPage.screenshot({ type: "jpeg", quality: 75 }), THUMB_WIDTH.mobile)
           await mPage.close()
           return { shot, thumb }
         } catch (e) {
@@ -620,7 +708,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       const scroll = await recordScroll(dPage, true, recordingFormat)
       await dismissBanners(dPage) // popups that only appear after scrolling
       const desktopShot = await fullPageShot(dPage, 1)
-      const desktopThumb = await dPage.screenshot({ type: "jpeg", quality: 75 })
+      const desktopThumb = await thumbnail(await dPage.screenshot({ type: "jpeg", quality: 75 }), THUMB_WIDTH.desktop)
       const styles = await run<{ tokens: DesignTokens }>(dPage, STYLES_JS, { maxElements: 3000 })
       const html = await buildSnapshot(dPage, desktop)
       const hovers = await recordHovers(dPage, hoverSeen, recordingFormat)
@@ -690,6 +778,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       coverKey ??= upload.desktopThumbKey
       allTokens.push(styles.tokens)
       captured++
+      titles.set(url, pageMeta.title)
       log(`  ✓ ${path} (${animations.length} recordings)`)
     } catch (e) {
       network?.assertAllowed()

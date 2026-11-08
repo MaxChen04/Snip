@@ -1,4 +1,4 @@
-// Evaluated in the captured page: title, description, favicon and same-site links.
+// Evaluated in the captured page: title, description, favicon, canonical URL and same-site links.
 () => {
   const abs = (h) => {
     try {
@@ -12,7 +12,9 @@
   const links = [...document.querySelectorAll("a[href]")]
     .map((a) => ({ href: abs(a.getAttribute("href")), nav: !!a.closest("nav, header, footer") }))
     .filter((l) => l.href)
+  const canonical = document.querySelector('link[rel~="canonical"]')?.getAttribute("href")
   return {
+    canonical: canonical ? abs(canonical) : null,
     title: document.title || null,
     description: document.querySelector('meta[name="description"], meta[property="og:description"]')?.getAttribute("content") || null,
     favicon: icon ? abs(icon.getAttribute("href")) : abs("/favicon.ico"),
