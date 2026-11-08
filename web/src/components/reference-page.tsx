@@ -231,6 +231,7 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
             icon={<RefreshCwIcon />}
             label="Re-capture"
             onClick={async () => {
+              if (pages.length && !confirm(`Re-capture ${r.domain}? Its ${pages.length} captured ${pages.length === 1 ? "page" : "pages"} will be replaced.`)) return
               await api.recapture(r.id)
               notify("Re-capture queued")
               load()
