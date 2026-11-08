@@ -190,12 +190,22 @@ The **Connect MCP** button in the app's top bar shows these steps with your own 
 | `search_pages` | Pages across all references; with a collection, its saved pages and the pages of its websites |
 | `search_animations` | Scroll and hover animations across all references |
 | `get_capture_status` | Job state, last progress and when the capture worker last checked in, with a suggested poll delay |
+| `wait_for_capture` | Waits up to 40s (max 50) for a capture, then returns the finished capture (page thumbnails, gallery link, page ids) or says whether to call again. For clients without MCP Tasks |
 | `list_collections` | Collections with website and page counts |
-| `add_reference` | Queue a URL (`single` or `crawl`) for capture, with optional notes and color scheme. A URL that's already saved returns the saved reference unless `allow_duplicate` |
+| `add_reference` | Queue a URL (`single` or `crawl`) for capture, with optional notes and color scheme. A URL that's already saved returns the saved reference unless `allow_duplicate`. With MCP Tasks it runs as a background task (see below) |
 | `set_reference_notes` | Replace a website's note (why it was saved) |
 | `create_collection` | New collection |
 | `set_collection_membership` | Add or remove a whole website from a collection |
 | `set_page_collection_membership` | Add or remove individual pages from a collection |
+
+### Ask your agent to capture a site
+
+Say "use Snip to capture linear.app" (or "crawl and gallerize it"). The agent calls `add_reference`, Snip captures in the background on your Mac, and when it finishes the agent gets a few page thumbnails and a link to the gallery.
+
+- **Clients with [MCP Tasks](https://modelcontextprotocol.io/extensions/tasks/overview)** (Claude Code 2.1.319 or later): the call becomes a task. Claude Code moves it to the background right away and tells Claude when the capture is done, so you can keep working. Cancelling the task stops the crawl after its current page and keeps what it captured, like the Stop button.
+- **Other clients** (Codex today): the agent calls `wait_for_capture` until it reports `done`. Each call returns within 50 seconds, under Codex's default 60-second tool timeout.
+
+Snip or `npm run capture` must be running. If no capture agent has checked in recently, `add_reference` answers right away and the agent asks you to start it.
 
 Every result carries the same JSON as text and as `structuredContent`. Bounded lists are capped by item count and bytes and say what they left out and how to continue; the legacy full reference read can be larger. Many models only see the first frame of a GIF, so new captures also store sampled frames and a contact sheet per animation (animations captured earlier only have the GIF until you recapture).
 
