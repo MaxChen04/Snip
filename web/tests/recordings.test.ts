@@ -40,7 +40,7 @@ test("WebM recordings are served in byte ranges and described over MCP, next to 
     await files.put(`${p}/scroll.webm`, video, { httpMetadata: { contentType: "video/webm" } })
     await files.put(`${p}/hover-0.gif`, new TextEncoder().encode("GIF89a"), { httpMetadata: { contentType: "image/gif" } })
 
-    const ctx = { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext
+    const ctx = { waitUntil() {}, passThroughOnException() {}, props: { ownerId: "max" } } as unknown as ExecutionContext
     const env = { DB: database, FILES: files, SESSION_SECRET: "test-secret", DEV_LOGIN: "max" } as unknown as Env
     const get = (key: string, headers: Record<string, string> = {}) => app.request(`http://localhost/files/${key}`, { headers }, env, ctx)
 

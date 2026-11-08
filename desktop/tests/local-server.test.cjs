@@ -116,7 +116,9 @@ async function launch(root, dataRoot = root, releaseManaged = false) {
   child.stdout.on('data', (data) => { output += data; });
   child.stderr.on('data', (data) => { output += data; });
   const result = await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error(`Server startup timed out: ${output}`)), 20000);
+    // Wrangler's first start compiles the Worker; under a loaded machine (or a cold
+    // cache) 20s was not enough and produced flakes unrelated to the code under test.
+    const timeout = setTimeout(() => reject(new Error(`Server startup timed out: ${output}`)), 60000);
     child.on('message', (message) => {
       if (message.type === 'snip:web-ready') { clearTimeout(timeout); resolve(message.url); }
       if (message.type === 'snip:web-error') { clearTimeout(timeout); reject(new Error(message.message)); }

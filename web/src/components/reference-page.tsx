@@ -272,7 +272,7 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
           <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
             <div className="flex h-7 items-center gap-2 rounded-full bg-control px-3 text-xs shadow-button">
               {r.status === "paused" ? <PauseIcon className="size-3.5 text-ink-10" /> : <Spinner className="size-3.5 text-ink-10" />}
-              <span>{captureLabel(r) ?? r.progress ?? "Waiting for the capture agent"}</span>
+              <span>{captureLabel(r) ?? r.progress ?? "Waiting for your Mac"}</span>
             </div>
             <CaptureControls r={r} onChange={load} />
           </div>

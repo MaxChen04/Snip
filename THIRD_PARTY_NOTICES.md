@@ -8,6 +8,14 @@ The images in `web/public/landing/` are screenshots of third-party websites (inc
 
 Your own captures are copies of other people's websites too. Snip stores them privately for your reference; check a site's terms before you share or republish anything you capture.
 
+## Fonts
+
+| Font | Where | Source | License |
+| --- | --- | --- | --- |
+| Inter (variable, latin subset) | `web/src/settings/fonts/InterVariable-latin.woff2` | https://github.com/rsms/inter | SIL Open Font License 1.1 |
+
+The Settings window bundles Inter locally so it loads no remote content. The full license text is at `web/src/settings/fonts/Inter-OFL.txt`. The rest of the app loads Inter from Google Fonts at runtime.
+
 ## Code and design guidance
 
 | Component | Where | Source | License |

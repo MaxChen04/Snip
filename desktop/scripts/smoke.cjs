@@ -45,10 +45,13 @@ async function main() {
   const check = name => { evidence.checks.push(name); console.log("PASS", name) }
   try {
     await fs.mkdir(root, { recursive: true }); await fs.mkdir(appDir)
-    for (const name of ["capture/src", "web/dist", "web/migrations", "web/public"]) await fs.cp(path.join(ROOT, name), path.join(root, name), { recursive: true })
+    for (const name of ["capture/src", "web/dist", "web/dist-settings", "web/migrations", "web/public"]) {
+      // dist-settings exists only after `npm run build -w web`; older checkouts lack it.
+      if (require("node:fs").existsSync(path.join(ROOT, name))) await fs.cp(path.join(ROOT, name), path.join(root, name), { recursive: true })
+    }
     for (const name of ["package.json", "web/wrangler.jsonc"]) await fs.copyFile(path.join(ROOT, name), path.join(root, name))
     await fs.symlink(path.join(ROOT, "node_modules"), path.join(root, "node_modules"), "dir")
-    for (const name of await fs.readdir(desktop)) if (name.endsWith(".cjs") || ["loading.html", "build.mjs", "install.mjs"].includes(name)) await fs.copyFile(path.join(desktop, name), path.join(appDir, name))
+    for (const name of await fs.readdir(desktop)) if (name.endsWith(".cjs") || ["loading.html", "cloud-unreachable.html", "build.mjs", "install.mjs"].includes(name)) await fs.copyFile(path.join(desktop, name), path.join(appDir, name))
     await fs.cp(path.join(desktop, "assets"), path.join(appDir, "assets"), { recursive: true })
     await fs.symlink(path.join(desktop, "node_modules"), path.join(appDir, "node_modules"), "dir")
     await fs.writeFile(path.join(appDir, "repo.json"), JSON.stringify({ root }))

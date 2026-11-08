@@ -3,16 +3,23 @@ import type { CaptureMode, CrawlState, JobComplete, PageUpload } from "../shared
 import {
   type AppEnv,
   finishLogin,
-  getSessionLogin,
+  getSession,
+  githubEnabled,
   logout,
   requireCaptureToken,
   crossSiteWrite,
   requireSession,
   sameOriginWrites,
+  signOutAll,
   startLogin,
   verifyFileSig,
 } from "./auth"
 import * as db from "./db"
+import { signInPath } from "../shared/safe-next"
+import { loginOptions, loginVerify, registerOptions, registerVerify, listDevices, removeDevice } from "./passkeys"
+import { ownerLinkPage, ownerLinkSubmit } from "./owner"
+import { transfer } from "./transfer"
+import { WORKER_VERSION } from "./version"
 import { cachedStorageUsage } from "./storage-usage"
 
 export const app = new Hono<AppEnv>()
@@ -24,9 +31,33 @@ app.onError((err, c) => {
 
 // ---------- Auth ----------
 
+// GitHub stays mounted whenever credentials exist, but it is optional: a passkeys-only install has
+// no GitHub App, and an MCP client authorizes through `/sign-in` instead (see `/authorize` below).
+// On an install that configures it, `/sign-in` still offers it as the fallback.
 app.get("/auth/login", (c) => startLogin(c))
 app.get("/auth/callback", (c) => finishLogin(c))
 app.get("/auth/logout", (c) => logout(c))
+
+// The owner link: GET renders the form and burns nothing, POST burns the nonce and signs in.
+app.get("/auth/owner", (c) => ownerLinkPage(c))
+app.post("/auth/owner", (c) => ownerLinkSubmit(c))
+
+// Passkeys: registration is owner-only, sign-in is anonymous, both single-use in D1.
+app.get("/auth/passkey/register/options", (c) => registerOptions(c))
+app.post("/auth/passkey/register/verify", (c) => registerVerify(c))
+app.get("/auth/passkey/login/options", (c) => loginOptions(c))
+app.post("/auth/passkey/login/verify", (c) => loginVerify(c))
+
+/**
+ * What this install can sign in with, for the anonymous sign-in page. It needs both facts to avoid
+ * offering a dead end: a passkey button when none is registered, or a GitHub link on a passkeys-only
+ * install. Nothing here is secret — the login page already reveals the same two things by trying.
+ */
+app.get("/auth/methods", async (c) => c.json({ github: githubEnabled(c.env), hasPasskeys: await db.hasPasskeys(c.env.DB) }))
+
+// ---------- Transfer (TRANSFER_TOKEN only; 404 when unset) ----------
+// Mounted before /api and outside its middleware: a move must not inherit session auth.
+app.route("/transfer", transfer)
 
 // ---------- MCP OAuth consent ----------
 // MCP clients are sent here by the OAuth provider. Max signs in with the same
@@ -36,11 +67,15 @@ const escapeHtml = (s: string) =>
   s.replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]!)
 
 app.get("/authorize", async (c) => {
-  const login = await getSessionLogin(c)
-  if (!login) {
+  const session = await getSession(c)
+  if (!session) {
+    // Sign in first, then come back here. `/sign-in` is the passkey page — the one route that works
+    // on a passkeys-only install with no GitHub App — and it returns to this exact URL, query
+    // included, so the client's authorization request survives the detour.
     const url = new URL(c.req.url)
-    return c.redirect(`/auth/login?next=${encodeURIComponent(url.pathname + url.search)}`)
+    return c.redirect(signInPath(url.pathname + url.search))
   }
+  const login = session.ownerId
   const authReq = await c.env.OAUTH_PROVIDER.parseAuthRequest(c.req.raw)
   const consent = await c.env.OAUTH_PROVIDER.describeConsent(authReq)
   const { handle, headers } = await c.env.OAUTH_PROVIDER.beginConsent(authReq)
@@ -76,8 +111,8 @@ app.get("/authorize", async (c) => {
 app.post("/authorize", async (c) => {
   const refused = crossSiteWrite(c.req.raw, { json: false })
   if (refused) return c.text(refused, 403)
-  const login = await getSessionLogin(c)
-  if (!login) return c.text("Not signed in", 401)
+  const session = await getSession(c)
+  if (!session) return c.text("Not signed in", 401)
   const form = await c.req.formData()
   const handle = String(form.get("handle") ?? "")
   if (form.get("decision") !== "approve") {
@@ -87,10 +122,11 @@ app.post("/authorize", async (c) => {
   const approved = await c.env.OAUTH_PROVIDER.approveConsent(c.req.raw, handle)
   const { redirectTo } = await c.env.OAUTH_PROVIDER.completeAuthorization({
     request: approved.request,
-    userId: login,
-    metadata: { label: login },
+    // Grants are bound to the owner identity, not to whichever method signed in.
+    userId: session.ownerId,
+    metadata: { label: session.label },
     scope: approved.request.scope,
-    props: { login },
+    props: { ownerId: session.ownerId },
   })
   const headers = new Headers(approved.headers)
   headers.set("location", redirectTo)
@@ -105,7 +141,7 @@ app.get("/files/*", async (c) => {
   const key = decodeURIComponent(c.req.path.slice("/files/".length))
   if (!KEY_RE.test(key) || key.includes("..")) return c.notFound()
   const signedOk = await verifyFileSig(c.env, key, c.req.query("exp"), c.req.query("sig"))
-  if (!signedOk && !(await getSessionLogin(c))) return c.json({ error: "unauthorized" }, 401)
+  if (!signedOk && !(await getSession(c))) return c.json({ error: "unauthorized" }, 401)
   // Byte ranges, which Safari needs before it will play a video. R2 reads the Range header itself.
   const ranged = c.req.header("range")?.startsWith("bytes=")
   // A range R2 can't satisfy is ignored and the whole file sent, which HTTP allows.
@@ -141,7 +177,38 @@ const api = new Hono<AppEnv>()
 api.use("*", sameOriginWrites)
 api.use("*", requireSession)
 
-api.get("/me", (c) => c.json({ login: c.get("login") }))
+api.get("/me", (c) => {
+  const session = c.get("session")
+  return c.json({ login: session.ownerId, ownerId: session.ownerId, method: session.method })
+})
+
+// Signs every device out: the counter in the owners row moves and every cookie minted before it
+// stops verifying. MCP tokens live in OAUTH_KV and are deliberately not affected.
+api.post("/sign-out-all", async (c) => c.json({ ok: true, epoch: await signOutAll(c.env, c.get("session")) }))
+
+// The owner's signed-in devices (passkeys only; GitHub sign-ins leave no device row).
+api.get("/passkeys", (c) => listDevices(c))
+api.delete("/passkeys/:id", (c) => removeDevice(c))
+
+api.get("/cloud-status", async (c) => {
+  const [owner, passkeys, presence, counts] = await Promise.all([
+    db.firstOwner(c.env.DB),
+    db.hasPasskeys(c.env.DB),
+    db.getPresence(c.env.DB),
+    db.libraryCounts(c.env.DB),
+  ])
+  const methods: ("passkey" | "github")[] = []
+  if (passkeys) methods.push("passkey")
+  if (githubEnabled(c.env)) methods.push("github")
+  return c.json({
+    version: WORKER_VERSION,
+    hasOwner: !!owner,
+    ownerId: owner?.id ?? null,
+    methods,
+    counts,
+    lastCapture: { at: presence.lastSeenAt, activity: presence.activity, stale: presence.freshness !== "recent" },
+  })
+})
 
 const listFilter = (q: Record<string, string>): db.ListFilter => ({
   q: q.q || undefined,

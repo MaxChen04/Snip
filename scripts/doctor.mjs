@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 // Checks a Snip checkout and prints one line per problem with how to fix it.
 //   npm run doctor
+//   npm run doctor -- --check              also probe the cloud library, like `status --check`
+//   npm run doctor -- --data-root <path>   read cloud.json from another install
+//
+// Cloud checks are offline by default, exactly like `status`: `<dataRoot>/.snip/cloud.json`
+// is the only source, and only an install that is in cloud mode (or halfway into it) is
+// reported on, so a local-only library never sees a cloud warning.
 
 import { spawnSync } from "node:child_process"
 import fs from "node:fs"
@@ -9,6 +15,9 @@ import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
+const require = createRequire(import.meta.url)
+// One shape definition for cloud.json: the engine that writes it also reads it.
+const readCloudState = require(path.join(ROOT, "desktop/provision/state.cjs")).readState
 const at = (...p) => path.join(ROOT, ...p)
 
 /** KEY=value lines, ignoring comments. */
@@ -25,7 +34,106 @@ const readEnv = (file) => (fs.existsSync(file) ? parseEnv(fs.readFileSync(file, 
 const isLocal = (url) => { try { return ["localhost", "127.0.0.1"].includes(new URL(url).hostname) } catch { return false } }
 const placeholder = (v) => !v || /your-|YOUR-|REPLACE_WITH|generate-with/.test(v)
 
-async function checks() {
+/** The cloud command line every fix points at, so users copy one real command. */
+const CLOUD_COMMAND = "npm run setup:cloudflare --"
+
+/** A canonical http(s) origin, or null when the value cannot be one. */
+export function cloudOrigin(value) {
+  if (!value) return null
+  let url
+  try { url = new URL(value) } catch { return null }
+  if (url.protocol !== "https:" && url.protocol !== "http:") return null
+  if (url.pathname !== "/" || url.search || url.hash || url.username || url.password) return null
+  return url.origin
+}
+
+/**
+ * Cloud-mode checks. Offline by default: cloud.json is the only source, and the
+ * network is touched only with `check`, matching `status --check`. Nothing is
+ * returned for a library that is not using cloud, so a local install reads clean.
+ */
+export async function cloudChecks({ dataRoot, check = false, fetchImpl = fetch, exists = fs.existsSync } = {}) {
+  const results = []
+  const file = path.join(dataRoot, ".snip", "cloud.json")
+  const add = (ok, label, fix) => results.push({ ok, area: "cloud", label, ...(fix ? { fix } : {}) })
+
+  let state
+  try {
+    state = readCloudState(dataRoot)
+  } catch (error) {
+    // A damaged journal blocks knowing the mode, so it is reported either way.
+    add(false, `The cloud setup record is unreadable: ${error.message}`, error.hint || `Inspect ${file}.`)
+    return results
+  }
+  if (state.mode !== "cloud" && state.mode !== "enabling") return results
+
+  const record = state.cloud || {}
+  const snapshot = state.snapshot || null
+
+  if (state.mode === "enabling") {
+    const failed = (state.steps || []).filter((step) => step && step.status === "failed").pop() || null
+    const error = state.error || null
+    const where = error?.step || failed?.id || null
+    const why = error?.message || failed?.detail || null
+    add(null, `Cloud setup did not finish${where ? ` (stopped at ${where})` : ""}${why ? `: ${why}` : ""}`,
+      `Resume it with \`${CLOUD_COMMAND} setup --resume\`. To stay local instead, run \`${CLOUD_COMMAND} abort\`.`)
+  } else {
+    const origin = cloudOrigin(record.url)
+    if (!origin) {
+      add(false, `Cloud mode is recorded without a usable Worker URL${record.url ? `: ${record.url}` : ""}`,
+        `Run \`${CLOUD_COMMAND} setup --resume\` if setup never finished, otherwise \`${CLOUD_COMMAND} deploy\`.`)
+    } else {
+      add(true, `Cloud library: ${origin}${record.workerVersion ? ` (Worker ${record.workerVersion})` : ""}`)
+      if (record.detachedAt) {
+        add(null, `cloud.json records a detach at ${record.detachedAt}, but the mode is cloud`,
+          `Run \`${CLOUD_COMMAND} status\`. If you meant to stop using the cloud library, run \`${CLOUD_COMMAND} detach\`.`)
+      }
+      if (!record.workerVersion) {
+        add(null, "No deployed Worker version is recorded for this install",
+          `Run \`${CLOUD_COMMAND} deploy\` once so this Mac knows what it deployed.`)
+      }
+      if (!exists(path.join(dataRoot, ".snip", "cloud-secrets.json"))) {
+        add(null, "This Mac holds no owner sign-in secret",
+          `Run \`${CLOUD_COMMAND} owner rotate\` to set a new one and mint a fresh sign-in link.`)
+      }
+
+      if (check) {
+        // The one network call, and only when asked for: the same probe
+        // `status --check` makes. A Worker answers 401/404 at its origin and is
+        // still healthy, so anything below 500 counts as reachable.
+        try {
+          const response = await fetchImpl(origin, { method: "GET", redirect: "manual", signal: AbortSignal.timeout(8000) })
+          if (response.status < 500) add(true, `The cloud library answers (HTTP ${response.status})`)
+          else add(false, `The cloud library answered HTTP ${response.status}`,
+            `Check it in the Cloudflare dashboard, then run \`${CLOUD_COMMAND} status --check\`.`)
+        } catch {
+          add(false, `Can't reach the cloud library at ${origin}`,
+            `Check this Mac's connection and open the URL in a browser, then run \`${CLOUD_COMMAND} status --check\`.`)
+        }
+      }
+    }
+  }
+
+  // Recorded local artifacts, checked by path only: a record pointing at a
+  // directory that is gone makes Settings offer something that cannot work.
+  const backup = snapshot && snapshot.kind === "backup" && snapshot.path ? snapshot.path : null
+  if (backup && !exists(path.join(dataRoot, backup))) {
+    add(false, `The previous library is missing: ${backup}`,
+      `Nothing can be restored from it. Remove the stale record with \`${CLOUD_COMMAND} snapshot delete --confirm ${path.basename(backup)}\`.`)
+  }
+  const exported = snapshot && snapshot.export && snapshot.export.path ? snapshot.export.path : null
+  if (exported && !exists(path.join(dataRoot, exported))) {
+    add(false, `Setup's backup files are missing: ${exported}`,
+      `Remove the stale record with \`${CLOUD_COMMAND} snapshot delete-export --confirm ${path.basename(exported)}\`.`)
+  }
+
+  return results
+}
+
+export async function checks(options = {}) {
+  const root = options.root ?? ROOT
+  const at = (...p) => path.join(root, ...p)
+  const fetchImpl = options.fetchImpl ?? fetch
   const results = []
   const ok = (label) => results.push({ ok: true, label })
   const bad = (label, fix) => results.push({ ok: false, label, fix })
@@ -48,16 +156,16 @@ async function checks() {
     else if (!placeholder(web.SESSION_SECRET) && !placeholder(web.CAPTURE_TOKEN)) ok("web/.dev.vars")
   }
 
-  const captureFile = process.env.SNIP_CAPTURE_ENV_FILE || at("capture/.env")
+  const captureFile = options.captureEnvFile || process.env.SNIP_CAPTURE_ENV_FILE || at("capture/.env")
   const capture = readEnv(captureFile)
-  if (!capture) bad(`${path.relative(ROOT, captureFile)} is missing`, "cp capture/.env.example capture/.env, then set SNIP_URL and CAPTURE_TOKEN.")
+  if (!capture) bad(`${path.relative(root, captureFile)} is missing`, "cp capture/.env.example capture/.env, then set SNIP_URL and CAPTURE_TOKEN.")
   else if (placeholder(capture.SNIP_URL) || !capture.CAPTURE_TOKEN) bad("capture/.env: SNIP_URL or CAPTURE_TOKEN is not set", "Use http://localhost:5173 and web/.dev.vars' CAPTURE_TOKEN locally, or your Worker URL and its CAPTURE_TOKEN secret.")
   else {
     if (isLocal(capture.SNIP_URL) && web && capture.CAPTURE_TOKEN !== web.CAPTURE_TOKEN) bad("capture/.env and web/.dev.vars have different CAPTURE_TOKENs", "Copy CAPTURE_TOKEN from web/.dev.vars into capture/.env.")
     else ok(`capture/.env points at ${capture.SNIP_URL}`)
 
     try {
-      const res = await fetch(new URL("/agent/ping", capture.SNIP_URL), {
+      const res = await fetchImpl(new URL("/agent/ping", capture.SNIP_URL), {
         headers: { authorization: `Bearer ${capture.CAPTURE_TOKEN}`, "x-snip-capture-protocol": "3" },
         signal: AbortSignal.timeout(5000),
       })
@@ -68,7 +176,7 @@ async function checks() {
       else bad(`The Worker answered ${res.status}`, "Check the Worker's logs.")
     } catch {
       if (isLocal(capture.SNIP_URL)) warn(`Nothing is answering at ${capture.SNIP_URL}`, "Start Snip.app or `npm run dev`, then run the doctor again.")
-      else bad(`Can't reach ${capture.SNIP_URL}`, "Check the URL, or deploy with `npm run setup:cloudflare`.")
+      else bad(`Can't reach ${capture.SNIP_URL}`, `Check the URL, or deploy with \`${CLOUD_COMMAND} deploy\`.`)
     }
   }
 
@@ -85,29 +193,47 @@ async function checks() {
     }
   }
 
-  const deploy = at("web/wrangler.deploy.jsonc")
-  if (fs.existsSync(deploy)) {
-    const { readValues } = await import(pathToFileURL(at("scripts/cloudflare.mjs")).href)
-    const v = readValues(fs.readFileSync(deploy, "utf8"))
-    const missing = Object.entries(v).filter(([, value]) => !value).map(([k]) => ({ d1: "database_id", kv: "KV id", login: "ALLOWED_GITHUB_LOGINS", url: "PUBLIC_URL" })[k])
-    if (missing.length) bad(`web/wrangler.deploy.jsonc is missing ${missing.join(", ")}`, "Run `npm run setup:cloudflare` again.")
-    else ok(`Deploy config for ${v.url} (sign-in: ${v.login})`)
-  }
+  // Cloud is reported only for an install that is actually using it, read from
+  // cloud.json alone. `--check` adds the one probe `status --check` makes.
+  const dataRoot = options.dataRoot ?? root
+  results.push(...await cloudChecks({ dataRoot, check: Boolean(options.check), fetchImpl }))
 
-  const status = spawnSync("git", ["status", "--porcelain", "--untracked-files=no", "web/wrangler.jsonc"], { cwd: ROOT, encoding: "utf8" })
-  if (status.stdout?.trim()) warn("web/wrangler.jsonc has local edits", "Run `npm run setup:cloudflare` (it preserves local storage in web/wrangler.local.jsonc and copies hosted values into web/wrangler.deploy.jsonc), then `git checkout web/wrangler.jsonc` so `npm run update` works.")
+  const status = options.gitStatus
+    ? { stdout: options.gitStatus() }
+    : spawnSync("git", ["status", "--porcelain", "--untracked-files=no", "web/wrangler.jsonc"], { cwd: root, encoding: "utf8" })
+  if (status.stdout?.trim()) {
+    warn("web/wrangler.jsonc has local edits", "`npm run update` stops on edits to tracked files. Start Snip once so it records this library's storage in .snip/storage-identities.json (or copy your own values into gitignored web/wrangler.local.jsonc), then `git checkout web/wrangler.jsonc`.")
+  }
 
   return results
 }
 
+/** `--check` and `--data-root <path>`; everything else is ignored. */
+export function parseFlags(argv) {
+  const flags = { check: false, dataRoot: null, help: false }
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]
+    if (arg === "--check") flags.check = true
+    else if (arg === "--help" || arg === "-h") flags.help = true
+    else if (arg === "--data-root") flags.dataRoot = argv[++i] ?? null
+    else if (arg.startsWith("--data-root=")) flags.dataRoot = arg.slice("--data-root=".length)
+  }
+  return flags
+}
+
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
 if (isMain) {
-  const results = await checks()
-  for (const r of results) {
-    const mark = r.ok === true ? "\x1b[32m✓\x1b[0m" : r.ok === false ? "\x1b[31m✗\x1b[0m" : "\x1b[33m!\x1b[0m"
-    console.log(`${mark} ${r.label}${r.fix ? `\n    ${r.fix}` : ""}`)
+  const flags = parseFlags(process.argv.slice(2))
+  if (flags.help) {
+    console.log("Usage: npm run doctor -- [--check] [--data-root <path>]\n\n  --check              also ask the cloud library whether it answers\n  --data-root <path>   read .snip/cloud.json from another install")
+  } else {
+    const results = await checks({ check: flags.check, dataRoot: flags.dataRoot ?? undefined })
+    for (const r of results) {
+      const mark = r.ok === true ? "\x1b[32m✓\x1b[0m" : r.ok === false ? "\x1b[31m✗\x1b[0m" : "\x1b[33m!\x1b[0m"
+      console.log(`${mark} ${r.label}${r.fix ? `\n    ${r.fix}` : ""}`)
+    }
+    const failed = results.filter((r) => r.ok === false).length
+    console.log(failed ? `\n${failed} problem${failed === 1 ? "" : "s"} to fix.` : "\nAll good.")
+    process.exitCode = failed ? 1 : 0
   }
-  const failed = results.filter((r) => r.ok === false).length
-  console.log(failed ? `\n${failed} problem${failed === 1 ? "" : "s"} to fix.` : "\nAll good.")
-  process.exitCode = failed ? 1 : 0
 }

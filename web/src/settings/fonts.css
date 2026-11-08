@@ -1,0 +1,17 @@
+/* The face Snip is set in, shipped inside the Settings bundle.
+ *
+ * Settings is the privileged recovery window: it opens when the local Worker is
+ * stopped and when the app is in cloud mode, so it must never wait on a third-party
+ * host. The gallery keeps loading Inter from Google Fonts; only this window vendors
+ * the latin subset, because its whole job is to work offline.
+ *
+ * Inter is licensed under the SIL Open Font License 1.1; the text is beside the font
+ * in Inter-OFL.txt and referenced from THIRD_PARTY_NOTICES.md.
+ */
+@font-face {
+  font-family: "Inter Variable";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("./fonts/InterVariable-latin.woff2") format("woff2");
+}

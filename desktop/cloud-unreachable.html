@@ -1,0 +1,52 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src file:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'" />
+    <title>Snip</title>
+    <style>
+      :root { color-scheme: light dark; --ground: #f6f5f2; --ink: #21201c; --muted: #63635e; --line: #dad9d6; --control: #fff; }
+      @media (prefers-color-scheme: dark) { :root { --ground: #111110; --ink: #eeeeec; --muted: #8a8982; --line: #31312e; --control: #191918; } }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 32px; background: var(--ground); color: var(--ink); font: 13px/1.5 -apple-system, "Inter", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+      main { width: 100%; max-width: 420px; display: grid; justify-items: center; gap: 14px; text-align: center; }
+      img { width: 64px; height: 64px; image-rendering: pixelated; opacity: .9; }
+      h1 { margin: 6px 0 0; font-size: 16px; font-weight: 500; letter-spacing: -.01em; }
+      p { margin: 0; color: var(--muted); }
+      code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--ink); }
+      .actions { display: flex; gap: 8px; margin-top: 8px; }
+      a { display: inline-flex; align-items: center; height: 30px; padding: 0 14px; border-radius: 7px; font-weight: 500; text-decoration: none; color: var(--ink); background: var(--control); box-shadow: 0 0 0 .5px var(--line), 0 1px 2px rgb(0 0 0 / .06); }
+      a.primary { background: var(--ink); color: var(--ground); box-shadow: none; }
+      a:active { scale: .97; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <img id="logo" alt="" hidden />
+      <h1>This Mac’s cloud library can’t be reached</h1>
+      <p id="detail">Snip couldn’t load <code id="url"></code>. Your local snapshot is untouched.</p>
+      <p id="reason" hidden></p>
+      <div class="actions">
+        <a class="primary" href="snip://settings/index.html">Open Settings</a>
+        <a href="#" id="retry">Try again</a>
+      </div>
+    </main>
+    <script>
+      const query = new URLSearchParams(location.search)
+      const logo = document.getElementById("logo")
+      logo.onload = () => (logo.hidden = false)
+      if (query.get("logo")) logo.src = query.get("logo")
+      const url = query.get("url")
+      document.getElementById("url").textContent = url || "your cloud Library"
+      if (query.get("detail")) {
+        const reason = document.getElementById("reason")
+        reason.textContent = query.get("detail")
+        reason.hidden = false
+      }
+      document.getElementById("retry").addEventListener("click", event => {
+        event.preventDefault()
+        location.reload()
+      })
+    </script>
+  </body>
+</html>
