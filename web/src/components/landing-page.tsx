@@ -228,7 +228,7 @@ function TokensSection() {
   ]
   return (
     <section id="styles" className={cn(sectionPad, "flex scroll-mt-20 flex-col-reverse gap-12 bg-fill-1 lg:flex-row lg:items-center lg:gap-20")}>
-      <div className="reveal flex w-full shrink-0 flex-col gap-6 rounded-3xl bg-card p-7 shadow-md ring-1 ring-border lg:w-[640px]">
+      <div className="reveal flex w-full shrink-0 flex-col gap-6 rounded-3xl bg-card p-7 shadow-md ring-1 ring-border lg:w-[640px] lg:shrink">
         <div className="flex items-center justify-between">
           <div>
             <p className="font-medium">Design tokens</p>
@@ -266,7 +266,7 @@ function TokensSection() {
           <span className="h-8 w-12 rounded-lg bg-card shadow-lg" />
         </div>
       </div>
-      <div className="reveal flex flex-1 flex-col gap-5">
+      <div className="reveal flex flex-1 flex-col gap-5 lg:min-w-80">
         <p className={label}>Styles</p>
         <h2 className={h2}>Styles read from the page itself</h2>
         <p className="max-w-[460px] leading-[1.6] text-muted-foreground">

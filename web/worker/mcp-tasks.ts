@@ -68,7 +68,9 @@ export function supersededTaskFields(ref: Reference, run: number) {
 /** The Task fields shared by CreateTaskResult and tasks/get. */
 export function taskFields(ref: Reference, status: CaptureStatus) {
   const state = taskStatus(ref)
-  const message = state === "working" ? [ref.progress, status.advice].filter(Boolean).join(". ") : status.advice
+  // Queued advice already starts with the progress text ("Waiting for your Mac: …"); don't say it twice.
+  const progress = ref.progress && !status.advice.startsWith(ref.progress) ? ref.progress : null
+  const message = state === "working" ? [progress, status.advice].filter(Boolean).join(". ") : status.advice
   return {
     taskId: taskIdFor(ref),
     status: state,
