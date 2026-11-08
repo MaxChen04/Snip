@@ -72,6 +72,18 @@ function normalize(href: string, root: URL): string | null {
   }
 }
 
+/**
+ * The already-visited page this one duplicates, or null. A page is a duplicate when it redirected to, or
+ * declares as canonical, a different same-site URL the crawl has already been through.
+ */
+export function duplicateOf(url: string, finalUrl: string, canonical: string | null, root: URL, visited: string[]): string | null {
+  for (const href of [finalUrl, canonical]) {
+    const n = href && normalize(href, root)
+    if (n && n !== url && visited.includes(n)) return n
+  }
+  return null
+}
+
 async function sitemapUrls(context: BrowserContext, root: URL): Promise<string[]> {
   try {
     const res = await context.request.get(new URL("/sitemap.xml", root).href, { timeout: 10_000 })
@@ -580,7 +592,13 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       // ---- Desktop ----
       const dPage = await newPage(desktop)
       await load(dPage, url, network)
-      const pageMeta = await run<{ title: string | null; description: string | null; favicon: string | null; links: { href: string; nav: boolean }[] }>(dPage, META_JS)
+      const pageMeta = await run<{ canonical: string | null; title: string | null; description: string | null; favicon: string | null; links: { href: string; nav: boolean }[] }>(dPage, META_JS)
+      // Before any screenshots or recordings. The URL stays in `visited`, so it is not queued again, and it is not counted as captured.
+      const duplicate = duplicateOf(url, dPage.url(), pageMeta.canonical, root, visited)
+      if (duplicate) {
+        log(`  - ${path} duplicates ${duplicate}, skipped`)
+        continue
+      }
       if (!meta) meta = pageMeta
 
       if (job.mode === "crawl") {
