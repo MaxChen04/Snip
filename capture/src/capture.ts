@@ -296,7 +296,9 @@ async function recordHovers(page: PwPage, seen: Set<string>, recordingFormat: Re
           return o
         })
         .catch(() => null)
-      const cssMs = await run<number>(page, TRANSITION_JS, `[data-rs-hover="${t.i}"]`).catch(() => HOVER_ENTER.max)
+      // Leaving runs the resting state's transitions; entering runs the :hover state's, read once hovered.
+      const cssTiming = () => run<number>(page, TRANSITION_JS, `[data-rs-hover="${t.i}"]`)
+      const restMs = await cssTiming().catch(() => HOVER_LEAVE.max)
 
       // Raw CDP skips page.screenshot's per-shot work in every frame (caret hiding, font wait). It takes the
       // clip in document coordinates; whole-pixel sizes match what page.screenshot produced.
@@ -323,23 +325,26 @@ async function recordHovers(page: PwPage, seen: Set<string>, recordingFormat: Re
         last = now
       }
       /** Record one phase: at least the CSS duration, then until frames stop changing, never past the cap. */
-      const recordPhase = async ({ min, max }: { min: number; max: number }, onTick?: (elapsed: number) => void) => {
+      // The timing can arrive while recording: until it does, the phase runs to its cap.
+      const recordPhase = async ({ min, max }: { min: number; max: number }, timing: Promise<number>, onTick?: (elapsed: number, least: number) => void) => {
         const from = Date.now()
-        const least = Math.min(max, Math.max(min, cssMs + HOVER_CSS_PAD_MS))
+        let least = max
+        void timing.then((ms) => { least = Math.min(max, Math.max(min, ms + HOVER_CSS_PAD_MS)) }, () => {})
         for (let elapsed = 0; elapsed < max; elapsed = Date.now() - from) {
           if (elapsed >= least && Date.now() - Math.max(last, from) >= HOVER_QUIET_MS) break
           await grab()
-          onTick?.(Date.now() - from)
+          onTick?.(Date.now() - from, least)
         }
       }
       await grab()
       phase = "enter"
       await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 4 })
-      await recordPhase(HOVER_ENTER, (elapsed) => { if (elapsed > Math.min(HOVER_ENTER.max, cssMs + HOVER_CSS_PAD_MS) / 2) phase = "hold" })
+      const hoverMs = cssTiming()
+      await recordPhase(HOVER_ENTER, hoverMs, (elapsed, least) => { if (elapsed > least / 2) phase = "hold" })
       frames[frames.length - 1]!.delay = 700
       phase = "leave"
       await page.mouse.move(2, 2, { steps: 4 })
-      await recordPhase(HOVER_LEAVE)
+      await recordPhase(HOVER_LEAVE, Promise.resolve(restMs))
       frames[frames.length - 1]!.delay = 900
 
       // Skip effects that changed nothing visible (repeats were merged, so that leaves one frame).
