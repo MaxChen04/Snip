@@ -1,5 +1,8 @@
 import { useEffect, useRef } from "react"
 
+/** Poll options for a capture that is running: a steady 4 s, so each finished page shows up within seconds. */
+export const LIVE_POLL = { minMs: 4_000, maxMs: 4_000 }
+
 /** Poll without overlapping requests; pause in hidden tabs and refresh when shown. */
 export function usePoll(fn: () => unknown, active: boolean, { minMs = 4_000, maxMs = 30_000 } = {}) {
   const fnRef = useRef(fn)
