@@ -28,5 +28,14 @@
       if (cs.animationName && cs.animationName !== "none") ms = Math.max(ms, longest(cs.animationName, cs.animationDuration, cs.animationDelay) * 1000)
     }
   }
+  // Animations already running from script (Web Animations API, e.g. motion libraries) carry their own timing.
+  for (const a of node.getAnimations?.({ subtree: true }) ?? []) {
+    const t = a.effect?.getComputedTiming?.()
+    if (!t) continue
+    const duration = typeof t.duration === "number" ? t.duration : 0
+    const end = Number.isFinite(t.endTime) ? t.endTime : (t.delay || 0) + duration // infinite: one iteration
+    // currentTime is how far it has run; what remains is how long the recording still has to cover.
+    ms = Math.max(ms, end - (typeof a.currentTime === "number" ? Math.min(a.currentTime, end) : 0))
+  }
   return Math.round(ms)
 }
