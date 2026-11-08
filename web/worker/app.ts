@@ -353,7 +353,8 @@ agent.post("/jobs/claim", async (c) => {
   const job = await db.claimJob(c.env.DB)
   c.executionCtx.waitUntil(db.cleanupRetiredFiles(c.env.DB, c.env.FILES))
   await db.touchPresence(c.env.DB, job ? "busy" : "idle", job?.id ?? null)
-  return job ? c.json(job) : c.body(null, 204)
+  // Advertise on every claim, including resumed jobs: the destination may have been upgraded since the last one.
+  return job ? c.json({ ...job, recordingFormats: ["gif", "webm"] }) : c.body(null, 204)
 })
 
 agent.post("/heartbeat", async (c) => {

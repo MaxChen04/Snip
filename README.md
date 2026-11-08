@@ -216,7 +216,7 @@ File URLs returned by the MCP are signed and expire after 24 hours.
 | `SCROLL_FPS` | `30` | Scroll recording frames per second (5–50) |
 | `SCROLL_STEP` | `40` | Pixels scrolled per scroll recording frame (min 8) |
 | `SCROLL_MAX_FRAMES` | `360` | Frame cap per scroll recording; long pages take bigger steps |
-| `SNIP_RECORDING_FORMAT` | `webm` | `gif` records GIFs instead (several times bigger) |
+| `SNIP_RECORDING_FORMAT` | `webm` | Prefer WebM when the Worker and browser support it; otherwise GIF. `gif` always records GIFs (several times bigger) |
 | `SNIP_VIDEO_QUANTIZER` | `34` | Video quality, 0 (best, biggest) to 63 (smallest) |
 | `SHEET_FRAMES` | `9` | Frames sampled per animation for its contact sheet (2–16) |
 | `SHEET_WIDTH` | `1536` | Max contact sheet width in px |

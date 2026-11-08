@@ -160,6 +160,8 @@ export interface Job {
   /** Where a paused crawl left off. Pages already captured are kept; continue from here. */
   resume: CrawlState | null
   options: CaptureOptions | null
+  /** Formats the serving Worker can display. Older Workers omit this and require GIF. Not persisted. */
+  recordingFormats?: ("gif" | "webm")[]
 }
 
 /** Crawl position saved when a capture pauses. */
@@ -200,7 +202,7 @@ export interface PageUpload {
     label: string | null
     selector: string | null
     viewport: "desktop" | "mobile"
-    /** .webm, or .gif from an agent that can't encode video */
+    /** .webm when both Worker and agent support video; otherwise .gif */
     gifKey: string
     width: number
     height: number

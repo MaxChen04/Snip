@@ -46,7 +46,7 @@ test("encodeRecording writes a WebM that plays each frame for its delay and hold
   try {
     const frames = await Promise.all(COLORS.map(async (c) => ({ png: await frame(c, 161, 91), delay: 300 })))
     frames[2]!.delay = 900
-    rec = await encodeRecording(browser, frames, { scale: 1 })
+    rec = await encodeRecording(browser, frames, { scale: 1, format: "webm" })
   } finally {
     await closeRenderer()
     await browser.close()
@@ -65,7 +65,7 @@ test("encodeRecording writes a WebM that plays each frame for its delay and hold
 test("recordingWriter scales frames and skips frames of another size", async () => {
   const browser = await chromium.launch()
   try {
-    const writer = await recordingWriter(browser, { scale: 2 })
+    const writer = await recordingWriter(browser, { scale: 2, format: "webm" })
     await writer.add(await frame(COLORS[0], 200, 100), 100)
     await writer.add(await frame(COLORS[1], 120, 100), 100) // another size: skipped
     await writer.add(await frame(COLORS[2], 200, 100), 100)

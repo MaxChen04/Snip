@@ -109,7 +109,7 @@ test("scroll recording streams frames into a half-size video and keeps full-size
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
     await page.setContent(`<style>body{margin:0}div{height:${BAND}px}</style>${COLORS.map(([r, g, b]) => `<div style="background:rgb(${r},${g},${b})"></div>`).join("")}`)
-    const { frames, recording } = await recordScroll(page, true)
+    const { frames, recording } = await recordScroll(page, true, "webm")
     const travel = COLORS.length * BAND - 900
     assert.equal(frames.length, Math.ceil(travel / 40) + 1)
     assert.deepEqual(frames.flatMap((f, i) => (f.still ? [i] : [])), sampleIndexes(frames.length))

@@ -164,7 +164,7 @@ export async function screencast(cdp: CDPSession, width: number, height: number,
 }
 
 /** Scroll through the page recording a video; also triggers lazy loading and scroll-reveal content. */
-export async function recordScroll(page: PwPage, record: boolean) {
+export async function recordScroll(page: PwPage, record: boolean, recordingFormat: Recording["ext"] = "gif") {
   const frames: Frame[] = []
   const { width: vw, height: vh } = page.viewportSize()!
   let height = await docHeight(page)
@@ -183,7 +183,7 @@ export async function recordScroll(page: PwPage, record: boolean) {
     const { data } = await cdp!.send("Page.captureScreenshot", params as { format: "png" })
     return Buffer.from(data, "base64")
   }
-  const writer = record ? await recordingWriter(page.context().browser()!) : null
+  const writer = record ? await recordingWriter(page.context().browser()!, { format: recordingFormat }) : null
   // Video takes JPEG frames: fewer bytes to pass along and cheaper for Chromium to encode than PNG. At quality 97
   // the video is ~10% bigger than from PNG (90 made it 50% bigger: VP9 spends bits on JPEG noise). A GIF's palette
   // is built best from PNG.
@@ -245,7 +245,7 @@ async function fullPageShot(page: PwPage, dpr: number) {
   return { buf, width: Math.round(width * dpr), height: Math.round(clipH * dpr) }
 }
 
-async function recordHovers(page: PwPage, seen: Set<string>) {
+async function recordHovers(page: PwPage, seen: Set<string>, recordingFormat: Recording["ext"]) {
   const found = await run<{ i: number; label: string; selector: string }[]>(page, HOVER_JS, { max: MAX_HOVERS * 2 })
   // Shared chrome (nav links, footer buttons) repeats on every page: record each effect once per site.
   const targets = found.filter((t) => !seen.has(`${t.selector}|${t.label}`)).slice(0, MAX_HOVERS)
@@ -329,7 +329,7 @@ async function recordHovers(page: PwPage, seen: Set<string>) {
       // Skip effects that changed nothing visible (repeats were merged, so that leaves one frame).
       if (frames.length < 2) continue
       const scale = clip.width > 700 ? 2 : 1
-      const recording = await encodeRecording(page.context().browser()!, frames, { scale })
+      const recording = await encodeRecording(page.context().browser()!, frames, { scale, format: recordingFormat })
       seen.add(`${t.selector}|${t.label}`)
       out.push({ recording, label: t.label, selector: t.selector, frames, observedStyles })
     } catch (e) {
@@ -473,6 +473,8 @@ export async function captureJob(browser: Browser, api: SnipApi, job: Job) {
 async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: BrowserContext, mobile: BrowserContext, network: CaptureNetwork) {
   const root = new URL(job.url)
   const prefix = `refs/${job.id}/${job.attempt}`
+  // Protocol 3 predates video. Missing capabilities mean the Worker still renders recordings as GIF images.
+  const recordingFormat = Array.isArray(job.recordingFormats) && job.recordingFormats.includes("webm") ? "webm" : "gif"
 
   const resume = job.resume
   const queue: string[] = resume ? [...resume.queue] : [normalize(root.href, root) ?? root.href]
@@ -575,13 +577,13 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
         } else queue.push(...fresh)
       }
 
-      const scroll = await recordScroll(dPage, true)
+      const scroll = await recordScroll(dPage, true, recordingFormat)
       await dismissBanners(dPage) // popups that only appear after scrolling
       const desktopShot = await fullPageShot(dPage, 1)
       const desktopThumb = await dPage.screenshot({ type: "jpeg", quality: 75 })
       const styles = await run<{ tokens: DesignTokens }>(dPage, STYLES_JS, { maxElements: 3000 })
       const html = await buildSnapshot(dPage, desktop)
-      const hovers = await recordHovers(dPage, hoverSeen)
+      const hovers = await recordHovers(dPage, hoverSeen, recordingFormat)
       await closePages()
 
       // ---- Mobile ----

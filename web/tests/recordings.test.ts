@@ -5,7 +5,7 @@ import { Miniflare, convertV4MiniflareOptions } from "miniflare"
 import { app } from "../worker/app"
 import * as db from "../worker/db"
 import { mcpApiHandler } from "../worker/mcp"
-import { isVideoKey } from "../shared/types"
+import { isVideoKey, type Job } from "../shared/types"
 
 test("isVideoKey tells WebM recordings from older GIFs", () => {
   assert.equal(isVideoKey("refs/r1/a/p0/scroll.webm"), true)
@@ -15,6 +15,7 @@ test("isVideoKey tells WebM recordings from older GIFs", () => {
 // Real local D1 and R2 bindings; no deployed resources are used.
 test("WebM recordings are served in byte ranges and described over MCP, next to older GIFs", async () => {
   const mf = new Miniflare(convertV4MiniflareOptions({ modules: true, script: 'export default {fetch(){return new Response("ok")}}', d1Databases: ["DB"], r2Buckets: ["FILES"] }))
+  const pending: Promise<unknown>[] = []
   try {
     const database = (await mf.getD1Database("DB")) as unknown as D1Database
     const files = (await mf.getR2Bucket("FILES")) as unknown as R2Bucket
@@ -25,8 +26,17 @@ test("WebM recordings are served in byte ranges and described over MCP, next to 
       await database.batch(statements.map((statement) => database.prepare(statement)))
     }
 
+    const ctx = { waitUntil(p: Promise<unknown>) { pending.push(p) }, passThroughOnException() {}, props: { ownerId: "max" } } as unknown as ExecutionContext
+    const env = { DB: database, FILES: files, SESSION_SECRET: "test-secret", DEV_LOGIN: "max", CAPTURE_TOKEN: "test-token" } as unknown as Env
+    const claim = () => app.request("http://localhost/agent/jobs/claim", {
+      method: "POST", headers: { authorization: "Bearer test-token", "x-snip-capture-protocol": "3" },
+    }, env, ctx)
+    assert.equal((await claim()).status, 204, "an empty queue still returns no job")
     const ref = await db.createReference(database, { url: "https://example.com", mode: "single" })
-    const job = (await db.claimJob(database))!
+    const claimed = await claim()
+    assert.equal(claimed.status, 200)
+    const job = await claimed.json() as Job
+    assert.deepEqual(job.recordingFormats, ["gif", "webm"], "the serving Worker advertises formats it can display")
     const p = `refs/${ref.id}/${job.attempt}/p0`
     const anim = (kind: "scroll" | "hover", gifKey: string) => ({ kind, label: kind, selector: null, viewport: "desktop" as const, gifKey, width: 720, height: 450, sheetKey: null, meta: null })
     await db.addPage(database, ref.id, job.attempt, {
@@ -40,8 +50,6 @@ test("WebM recordings are served in byte ranges and described over MCP, next to 
     await files.put(`${p}/scroll.webm`, video, { httpMetadata: { contentType: "video/webm" } })
     await files.put(`${p}/hover-0.gif`, new TextEncoder().encode("GIF89a"), { httpMetadata: { contentType: "image/gif" } })
 
-    const ctx = { waitUntil() {}, passThroughOnException() {}, props: { ownerId: "max" } } as unknown as ExecutionContext
-    const env = { DB: database, FILES: files, SESSION_SECRET: "test-secret", DEV_LOGIN: "max" } as unknown as Env
     const get = (key: string, headers: Record<string, string> = {}) => app.request(`http://localhost/files/${key}`, { headers }, env, ctx)
 
     const whole = await get(`${p}/scroll.webm`)
@@ -84,6 +92,7 @@ test("WebM recordings are served in byte ranges and described over MCP, next to 
     assert.equal(h.structuredContent.gif.url, h.structuredContent.recording.url)
     assert.equal(h.content[1].mimeType, "image/gif")
   } finally {
+    await Promise.allSettled(pending)
     await mf.dispose()
   }
 })

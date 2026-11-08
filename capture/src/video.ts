@@ -6,7 +6,8 @@ import { muxWebm, type ColorSpace } from "./webm"
 
 // Scroll and hover recordings are WebM (VP9), encoded with WebCodecs in the browser the agent already runs:
 // usually several times smaller than the same GIF, at full colour. SNIP_RECORDING_FORMAT=gif keeps GIFs, and
-// a browser that can't encode VP9 falls back to them.
+// a browser that can't encode VP9 falls back to them. Callers must opt in to WebM only when the destination
+// Worker advertises support; an older Worker accepts uploads but can only display GIF recordings.
 const ENCODER_JS = readFileSync(new URL("./inpage/video-encoder.js", import.meta.url), "utf8")
 const FORMAT = process.env.SNIP_RECORDING_FORMAT === "gif" ? "gif" : "webm"
 const CODEC = "vp09.00.10.08" // VP9 profile 0, 8-bit 4:2:0
@@ -112,10 +113,11 @@ function gifRecording(scale: number): RecordingWriter {
 }
 
 let warned = false
-/** A writer for one recording: WebM where the browser can encode it, else GIF. */
-export async function recordingWriter(browser: Browser, opts: { scale?: number } = {}): Promise<RecordingWriter> {
+type RecordingOptions = { scale?: number; format?: Recording["ext"] }
+/** A writer for one recording. GIF unless the caller requests WebM for a destination that supports it. */
+export async function recordingWriter(browser: Browser, opts: RecordingOptions = {}): Promise<RecordingWriter> {
   const scale = Math.max(1, opts.scale ?? 1)
-  if (FORMAT === "webm") {
+  if (opts.format === "webm" && FORMAT === "webm") {
     if (await canEncode(browser)) return webmWriter(browser, scale)
     if (!warned) console.log("  this browser can't encode VP9 video; recording GIFs instead")
     warned = true
@@ -124,7 +126,7 @@ export async function recordingWriter(browser: Browser, opts: { scale?: number }
 }
 
 /** Encode finished PNG frames into one recording. */
-export async function encodeRecording(browser: Browser, frames: Frame[], opts: { scale?: number } = {}) {
+export async function encodeRecording(browser: Browser, frames: Frame[], opts: RecordingOptions = {}) {
   const writer = await recordingWriter(browser, opts)
   for (const f of frames) await writer.add(f.png!, f.delay)
   return writer.finish()
