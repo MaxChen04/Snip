@@ -185,7 +185,11 @@ function DitherField({ interactive, reduce, status }: { interactive: boolean; re
       pointer.inside = false
     }
 
-    const resizeObserver = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(resize)
+    const resizeObserver = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => {
+      resize()
+      // Resizing clears the canvas; reduced motion has no frame loop to repaint it.
+      if (reduce) draw(0)
+    })
 
     resize()
     resizeObserver?.observe(canvas)
