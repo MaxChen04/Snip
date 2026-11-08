@@ -72,12 +72,6 @@ export function gifWriter(opts: { scale?: number } = {}) {
   }
 }
 
-export async function encodeGif(frames: Frame[], opts: { scale?: number } = {}) {
-  const writer = gifWriter(opts)
-  for (const f of frames) await writer.add(f.png!, f.delay)
-  return writer.finish()
-}
-
 /** GIF89a header, a screen with no shared palette, and the loop-forever extension. */
 function header(width: number, height: number) {
   const b = Buffer.alloc(32)
