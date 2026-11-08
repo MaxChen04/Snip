@@ -93,6 +93,16 @@ export function rankLinks<L extends { href: string; nav: boolean }>(links: L[]):
   return links.map((l) => ({ l, s: score(l) })).sort((a, b) => a.s - b.s).map(({ l }) => l)
 }
 
+/** The host a page ended up on if it redirected off the site, else null. */
+export function leftSite(finalUrl: string, root: URL): string | null {
+  try {
+    const u = new URL(finalUrl)
+    return /^https?:$/.test(u.protocol) && !sameSite(u, root) ? u.hostname : null
+  } catch {
+    return null
+  }
+}
+
 /**
  * The page this one duplicates, or null. Redirecting to a different same-site URL the crawl has already been
  * through always counts. A canonical link counts only when the page it names was captured in this run with the
@@ -540,7 +550,8 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
   const recordingFormat = Array.isArray(job.recordingFormats) && job.recordingFormats.includes("webm") ? "webm" : "gif"
 
   const resume = job.resume
-  const queue: string[] = resume ? [...resume.queue] : [normalize(root.href, root) ?? root.href]
+  const start = normalize(root.href, root) ?? root.href
+  const queue: string[] = resume ? [...resume.queue] : [start]
   const visited: string[] = resume ? [...resume.visited] : []
   const seen = new Set([...visited, ...queue])
   const titles = new Map<string, string>() // pages captured in this run, for duplicateOf; empty after a resume
@@ -624,7 +635,13 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       const dPage = await newPage(desktop)
       await load(dPage, url, network)
       const pageMeta = await run<{ canonical: string | null; title: string | null; description: string | null; favicon: string | null; links: { href: string; nav: boolean }[] }>(dPage, META_JS)
-      // Before any screenshots or recordings. The URL stays in `visited`, so it is not queued again, and it is not counted as captured.
+      // Both checks run before any screenshots or recordings. A skipped URL stays in `visited`, so it is not queued again, and it is not counted as captured.
+      // A crawled link that redirected off the site (e.g. to a Slack invite) is not a page of it. The start page keeps whatever it redirects to.
+      const away = job.mode === "crawl" && url !== start ? leftSite(dPage.url(), root) : null
+      if (away) {
+        log(`  - ${path} left the site (${away}), skipped`)
+        continue
+      }
       const duplicate = duplicateOf(url, dPage.url(), pageMeta.canonical, pageMeta.title, root, visited, titles)
       if (duplicate) {
         log(`  - ${path} duplicates ${duplicate}, skipped`)

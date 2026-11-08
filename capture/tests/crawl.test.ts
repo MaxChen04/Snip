@@ -1,8 +1,18 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { duplicateOf, rankLinks } from "../src/capture"
+import { duplicateOf, leftSite, rankLinks } from "../src/capture"
 
 const root = new URL("https://vercel.com")
+
+test("a page that redirected to another site has left the site", () => {
+  const linear = new URL("https://linear.app")
+  assert.equal(leftSite("https://linearcustomers.slack.com/join/shared_invite/abc", linear), "linearcustomers.slack.com")
+  assert.equal(leftSite("https://app.linear.app/login", linear), "app.linear.app")
+  assert.equal(leftSite("https://linear.app/join-slack", linear), null)
+  assert.equal(leftSite("https://www.linear.app/join-slack", linear), null)
+  assert.equal(leftSite("about:blank", linear), null)
+  assert.equal(leftSite("not a url", linear), null)
+})
 const visited = ["https://vercel.com/", "https://vercel.com/pricing", "https://vercel.com/home"]
 
 const titles = new Map([
