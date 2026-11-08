@@ -39,7 +39,7 @@ import { api, fileUrl, type Animation, type Page, type Reference } from "@/lib/a
 import { isVideoKey } from "../../shared/types"
 import { useCollections } from "@/lib/collections"
 import { referenceViewUrl, useDesktopState } from "@/hooks/use-desktop-state"
-import { usePoll } from "@/hooks/use-poll"
+import { LIVE_POLL, usePoll } from "@/hooks/use-poll"
 
 /** A failed capture: what went wrong in plain terms, the raw error, and Retry. */
 function CaptureFailure({ id, error, onRetried }: { id: string; error: string | null; onRetried: () => void }) {
@@ -131,7 +131,8 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
   useEffect(() => { void load() }, [load])
 
   const busy = data && (data.reference.status === "queued" || data.reference.status === "capturing")
-  usePoll(load, !!busy)
+  // Each captured page appears as soon as it is saved: poll at a steady pace while capturing, back off while queued.
+  usePoll(load, !!busy, data?.reference.status === "capturing" ? LIVE_POLL : undefined)
 
   if (error) return <div className="grid min-h-svh place-items-center text-sm text-muted-foreground">{error}</div>
   if (!data) {

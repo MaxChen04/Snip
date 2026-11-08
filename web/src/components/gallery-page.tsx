@@ -16,7 +16,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { useInfinite } from "@/hooks/use-infinite"
-import { usePoll } from "@/hooks/use-poll"
+import { LIVE_POLL, usePoll } from "@/hooks/use-poll"
 import { useDesktopState } from "@/hooks/use-desktop-state"
 import { api, fileUrl, type AnimationWithRef, type Filters, type PageWithRef, type Reference, type Sort } from "@/lib/api"
 import { useCollections } from "@/lib/collections"
@@ -343,9 +343,11 @@ function WebsitesGrid({ filters, onCount }: { filters: Filters; onCount: (n: num
   useReloadEvent(list.reload)
   useCountReport(list.items.length, list.loading, onCount)
 
-  // Poll while any capture is in flight.
+  // Poll while any capture is in flight. A running capture finishes a page every ~20 s, so it polls at a steady
+  // pace to show each one; a queued one may wait for a Mac that is off, so it backs off.
   const busy = list.items.some((r) => r.status === "queued" || r.status === "capturing")
-  usePoll(list.refreshHead, busy)
+  const capturing = list.items.some((r) => r.status === "capturing")
+  usePoll(list.refreshHead, busy, capturing ? LIVE_POLL : undefined)
 
   if (list.loading && !list.items.length) return <SkeletonGrid />
   return (

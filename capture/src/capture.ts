@@ -14,6 +14,7 @@ const SNAPSHOT_JS = script("snapshot")
 const HOVER_JS = script("hover-targets")
 const META_JS = script("meta")
 const DISMISS_JS = script("dismiss")
+const TRANSITION_JS = script("transition-ms")
 const DISMISS_POPUPS = process.env.DISMISS_POPUPS !== "false"
 const run = <T>(page: PwPage, source: string, arg?: unknown) => page.evaluate(`(${source})(${JSON.stringify(arg ?? null)})`) as Promise<T>
 
@@ -32,6 +33,13 @@ const FIRST_FRAME_MS = 700 // beat at the top before it starts moving
 const LAST_FRAME_MS = 1200
 const MAX_HOVERS = 6
 const HOVER_FRAME_MS = 33
+// Hover recording windows. Each phase records at least as long as the CSS transitions on the target and its
+// children say it lasts, then keeps going while frames still change (JS-driven effects), up to the cap.
+const HOVER_SETTLE_MS = 120 // pointer moved away before recording; resting effects have mostly finished
+const HOVER_ENTER = { min: 300, max: 900 }
+const HOVER_LEAVE = { min: 250, max: 600 }
+const HOVER_QUIET_MS = 150 // no new frame for this long after the minimum: the effect has finished
+const HOVER_CSS_PAD_MS = 150
 const MAX_SAVED_QUEUE = 2000 // URLs kept when a crawl pauses
 // Same text as STOPPED_EMPTY in web/shared/capture-errors.ts. Released apps ship capture/src without
 // web/shared, so the agent may only import types from there.
@@ -233,7 +241,9 @@ export async function recordScroll(page: PwPage, record: boolean, recordingForma
       log("  scroll recording failed:", (e as Error).message.split("\n")[0])
     }
   }
-  await closeRenderer() // the encoder's page would otherwise hold its memory through the rest of the page
+  // The encoder's page would otherwise hold its memory through the rest of the page. Only a recording scroll
+  // opened it: the mobile scroll runs alongside the desktop recording and must not close its encoder.
+  if (writer) await closeRenderer()
   return { frames, recording }
 }
 
@@ -257,7 +267,7 @@ async function recordHovers(page: PwPage, seen: Set<string>, recordingFormat: Re
       const el = page.locator(`[data-rs-hover="${t.i}"]`).first()
       await el.scrollIntoViewIfNeeded({ timeout: 2000 })
       await page.mouse.move(2, 2)
-      await sleep(350)
+      await sleep(HOVER_SETTLE_MS)
       const box = await el.boundingBox()
       if (!box) continue
       const vp = page.viewportSize()!
@@ -286,6 +296,9 @@ async function recordHovers(page: PwPage, seen: Set<string>, recordingFormat: Re
           return o
         })
         .catch(() => null)
+      // Leaving runs the resting state's transitions; entering runs the :hover state's, read once hovered.
+      const cssTiming = () => run<number>(page, TRANSITION_JS, `[data-rs-hover="${t.i}"]`)
+      const restMs = await cssTiming().catch(() => HOVER_LEAVE.max)
 
       // Raw CDP skips page.screenshot's per-shot work in every frame (caret hiding, font wait). It takes the
       // clip in document coordinates; whole-pixel sizes match what page.screenshot produced.
@@ -311,19 +324,27 @@ async function recordHovers(page: PwPage, seen: Set<string>, recordingFormat: Re
         frames.push({ png, delay: 80, offsetMs: now - t0, phase })
         last = now
       }
+      /** Record one phase: at least the CSS duration, then until frames stop changing, never past the cap. */
+      // The timing can arrive while recording: until it does, the phase runs to its cap.
+      const recordPhase = async ({ min, max }: { min: number; max: number }, timing: Promise<number>, onTick?: (elapsed: number, least: number) => void) => {
+        const from = Date.now()
+        let least = max
+        void timing.then((ms) => { least = Math.min(max, Math.max(min, ms + HOVER_CSS_PAD_MS)) }, () => {})
+        for (let elapsed = 0; elapsed < max; elapsed = Date.now() - from) {
+          if (elapsed >= least && Date.now() - Math.max(last, from) >= HOVER_QUIET_MS) break
+          await grab()
+          onTick?.(Date.now() - from, least)
+        }
+      }
       await grab()
       phase = "enter"
       await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 4 })
-      const start = Date.now()
-      while (Date.now() - start < 900) {
-        await grab()
-        if (Date.now() - start > 450) phase = "hold"
-      }
+      const hoverMs = cssTiming()
+      await recordPhase(HOVER_ENTER, hoverMs, (elapsed, least) => { if (elapsed > least / 2) phase = "hold" })
       frames[frames.length - 1]!.delay = 700
       phase = "leave"
       await page.mouse.move(2, 2, { steps: 4 })
-      const leave = Date.now()
-      while (Date.now() - leave < 600) await grab()
+      await recordPhase(HOVER_LEAVE, Promise.resolve(restMs))
       frames[frames.length - 1]!.delay = 900
 
       // Skip effects that changed nothing visible (repeats were merged, so that leaves one frame).
@@ -547,11 +568,14 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
     await api.progress(job.id, `Capturing ${captured + 1}/${job.mode === "crawl" ? `${Math.min(job.maxPages, captured + 1 + queue.length)}` : 1}: ${path}`)
     log(`[${job.id}] ${url}`)
     const p = `${prefix}/p${ord}`
-    // Each viewport gets a fresh page that closes once captured, so only one site's renderer is alive at a time.
+    // Each viewport gets a fresh page that closes once captured. The mobile page loads and screenshots while
+    // the desktop page records, so at most two of the site's renderers are alive at once.
     // The contexts live for the whole job and keep cookies (dismissed banners stay dismissed).
     const open: PwPage[] = []
     const newPage = async (context: BrowserContext) => { const page = await context.newPage(); open.push(page); return page }
     const closePages = () => Promise.allSettled(open.map((page) => page.close()))
+    type MobileShots = { shot: { buf: Buffer; width: number; height: number }; thumb: Buffer } | null
+    let mobileTask: Promise<MobileShots> | undefined
     try {
       // ---- Desktop ----
       const dPage = await newPage(desktop)
@@ -577,6 +601,22 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
         } else queue.push(...fresh)
       }
 
+      // ---- Mobile, alongside the desktop recordings ----
+      mobileTask = (async (): Promise<MobileShots> => {
+        try {
+          const mPage = await newPage(mobile)
+          await load(mPage, url, network)
+          await recordScroll(mPage, false)
+          const shot = await fullPageShot(mPage, MOBILE_DPR)
+          const thumb = await mPage.screenshot({ type: "jpeg", quality: 75 })
+          await mPage.close()
+          return { shot, thumb }
+        } catch (e) {
+          log("  mobile capture failed:", (e as Error).message.split("\n")[0])
+          return null
+        }
+      })()
+
       const scroll = await recordScroll(dPage, true, recordingFormat)
       await dismissBanners(dPage) // popups that only appear after scrolling
       const desktopShot = await fullPageShot(dPage, 1)
@@ -584,21 +624,10 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       const styles = await run<{ tokens: DesignTokens }>(dPage, STYLES_JS, { maxElements: 3000 })
       const html = await buildSnapshot(dPage, desktop)
       const hovers = await recordHovers(dPage, hoverSeen, recordingFormat)
-      await closePages()
-
-      // ---- Mobile ----
-      let mobileShot: { buf: Buffer; width: number; height: number } | null = null
-      let mobileThumb: Buffer | null = null
-      try {
-        const mPage = await newPage(mobile)
-        await load(mPage, url, network)
-        await recordScroll(mPage, false)
-        mobileShot = await fullPageShot(mPage, MOBILE_DPR)
-        mobileThumb = await mPage.screenshot({ type: "jpeg", quality: 75 })
-      } catch (e) {
-        log("  mobile capture failed:", (e as Error).message.split("\n")[0])
-      }
-      await closePages()
+      await dPage.close()
+      const mobileShots = await mobileTask
+      const mobileShot = mobileShots?.shot ?? null
+      const mobileThumb = mobileShots?.thumb ?? null
 
       network?.assertAllowed()
 
@@ -671,6 +700,8 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       if (failures > Math.max(5, job.maxPages)) throw e
     } finally {
       await Promise.allSettled([closePages(), closeRenderer()])
+      // A desktop failure closes the mobile page above, which ends its task.
+      await mobileTask
     }
   }
 
