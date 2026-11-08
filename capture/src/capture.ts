@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs"
+import sharp from "sharp"
 import type { Browser, BrowserContext, BrowserContextOptions, CDPSession, Page as PwPage } from "playwright"
 import type { CrawlState, DesignTokens, Job, PageUpload } from "../../web/shared/types"
 import { JobGoneError, type SnipApi } from "./api"
@@ -22,6 +23,9 @@ const DESKTOP = { width: 1440, height: 900 }
 const MOBILE = { width: 390, height: 844 }
 const MOBILE_DPR = 1.5
 const MAX_SHOT_PX = 16000 // Chromium texture limit for full-page screenshots
+// Gallery thumbnails render 230-600 css px wide (950 device px at 2x on the large grid); the mobile one is a ~210 css px tall inset.
+const THUMB_WIDTH = { desktop: 960, mobile: 320 }
+const thumbnail = (jpeg: Buffer, width: number) => sharp(jpeg).resize({ width, withoutEnlargement: true }).jpeg({ quality: 75 }).toBuffer()
 // Scroll recording: frames are captured at fixed scroll increments and played back at a fixed rate,
 // so playback is smooth no matter how long each screenshot took.
 const SCROLL_FPS = Math.min(50, Math.max(5, Number(process.env.SCROLL_FPS ?? 30)))
@@ -626,7 +630,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
           await load(mPage, url, network)
           await recordScroll(mPage, false)
           const shot = await fullPageShot(mPage, MOBILE_DPR)
-          const thumb = await mPage.screenshot({ type: "jpeg", quality: 75 })
+          const thumb = await thumbnail(await mPage.screenshot({ type: "jpeg", quality: 75 }), THUMB_WIDTH.mobile)
           await mPage.close()
           return { shot, thumb }
         } catch (e) {
@@ -638,7 +642,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       const scroll = await recordScroll(dPage, true, recordingFormat)
       await dismissBanners(dPage) // popups that only appear after scrolling
       const desktopShot = await fullPageShot(dPage, 1)
-      const desktopThumb = await dPage.screenshot({ type: "jpeg", quality: 75 })
+      const desktopThumb = await thumbnail(await dPage.screenshot({ type: "jpeg", quality: 75 }), THUMB_WIDTH.desktop)
       const styles = await run<{ tokens: DesignTokens }>(dPage, STYLES_JS, { maxElements: 3000 })
       const html = await buildSnapshot(dPage, desktop)
       const hovers = await recordHovers(dPage, hoverSeen, recordingFormat)
