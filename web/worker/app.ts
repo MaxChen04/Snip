@@ -162,8 +162,10 @@ app.get("/files/*", async (c) => {
   }
   const range = ranged && obj.body ? obj.range : undefined
   if (range) {
-    const start = "suffix" in range ? Math.max(0, obj.size - range.suffix) : (range.offset ?? 0)
-    const length = Math.min(obj.size - start, "suffix" in range ? obj.size - start : (range.length ?? obj.size - start))
+    // Runtimes differ in which keys they set (some set suffix: undefined), so check values, not keys.
+    const r = range as { offset?: number; length?: number; suffix?: number }
+    const start = typeof r.suffix === "number" ? Math.max(0, obj.size - r.suffix) : (r.offset ?? 0)
+    const length = Math.min(obj.size - start, typeof r.suffix === "number" ? obj.size - start : (r.length ?? obj.size - start))
     headers.set("content-range", `bytes ${start}-${start + length - 1}/${obj.size}`)
     headers.set("content-length", String(length))
     return new Response(obj.body, { status: 206, headers })
