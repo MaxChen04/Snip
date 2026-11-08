@@ -38,7 +38,7 @@ export function exportPlan(r: Reference, pages: Page[], animations: Animation[])
   return { name: `snip-${slug(r.title || r.domain)}.zip`, files, metadata }
 }
 
-/** Downloads a reference's screenshots, HTML snapshots, styles, GIFs and tokens as one .zip. */
+/** Downloads a reference's screenshots, HTML snapshots, styles, recordings and tokens as one .zip. */
 export async function exportReference(r: Reference, pages: Page[], animations: Animation[], onProgress?: (done: number, total: number) => void) {
   const plan = exportPlan(r, pages, animations)
   const entries: ZipEntry[] = [{ name: "reference.json", data: new TextEncoder().encode(JSON.stringify(plan.metadata, null, 2)) }]

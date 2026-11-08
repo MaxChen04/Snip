@@ -292,7 +292,7 @@ function MotionSection() {
       <div className="flex w-full flex-col gap-6 lg:flex-row">
         <div className="reveal flex flex-col gap-6 rounded-4xl bg-fill-1 p-6 ring-1 ring-border md:p-8 lg:flex-[7_1_0%]">
           <div className="flex flex-col gap-2">
-            <h3 className="text-[22px] font-medium tracking-[-0.025em]">Scroll and hover, as GIFs</h3>
+            <h3 className="text-[22px] font-medium tracking-[-0.025em]">Scroll and hover, as video</h3>
             <p className="max-w-[420px] text-[15px] leading-[1.6] text-muted-foreground">
               Each page gets a smooth scroll recording at 30 fps. Elements with hover effects get their own short loop.
             </p>
@@ -409,7 +409,7 @@ const faqs: { q: string; a: ReactNode }[] = [
   },
   {
     q: "Does it cost anything?",
-    a: "No. Snip runs on your Mac. If you turn on cloud mode, it fits in Cloudflare’s free plan: R2 gives you 10 GB of storage, roughly 1,500 to 3,000 captured pages depending on page length and GIFs. R2 has to be switched on once, and Cloudflare asks for a card at that point even though the plan is free.",
+    a: "No. Snip runs on your Mac. If you turn on cloud mode, it fits in Cloudflare’s free plan: R2 gives you 10 GB of storage, roughly 3,000 to 6,000 captured pages depending on page length and motion. R2 has to be switched on once, and Cloudflare asks for a card at that point even though the plan is free.",
   },
   {
     q: "Does my laptop need to stay on?",

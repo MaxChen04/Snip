@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import sharp from "sharp"
-import { encodeGif, gifWriter } from "../src/gif"
+import { gifWriter } from "../src/gif"
 
 const COLORS = [[230, 30, 30], [30, 160, 60], [40, 70, 220]] as const
 /** A test frame: a solid colour with a white square, so each frame has a palette and some detail. */
@@ -24,11 +24,4 @@ test("gifWriter splices native frames into one looping animation with each frame
     const corner = [...data.subarray(0, 3)] // top-left pixel is the frame's colour, outside the white square
     assert.ok(corner.every((v, c) => Math.abs(v - expected[c]!) < 12), `frame ${i} shows ${corner}, expected ${expected}`)
   }
-})
-
-test("encodeGif produces the same bytes as streaming the frames into gifWriter", async () => {
-  const frames = await Promise.all(COLORS.map(async (color, i) => ({ png: await frame(color), delay: 40 * (i + 1) })))
-  const writer = gifWriter()
-  for (const f of frames) await writer.add(f.png, f.delay)
-  assert.ok(writer.finish().bytes.equals((await encodeGif(frames)).bytes))
 })

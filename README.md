@@ -95,7 +95,7 @@ Installs that were set up before this version and already have GitHub sign-in co
 - Desktop (1440px, or 1280/1920) and mobile (390px) full-page screenshots, in light or dark mode
 - **Computed styles** per element (only values that differ from browser defaults, plus `::before`/`::after`), keyframes, `:hover` rules and CSS variables
 - A **self-contained HTML snapshot**: linked and cross-origin CSS inlined, CSS-in-JS / CSSOM rules materialized, web fonts embedded, scripts stripped
-- **Scroll GIFs** per page and **hover GIFs** for elements with hover effects
+- **Scroll recordings** per page and **hover recordings** for elements with hover effects, as WebM video
 - Extracted **design tokens**: colors, fonts, type scale, spacing, radii, shadows, transitions
 
 Pages behind a login can be captured with a saved sign-in (`STORAGE_STATE`, see [capture options](#capture-agent-options-captureenv)).
@@ -109,7 +109,7 @@ The app is an infinite gallery (Websites / Pages / Animations) with search and s
 - **Collections**: save whole websites or **individual pages**.
 - **Page viewer**: a resizable sidebar with **Tokens**, **HTML** and **CSS** tabs, desktop and mobile.
 - **Select** pages, animations and tokens, then **Copy prompt** to hand exactly those to an agent.
-- **Export** a website as a .zip (screenshots, HTML, styles, GIFs, tokens) from its **More** menu.
+- **Export** a website as a .zip (screenshots, HTML, styles, recordings, tokens) from its **More** menu.
 - **Connect MCP** in the top bar shows copy-ready setup for Claude, Codex, OpenCode, Cursor and other clients.
 - Press <kbd>/</kbd> to search. A banner tells you when captures are waiting on an offline capture agent, and the account menu shows how much storage your captures use: bytes on disk in the local app, and R2 usage against the 10 GB free tier in cloud mode.
 - In cloud mode a capture started elsewhere shows **Waiting for your Mac** until this Mac's capture agent picks it up.
@@ -126,7 +126,7 @@ The app is an infinite gallery (Websites / Pages / Animations) with search and s
 
 ![Selecting pages and copying an agent prompt](docs/media/select.gif)
 
-**Animations.** Scroll and hover GIFs from every capture, in one feed.
+**Animations.** Scroll and hover recordings from every capture, in one feed.
 
 ![Animations gallery](docs/media/animations.gif)
 
@@ -186,7 +186,7 @@ The **Connect MCP** button in the app's top bar shows these steps with your own 
 | `get_reference` | One reference in bounded parts: `overview`, `pages`, `animations`, `tokens` (optionally one `token_group`, paginated). `full` is the legacy everything-at-once read |
 | `get_page` | One page: signed screenshot URLs with coverage, a token summary, an inline viewport screenshot and optional HTML in chunks |
 | `get_page_styles` | Valid, bounded computed styles: summary, filtered elements, keyframes, hover rules, font faces, CSS variables |
-| `get_animation` | One animation: a manifest (timing provenance, sampled frames, the element's observed styles) plus a contact sheet, a single frame or the GIF |
+| `get_animation` | One animation: a manifest (timing provenance, sampled frames, the element's observed styles) plus a contact sheet or a single frame, and a link to the recording |
 | `search_pages` | Pages across all references; with a collection, its saved pages and the pages of its websites |
 | `search_animations` | Scroll and hover animations across all references |
 | `get_capture_status` | Job state, last progress and when the capture worker last checked in, with a suggested poll delay |
@@ -207,7 +207,7 @@ Say "use Snip to capture linear.app" (or "crawl and gallerize it"). The agent ca
 
 Snip or `npm run capture` must be running. If no capture agent has checked in recently, `add_reference` answers right away and the agent asks you to start it.
 
-Every result carries the same JSON as text and as `structuredContent`. Bounded lists are capped by item count and bytes and say what they left out and how to continue; the legacy full reference read can be larger. Many models only see the first frame of a GIF, so new captures also store sampled frames and a contact sheet per animation (animations captured earlier only have the GIF until you recapture).
+Every result carries the same JSON as text and as `structuredContent`. Bounded lists are capped by item count and bytes and say what they left out and how to continue; the legacy full reference read can be larger. Recordings are WebM video (older captures have GIFs), which most models can't watch, so captures also store sampled frames and a contact sheet per animation. `get_animation` gives the recording's signed URL under `recording`; its `gif` representation still inlines older GIFs.
 
 File URLs returned by the MCP are signed and expire after 24 hours.
 
@@ -223,9 +223,11 @@ File URLs returned by the MCP are signed and expire after 24 hours.
 | `POLL_SECONDS` | `5` | Queue poll interval |
 | `HEADLESS` | `true` | `false` to watch the browser |
 | `DISMISS_POPUPS` | `true` | `false` keeps cookie banners and popups in captures |
-| `SCROLL_FPS` | `30` | Scroll GIF frames per second (5–50) |
-| `SCROLL_STEP` | `40` | Pixels scrolled per scroll GIF frame (min 8) |
-| `SCROLL_MAX_FRAMES` | `360` | Frame cap per scroll GIF; long pages take bigger steps |
+| `SCROLL_FPS` | `30` | Scroll recording frames per second (5–50) |
+| `SCROLL_STEP` | `40` | Pixels scrolled per scroll recording frame (min 8) |
+| `SCROLL_MAX_FRAMES` | `360` | Frame cap per scroll recording; long pages take bigger steps |
+| `SNIP_RECORDING_FORMAT` | `webm` | Prefer WebM when the Worker and browser support it; otherwise GIF. `gif` always records GIFs (several times bigger) |
+| `SNIP_VIDEO_QUANTIZER` | `34` | Video quality, 0 (best, biggest) to 63 (smallest) |
 | `SHEET_FRAMES` | `9` | Frames sampled per animation for its contact sheet (2–16) |
 | `SHEET_WIDTH` | `1536` | Max contact sheet width in px |
 | `BROWSER_IDLE_SECONDS` | `120` | Seconds Chromium stays open after the last capture |
@@ -284,7 +286,7 @@ npm test               # web, capture (including MCP response budgets) and deskt
 ## Stack
 
 - `web/`: Vite + React 19 + Tailwind v4, **shadcn/ui** with the **SortUI** registry (`src/components/ui`, restyled with tactile surfaces), **Hugeicons**, Hono on Cloudflare Workers, D1, R2, `@cloudflare/workers-oauth-provider`, MCP via `@modelcontextprotocol/server`.
-- `capture/`: Node 22+ + Playwright, `sharp` (libvips) for GIF encoding.
+- `capture/`: Node 22+ + Playwright. Recordings are VP9 WebM encoded with WebCodecs in the capture browser; `sharp` (libvips) encodes the GIF fallback.
 - `desktop/`: Electron menu-bar app for Apple Silicon Macs ([Snip.app](docs/mac-app.md)).
 - `web/site/`: the static [public site](docs/public-site.md) on usesnip.dev.
 
@@ -293,7 +295,7 @@ npm test               # web, capture (including MCP response budgets) and deskt
 - Full-page screenshots are capped at 16,000px tall (Chromium's texture limit).
 - Crawls stay on the same hostname (with or without `www.`) and ignore query strings.
 - Sites behind bot walls capture whatever the browser is shown. Cookie banners with an obvious "Accept" button are dismissed.
-- Hover GIFs pick up to 6 elements per page from `:hover` rules and transitions; shared nav/footer effects are recorded once per site.
+- Hover recordings pick up to 6 elements per page from `:hover` rules and transitions; shared nav/footer effects are recorded once per site.
 
 ## Contributing
 

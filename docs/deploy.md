@@ -12,7 +12,7 @@ In Snip.app, open **Settings → Cloud → Enable cloud**. The app shows a sheet
 
 ### What the sheet says
 
-- **Copies:** every reference, page, animation, collection, note, extracted token, screenshot, GIF, HTML snapshot and style file in the library.
+- **Copies:** every reference, page, animation, collection, note, extracted token, screenshot, recording, HTML snapshot and style file in the library.
 - **Stays:** the local library itself, exactly where it is. Settings lists it as **This Mac's library**, with one action, **Switch back to it**; the app never renames or deletes it.
 - **Doesn't move:** browser sessions and MCP grants. Agents sign in again at the new address.
 - **Capture:** stays on this Mac. The capture agent is pointed at the new address after the copy finishes.
@@ -345,6 +345,6 @@ If the Worker is healthy but the app shows the wrong library, check `status` bef
 
 ## Free-tier headroom
 
-R2 gives 10 GB (roughly 1,500 to 3,000 captured pages, depending on page length and GIFs), D1 5 GB, Workers 100k requests a day. The account menu shows how much of the R2 free tier a hosted Snip is using; the local app shows the bytes stored on this Mac instead.
+R2 gives 10 GB (roughly 3,000 to 6,000 captured pages, depending on page length and motion), D1 5 GB, Workers 100k requests a day. The account menu shows how much of the R2 free tier a hosted Snip is using; the local app shows the bytes stored on this Mac instead.
 
 The hosted Worker rate-limits sign-in and MCP connection setup so repeated requests stay cheap; the storage meter is cached for five minutes. See [Cloudflare cost controls](cloudflare-cost-controls.md) for the limits, billing alerts and an optional CPU ceiling on Workers Paid, and [storage usage](storage-usage.md) for how the meter is counted.
