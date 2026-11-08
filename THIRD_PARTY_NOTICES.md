@@ -23,6 +23,7 @@ The Settings window bundles Inter locally so it loads no remote content. The ful
 | shadcn/ui | `web/src/components/ui/` (generated components) | https://github.com/shadcn-ui/ui | MIT |
 | SortUI | `web/src/components/ui/`, theme in `web/src/index.css` | https://github.com/sortui/ui | MIT |
 | tactile-design skill | `.agents/skills/tactile-design/` | https://github.com/kosta4a/tactile-design | MIT |
+| beUI Image Generation | `web/src/components/image-generation.tsx` | https://github.com/starc007/ui-components | MIT |
 
 npm dependencies are not vendored; their licenses ship with each package in `node_modules`.
 
@@ -104,3 +105,28 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+### beUI Image Generation
+
+```
+MIT License
+
+Copyright (c) 2026 Saurabh Chauhan
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```

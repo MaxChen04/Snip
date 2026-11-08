@@ -22,6 +22,7 @@ import { Masonry } from "@/components/gallery-page"
 import { SavePagesButton } from "@/components/save-pages"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { TokensPanel } from "@/components/tokens-panel"
+import { ImageGeneration } from "@/components/image-generation"
 import { PageViewer } from "@/components/page-viewer"
 import { ActionCircle, Segmented, TopBar } from "@/components/top-bar"
 import {
@@ -171,6 +172,11 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
   const hoverRecordings = animations.filter((a) => a.kind === "hover")
 
   const inCollections = collections.filter((c) => r.collectionIds.includes(c.id))
+  // The capture agent reports "Capturing 7/25: /enterprise" while it works on a page.
+  const capturing = r.progress?.match(/^Capturing (\d+)\/(\d+): (.+)$/)
+  const capturingPath = capturing?.[3]
+  // Share of pages already finished, so the last page reads 83%, not 100%, while it is still capturing.
+  const capturedPercent = capturing ? Math.round(((Number(capturing[1]) - 1) / Number(capturing[2])) * 100) : 0
 
   return (
     <div className="min-h-svh">
@@ -353,8 +359,20 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
                 </button>
                 </div>
               ))}
+              {busy && (
+                <ImageGeneration
+                  status={r.status === "queued" ? "queued" : "generating"}
+                  label={capturingPath ? `Capturing ${capturingPath}` : (r.progress ?? "Waiting for your Mac")}
+                  resolution={capturingPath ?? ""}
+                  aspectRatio="16 / 10"
+                  size="fluid"
+                  statusText={`${capturedPercent}%`}
+                  statusClassName="tabular-nums"
+                  className="[&_[role=img]]:rounded-lg [&_[role=img]]:shadow-card"
+                />
+              )}
             </Masonry>
-            {!pages.length && <p className="py-16 text-center text-sm text-muted-foreground">No pages captured yet.</p>}
+            {!pages.length && !busy && <p className="py-16 text-center text-sm text-muted-foreground">No pages captured yet.</p>}
           </>
         )}
 
