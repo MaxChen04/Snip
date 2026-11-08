@@ -23,33 +23,40 @@ test("a crawled link is skipped when it errored or left the site, not otherwise"
   assert.equal(skipReason("https://linear.app/pricing", 304, linear), null)
   assert.equal(skipReason("https://linear.app/pricing", null, linear), null)
 })
-const visited = ["https://vercel.com/", "https://vercel.com/pricing", "https://vercel.com/home"]
-
-const titles = new Map([
+// Pages captured in the run. "/failed" was visited but not captured, so it is not here.
+const titles = new Map<string, string | null>([
   ["https://vercel.com/", "Vercel: Build and deploy"],
   ["https://vercel.com/pricing", "Pricing - Vercel"],
+  ["https://vercel.com/untitled", null],
 ])
 
 test("a page whose canonical page was captured with the same title is a duplicate", () => {
   const home = "Vercel: Build and deploy"
-  assert.equal(duplicateOf("https://vercel.com/home", "https://vercel.com/home", "https://vercel.com", home, root, visited, titles), "https://vercel.com/")
-  assert.equal(duplicateOf("https://vercel.com/home", "https://www.vercel.com/home", "https://vercel.com/?ref=x#top", home, root, visited, titles), "https://vercel.com/")
+  assert.equal(duplicateOf("https://vercel.com/home", "https://vercel.com/home", "https://vercel.com", home, root, titles), "https://vercel.com/")
+  assert.equal(duplicateOf("https://vercel.com/home", "https://www.vercel.com/home", "https://vercel.com/?ref=x#top", home, root, titles), "https://vercel.com/")
 })
 
 test("a canonical shared by pages with different titles does not make them duplicates", () => {
-  assert.equal(duplicateOf("https://vercel.com/about", "https://vercel.com/about", "https://vercel.com/", "About - Vercel", root, visited, titles), null)
-  assert.equal(duplicateOf("https://vercel.com/about", "https://vercel.com/about", "https://vercel.com/", null, root, visited, titles), null)
+  assert.equal(duplicateOf("https://vercel.com/about", "https://vercel.com/about", "https://vercel.com/", "About - Vercel", root, titles), null)
+  assert.equal(duplicateOf("https://vercel.com/about", "https://vercel.com/about", "https://vercel.com/", null, root, titles), null)
+  assert.equal(duplicateOf("https://vercel.com/about", "https://vercel.com/about", "https://vercel.com/untitled", null, root, titles), null)
   // After a resume the titles are gone, so a canonical alone never skips a page.
-  assert.equal(duplicateOf("https://vercel.com/home", "https://vercel.com/home", "https://vercel.com/", "Vercel: Build and deploy", root, visited, new Map()), null)
+  assert.equal(duplicateOf("https://vercel.com/home", "https://vercel.com/home", "https://vercel.com/", "Vercel: Build and deploy", root, new Map()), null)
 })
 
-test("a page that redirected to an already visited URL is a duplicate, whatever its title", () => {
-  assert.equal(duplicateOf("https://vercel.com/old", "https://vercel.com/pricing/", null, "Old", root, visited, titles), "https://vercel.com/pricing")
-  assert.equal(duplicateOf("https://vercel.com/old", "https://vercel.com/pricing/", null, "Old", root, visited, new Map()), "https://vercel.com/pricing")
+test("a page that redirected to a captured URL is a duplicate, whatever its title", () => {
+  assert.equal(duplicateOf("https://vercel.com/old", "https://vercel.com/pricing/", null, "Old", root, titles), "https://vercel.com/pricing")
+  assert.equal(duplicateOf("https://vercel.com/old", "https://vercel.com/untitled", null, null, root, titles), "https://vercel.com/untitled")
+})
+
+test("a page that redirected to a visited URL that was not captured is kept", () => {
+  assert.equal(duplicateOf("https://vercel.com/old", "https://vercel.com/failed", null, "Old", root, titles), null)
+  // After a resume nothing is captured in this run, so the redirect skip does not fire.
+  assert.equal(duplicateOf("https://vercel.com/old", "https://vercel.com/pricing/", null, "Old", root, new Map()), null)
 })
 
 test("a page is kept when its canonical is itself, uncaptured, off-site or missing", () => {
-  const keep = (final: string, canonical: string | null) => duplicateOf("https://vercel.com/about", final, canonical, "Pricing - Vercel", root, visited, titles)
+  const keep = (final: string, canonical: string | null) => duplicateOf("https://vercel.com/about", final, canonical, "Pricing - Vercel", root, titles)
   assert.equal(keep("https://vercel.com/about", "https://vercel.com/about/"), null)
   assert.equal(keep("https://vercel.com/about", "https://vercel.com/company"), null)
   assert.equal(keep("https://vercel.com/about", "https://example.com/"), null)

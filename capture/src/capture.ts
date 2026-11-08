@@ -132,9 +132,10 @@ export function skipReason(finalUrl: string, status: number | null, root: URL): 
 }
 
 /**
- * The page this one duplicates, or null. Redirecting to a different same-site URL the crawl has already been
- * through always counts. A canonical link counts only when the page it names was captured in this run with the
- * same title (`titles`), because some sites declare one canonical on every route.
+ * The page this one duplicates, or null. `titles` holds every page captured in this run (a failed or skipped
+ * URL is not in it) with its title. Redirecting to a different same-site URL in it always counts. A canonical
+ * link counts only when the page it names also has the same title, because some sites declare one canonical on
+ * every route.
  */
 export function duplicateOf(
   url: string,
@@ -142,13 +143,12 @@ export function duplicateOf(
   canonical: string | null,
   title: string | null,
   root: URL,
-  visited: string[],
-  titles: Map<string, string>,
+  titles: Map<string, string | null>,
 ): string | null {
   const redirect = normalize(finalUrl, root)
-  if (redirect && redirect !== url && visited.includes(redirect)) return redirect
+  if (redirect && redirect !== url && titles.has(redirect)) return redirect
   const target = canonical && normalize(canonical, root)
-  if (target && target !== url && titles.get(target) === title) return target
+  if (target && target !== url && title !== null && titles.get(target) === title) return target
   return null
 }
 
@@ -585,7 +585,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
   const queue: string[] = resume ? [...resume.queue] : [start]
   const visited: string[] = resume ? [...resume.visited] : []
   const seen = new Set([...visited, ...queue])
-  const titles = new Map<string, string>() // pages captured in this run, for duplicateOf; empty after a resume
+  const titles = new Map<string, string | null>() // every page captured in this run, for duplicateOf; empty after a resume
   if (job.mode === "crawl" && !resume) {
     const urls = (await sitemapUrls(desktop, root)).flatMap((u) => normalize(u, root) ?? [])
     for (const { href } of rankLinks(urls.map((href) => ({ href, nav: false })))) {
@@ -673,7 +673,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
         log(`  - ${path} ${skip}, skipped`)
         continue
       }
-      const duplicate = duplicateOf(url, dPage.url(), pageMeta.canonical, pageMeta.title, root, visited, titles)
+      const duplicate = duplicateOf(url, dPage.url(), pageMeta.canonical, pageMeta.title, root, titles)
       if (duplicate) {
         log(`  - ${path} duplicates ${duplicate}, skipped`)
         continue
@@ -778,7 +778,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       coverKey ??= upload.desktopThumbKey
       allTokens.push(styles.tokens)
       captured++
-      if (pageMeta.title) titles.set(url, pageMeta.title)
+      titles.set(url, pageMeta.title)
       log(`  ✓ ${path} (${animations.length} recordings)`)
     } catch (e) {
       network?.assertAllowed()
