@@ -57,6 +57,8 @@ export interface Reference {
   updatedAt: string
   /** Last claim or progress time while capturing. */
   claimedAt: string | null
+  /** Starts at 1; each Recapture adds one. An MCP task belongs to one run. */
+  captureRun: number
 }
 
 export interface Page {

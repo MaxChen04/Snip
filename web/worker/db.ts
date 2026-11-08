@@ -61,6 +61,7 @@ function toReference(r: Row): Reference {
     createdAt: r.created_at as string,
     updatedAt: r.updated_at as string,
     claimedAt: (r.claimed_at as string) ?? null,
+    captureRun: (r.capture_run as number) ?? 1,
   }
 }
 
@@ -341,7 +342,7 @@ export async function requeueReference(db: D1Database, id: string) {
     db.prepare(`DELETE FROM pages WHERE reference_id = ?`).bind(id), // animations cascade
     db
       .prepare(
-        `UPDATE refs SET status = 'queued', progress = 'Waiting for your Mac', error = NULL, page_count = 0, animation_count = 0, cover_key = NULL, tokens_json = NULL, claimed_at = NULL, capture_control = NULL, crawl_state = NULL, updated_at = ? WHERE id = ?`,
+        `UPDATE refs SET status = 'queued', progress = 'Waiting for your Mac', error = NULL, page_count = 0, animation_count = 0, cover_key = NULL, tokens_json = NULL, claimed_at = NULL, capture_control = NULL, crawl_state = NULL, capture_run = capture_run + 1, updated_at = ? WHERE id = ?`,
       )
       .bind(now(), id),
   ])
