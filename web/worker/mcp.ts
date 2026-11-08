@@ -173,11 +173,11 @@ function buildServer(env: Env, origin: string) {
    * inline page thumbnails. The same result serves a finished task, wait_for_capture
    * and anything else that reports completion, so every client sees the same thing.
    */
-  async function captureResult(ref: Reference, maxImages = LIMITS.summaryImages) {
+  async function captureResult(ref: Reference, maxImages = LIMITS.summaryImages, extra: Record<string, unknown> = {}) {
     if (ref.status === "failed")
       return {
         ...fail(`Capture of ${ref.url} did not finish${ref.error ? `: ${ref.error}` : ""}. Tell the user; they can retry it from the Snip app (${origin}/r/${ref.id}).`),
-        structuredContent: { referenceId: ref.id, state: ref.status, error: ref.error, galleryUrl: `${origin}/r/${ref.id}` },
+        structuredContent: { ...extra, referenceId: ref.id, state: ref.status, error: ref.error, galleryUrl: `${origin}/r/${ref.id}` },
       }
     const r = await db.getReference(env.DB, ref.id)
     const full = r?.reference ?? ref
@@ -201,6 +201,7 @@ function buildServer(env: Env, origin: string) {
     const tokens = tokenSummary(full.tokens, 4)
     return ok(
       {
+        ...extra,
         referenceId: full.id,
         state: full.status,
         title: full.title,
@@ -703,8 +704,8 @@ Scroll timing is synthetic playback; hover offsets are measured. Treat easing an
         const ref = await db.getReferenceRecord(env.DB, reference_id)
         if (!ref) return fail(`No reference with id "${reference_id}". It may have been deleted. Call search_references to find ids.`)
         if (isFinished(ref)) {
-          const result = await captureResult(ref, max_images)
-          return { ...result, structuredContent: { done: true, ...result.structuredContent } }
+          // done goes into the payload before it is serialized, so text-only clients see it too.
+          return captureResult(ref, max_images, { done: true })
         }
         const status = await db.getCaptureStatus(env.DB, ref)
         const left = deadline - Date.now()

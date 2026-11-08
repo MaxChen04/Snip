@@ -172,6 +172,7 @@ test("wait_for_capture returns the finished capture, or says whether to call aga
     await finish(queued.id)
     const done = (await call("wait_for_capture", { reference_id: queued.id })).result!
     assert.equal(done.structuredContent.done, true)
+    assert.equal(JSON.parse(done.content[0].text).done, true)
     assert.equal(done.structuredContent.galleryUrl, `http://localhost/r/${queued.id}`)
     assert.equal(done.content.filter((c: { type: string }) => c.type === "image").length, 1)
 
