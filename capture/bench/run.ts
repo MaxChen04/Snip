@@ -229,7 +229,7 @@ const api = {
   pause: async () => true,
   fail: async () => {},
 } as unknown as SnipApi
-const job: Job = { id: "bench", url, mode: "crawl", maxPages: pageCount, attempt: "a1", resume: null, options: null }
+const job: Job = { id: "bench", url, mode: "crawl", maxPages: pageCount, attempt: "a1", resume: null, options: null, recordingFormats: ["gif", "webm"] }
 
 const browser = await chromium.launch({ headless: true, args: [...CHROMIUM_ARGS, ...extraArgs], executablePath: process.env.CHROMIUM_PATH || undefined })
 await sampler.start()
@@ -257,9 +257,9 @@ const result = {
   rssAvgMB: Math.round(m.rssAvg), rssP95MB: Math.round(m.rssP95), rssPeakMB: Math.round(m.rssPeak),
   cpuSByKind: Object.fromEntries(KINDS.filter((k) => m.byKind[k] != null).map((k) => [k, +m.byKind[k]!.toFixed(1)])),
   rssPeakByKindMB: Object.fromEntries(KINDS.filter((k) => sampler.peakByKind[k] != null).map((k) => [k, Math.round(sampler.peakByKind[k]!)])),
-  uploads: { files: uploads.size, totalKB: Math.round([...uploads.values()].reduce((s, v) => s + v.bytes, 0) / 1024), gifKB: Math.round(bytesOf(/\.gif$/) / 1024), stillsKB: Math.round(bytesOf(/-(f\d+|sheet)\.jpg$/) / 1024) },
+  uploads: { files: uploads.size, totalKB: Math.round([...uploads.values()].reduce((s, v) => s + v.bytes, 0) / 1024), recordingKB: Math.round(bytesOf(/\.(gif|webm)$/) / 1024), gifKB: Math.round(bytesOf(/\.gif$/) / 1024), webmKB: Math.round(bytesOf(/\.webm$/) / 1024), stillsKB: Math.round(bytesOf(/-(f\d+|sheet)\.jpg$/) / 1024) },
   scrollFrames: animations.filter((a) => a.kind === "scroll").reduce((s, a) => s + (a.meta?.frameCount ?? 0), 0),
-  hoverGifs: animations.filter((a) => a.kind === "hover").length,
+  hoverRecordings: animations.filter((a) => a.kind === "hover").length,
   output,
   timeline: sampler.timeline,
 }
@@ -270,7 +270,7 @@ console.log(`cpu s by process: ${Object.entries(result.cpuSByKind).map(([k, v]) 
 console.log(`peak rss by process: ${Object.entries(result.rssPeakByKindMB).map(([k, v]) => `${k} ${v}MB`).join(" · ")}`)
 console.log(`at the total peak (MB): ${sampler.atPeak.filter((p) => p.rss > 5).map((p) => `${p.label} ${Math.round(p.rss)}`).join(" · ")}`)
 console.log(`node at its peak (MB): ${Object.entries(sampler.nodeAtPeak).map(([k, v]) => `${k} ${v}`).join(" · ")}`)
-console.log(`output: ${result.scrollFrames} scroll frames, ${result.hoverGifs} hover GIFs, ${result.uploads.files} files, ${result.uploads.totalKB}KB (gif ${result.uploads.gifKB}KB, stills ${result.uploads.stillsKB}KB)`)
+console.log(`output: ${result.scrollFrames} scroll frames, ${result.hoverRecordings} hover recordings, ${result.uploads.files} files, ${result.uploads.totalKB}KB (recordings ${result.uploads.recordingKB}KB: webm ${result.uploads.webmKB}KB gif ${result.uploads.gifKB}KB, stills ${result.uploads.stillsKB}KB)`)
 for (const o of output) console.log(`  ${o.path} desktop ${o.desktop} mobile ${o.mobile} ${o.animations.join(" ")}`)
 const out = flag("out")
 if (out) writeFileSync(out, JSON.stringify(result, null, 2))

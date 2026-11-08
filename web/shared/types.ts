@@ -84,6 +84,9 @@ export interface Page {
 
 export type AnimationKind = "scroll" | "hover"
 
+/** Whether an animation's recording is a video (WebM). Older captures stored GIFs under the same field. */
+export const isVideoKey = (key: string) => key.toLowerCase().endsWith(".webm")
+
 export interface Animation {
   id: string
   referenceId: string
@@ -92,6 +95,7 @@ export interface Animation {
   label: string | null
   selector: string | null
   viewport: "desktop" | "mobile"
+  /** The recording: a WebM video, or a GIF for captures made before recordings switched to video (see isVideoKey). */
   gifKey: string
   width: number
   height: number
@@ -103,12 +107,12 @@ export interface Animation {
 
 /**
  * How an animation was recorded, kept separate by provenance:
- * playback timing is what the GIF displays; capture offsets and scroll positions are only set where measured.
+ * playback timing is what the recording displays; capture offsets and scroll positions are only set where measured.
  */
 export interface AnimationMeta {
   version: 1
   frameCount: number
-  /** Total GIF playback time. Scroll GIFs use synthetic per-frame delays, so this is not the site's real timing. */
+  /** Total playback time. Scroll recordings use synthetic per-frame delays, so this is not the site's real timing. */
   playbackMs: number
   timing: "synthetic" | "measured"
   /** Uniformly sampled frames, stored as JPEGs and tiled into the contact sheet in this order. */
@@ -122,9 +126,9 @@ export interface AnimationFrame {
   key: string
   width: number
   height: number
-  /** Index in the full GIF frame sequence. */
+  /** Index in the recording's full frame sequence. */
   sourceIndex: number
-  /** When this frame appears during GIF playback. */
+  /** When this frame appears during playback. */
   playbackMs: number
   /** Measured ms since the recording started (hover only). */
   captureOffsetMs: number | null
@@ -156,6 +160,8 @@ export interface Job {
   /** Where a paused crawl left off. Pages already captured are kept; continue from here. */
   resume: CrawlState | null
   options: CaptureOptions | null
+  /** Formats the serving Worker can display. Older Workers omit this and require GIF. Not persisted. */
+  recordingFormats?: ("gif" | "webm")[]
 }
 
 /** Crawl position saved when a capture pauses. */
@@ -196,6 +202,7 @@ export interface PageUpload {
     label: string | null
     selector: string | null
     viewport: "desktop" | "mobile"
+    /** .webm when both Worker and agent support video; otherwise .gif */
     gifKey: string
     width: number
     height: number

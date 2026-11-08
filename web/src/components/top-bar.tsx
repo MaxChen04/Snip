@@ -180,7 +180,7 @@ function StorageMeter({ usage }: { usage: StorageUsage | null | "error" }) {
   // counts against R2's free tier.
   if (isLocalOrigin()) {
     return (
-      <div className="flex items-center justify-between px-2 py-1.5 text-xs" title="Screenshots, GIFs, HTML snapshots and styles, stored in this Mac's Snip library.">
+      <div className="flex items-center justify-between px-2 py-1.5 text-xs" title="Screenshots, recordings, HTML snapshots and styles, stored in this Mac's Snip library.">
         Storage
         <span className="text-ink-11 tabular-nums">{usage ? `${usage.partial ? "over " : ""}${formatBytes(usage.bytes)} on disk` : "…"}</span>
       </div>
