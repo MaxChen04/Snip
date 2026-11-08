@@ -87,10 +87,30 @@ const HIGH_VALUE = /^\/(pricing|enterprise|products?|features|about|customers|so
 export function rankLinks<L extends { href: string; nav: boolean }>(links: L[]): L[] {
   const score = ({ href, nav }: L) => {
     const path = new URL(href).pathname
-    const tier = LOW_VALUE.test(path) ? 2 : HIGH_VALUE.test(path) ? 0 : 1
-    return tier * 1000 + (nav ? 0 : 100) + Math.min(path.split("/").filter(Boolean).length, 99)
+    return tierOf(href) * 1000 + (nav ? 0 : 100) + Math.min(path.split("/").filter(Boolean).length, 99)
   }
   return links.map((l) => ({ l, s: score(l) })).sort((a, b) => a.s - b.s).map(({ l }) => l)
+}
+
+/** 0 for well-known pages, 2 for login/legal/careers pages, 1 otherwise. */
+const tierOf = (href: string) => {
+  const path = new URL(href).pathname
+  return LOW_VALUE.test(path) ? 2 : HIGH_VALUE.test(path) ? 0 : 1
+}
+
+/**
+ * The queue once the first page's links are known: those links, already ranked, go ahead of everything queued
+ * so far (a sitemap's order says little about which pages matter) and the rest follows in its old order.
+ * A link that is already queued moves up from its place. Visited URLs are never added. Low-value links stay
+ * behind the other queued pages, or go last if they were not queued.
+ */
+export function promoteLinks(queue: string[], links: string[], visited: string[]): string[] {
+  const fresh = [...new Set(links)].filter((u) => !visited.includes(u))
+  const front = fresh.filter((u) => tierOf(u) < 2)
+  const moved = new Set(front)
+  const rest = queue.filter((u) => !moved.has(u))
+  const queued = new Set(rest)
+  return [...front, ...rest, ...fresh.filter((u) => tierOf(u) === 2 && !queued.has(u))]
 }
 
 /** The host a page ended up on if it redirected off the site, else null. */
@@ -566,11 +586,11 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
   const seen = new Set([...visited, ...queue])
   const titles = new Map<string, string>() // pages captured in this run, for duplicateOf; empty after a resume
   if (job.mode === "crawl" && !resume) {
-    for (const u of await sitemapUrls(desktop, root)) {
-      const n = normalize(u, root)
-      if (n && !seen.has(n)) {
-        seen.add(n)
-        queue.push(n)
+    const urls = (await sitemapUrls(desktop, root)).flatMap((u) => normalize(u, root) ?? [])
+    for (const { href } of rankLinks(urls.map((href) => ({ href, nav: false })))) {
+      if (!seen.has(href)) {
+        seen.add(href)
+        queue.push(href)
       }
     }
   }
@@ -660,19 +680,12 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       if (!meta) meta = pageMeta
 
       if (job.mode === "crawl") {
-        const fresh: string[] = []
-        for (const l of rankLinks(pageMeta.links)) {
-          const n = normalize(l.href, root)
-          if (n && !seen.has(n)) {
-            seen.add(n)
-            fresh.push(n)
-          }
-        }
-        // Links from the first page outrank sitemap order.
+        const links = rankLinks(pageMeta.links).flatMap((l) => normalize(l.href, root) ?? [])
         if (!navLinksQueued) {
-          queue.unshift(...fresh)
+          queue.splice(0, queue.length, ...promoteLinks(queue, links, visited))
           navLinksQueued = true
-        } else queue.push(...fresh)
+        } else queue.push(...new Set(links.filter((n) => !seen.has(n))))
+        for (const n of links) seen.add(n)
       }
 
       // ---- Mobile, alongside the desktop recordings ----

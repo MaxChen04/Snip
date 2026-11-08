@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { duplicateOf, leftSite, rankLinks, skipReason } from "../src/capture"
+import { duplicateOf, leftSite, promoteLinks, rankLinks, skipReason } from "../src/capture"
 
 const root = new URL("https://vercel.com")
 
@@ -75,4 +75,18 @@ test("link ranking keeps nav links ahead of body links and DOM order for ties", 
   const link = (href: string, nav: boolean) => ({ href: `https://example.com${href}`, nav })
   const ranked = rankLinks([link("/zeta", false), link("/beta", true), link("/alpha", true), link("/deep/page", true), link("/top", false)])
   assert.deepEqual(ranked.map((l) => new URL(l.href).pathname), ["/beta", "/alpha", "/deep/page", "/zeta", "/top"])
+})
+
+test("the first page's links go ahead of a sitemap queue and low-value pages stay last", () => {
+  const at = (path: string) => `https://linear.app${path}`
+  const asLinks = (list: string[], nav: boolean) => list.map((path) => ({ href: at(path), nav }))
+  const paths = (urls: string[]) => urls.map((u) => new URL(u).pathname)
+  // The sitemap seed as capturePages ranks it ("/" is the page being captured), then the first page's ranked links.
+  const queue = rankLinks(asLinks(["/about", "/agents", "/ai", "/careers", "/changelog", "/enterprise", "/pricing", "/login"], false)).map((l) => l.href)
+  assert.deepEqual(paths(queue), ["/about", "/enterprise", "/pricing", "/agents", "/ai", "/changelog", "/careers", "/login"])
+  const links = rankLinks(asLinks(["/", "/pricing", "/enterprise", "/homepage", "/login", "/features", "/signup"], true)).map((l) => l.href)
+
+  const merged = promoteLinks(queue, links, [at("/")])
+  // Queued links move up, visited "/" is not re-added, /login stays behind the other queued pages, unqueued /signup goes last.
+  assert.deepEqual(paths(merged), ["/pricing", "/enterprise", "/features", "/homepage", "/about", "/agents", "/ai", "/changelog", "/careers", "/login", "/signup"])
 })
