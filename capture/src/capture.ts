@@ -868,7 +868,8 @@ async function recordHovers(page: PwPage, seen: Set<string>, recordingFormat: Re
       const recordPhase = async ({ min, max }: { min: number; max: number }, timing: Promise<number>, onTick?: (elapsed: number, least: number) => void) => {
         const from = Date.now()
         let least = max
-        void timing.then((ms) => { least = Math.min(max, Math.max(min, ms + HOVER_CSS_PAD_MS)) }, () => {})
+        // No timing at all means the effect is instant or driven by script (which may start late): keep the full window.
+        void timing.then((ms) => { least = ms > 0 ? Math.min(max, Math.max(min, ms + HOVER_CSS_PAD_MS)) : max }, () => {})
         for (let elapsed = 0; elapsed < max; elapsed = Date.now() - from) {
           if (elapsed >= least && Date.now() - Math.max(last, from) >= HOVER_QUIET_MS) break
           await grab()
@@ -1155,8 +1156,9 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
 
       // ---- Mobile, alongside the desktop recordings ----
       mobileTask = (async (): Promise<MobileShots> => {
+        let mPage: PwPage | undefined
         try {
-          const mPage = await newPage(mobile)
+          mPage = await newPage(mobile)
           await load(mPage, url, network)
           await recordScroll(mPage, false)
           const shot = await fullPageShot(mPage, MOBILE_DPR)
@@ -1171,11 +1173,13 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
             })
           }
           const thumb = await thumbnail(await mPage.screenshot({ type: "jpeg", quality: 75 }), THUMB_WIDTH.mobile)
-          await mPage.close()
           return { shot, thumb, patches: inView.patches.length }
         } catch (e) {
           log("  mobile capture failed:", (e as Error).message.split("\n")[0])
           return null
+        } finally {
+          // Free its renderer now, also after a failure, rather than when the desktop page is done.
+          await mPage?.close().catch(() => {})
         }
       })()
 
