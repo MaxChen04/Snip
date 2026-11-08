@@ -202,7 +202,7 @@ The **Connect MCP** button in the app's top bar shows these steps with your own 
 
 Say "use Snip to capture linear.app" (or "crawl and gallerize it"). The agent calls `add_reference`, Snip captures in the background on your Mac, and when it finishes the agent gets a few page thumbnails and a link to the gallery.
 
-- **Clients with [MCP Tasks](https://modelcontextprotocol.io/extensions/tasks/overview)** (Claude Code 2.1.319 or later): the call becomes a task. Claude Code moves it to the background right away and tells Claude when the capture is done, so you can keep working. Cancelling the task stops the crawl after its current page and keeps what it captured, like the Stop button.
+- **Clients with [MCP Tasks](https://modelcontextprotocol.io/extensions/tasks/overview)** (Claude Code 2.1.319 or later): the call becomes a task. Claude Code moves it to the background right away and tells Claude when the capture is done, so you can keep working. Cancelling the task stops the crawl after its current page and keeps what it captured, like the Stop button. A task belongs to one capture run: if you press Recapture while it's open, the old task ends as cancelled and the agent can follow the new run with `wait_for_capture`.
 - **Other clients** (Codex today): the agent calls `wait_for_capture` until it reports `done`. Each call returns within 50 seconds, under Codex's default 60-second tool timeout.
 
 Snip or `npm run capture` must be running. If no capture agent has checked in recently, `add_reference` answers right away and the agent asks you to start it.

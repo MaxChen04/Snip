@@ -5,7 +5,10 @@ import type { Animation, DesignTokens, Page, Reference } from "../shared/types"
 import { isLocalOrigin, signFileUrl } from "./auth"
 import * as db from "./db"
 import { bounded, decodeCursor, encodeCursor } from "./mcp-bounds"
-import { TASKS_EXTENSION, WAIT_DEFAULT_SECONDS, WAIT_MAX_SECONDS, WAIT_STEP_MS, clientDeclaresTasks, isFinished, needsUser, taskFields } from "./mcp-tasks"
+import {
+  TASKS_EXTENSION, WAIT_DEFAULT_SECONDS, WAIT_MAX_SECONDS, WAIT_STEP_MS,
+  clientDeclaresTasks, isFinished, needsUser, parseTaskId, supersededTaskFields, taskFields,
+} from "./mcp-tasks"
 import { WORKER_VERSION } from "./version"
 
 // Remote MCP server. Read tools let an agent pull references (screenshots, motion stills,
@@ -233,23 +236,27 @@ function buildServer(env: Env, origin: string) {
       })
   }
   const findTask = async (taskId: string) => {
-    const ref = await db.getReferenceRecord(env.DB, taskId)
-    if (!ref) throw new ProtocolError(ProtocolErrorCode.InvalidParams, "Failed to retrieve task: Task not found")
-    return ref
+    const id = parseTaskId(taskId)
+    const ref = id && (await db.getReferenceRecord(env.DB, id.referenceId))
+    // A run number from the future is not a task we issued.
+    if (!id || !ref || id.run > ref.captureRun) throw new ProtocolError(ProtocolErrorCode.InvalidParams, "Failed to retrieve task: Task not found")
+    return { ref, current: id.run === ref.captureRun, run: id.run }
   }
   const taskParams = { params: z.looseObject({ taskId: z.string() }) }
   server.server.setRequestHandler("tasks/get", taskParams, async ({ taskId }, ctx) => {
     requireTasks(ctx)
-    const ref = await findTask(taskId)
+    const { ref, current, run } = await findTask(taskId)
+    if (!current) return supersededTaskFields(ref, run)
     const fields = taskFields(ref, await db.getCaptureStatus(env.DB, ref))
     if (fields.status !== "completed") return fields
     return { ...fields, result: await captureResult(ref) }
   })
   server.server.setRequestHandler("tasks/cancel", taskParams, async ({ taskId }, ctx) => {
     requireTasks(ctx)
-    await findTask(taskId)
+    const { ref, current } = await findTask(taskId)
     // Cooperative, like the app's Stop: a running crawl ends after its current page and keeps what it captured.
-    await db.requestStop(env.DB, taskId)
+    // A superseded task is already over; cancelling it must not stop the user's recapture.
+    if (current) await db.requestStop(env.DB, ref.id)
     return {}
   })
   server.server.setRequestHandler("tasks/update", { params: z.looseObject({ taskId: z.string() }) }, async ({ taskId }, ctx) => {

@@ -2,8 +2,9 @@ import type { CaptureStatus, Reference } from "../shared/types"
 import { STOPPED_EMPTY } from "../shared/capture-errors"
 
 // MCP Tasks extension (io.modelcontextprotocol/tasks, 2026-07-28). A capture is
-// already a durable job in D1, so the task id is the reference id and tasks/get
-// reads the capture's current state; nothing extra is stored.
+// already a durable job in D1, so the task id is "<reference id>.<capture run>" and
+// tasks/get reads the capture's current state; nothing extra is stored. A Recapture
+// starts a new run, which ends the old run's task as cancelled.
 //
 // Spec rules this module encodes:
 // - A task is returned only to a client that declared the extension on that request.
@@ -44,12 +45,32 @@ export function taskStatus(ref: Reference): CaptureTaskStatus {
   return "working"
 }
 
+export const taskIdFor = (ref: Reference) => `${ref.id}.${ref.captureRun}`
+
+/** The reference and run a task id names, or null when it is not one of ours. */
+export function parseTaskId(taskId: string): { referenceId: string; run: number } | null {
+  const m = /^([0-9a-f]{16})\.([1-9][0-9]{0,8})$/.exec(taskId)
+  return m ? { referenceId: m[1]!, run: Number(m[2]) } : null
+}
+
+/** A task whose run was replaced by a Recapture. Its own result is gone with the old pages. */
+export function supersededTaskFields(ref: Reference, run: number) {
+  return {
+    taskId: `${ref.id}.${run}`,
+    status: "cancelled" as const,
+    statusMessage: `The user recaptured this reference, which replaced this capture. Follow the new capture with wait_for_capture(reference_id "${ref.id}").`,
+    createdAt: ref.createdAt,
+    lastUpdatedAt: ref.updatedAt,
+    ttlMs: null,
+  }
+}
+
 /** The Task fields shared by CreateTaskResult and tasks/get. */
 export function taskFields(ref: Reference, status: CaptureStatus) {
   const state = taskStatus(ref)
   const message = state === "working" ? [ref.progress, status.advice].filter(Boolean).join(". ") : status.advice
   return {
-    taskId: ref.id,
+    taskId: taskIdFor(ref),
     status: state,
     statusMessage: message,
     createdAt: ref.createdAt,

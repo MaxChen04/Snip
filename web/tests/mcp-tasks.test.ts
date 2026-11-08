@@ -8,6 +8,7 @@ import { STOPPED_EMPTY } from "../shared/capture-errors"
 import type { PageUpload } from "../shared/types"
 
 const V = "2026-07-28"
+const refOf = (taskId: string) => taskId.split(".")[0]!
 const TASKS = "io.modelcontextprotocol/tasks"
 
 async function setup() {
@@ -80,14 +81,15 @@ test("add_reference becomes a task that completes with thumbnails and a gallery 
     assert.equal(created.status, "working")
     assert.equal(created.ttlMs, null)
     assert.ok(created.pollIntervalMs > 0)
-    const id = created.taskId as string
+    const id = refOf(created.taskId)
+    assert.equal(created.taskId, `${id}.1`)
 
-    const working = (await task("tasks/get", id)).result!
+    const working = (await task("tasks/get", created.taskId)).result!
     assert.equal(working.status, "working")
     assert.equal(working.result, undefined)
 
     await finish(id)
-    const done = (await task("tasks/get", id)).result!
+    const done = (await task("tasks/get", created.taskId)).result!
     assert.equal(done.status, "completed")
     assert.equal(done.result.isError, undefined)
     assert.equal(done.result.structuredContent.galleryUrl, `http://localhost/r/${id}`)
@@ -126,10 +128,11 @@ test("tasks/get on an unknown id is invalid params, and tasks/cancel stops the c
   const { mf, DB, call, task } = await setup()
   try {
     assert.equal((await task("tasks/get", "missing")).error?.code, -32602)
+    assert.equal((await task("tasks/get", "0123456789abcdef.1")).error?.code, -32602)
     await db.touchPresence(DB, "idle", null)
     const created = (await call("add_reference", { url: "https://example.com" })).result!
     assert.deepEqual(Object.keys((await task("tasks/cancel", created.taskId)).result!).filter((k) => k !== "_meta" && k !== "resultType"), [])
-    const ref = await db.getReferenceRecord(DB, created.taskId)
+    const ref = await db.getReferenceRecord(DB, refOf(created.taskId))
     assert.equal(ref?.error, STOPPED_EMPTY)
     assert.equal((await task("tasks/get", created.taskId)).result!.status, "cancelled")
   } finally {
@@ -143,7 +146,7 @@ test("a failed capture completes its task with a tool error, not a failed task",
     await db.touchPresence(DB, "idle", null)
     const created = (await call("add_reference", { url: "https://example.com" })).result!
     const job = (await db.claimJob(DB))!
-    await db.failJob(DB, created.taskId, job.attempt, "Navigation timeout")
+    await db.failJob(DB, refOf(created.taskId), job.attempt, "Navigation timeout")
     const done = (await task("tasks/get", created.taskId)).result!
     assert.equal(done.status, "completed")
     assert.equal(done.result.isError, true)
@@ -178,6 +181,34 @@ test("wait_for_capture returns the finished capture, or says whether to call aga
 
     const none = (await call("wait_for_capture", { reference_id: queued.id, max_images: 0 })).result!
     assert.equal(none.content.filter((c: { type: string }) => c.type === "image").length, 0)
+  } finally {
+    await mf.dispose()
+  }
+})
+
+test("a Recapture ends the old run's task as cancelled, and cancelling it leaves the new run alone", async () => {
+  const { mf, DB, call, task, finish } = await setup()
+  try {
+    await db.touchPresence(DB, "idle", null)
+    const created = (await call("add_reference", { url: "https://example.com" })).result!
+    const id = refOf(created.taskId)
+    await finish(id)
+    await db.requeueReference(DB, id)
+
+    const old = (await task("tasks/get", created.taskId)).result!
+    assert.equal(old.status, "cancelled")
+    assert.match(old.statusMessage, /recaptured/)
+    assert.equal(old.result, undefined)
+
+    await task("tasks/cancel", created.taskId)
+    const ref = (await db.getReferenceRecord(DB, id))!
+    assert.equal(ref.status, "queued")
+    assert.equal(ref.captureRun, 2)
+    assert.equal(ref.error, null)
+
+    // The new run is reachable as its own task id, and a run that was never issued is not.
+    assert.equal((await task("tasks/get", `${id}.2`)).result!.status, "working")
+    assert.equal((await task("tasks/get", `${id}.3`)).error?.code, -32602)
   } finally {
     await mf.dispose()
   }
