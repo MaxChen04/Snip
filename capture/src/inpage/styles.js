@@ -20,9 +20,23 @@
   iframe.style.cssText = "position:absolute;width:0;height:0;border:0;visibility:hidden"
   document.documentElement.appendChild(iframe)
   const idoc = iframe.contentDocument
-  idoc.open()
-  idoc.write("<!doctype html><html><head></head><body></body></html>")
-  idoc.close()
+  // A standards-mode blank document gives standards-mode defaults. Pages with a Trusted Types CSP
+  // (linear.app/signup) reject a plain string, so write through a policy; if the page blocks that too,
+  // build the skeleton with DOM calls (quirks mode, whose defaults barely differ).
+  let skeleton = "<!doctype html><html><head></head><body></body></html>"
+  try {
+    if (window.trustedTypes) skeleton = window.trustedTypes.createPolicy("snip-defaults", { createHTML: (s) => s }).createHTML(skeleton)
+  } catch {}
+  try {
+    idoc.open()
+    idoc.write(skeleton)
+    idoc.close()
+  } catch {
+    idoc.close()
+    if (!idoc.documentElement) idoc.appendChild(idoc.createElement("html"))
+    if (!idoc.head) idoc.documentElement.appendChild(idoc.createElement("head"))
+    if (!idoc.body) idoc.documentElement.appendChild(idoc.createElement("body"))
+  }
   const defaults = new Map()
   const defaultsFor = (tag) => {
     if (defaults.has(tag)) return defaults.get(tag)
