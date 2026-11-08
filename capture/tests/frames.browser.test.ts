@@ -133,7 +133,11 @@ test("scroll recording streams frames into a half-size video and keeps full-size
       const g = canvas.getContext("2d")
       const out = []
       for (const time of times) {
+        // "seeked" can fire before the new frame reaches the element, so drawImage would read the old one. Also
+        // wait for the frame to be presented (a seek that lands on the frame already shown presents nothing).
+        const presented = new Promise((resolve) => { video.requestVideoFrameCallback(resolve); setTimeout(resolve, 500) })
         await new Promise((resolve) => { video.onseeked = resolve; video.currentTime = time })
+        await presented
         g.drawImage(video, 0, 0)
         out.push([...g.getImageData(10, 10, 1, 1).data.slice(0, 3)])
       }

@@ -26,7 +26,11 @@ async function play(bytes: Buffer, times: number[]) {
       const ctx = canvas.getContext("2d")!
       const colors: number[][] = []
       for (const t of times) {
+        // "seeked" can fire before the new frame reaches the element, so drawImage would read the old one. Also
+        // wait for the frame to be presented (a seek that lands on the frame already shown presents nothing).
+        const presented = new Promise((resolve) => { video.requestVideoFrameCallback(resolve); setTimeout(resolve, 500) })
         await new Promise((resolve) => { video.onseeked = resolve; video.currentTime = t })
+        await presented
         ctx.drawImage(video, 0, 0)
         colors.push([...ctx.getImageData(4, 4, 1, 1).data.slice(0, 3)])
       }
