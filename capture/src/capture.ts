@@ -76,6 +76,23 @@ function normalize(href: string, root: URL): string | null {
   }
 }
 
+const LOW_VALUE = /^\/(log-?(in|out)|sign-?(in|up)|register|dashboard|account|cart|checkout|legal|careers|jobs|new|(terms|privacy|cookies?)[\w-]*)(\/|$)/i
+const HIGH_VALUE = /^\/(pricing|enterprise|products?|features|about|customers|solutions)(\/|$)/i
+
+/**
+ * A page's links in the order to capture them, so a crawl that hits max_pages has seen the pages worth
+ * keeping: well-known pages first, login/legal/careers pages last (but still queued), then nav/header/footer
+ * links before the rest and shallow paths before deep ones. Ties keep DOM order.
+ */
+export function rankLinks<L extends { href: string; nav: boolean }>(links: L[]): L[] {
+  const score = ({ href, nav }: L) => {
+    const path = new URL(href).pathname
+    const tier = LOW_VALUE.test(path) ? 2 : HIGH_VALUE.test(path) ? 0 : 1
+    return tier * 1000 + (nav ? 0 : 100) + Math.min(path.split("/").filter(Boolean).length, 99)
+  }
+  return links.map((l) => ({ l, s: score(l) })).sort((a, b) => a.s - b.s).map(({ l }) => l)
+}
+
 /**
  * The already-visited page this one duplicates, or null. A page is a duplicate when it redirected to, or
  * declares as canonical, a different same-site URL the crawl has already been through.
@@ -606,10 +623,8 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       if (!meta) meta = pageMeta
 
       if (job.mode === "crawl") {
-        // Nav/header/footer links first (they are the site's main pages), then the rest.
-        const links = [...pageMeta.links].sort((a, b) => Number(b.nav) - Number(a.nav))
         const fresh: string[] = []
-        for (const l of links) {
+        for (const l of rankLinks(pageMeta.links)) {
           const n = normalize(l.href, root)
           if (n && !seen.has(n)) {
             seen.add(n)
