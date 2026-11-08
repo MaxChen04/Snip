@@ -61,7 +61,7 @@ test("a page is kept when its canonical is itself, uncaptured, off-site or missi
 test("links are ranked: pricing and enterprise early, login and legal last but kept", () => {
   const paths = [
     "/home", "/passport", "/connect", "/eve", "/security", "/cdn", "/products/ai", "/products/previews", "/products/rendering",
-    "/for/startups", "/for/agencies", "/partners/aws", "/contact/sales", "/login", "/signup", "/docs", "/blog", "/legal/terms",
+    "/for/startups", "/for/agencies", "/partners/aws", "/contact/sales", "/customers/openai", "/login", "/signup", "/docs", "/blog", "/legal/terms",
     "/privacy-policy", "/careers", "/templates", "/customers", "/changelog", "/help", "/pricing", "/enterprise", "/new", "/news",
   ]
   const ranked = rankLinks(paths.map((href) => ({ href: `https://vercel.com${href}`, nav: true }))).map((l) => new URL(l.href).pathname)
@@ -69,6 +69,8 @@ test("links are ranked: pricing and enterprise early, login and legal last but k
   assert.ok(ranked.indexOf("/pricing") < 10 && ranked.indexOf("/enterprise") < 10)
   assert.deepEqual(ranked.slice(-6), ["/login", "/signup", "/privacy-policy", "/careers", "/new", "/legal/terms"])
   assert.ok(ranked.indexOf("/news") < ranked.indexOf("/login"), "/news is not /new")
+  assert.ok(ranked.indexOf("/customers") < ranked.indexOf("/docs") && ranked.indexOf("/docs") < ranked.indexOf("/customers/openai"), "only the top-level /customers is boosted")
+  assert.ok(ranked.indexOf("/docs") < ranked.indexOf("/products/ai"), "only the top-level /products is boosted")
 })
 
 test("link ranking keeps nav links ahead of body links and DOM order for ties", () => {

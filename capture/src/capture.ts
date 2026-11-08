@@ -77,7 +77,8 @@ function normalize(href: string, root: URL): string | null {
 }
 
 const LOW_VALUE = /^\/(log-?(in|out)|sign-?(in|up)|register|dashboard|account|cart|checkout|legal|careers|jobs|new|(terms|privacy|cookies?)[\w-]*)(\/|$)/i
-const HIGH_VALUE = /^\/(pricing|enterprise|products?|features|about|customers|solutions)(\/|$)/i
+// Only the top-level page itself: /customers is boosted, its case studies under /customers/x are not.
+const HIGH_VALUE = /^\/(pricing|enterprise|products?|features|about|customers|solutions)\/?$/i
 
 /**
  * A page's links in the order to capture them, so a crawl that hits max_pages has seen the pages worth
