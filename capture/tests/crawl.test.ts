@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { duplicateOf, leftSite, rankLinks } from "../src/capture"
+import { duplicateOf, leftSite, rankLinks, skipReason } from "../src/capture"
 
 const root = new URL("https://vercel.com")
 
@@ -12,6 +12,16 @@ test("a page that redirected to another site has left the site", () => {
   assert.equal(leftSite("https://www.linear.app/join-slack", linear), null)
   assert.equal(leftSite("about:blank", linear), null)
   assert.equal(leftSite("not a url", linear), null)
+})
+
+test("a crawled link is skipped when it errored or left the site, not otherwise", () => {
+  const linear = new URL("https://linear.app")
+  assert.equal(skipReason("https://linear.app/javascript:openCookies()/", 404, linear), "returned 404")
+  assert.equal(skipReason("https://linear.app/boom", 500, linear), "returned 500")
+  assert.equal(skipReason("https://linearcustomers.slack.com/join/x", 200, linear), "left the site (linearcustomers.slack.com)")
+  assert.equal(skipReason("https://linear.app/pricing", 200, linear), null)
+  assert.equal(skipReason("https://linear.app/pricing", 304, linear), null)
+  assert.equal(skipReason("https://linear.app/pricing", null, linear), null)
 })
 const visited = ["https://vercel.com/", "https://vercel.com/pricing", "https://vercel.com/home"]
 

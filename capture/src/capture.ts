@@ -103,6 +103,13 @@ export function leftSite(finalUrl: string, root: URL): string | null {
   }
 }
 
+/** Why a crawled link is not a page of the site (it errored, or redirected off it), or null. */
+export function skipReason(finalUrl: string, status: number | null, root: URL): string | null {
+  if (status !== null && status >= 400) return `returned ${status}`
+  const host = leftSite(finalUrl, root)
+  return host ? `left the site (${host})` : null
+}
+
 /**
  * The page this one duplicates, or null. Redirecting to a different same-site URL the crawl has already been
  * through always counts. A canonical link counts only when the page it names was captured in this run with the
@@ -137,9 +144,11 @@ async function sitemapUrls(context: BrowserContext, root: URL): Promise<string[]
 
 type CaptureNetwork = Awaited<ReturnType<typeof createCaptureNetwork>> | null
 
+/** Loads the page and returns the HTTP status of the document it landed on, or null if there was no response. */
 async function load(page: PwPage, url: string, network: CaptureNetwork) {
+  let status: number | null = null
   try {
-    await page.goto(url, { waitUntil: "load", timeout: 45_000 })
+    status = (await page.goto(url, { waitUntil: "load", timeout: 45_000 }))?.status() ?? null
   } catch (error) {
     network?.assertAllowed()
     throw error
@@ -149,6 +158,7 @@ async function load(page: PwPage, url: string, network: CaptureNetwork) {
   await dismissBanners(page)
   await page.evaluate(() => document.fonts?.ready).catch(() => {})
   await sleep(600)
+  return status
 }
 
 /** Close cookie banners and popups in the page and its frames. Banners often animate in late, so try twice. */
@@ -633,13 +643,13 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
     try {
       // ---- Desktop ----
       const dPage = await newPage(desktop)
-      await load(dPage, url, network)
+      const status = await load(dPage, url, network)
       const pageMeta = await run<{ canonical: string | null; title: string | null; description: string | null; favicon: string | null; links: { href: string; nav: boolean }[] }>(dPage, META_JS)
       // Both checks run before any screenshots or recordings. A skipped URL stays in `visited`, so it is not queued again, and it is not counted as captured.
-      // A crawled link that redirected off the site (e.g. to a Slack invite) is not a page of it. The start page keeps whatever it redirects to.
-      const away = job.mode === "crawl" && url !== start ? leftSite(dPage.url(), root) : null
-      if (away) {
-        log(`  - ${path} left the site (${away}), skipped`)
+      // A crawled link that errored or redirected off the site (e.g. to a Slack invite) is not a page of it. The start page and single-page captures keep whatever they get.
+      const skip = job.mode === "crawl" && url !== start ? skipReason(dPage.url(), status, root) : null
+      if (skip) {
+        log(`  - ${path} ${skip}, skipped`)
         continue
       }
       const duplicate = duplicateOf(url, dPage.url(), pageMeta.canonical, pageMeta.title, root, visited, titles)
