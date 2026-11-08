@@ -218,6 +218,7 @@ File URLs returned by the MCP are signed and expire after 24 hours.
 | `SCROLL_MAX_FRAMES` | `360` | Frame cap per scroll recording; long pages take bigger steps |
 | `SNIP_RECORDING_FORMAT` | `webm` | Prefer WebM when the Worker and browser support it; otherwise GIF. `gif` always records GIFs (several times bigger) |
 | `SNIP_VIDEO_QUANTIZER` | `34` | Video quality, 0 (best, biggest) to 63 (smallest) |
+| `SNIP_PARALLEL_MOBILE` | `1` | `0` captures the mobile page after the desktop one instead of alongside it: about 200 MB less at peak, captures about 20% slower |
 | `SHEET_FRAMES` | `9` | Frames sampled per animation for its contact sheet (2–16) |
 | `SHEET_WIDTH` | `1536` | Max contact sheet width in px |
 | `BROWSER_IDLE_SECONDS` | `120` | Seconds Chromium stays open after the last capture |
