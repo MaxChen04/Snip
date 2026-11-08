@@ -16,9 +16,6 @@ const META_JS = script("meta")
 const DISMISS_JS = script("dismiss")
 const TRANSITION_JS = script("transition-ms")
 const DISMISS_POPUPS = process.env.DISMISS_POPUPS !== "false"
-// Capture the mobile page while the desktop page records (~20% faster captures, ~200 MB more at peak while both
-// are open). Off captures them one after the other, for machines short on memory.
-const PARALLEL_MOBILE = !/^(0|false)$/i.test(process.env.SNIP_PARALLEL_MOBILE ?? "")
 const run = <T>(page: PwPage, source: string, arg?: unknown) => page.evaluate(`(${source})(${JSON.stringify(arg ?? null)})`) as Promise<T>
 
 const DESKTOP = { width: 1440, height: 900 }
@@ -604,8 +601,8 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
         } else queue.push(...fresh)
       }
 
-      // ---- Mobile, alongside the desktop recordings unless SNIP_PARALLEL_MOBILE is off ----
-      const startMobile = async (): Promise<MobileShots> => {
+      // ---- Mobile, alongside the desktop recordings ----
+      mobileTask = (async (): Promise<MobileShots> => {
         try {
           const mPage = await newPage(mobile)
           await load(mPage, url, network)
@@ -618,8 +615,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
           log("  mobile capture failed:", (e as Error).message.split("\n")[0])
           return null
         }
-      }
-      if (PARALLEL_MOBILE) mobileTask = startMobile()
+      })()
 
       const scroll = await recordScroll(dPage, true, recordingFormat)
       await dismissBanners(dPage) // popups that only appear after scrolling
@@ -629,7 +625,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       const html = await buildSnapshot(dPage, desktop)
       const hovers = await recordHovers(dPage, hoverSeen, recordingFormat)
       await dPage.close()
-      const mobileShots = await (mobileTask ??= startMobile())
+      const mobileShots = await mobileTask
       const mobileShot = mobileShots?.shot ?? null
       const mobileThumb = mobileShots?.thumb ?? null
 
