@@ -17,7 +17,7 @@ export function isLocalOrigin(origin: string = location.origin): boolean {
   }
 }
 
-export const claudeCodeCommand = (url: string) => `claude mcp add --transport http snip ${url}`
+export const claudeCodeCommand = (url: string) => `claude mcp add --scope user --transport http snip ${url}`
 export const mcpJsonConfig = (url: string) => JSON.stringify({ mcpServers: { snip: { url } } }, null, 2)
 
 /** Codex CLI, IDE extension and Codex desktop app share ~/.codex/config.toml. */

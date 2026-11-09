@@ -79,9 +79,47 @@ export interface Page {
   snapshotKey: string | null
   stylesKey: string | null
   tokens: DesignTokens | null
+  /** The desktop page cut into its visual sections, top to bottom. Empty for captures made before sections existed. */
+  sections: PageSection[]
   /** Collections this page was saved to on its own (not through its website). */
   collectionIds: string[]
   createdAt: string
+}
+
+/** One visual section of a page (header, hero, a content block, footer), found from the DOM at capture time. */
+export interface PageSection {
+  kind: "header" | "hero" | "section" | "footer"
+  /** The section's aria-label, first heading or id; otherwise its kind. */
+  label: string
+  /** Top edge and height in CSS px of the desktop full-page screenshot. The sections tile it top to bottom. */
+  y: number
+  height: number
+  /** JPEG of just this section, at desktop width. */
+  key: string
+}
+
+/**
+ * One CSS transition, CSS animation or Web Animation the browser ran while a recording was made, as the browser
+ * reported it: real duration, delay, easing and from/to keyframes. Motion that scripts write frame by frame
+ * (GSAP, scroll libraries) never creates one, so it is not listed.
+ */
+export interface MotionEntry {
+  type: "transition" | "animation" | "web-animation"
+  /** Short CSS selector of the animated element, with ::before/::after where it was a pseudo-element. */
+  target: string
+  /** The transitioned property or the @keyframes name. */
+  property: string | null
+  durationMs: number
+  delayMs: number
+  easing: string
+  iterations: number | "infinite"
+  keyframes: Record<string, string | number>[]
+  /** ms after the recording started (hover: after the pointer arrived). */
+  startMs: number
+  /** window.scrollY when it started. */
+  scrollY: number
+  /** How many elements ran this same effect (e.g. each letter of a heading); startMs and scrollY are the first one's. */
+  count?: number
 }
 
 export type AnimationKind = "scroll" | "hover"
@@ -122,6 +160,8 @@ export interface AnimationMeta {
   sheet: { width: number; height: number; columns: number } | null
   /** Computed styles of the hovered element at rest (no :hover applied). Observed values, not the author's source CSS. */
   observedStyles: Record<string, string> | null
+  /** Animations the browser ran during the recording. Absent for captures made before motion logging existed. */
+  motion?: MotionEntry[]
 }
 
 export interface AnimationFrame {
@@ -199,6 +239,8 @@ export interface PageUpload {
   snapshotKey: string | null
   stylesKey: string | null
   tokens: DesignTokens | null
+  /** Older agents send none. */
+  sections?: PageSection[]
   animations: {
     kind: AnimationKind
     label: string | null

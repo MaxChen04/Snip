@@ -16,7 +16,7 @@ test("isLocalOrigin spots the local app", () => {
 
 test("client snippets embed the exact URL", () => {
   const url = "https://snip.max.workers.dev/mcp"
-  assert.equal(claudeCodeCommand(url), `claude mcp add --transport http snip ${url}`)
+  assert.equal(claudeCodeCommand(url), `claude mcp add --scope user --transport http snip ${url}`)
   assert.deepEqual(JSON.parse(mcpJsonConfig(url)), { mcpServers: { snip: { url } } })
   assert.equal(codexCommand(url), `codex mcp add snip --url ${url}`)
   assert.equal(codexToml(url), `[mcp_servers.snip]\nurl = "${url}"`)

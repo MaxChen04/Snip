@@ -122,7 +122,7 @@ function ResizeHandle({ width, onDrag, onCommit }: { width: number; onDrag: (w: 
 
 // ---------- Viewer ----------
 
-type SideTab = "tokens" | "html" | "css"
+type SideTab = "sections" | "tokens" | "html" | "css"
 
 export function PageViewer({ page, onClose, onCollectionsChange }: {
   page: Page
@@ -140,12 +140,13 @@ export function PageViewer({ page, onClose, onCollectionsChange }: {
 
   const tabs = useMemo(() => {
     const t: { value: SideTab; label: string }[] = []
+    if (page.sections.length) t.push({ value: "sections", label: "Sections" })
     if (page.tokens) t.push({ value: "tokens", label: "Tokens" })
     if (page.snapshotKey) t.push({ value: "html", label: "HTML" })
     if (page.stylesKey) t.push({ value: "css", label: "CSS" })
     return t
-  }, [page.tokens, page.snapshotKey, page.stylesKey])
-  const [tabPref, setTabPref] = useState<SideTab>(() => readPref<SideTab>(TAB_KEY, "tokens"))
+  }, [page.sections.length, page.tokens, page.snapshotKey, page.stylesKey])
+  const [tabPref, setTabPref] = useState<SideTab>(() => readPref<SideTab>(TAB_KEY, "sections"))
   const tab = tabs.some((t) => t.value === tabPref) ? tabPref : tabs[0]?.value
 
   useEffect(() => {
@@ -159,6 +160,30 @@ export function PageViewer({ page, onClose, onCollectionsChange }: {
   }, [onClose])
 
   const showSidebar = open && tabs.length > 0
+
+  // Sections are measured on the desktop screenshot; map their capture px onto the image as displayed.
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const imgRef = useRef<HTMLImageElement>(null)
+  const [active, setActive] = useState(0)
+  const sectionTop = (y: number) => {
+    const img = imgRef.current
+    return img && page.desktopWidth ? img.offsetTop + (y * img.clientWidth) / page.desktopWidth : 0
+  }
+  const goToSection = (i: number) => {
+    const go = () => scrollRef.current?.scrollTo({ top: sectionTop(page.sections[i]!.y) - 16, behavior: "smooth" })
+    if (device === "desktop") go()
+    else {
+      setDevice("desktop")
+      requestAnimationFrame(() => requestAnimationFrame(go))
+    }
+  }
+  const onScroll = () => {
+    if (device !== "desktop" || !page.sections.length) return
+    const at = (scrollRef.current?.scrollTop ?? 0) + 24
+    let i = 0
+    while (i + 1 < page.sections.length && sectionTop(page.sections[i + 1]!.y) <= at) i++
+    setActive(i)
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-background" role="dialog" aria-modal="true">
@@ -188,7 +213,7 @@ export function PageViewer({ page, onClose, onCollectionsChange }: {
               size="icon-sm"
               aria-label={open ? "Hide sidebar" : "Show sidebar"}
               aria-pressed={open}
-              title={open ? "Hide sidebar" : "Show tokens, HTML and CSS"}
+              title={open ? "Hide sidebar" : "Show sections, tokens, HTML and CSS"}
               onClick={() => setOpen(!open)}
             >
               {open ? <PanelRightCloseIcon /> : <PanelRightOpenIcon />}
@@ -198,9 +223,10 @@ export function PageViewer({ page, onClose, onCollectionsChange }: {
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto bg-fill-1 p-4 sm:p-6">
+        <div ref={scrollRef} onScroll={onScroll} className="relative min-h-0 min-w-0 flex-1 overflow-y-auto bg-fill-1 p-4 sm:p-6">
           {key ? (
             <img
+              ref={device === "desktop" ? imgRef : undefined}
               src={fileUrl(key)}
               alt=""
               className={device === "desktop" ? "mx-auto w-full max-w-6xl rounded-lg shadow-card" : "mx-auto w-[390px] max-w-full rounded-3xl shadow-card"}
@@ -234,6 +260,11 @@ export function PageViewer({ page, onClose, onCollectionsChange }: {
                     ))}
                   </TabsList>
                 </div>
+                {page.sections.length > 0 && (
+                  <TabsContent value="sections" className="min-h-0 overflow-y-auto px-4 pt-2 pb-6">
+                    <SectionsPanel page={page} active={device === "desktop" ? active : -1} onSelect={goToSection} />
+                  </TabsContent>
+                )}
                 {page.tokens && (
                   <TabsContent value="tokens" className="min-h-0 overflow-y-auto px-4 pt-2 pb-6">
                     <TokensPanel tokens={page.tokens} compact />
@@ -255,6 +286,45 @@ export function PageViewer({ page, onClose, onCollectionsChange }: {
         )}
       </div>
     </div>
+  )
+}
+
+// ---------- Sections ----------
+
+const SECTION_KIND = { header: "Header", hero: "Hero", section: null, footer: "Footer" } as const
+
+function SectionsPanel({ page, active, onSelect }: { page: Page; active: number; onSelect: (i: number) => void }) {
+  return (
+    <ol className="flex flex-col gap-3">
+      {page.sections.map((s, i) => {
+        const kind = SECTION_KIND[s.kind]
+        return (
+          <li key={s.key}>
+            <button
+              type="button"
+              onClick={() => onSelect(i)}
+              aria-current={i === active ? "true" : undefined}
+              className={cn(
+                "group flex w-full flex-col gap-1.5 rounded-xl p-1.5 text-left transition-colors hover:bg-fill-2 focus-visible:bg-fill-2 focus-visible:outline-none",
+                i === active && "bg-fill-2",
+              )}
+            >
+              <img
+                src={fileUrl(s.key)}
+                alt=""
+                loading="lazy"
+                className={cn("max-h-56 w-full rounded-lg object-cover object-top ring-1 ring-border", i === active && "ring-2 ring-primary")}
+              />
+              <span className="flex min-w-0 items-baseline gap-2 px-1 text-xs">
+                <span className="text-2xs text-muted-foreground tabular-nums">{i + 1}</span>
+                <span className="truncate font-medium">{s.label}</span>
+                {kind && kind !== s.label && <span className="ml-auto shrink-0 text-2xs text-muted-foreground">{kind}</span>}
+              </span>
+            </button>
+          </li>
+        )
+      })}
+    </ol>
   )
 }
 

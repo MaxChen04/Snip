@@ -146,7 +146,7 @@ npm run setup:cloudflare -- abort
 The MCP endpoint is `http://localhost:5173/mcp` while the local app runs, and `https://snip.<your-subdomain>.workers.dev/mcp` in cloud mode. Locally, only clients on the same Mac can reach it.
 
 ```
-claude mcp add --transport http snip http://localhost:5173/mcp
+claude mcp add --scope user --transport http snip http://localhost:5173/mcp
 ```
 
 Codex (CLI, IDE extension and Codex desktop app share `~/.codex/config.toml`):

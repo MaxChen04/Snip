@@ -1,11 +1,11 @@
 import { existsSync, readFileSync } from "node:fs"
 import sharp from "sharp"
 import type { Browser, BrowserContext, BrowserContextOptions, CDPSession, Page as PwPage } from "playwright"
-import type { CrawlState, DesignTokens, Job, PageUpload } from "../../web/shared/types"
+import type { CrawlState, DesignTokens, Job, MotionEntry, PageSection, PageUpload } from "../../web/shared/types"
 import { JobGoneError, type SnipApi } from "./api"
 import type { Frame } from "./gif"
 import { allowPrivateUrls, assertPublicUrl, createCaptureNetwork, PrivateAddressError } from "./network-guard"
-import { buildStills, closeRenderer, sampleIndexes } from "./sheet"
+import { buildStills, closeRenderer, cropBands, sampleIndexes } from "./sheet"
 import { encodeRecording, recordingWriter, type Recording } from "./video"
 
 // In-page scripts live in plain .js files so the TS toolchain can't inject helpers into them.
@@ -16,6 +16,9 @@ const HOVER_JS = script("hover-targets")
 const META_JS = script("meta")
 const DISMISS_JS = script("dismiss")
 const TRANSITION_JS = script("transition-ms")
+const SECTIONS_JS = script("sections")
+const MOTION_JS = script("motion")
+const MAX_SECTIONS = 24
 const DISMISS_POPUPS = process.env.DISMISS_POPUPS !== "false"
 const run = <T>(page: PwPage, source: string, arg?: unknown) => page.evaluate(`(${source})(${JSON.stringify(arg ?? null)})`) as Promise<T>
 
@@ -330,6 +333,16 @@ export async function recordScroll(page: PwPage, record: boolean, recordingForma
   return { frames, recording }
 }
 
+/** Animations the browser started since the last call (see inpage/motion.js). Logging failures only lose the log. */
+const takeMotion = (page: PwPage) => run<MotionEntry[]>(page, MOTION_JS, { op: "take" }).catch(() => [])
+
+/** Where the page breaks into its visual sections (see inpage/sections.js). The page must be scrolled to the top. */
+const findSections = (page: PwPage) =>
+  run<Omit<PageSection, "key">[]>(page, SECTIONS_JS, { maxPx: MAX_SHOT_PX, max: MAX_SECTIONS }).catch((e) => {
+    log("  sections skipped:", (e as Error).message.split("\n")[0])
+    return []
+  })
+
 async function fullPageShot(page: PwPage, dpr: number) {
   const height = await docHeight(page)
   const width = page.viewportSize()!.width
@@ -342,7 +355,7 @@ async function recordHovers(page: PwPage, seen: Set<string>, recordingFormat: Re
   const found = await run<{ i: number; label: string; selector: string }[]>(page, HOVER_JS, { max: MAX_HOVERS * 2 })
   // Shared chrome (nav links, footer buttons) repeats on every page: record each effect once per site.
   const targets = found.filter((t) => !seen.has(`${t.selector}|${t.label}`)).slice(0, MAX_HOVERS)
-  const out: { recording: Recording; label: string; selector: string; frames: Frame[]; observedStyles: Record<string, string> | null }[] = []
+  const out: { recording: Recording; label: string; selector: string; frames: Frame[]; observedStyles: Record<string, string> | null; motion: MotionEntry[] }[] = []
   if (!targets.length) return out
   const cdp = await page.context().newCDPSession(page)
   for (const t of targets) {
@@ -420,6 +433,7 @@ async function recordHovers(page: PwPage, seen: Set<string>, recordingFormat: Re
         }
       }
       await grab()
+      await takeMotion(page) // the resting state's; the clock restarts as the pointer arrives
       phase = "enter"
       await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 4 })
       const hoverMs = cssTiming()
@@ -429,13 +443,14 @@ async function recordHovers(page: PwPage, seen: Set<string>, recordingFormat: Re
       await page.mouse.move(2, 2, { steps: 4 })
       await recordPhase(HOVER_LEAVE, Promise.resolve(restMs))
       frames[frames.length - 1]!.delay = 900
+      const motion = await takeMotion(page)
 
       // Skip effects that changed nothing visible (repeats were merged, so that leaves one frame).
       if (frames.length < 2) continue
       const scale = clip.width > 700 ? 2 : 1
       const recording = await encodeRecording(page.context().browser()!, frames, { scale, format: recordingFormat })
       seen.add(`${t.selector}|${t.label}`)
-      out.push({ recording, label: t.label, selector: t.selector, frames, observedStyles })
+      out.push({ recording, label: t.label, selector: t.selector, frames, observedStyles, motion })
     } catch (e) {
       log("  hover capture skipped:", (e as Error).message.split("\n")[0])
     }
@@ -705,9 +720,12 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
         }
       })()
 
+      await run(dPage, MOTION_JS, { op: "install" }).catch(() => {})
       const scroll = await recordScroll(dPage, true, recordingFormat)
+      const scrollMotion = await takeMotion(dPage)
       await dismissBanners(dPage) // popups that only appear after scrolling
       const desktopShot = await fullPageShot(dPage, 1)
+      const sectionCuts = (await findSections(dPage)).filter((s) => s.y < desktopShot.height)
       const desktopThumb = await thumbnail(await dPage.screenshot({ type: "jpeg", quality: 75 }), THUMB_WIDTH.desktop)
       const styles = await run<{ tokens: DesignTokens }>(dPage, STYLES_JS, { maxElements: 3000 })
       const html = await buildSnapshot(dPage, desktop)
@@ -721,9 +739,10 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
 
       // ---- Upload ----
       const animations: PageUpload["animations"] = []
-      const stills = async (key: string, frames: Frame[], timing: "synthetic" | "measured", observed: Record<string, string> | null) => {
+      const stills = async (key: string, frames: Frame[], timing: "synthetic" | "measured", observed: Record<string, string> | null, motion: MotionEntry[]) => {
         try {
-          return await buildStills(browser, api, key, frames, timing, observed)
+          const s = await buildStills(browser, api, key, frames, timing, observed)
+          return { ...s, meta: s.meta && { ...s.meta, motion } }
         } catch (e) {
           log("  contact sheet skipped:", (e as Error).message.split("\n")[0])
           return { sheetKey: null, meta: null }
@@ -732,7 +751,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       if (scroll.recording) {
         const rec = scroll.recording
         animations.push({
-          ...(await stills(`${p}/scroll`, scroll.frames, "synthetic", null)),
+          ...(await stills(`${p}/scroll`, scroll.frames, "synthetic", null, scrollMotion)),
           kind: "scroll",
           label: path === "/" ? "Home" : path,
           selector: null,
@@ -745,7 +764,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       for (let i = 0; i < hovers.length; i++) {
         const h = hovers[i]!
         animations.push({
-          ...(await stills(`${p}/hover-${i}`, h.frames, "measured", h.observedStyles)),
+          ...(await stills(`${p}/hover-${i}`, h.frames, "measured", h.observedStyles, h.motion)),
           kind: "hover",
           label: h.label,
           selector: h.selector,
@@ -756,6 +775,17 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
         })
       }
 
+      // Cut from the full-page screenshot, which is clipped at MAX_SHOT_PX like the sections. A failure only loses the sections.
+      const uploadSections = async (): Promise<PageSection[]> => {
+        try {
+          const crops = await cropBands(browser, desktopShot.buf, sectionCuts)
+          return await Promise.all(sectionCuts.map(async (s, i) => ({ ...s, key: await api.upload(`${p}/section-${i}.jpg`, crops[i]!, "image/jpeg") })))
+        } catch (e) {
+          if (e instanceof JobGoneError) throw e
+          log("  sections skipped:", (e as Error).message.split("\n")[0])
+          return []
+        }
+      }
       const upload: PageUpload = {
         url,
         path,
@@ -772,6 +802,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
         snapshotKey: await api.upload(`${p}/snapshot.html`, html, "text/html; charset=utf-8"),
         stylesKey: await api.upload(`${p}/styles.json`, JSON.stringify(styles), "application/json"),
         tokens: styles.tokens,
+        sections: await uploadSections(),
         animations,
       }
       await api.addPage(job.id, upload)
@@ -779,7 +810,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       allTokens.push(styles.tokens)
       captured++
       titles.set(url, pageMeta.title)
-      log(`  ✓ ${path} (${animations.length} recordings)`)
+      log(`  ✓ ${path} (${animations.length} recordings, ${upload.sections?.length ?? 0} sections)`)
     } catch (e) {
       network?.assertAllowed()
       if (e instanceof JobGoneError || e instanceof PrivateAddressError) throw e

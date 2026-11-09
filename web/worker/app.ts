@@ -416,7 +416,8 @@ agent.post("/jobs/:id/pages", async (c) => {
   if (!validAttempt(attempt)) return c.json({ error: "job is gone" }, 410)
   const page = await c.req.json<PageUpload>()
   const prefix = `refs/${id}/${attempt}/`
-  const keys = [page.desktopKey, page.desktopThumbKey, page.mobileKey, page.mobileThumbKey, page.snapshotKey, page.stylesKey, ...page.animations.flatMap((a) => [a.gifKey, a.sheetKey])]
+  if (page.sections !== undefined && (!Array.isArray(page.sections) || page.sections.some((s) => typeof s?.key !== "string"))) return c.json({ error: "bad sections" }, 400)
+  const keys = [page.desktopKey, page.desktopThumbKey, page.mobileKey, page.mobileThumbKey, page.snapshotKey, page.stylesKey, ...(page.sections ?? []).map((s) => s.key), ...page.animations.flatMap((a) => [a.gifKey, a.sheetKey])]
   if (keys.some((key) => key && !key.startsWith(prefix))) return c.json({ error: "bad file key" }, 400)
   const pageId = await db.addPage(c.env.DB, id, attempt, page)
   return pageId ? c.json({ id: pageId }) : c.json({ error: "job is gone" }, 410)

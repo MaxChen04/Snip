@@ -139,3 +139,34 @@ export async function buildStills(
     meta: { version: 1, frameCount: frames.length, playbackMs: t, timing, frames: out, sheet, observedStyles },
   }
 }
+
+/**
+ * Cut a full-page screenshot into horizontal bands (page sections), as JPEGs. The screenshot is decoded once in
+ * the helper page and each band drawn from it, which is far cheaper than asking the captured page to re-render
+ * its full height for every section. Bands are in the screenshot's pixels; any past its bottom are clipped.
+ */
+export async function cropBands(browser: Browser, jpeg: Buffer, bands: { y: number; height: number }[]): Promise<Buffer[]> {
+  if (!bands.length) return []
+  const page = await renderer(browser)
+  try {
+    const out = await page.evaluate(async ({ src, bands }) => {
+      const img = new Image()
+      img.src = src
+      await img.decode()
+      const canvas = document.createElement("canvas")
+      const ctx = canvas.getContext("2d")!
+      const parts: string[] = []
+      for (const b of bands) {
+        const h = Math.max(1, Math.min(b.height, img.naturalHeight - b.y))
+        canvas.width = img.naturalWidth
+        canvas.height = h
+        ctx.drawImage(img, 0, b.y, img.naturalWidth, h, 0, 0, img.naturalWidth, h)
+        parts.push(canvas.toDataURL("image/jpeg", 0.8).slice("data:image/jpeg;base64,".length))
+      }
+      return parts
+    }, { src: dataUrl(jpeg), bands })
+    return out.map((b64) => Buffer.from(b64, "base64"))
+  } finally {
+    await page.setContent("").catch(() => {})
+  }
+}
