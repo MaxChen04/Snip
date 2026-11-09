@@ -35,11 +35,13 @@
       encoder.configure(config)
     },
 
-    // timestamp in microseconds. Images of another size are scaled to the recording's size.
-    add: async ({ image, mime, timestamp, key }) => {
+    // timestamp in microseconds. Images of another size are scaled to the recording's size. `crop`, in image
+    // pixels, takes just that part of the image.
+    add: async ({ image, mime, timestamp, key, crop }) => {
       if (failure) throw new Error(failure)
       const blob = await (await fetch(`data:${mime};base64,${image}`)).blob()
-      const bitmap = await createImageBitmap(blob, { resizeWidth: size.width, resizeHeight: size.height, resizeQuality: "medium" })
+      const resize = { resizeWidth: size.width, resizeHeight: size.height, resizeQuality: "medium" }
+      const bitmap = crop ? await createImageBitmap(blob, crop.x, crop.y, crop.width, crop.height, resize) : await createImageBitmap(blob, resize)
       const frame = new VideoFrame(bitmap, { timestamp })
       bitmap.close()
       const options = { keyFrame: key }

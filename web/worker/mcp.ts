@@ -124,7 +124,7 @@ function buildServer(env: Env, origin: string) {
 
   const coverage = (h: number | null) => (h == null ? "not_captured" : h >= PAGE_CLIP_PX ? "clipped_at_height_limit" : "full_document_at_capture")
 
-  const describePage = async (p: Page) => ({
+  const describePage = async (p: Page, withUrls = false) => ({
     id: p.id,
     referenceId: p.referenceId,
     url: p.url,
@@ -146,7 +146,16 @@ function buildServer(env: Env, origin: string) {
     },
     htmlSnapshotUrl: await url(p.snapshotKey),
     computedStylesUrl: await url(p.stylesKey),
-    sections: await Promise.all(p.sections.map(async (s, index) => ({ index, kind: s.kind, label: s.label, y: s.y, height: s.height, url: await url(s.key) }))),
+    // Without signed URLs by default: one per section (and clip) made every get_page call several KB larger.
+    sections: await Promise.all(p.sections.map(async (s, index) => ({
+      index, kind: s.kind, label: s.label, y: s.y, height: s.height,
+      ...(withUrls ? { url: await url(s.key) } : {}),
+      live: s.live ? { format: "webm", y: s.live.y ?? s.y, height: s.live.height, durationMs: s.live.durationMs, ...(withUrls ? { url: await url(s.live.key) } : {}) } : null,
+    }))),
+    // The other color scheme, when the site has a theme for it: get_page(scheme) shows it.
+    otherScheme: p.altScheme
+      ? { scheme: p.altScheme.scheme, width: p.altScheme.desktopWidth, height: p.altScheme.desktopHeight, fullPageUrl: await url(p.altScheme.desktopKey), thumbUrl: await url(p.altScheme.desktopThumbKey) }
+      : null,
     collectionIds: p.collectionIds,
   })
 
@@ -349,7 +358,7 @@ Signed file URLs expire after 24 hours.`,
           ...(await summarizeRef(ref)),
           description: ref.description,
           tokens: ref.tokens,
-          pages: await Promise.all(r.pages.map(describePage)),
+          pages: await Promise.all(r.pages.map((pg) => describePage(pg))),
           animations: await Promise.all(r.animations.map(describeAnimation)),
           note: "Legacy full read. Prefer part \"overview\" and the per-item tools to keep results small.",
         })
@@ -426,35 +435,43 @@ Signed file URLs expire after 24 hours.`,
     {
       title: "Get a captured page",
       description:
-        "Get one captured page: signed screenshot URLs with coverage, the page's sections, a token summary, and optionally an inline viewport screenshot (desktop by default) and a chunk of the self-contained HTML snapshot. sections lists the desktop page cut into header, hero, content blocks and footer; pass section (an index) to inline that one section at full desktop width, which stays legible where the full-page screenshot would be scaled down. For computed styles use get_page_styles. If an image can't be inlined the result says why.",
+        "Get one captured page: signed screenshot URLs with coverage, the page's sections, a token summary, and optionally an inline viewport screenshot (desktop by default) and a chunk of the self-contained HTML snapshot. sections lists the desktop page cut into header, hero, content blocks and footer; pass section (an index) to inline that one section at full desktop width, which stays legible where the full-page screenshot would be scaled down. A section with live set moved on its own at capture time (canvas or WebGL backgrounds, marquees, carousels): a short looping WebM of it covers live.height px from live.y (touching sections that move share one clip), for people or tools that play video; it is never inlined. Sections come without file URLs unless include_section_urls is true; the section you inline always carries its own. otherScheme, when set, means the site also has a theme for the other color scheme (e.g. dark): pass scheme to see the desktop screenshot or a section in it. For computed styles use get_page_styles. If an image can't be inlined the result says why.",
       inputSchema: z.object({
         page_id: z.string().describe("From get_reference or a copied Snip prompt"),
         image: z.enum(["none", "desktop", "mobile"]).optional().describe("Inline a viewport-sized screenshot. Default desktop, or none when section is given."),
         section: z.number().int().min(0).optional().describe("Inline this section's screenshot: an index from sections"),
+        include_section_urls: z.boolean().optional().describe("Add signed file URLs (screenshot and live clip) to every section. Default false"),
+        scheme: z.enum(["light", "dark"]).optional().describe("Show the desktop screenshot or section in this color scheme, when otherScheme says the page has it. Default: the scheme it was captured in"),
         include_styles: z.boolean().optional().describe("Deprecated: adds a style summary. Use get_page_styles."),
         include_html: z.boolean().optional(),
         html_offset: z.number().int().min(0).optional().describe("Character offset to continue the HTML from"),
       }),
       annotations: { readOnlyHint: true },
     },
-    async ({ page_id, image: imageArg, section, include_styles, include_html, html_offset = 0 }) => {
+    async ({ page_id, image: imageArg, section, include_section_urls, scheme, include_styles, include_html, html_offset = 0 }) => {
       const p = await db.getPage(env.DB, page_id)
       if (!p) return fail(`No page with id "${page_id}". Use get_reference(id, part "pages") to list page ids.`)
-      const data: Record<string, unknown> = { ...(await describePage(p)), tokens: tokenSummary(p.tokens) }
-      if (!p.sections.length) data.sectionsUnavailable = "This page was captured before sections existed. Recapture the reference in Snip to cut it into sections."
+      const data: Record<string, unknown> = { ...(await describePage(p, !!include_section_urls)), tokens: tokenSummary(p.tokens) }
+      if (!p.sections.length)
+        data.sectionsUnavailable = p.sectionsCaptured
+          ? "This page doesn't break into separate sections. Use the full-page screenshot."
+          : "This page was captured before sections existed. Recapture the reference in Snip to cut it into sections."
       const images: Content[] = []
       const image = imageArg ?? (section == null ? "desktop" : "none")
+      const other = scheme && p.altScheme?.scheme === scheme ? p.altScheme : null
+      const captured = p.altScheme ? (p.altScheme.scheme === "dark" ? "light" : "dark") : null
+      if (scheme && !other && scheme !== captured) data.schemeUnavailable = `This page has no ${scheme} version: the site didn't change when its color scheme was flipped, or it was captured before color schemes were. Showing it as captured.`
       if (section != null) {
         const s = p.sections[section]
         if (!s) return fail(p.sections.length ? `Pass section as an index from 0 to ${p.sections.length - 1}.` : "This page has no sections. Use image \"desktop\" or the fullPageUrl.")
-        const res = await inlineImage(s.key)
+        const res = await inlineImage(other?.sectionKeys[section] ?? s.key)
         if ("image" in res) {
           images.push(res.image)
-          data.section = { index: section, label: s.label, included: true }
-        } else data.section = { index: section, label: s.label, included: false, reason: res.reason, alternatives: ["the section's signed url above, if your environment can fetch URLs"] }
+          data.section = { index: section, label: s.label, included: true, url: await url(s.key) }
+        } else data.section = { index: section, label: s.label, included: false, reason: res.reason, url: await url(s.key), alternatives: ["section.url, if your environment can fetch URLs"] }
       }
       if (image !== "none") {
-        const res = await inlineImage(image === "mobile" ? p.mobileThumbKey : p.desktopThumbKey)
+        const res = await inlineImage(image === "mobile" ? p.mobileThumbKey : (other?.desktopThumbKey ?? p.desktopThumbKey))
         if ("image" in res) {
           images.push(res.image)
           data.image = { viewport: image, included: true }
@@ -572,10 +589,11 @@ Scroll timing is synthetic playback; hover offsets are measured. Treat easing an
         animation_id: z.string().describe("From get_reference, search_animations or a copied Snip prompt"),
         representation: z.enum(["manifest", "contact_sheet", "frame", "gif"]).optional(),
         frame: z.number().int().min(0).optional().describe("With representation \"frame\": index into manifest.frames"),
+        motion_offset: z.number().int().min(0).optional().describe("motion.nextOffset from a previous call, to read further motion entries"),
       }),
       annotations: { readOnlyHint: true },
     },
-    async ({ animation_id, representation = "contact_sheet", frame }) => {
+    async ({ animation_id, representation = "contact_sheet", frame, motion_offset = 0 }) => {
       const a = await db.getAnimation(env.DB, animation_id)
       if (!a) return fail(`No animation with id "${animation_id}". Use get_reference(id, part "animations") or search_animations to list ids.`)
       const page = a.pageId ? await db.getPage(env.DB, a.pageId) : null
@@ -608,7 +626,8 @@ Scroll timing is synthetic playback; hover offsets are measured. Treat easing an
         motion: m?.motion
           ? {
               note: "Animations the browser itself ran during the recording (CSS transitions, CSS animations, Web Animations), with their real duration, delay, easing and keyframes. These are exact, unlike timing read from frames. Motion that a script writes frame by frame (GSAP, scroll libraries) never appears here.",
-              ...bounded(m.motion, 0, 40, 16_000, "use the frames instead"),
+              ...bounded(m.motion, motion_offset, 40, 16_000, "use the frames instead"),
+              next: "pass motion_offset: nextOffset to read more",
             }
           : { unavailable: "Captured before motion logging existed. Recapture the reference in Snip to log it." },
         pageMotionTokens: page?.tokens

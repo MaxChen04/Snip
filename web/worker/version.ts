@@ -6,4 +6,4 @@
  *
  * Bump it whenever `web/worker` or the schema changes in a way the client can observe.
  */
-export const WORKER_VERSION = "1.2.0"
+export const WORKER_VERSION = "1.3.0"
