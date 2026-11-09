@@ -325,7 +325,7 @@ function MotionSection() {
           </div>
           <div className="flex flex-col gap-1.5 overflow-x-auto rounded-xl bg-background/10 p-4">
             <span className="text-2xs text-background/60">Terminal</span>
-            <code className="font-mono text-xs whitespace-nowrap">claude mcp add --transport http snip</code>
+            <code className="font-mono text-xs whitespace-nowrap">claude mcp add --scope user --transport http snip</code>
             <code className="font-mono text-xs whitespace-nowrap text-background/70">http://localhost:5173/mcp</code>
           </div>
           <div className="flex flex-col gap-1.5 rounded-xl bg-background p-4 text-foreground">

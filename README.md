@@ -161,7 +161,7 @@ Cloud mode deploys the same Worker to your own Cloudflare account and copies the
 The MCP endpoint is `http://localhost:5173/mcp` when Snip runs on your Mac, and `https://snip.<your-subdomain>.workers.dev/mcp` in cloud mode. Locally, only agents on the same Mac can reach it while Snip is running. A cloud client such as Claude.ai needs the deployed URL, then signs in with your passkey and asks for your approval; locally there is no sign-in, just a consent screen.
 
 ```bash
-claude mcp add --transport http snip http://localhost:5173/mcp
+claude mcp add --scope user --transport http snip http://localhost:5173/mcp
 ```
 
 Codex (the CLI, IDE extension and Codex desktop app share `~/.codex/config.toml`):

@@ -354,7 +354,7 @@ agent.post("/jobs/claim", async (c) => {
   c.executionCtx.waitUntil(db.cleanupRetiredFiles(c.env.DB, c.env.FILES))
   await db.touchPresence(c.env.DB, job ? "busy" : "idle", job?.id ?? null)
   // Advertise on every claim, including resumed jobs: the destination may have been upgraded since the last one.
-  return job ? c.json({ ...job, recordingFormats: ["gif", "webm"] }) : c.body(null, 204)
+  return job ? c.json({ ...job, recordingFormats: ["gif", "webm"], features: ["sections", "live", "schemes"] }) : c.body(null, 204)
 })
 
 agent.post("/heartbeat", async (c) => {
@@ -410,13 +410,27 @@ agent.put("/files/*", async (c) => {
   return c.json({ key })
 })
 
+const num = (n: unknown) => typeof n === "number" && Number.isFinite(n) && n >= 0
+/** Sections as the agent sends them: the viewer and MCP position clips and crops from these numbers. */
+function validSections(sections: unknown): sections is NonNullable<PageUpload["sections"]> {
+  return Array.isArray(sections) && sections.length <= 64 && sections.every((s) =>
+    s && typeof s === "object" && typeof s.key === "string" && typeof s.label === "string" && s.label.length <= 200 &&
+    ["header", "hero", "section", "footer"].includes(s.kind) && num(s.y) && num(s.height) &&
+    (s.live === undefined || (s.live && typeof s.live.key === "string" && num(s.live.height) && num(s.live.durationMs) && (s.live.y === undefined || num(s.live.y)))))
+}
+
 agent.post("/jobs/:id/pages", async (c) => {
   const id = c.req.param("id")
   const attempt = attemptFrom(c)
   if (!validAttempt(attempt)) return c.json({ error: "job is gone" }, 410)
   const page = await c.req.json<PageUpload>()
   const prefix = `refs/${id}/${attempt}/`
-  const keys = [page.desktopKey, page.desktopThumbKey, page.mobileKey, page.mobileThumbKey, page.snapshotKey, page.stylesKey, ...page.animations.flatMap((a) => [a.gifKey, a.sheetKey])]
+  if (page.sections !== undefined && !validSections(page.sections)) return c.json({ error: "bad sections" }, 400)
+  const alt = page.altScheme
+  if (alt !== undefined && !(alt && (alt.scheme === "light" || alt.scheme === "dark") && typeof alt.desktopKey === "string" && typeof alt.desktopThumbKey === "string" &&
+    num(alt.desktopWidth) && num(alt.desktopHeight) && Array.isArray(alt.sectionKeys) && alt.sectionKeys.length <= 64 && alt.sectionKeys.every((k) => k === null || typeof k === "string")))
+    return c.json({ error: "bad altScheme" }, 400)
+  const keys = [page.desktopKey, page.desktopThumbKey, page.mobileKey, page.mobileThumbKey, page.snapshotKey, page.stylesKey, ...(page.sections ?? []).flatMap((s) => [s.key, s.live?.key]), alt?.desktopKey, alt?.desktopThumbKey, ...(alt?.sectionKeys ?? []), ...page.animations.flatMap((a) => [a.gifKey, a.sheetKey])]
   if (keys.some((key) => key && !key.startsWith(prefix))) return c.json({ error: "bad file key" }, 400)
   const pageId = await db.addPage(c.env.DB, id, attempt, page)
   return pageId ? c.json({ id: pageId }) : c.json({ error: "job is gone" }, 410)

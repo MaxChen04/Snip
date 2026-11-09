@@ -541,7 +541,7 @@ function ConnectSection() {
       intro="Your Worker serves an MCP endpoint at /mcp. Locally that is http://localhost:5173/mcp, which only clients on this Mac can reach while Snip is running. Clients register themselves, ask for your approval and show a consent screen."
     >
       <div className="flex max-w-[760px] flex-col gap-4">
-        <CodeBlock label="Claude Code" lines={["claude mcp add --transport http snip http://localhost:5173/mcp"]} />
+        <CodeBlock label="Claude Code" lines={["claude mcp add --scope user --transport http snip http://localhost:5173/mcp"]} />
         <CodeBlock label="Codex" lines={["codex mcp add snip --url http://localhost:5173/mcp", "codex mcp login snip"]} />
         <CodeBlock
           label="OpenCode · ~/.config/opencode/opencode.json, then opencode mcp auth snip"

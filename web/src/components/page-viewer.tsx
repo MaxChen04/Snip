@@ -29,6 +29,8 @@ const DEFAULT_WIDTH = 360
 const WIDTH_KEY = "snip.viewer.sidebarWidth"
 const OPEN_KEY = "snip.viewer.sidebarOpen"
 const TAB_KEY = "snip.viewer.sidebarTab"
+const LIVE_KEY = "snip.viewer.live"
+const SCHEME_KEY = "snip.viewer.scheme"
 
 const maxWidth = () => Math.max(MIN_WIDTH, Math.min(960, Math.round(window.innerWidth * 0.6)))
 const clampWidth = (w: number) => Math.round(Math.min(maxWidth(), Math.max(MIN_WIDTH, w)))
@@ -122,7 +124,7 @@ function ResizeHandle({ width, onDrag, onCommit }: { width: number; onDrag: (w: 
 
 // ---------- Viewer ----------
 
-type SideTab = "tokens" | "html" | "css"
+type SideTab = "sections" | "tokens" | "html" | "css"
 
 export function PageViewer({ page, onClose, onCollectionsChange }: {
   page: Page
@@ -130,7 +132,16 @@ export function PageViewer({ page, onClose, onCollectionsChange }: {
   onCollectionsChange: (pageIds: string[], collectionId: string, member: boolean) => void
 }) {
   const [device, setDevice] = useState<"desktop" | "mobile">("desktop")
-  const key = device === "desktop" ? page.desktopKey : page.mobileKey
+  // A page whose site has a theme for the other color scheme carries it as altScheme (desktop only).
+  const alt = page.altScheme
+  const baseScheme = alt ? (alt.scheme === "dark" ? "light" : "dark") : null
+  const [schemePref, setSchemePrefState] = useState(() => readPref<string>(SCHEME_KEY, ""))
+  const setSchemePref = (v: string) => {
+    setSchemePrefState(v)
+    writePref(SCHEME_KEY, v)
+  }
+  const showAlt = device === "desktop" && !!alt && schemePref === alt.scheme
+  const key = device === "desktop" ? (showAlt ? alt!.desktopKey : page.desktopKey) : page.mobileKey
   const [width, setWidth, commitWidth] = useSidebarWidth()
   const [open, setOpenState] = useState(() => readPref(OPEN_KEY, window.innerWidth >= 1024 ? "1" : "0") === "1")
   const setOpen = (v: boolean) => {
@@ -140,12 +151,13 @@ export function PageViewer({ page, onClose, onCollectionsChange }: {
 
   const tabs = useMemo(() => {
     const t: { value: SideTab; label: string }[] = []
+    if (page.sections.length) t.push({ value: "sections", label: "Sections" })
     if (page.tokens) t.push({ value: "tokens", label: "Tokens" })
     if (page.snapshotKey) t.push({ value: "html", label: "HTML" })
     if (page.stylesKey) t.push({ value: "css", label: "CSS" })
     return t
-  }, [page.tokens, page.snapshotKey, page.stylesKey])
-  const [tabPref, setTabPref] = useState<SideTab>(() => readPref<SideTab>(TAB_KEY, "tokens"))
+  }, [page.sections.length, page.tokens, page.snapshotKey, page.stylesKey])
+  const [tabPref, setTabPref] = useState<SideTab>(() => readPref<SideTab>(TAB_KEY, "sections"))
   const tab = tabs.some((t) => t.value === tabPref) ? tabPref : tabs[0]?.value
 
   useEffect(() => {
@@ -159,6 +171,43 @@ export function PageViewer({ page, onClose, onCollectionsChange }: {
   }, [onClose])
 
   const showSidebar = open && tabs.length > 0
+
+  // Live plays each moving section's clip over the screenshot. Off by default for people who ask for less motion.
+  // Neighbouring sections recorded together share one clip: draw each clip once, at its own top edge.
+  const liveClips = useMemo(
+    () => [...new Map(page.sections.flatMap((s) => (s.live ? [[s.live.key, { key: s.live.key, y: s.live.y ?? s.y, height: s.live.height }] as const] : []))).values()],
+    [page.sections],
+  )
+  const hasLive = liveClips.length > 0
+  const [live, setLiveState] = useState(() => readPref(LIVE_KEY, window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "0" : "1") === "1")
+  const setLive = (v: boolean) => {
+    setLiveState(v)
+    writePref(LIVE_KEY, v ? "1" : "0")
+  }
+
+  // Sections are measured on the desktop screenshot; map their capture px onto the image as displayed.
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const imgRef = useRef<HTMLDivElement>(null)
+  const [active, setActive] = useState(0)
+  const sectionTop = (y: number) => {
+    const img = imgRef.current
+    return img && page.desktopWidth ? img.offsetTop + (y * img.clientWidth) / page.desktopWidth : 0
+  }
+  const goToSection = (i: number) => {
+    const go = () => scrollRef.current?.scrollTo({ top: sectionTop(page.sections[i]!.y) - 16, behavior: "smooth" })
+    if (device === "desktop") go()
+    else {
+      setDevice("desktop")
+      requestAnimationFrame(() => requestAnimationFrame(go))
+    }
+  }
+  const onScroll = () => {
+    if (device !== "desktop" || !page.sections.length) return
+    const at = (scrollRef.current?.scrollTop ?? 0) + 24
+    let i = 0
+    while (i + 1 < page.sections.length && sectionTop(page.sections[i + 1]!.y) <= at) i++
+    setActive(i)
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-background" role="dialog" aria-modal="true">
@@ -180,6 +229,25 @@ export function PageViewer({ page, onClose, onCollectionsChange }: {
             <SmartphoneIcon /> <span className="hidden sm:inline">Mobile</span>
           </ToggleGroupItem>
         </ToggleGroup>
+        {alt && device === "desktop" && (
+          <ToggleGroup variant="outline" size="sm" value={[showAlt ? alt.scheme : baseScheme!]} onValueChange={(v) => v[0] && setSchemePref(v[0] as string)}>
+            {(["light", "dark"] as const).map((s) => (
+              <ToggleGroupItem key={s} value={s} aria-label={`${s === "light" ? "Light" : "Dark"} mode`}>
+                {s === "light" ? "Light" : "Dark"}
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+        )}
+        {hasLive && device === "desktop" && !showAlt && (
+          <ToggleGroup variant="outline" size="sm" value={[live ? "live" : "static"]} onValueChange={(v) => v[0] && setLive(v[0] === "live")}>
+            <ToggleGroupItem value="static" aria-label="Static screenshot" title="Static screenshot">
+              Static
+            </ToggleGroupItem>
+            <ToggleGroupItem value="live" aria-label="Live: play sections that move" title="Play sections that move, as recorded">
+              Live
+            </ToggleGroupItem>
+          </ToggleGroup>
+        )}
         <div className="flex flex-1 basis-0 justify-end gap-2">
           <SavePagesButton pages={[page]} onChange={onCollectionsChange} label={page.collectionIds.length ? "Saved" : "Save"} className="h-8 px-3" />
           {tabs.length > 0 && (
@@ -188,7 +256,7 @@ export function PageViewer({ page, onClose, onCollectionsChange }: {
               size="icon-sm"
               aria-label={open ? "Hide sidebar" : "Show sidebar"}
               aria-pressed={open}
-              title={open ? "Hide sidebar" : "Show tokens, HTML and CSS"}
+              title={open ? "Hide sidebar" : "Show sections, tokens, HTML and CSS"}
               onClick={() => setOpen(!open)}
             >
               {open ? <PanelRightCloseIcon /> : <PanelRightOpenIcon />}
@@ -198,13 +266,23 @@ export function PageViewer({ page, onClose, onCollectionsChange }: {
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto bg-fill-1 p-4 sm:p-6">
+        <div ref={scrollRef} onScroll={onScroll} className="relative min-h-0 min-w-0 flex-1 overflow-y-auto bg-fill-1 p-4 sm:p-6">
           {key ? (
-            <img
-              src={fileUrl(key)}
-              alt=""
-              className={device === "desktop" ? "mx-auto w-full max-w-6xl rounded-lg shadow-card" : "mx-auto w-[390px] max-w-full rounded-3xl shadow-card"}
-            />
+            <div
+              ref={device === "desktop" ? imgRef : undefined}
+              className={cn("relative mx-auto overflow-hidden shadow-card", device === "desktop" ? "w-full max-w-6xl rounded-lg" : "w-[390px] max-w-full rounded-3xl")}
+            >
+              <img src={fileUrl(key)} alt="" className="block w-full" />
+              {device === "desktop" && live && !showAlt && page.desktopHeight
+                ? liveClips.map((c) => (
+                    <LiveClip
+                      key={c.key}
+                      src={fileUrl(c.key)!}
+                      style={{ top: `${(c.y / page.desktopHeight!) * 100}%`, height: `${(c.height / page.desktopHeight!) * 100}%` }}
+                    />
+                  ))
+                : null}
+            </div>
           ) : (
             <p className="py-24 text-center text-sm text-muted-foreground">No {device} screenshot.</p>
           )}
@@ -234,6 +312,11 @@ export function PageViewer({ page, onClose, onCollectionsChange }: {
                     ))}
                   </TabsList>
                 </div>
+                {page.sections.length > 0 && (
+                  <TabsContent value="sections" className="min-h-0 overflow-y-auto px-4 pt-2 pb-6">
+                    <SectionsPanel page={page} keys={showAlt ? alt!.sectionKeys : null} active={device === "desktop" ? active : -1} onSelect={goToSection} />
+                  </TabsContent>
+                )}
                 {page.tokens && (
                   <TabsContent value="tokens" className="min-h-0 overflow-y-auto px-4 pt-2 pb-6">
                     <TokensPanel tokens={page.tokens} compact />
@@ -255,6 +338,62 @@ export function PageViewer({ page, onClose, onCollectionsChange }: {
         )}
       </div>
     </div>
+  )
+}
+
+// ---------- Sections ----------
+
+/** One section's recorded clip, laid over its place in the screenshot. Plays only while on screen. */
+function LiveClip({ src, style }: { src: string; style: React.CSSProperties }) {
+  const ref = useRef<HTMLVideoElement>(null)
+  useEffect(() => {
+    const video = ref.current
+    if (!video) return
+    const io = new IntersectionObserver(([entry]) => (entry?.isIntersecting ? video.play().catch(() => {}) : video.pause()), { rootMargin: "200px" })
+    io.observe(video)
+    return () => io.disconnect()
+  }, [])
+  return <video ref={ref} src={src} muted loop playsInline preload="metadata" aria-hidden className="pointer-events-none absolute inset-x-0 w-full object-cover object-top" style={style} />
+}
+
+const SECTION_KIND = { header: "Header", hero: "Hero", section: null, footer: "Footer" } as const
+
+/** `keys` swaps in the other color scheme's crops, where it has one. */
+function SectionsPanel({ page, keys, active, onSelect }: { page: Page; keys: (string | null)[] | null; active: number; onSelect: (i: number) => void }) {
+  return (
+    <ol className="flex flex-col gap-3">
+      {page.sections.map((s, i) => {
+        const kind = SECTION_KIND[s.kind]
+        return (
+          <li key={s.key}>
+            <button
+              type="button"
+              onClick={() => onSelect(i)}
+              aria-current={i === active ? "true" : undefined}
+              className={cn(
+                "group flex w-full flex-col gap-1.5 rounded-xl p-1.5 text-left transition-colors hover:bg-fill-2 focus-visible:bg-fill-2 focus-visible:outline-none",
+                i === active && "bg-fill-2",
+              )}
+            >
+              <img
+                src={fileUrl(keys?.[i] ?? s.key)}
+                alt=""
+                loading="lazy"
+                className={cn("max-h-56 w-full rounded-lg object-cover object-top ring-1 ring-border", i === active && "ring-2 ring-primary")}
+              />
+              <span className="flex min-w-0 items-baseline gap-2 px-1 text-xs">
+                <span className="text-2xs text-muted-foreground tabular-nums">{i + 1}</span>
+                <span className="truncate font-medium">{s.label}</span>
+                <span className="ml-auto flex shrink-0 items-baseline gap-1.5 text-2xs text-muted-foreground">
+                  {kind && kind !== s.label && <span>{kind}</span>}
+                  {s.live && <span className="font-medium text-primary" title="This section moves; turn on Live to play it">Live</span>}
+                </span>
+              </span>
+            </button>
+          </li>
+        )
+      })}
+    </ol>
   )
 }
 
