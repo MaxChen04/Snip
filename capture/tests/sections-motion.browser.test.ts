@@ -3,6 +3,8 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { chromium } from "playwright"
 
+// Only the first crawl page gets clips here, so the second takes the patch-only pass. Read when capture.ts first loads.
+process.env.SNIP_LIVE_PAGES = "1"
 const SECTIONS_JS = readFileSync(new URL("../src/inpage/sections.js", import.meta.url), "utf8")
 const MOTION_JS = readFileSync(new URL("../src/inpage/motion.js", import.meta.url), "utf8")
 const launch = () => chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined })
@@ -286,5 +288,96 @@ test("only bars pinned to the viewport edges are hidden: fixed backgrounds and p
   } finally {
     await closeRenderer()
     await browser.close()
+  }
+})
+
+// A page whose reveals undo themselves out of view, so a full-page shot taken from the top shows them hidden.
+// The teal box sits at document y 1000-1300, below the first viewport on desktop and mobile alike.
+const REVEAL_PAGE = (title: string, link = "") => `<!doctype html><title>${title}</title><meta name="viewport" content="width=device-width">
+  <style>body { margin: 0; font: 16px sans-serif } section { display: block; position: relative } .box { height: 300px; background: rgb(0, 128, 128); opacity: 0 } .box.in { opacity: 1 }</style>
+  <nav>${link}</nav>
+  <section style="height: 900px"><h1>${title}</h1></section>
+  <section style="height: 700px"><h2>Reveals</h2><div class="box" style="position: absolute; top: 100px; width: 100%"></div></section>
+  <section style="height: 900px"><h2>Still end</h2></section>
+  <script>const io = new IntersectionObserver((es) => es.forEach((e) => e.target.classList.toggle("in", e.isIntersecting))); document.querySelectorAll(".box").forEach((b) => io.observe(b))</script>`
+const teal = (rgb: number[]) => rgb[0]! < 60 && rgb[1]! > 90 && rgb[2]! > 90
+
+test("without clips, in-view patches come from one still per section, on desktop and on a mobile viewport at its own DPR", async () => {
+  const { recordLiveSections, patchInView, fullPageShotAtForTest, OBSERVED_FOR_TEST, HOLD_RESIZE_FOR_TEST } = await import("../src/capture")
+  const sharp = (await import("sharp")).default
+  const px = async (img: Buffer, x: number, y: number) => [...(await sharp(img).extract({ left: x, top: y, width: 1, height: 1 }).raw().toBuffer())]
+  const browser = await launch()
+  try {
+    for (const { name, options, dpr } of [
+      { name: "desktop", options: { viewport: { width: 800, height: 600 } }, dpr: 1 },
+      { name: "mobile", options: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 1.5, isMobile: true, hasTouch: true }, dpr: 1.5 },
+    ]) {
+      const context = await browser.newContext(options)
+      await context.addInitScript(HOLD_RESIZE_FOR_TEST)
+      await context.addInitScript(OBSERVED_FOR_TEST)
+      await context.route("http://snip.test/", (route) => route.fulfill({ contentType: "text/html", body: REVEAL_PAGE("Patch only") }))
+      const page = await context.newPage()
+      await page.goto("http://snip.test/")
+      const shot = await fullPageShotAtForTest(page, dpr)
+      assert.equal(shot.width, Math.round((options.viewport.width) * dpr))
+      assert.ok(!teal(await px(shot.buf, 100, 1150 * dpr)), `${name}: the shot from the top misses the reveal`)
+
+      const cuts = [{ y: 0, height: 900 }, { y: 900, height: 700 }, { y: 1600, height: 900 }].map((c, i) => ({ kind: "section" as const, label: `Part ${i}`, ...c }))
+      const inView = { shot: shot.buf, patches: [] as { y: number; height: number; jpeg: Buffer }[], dpr }
+      // "gif": the Worker takes no clips, so nothing is recorded, but the patches are still collected.
+      assert.deepEqual(await recordLiveSections(page, cuts, "gif", new Map(), inView), [null, null, null])
+      assert.ok(inView.patches.length >= 1 && inView.patches.every((p) => p.y >= 900 && p.y < 1600), `${name}: only the revealing section, got ${inView.patches.map((p) => p.y)}`)
+      const patched = await patchInView(shot.buf, inView.patches, dpr)
+      assert.deepEqual(imageSizeOf(await sharp(patched).metadata()), [shot.width, shot.height], `${name}: same size`)
+      assert.ok(teal(await px(patched, 100, 1150 * dpr)), `${name}: the reveal is in, got ${await px(patched, 100, 1150 * dpr)}`)
+      assert.ok(!teal(await px(patched, 100, 950 * dpr)) && !teal(await px(patched, 100, 1350 * dpr)), `${name}: the patch lines up with the box in image px`)
+      assert.equal(await page.evaluate(() => scrollY), 0, "left at the top")
+      await context.close()
+    }
+  } finally {
+    await browser.close()
+  }
+})
+
+const imageSizeOf = (m: { width?: number; height?: number }) => [m.width, m.height]
+
+test("a crawl page past the clip limit and the mobile shot still get in-view patches", { timeout: 180_000 }, async () => {
+  const http = await import("node:http")
+  const sharp = (await import("sharp")).default
+  const { captureJob } = await import("../src/capture")
+  const previous = process.env.ALLOW_PRIVATE_URLS
+  process.env.ALLOW_PRIVATE_URLS = "true"
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { "content-type": "text/html" })
+    res.end(req.url === "/b" ? REVEAL_PAGE("Page B") : REVEAL_PAGE("Page A", `<a href="/b">Page B</a>`))
+  })
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`
+  const browser = await launch()
+  try {
+    const uploads = new Map<string, Buffer>()
+    const pages: { url: string; desktopKey: string; mobileKey: string | null }[] = []
+    const api = {
+      control: async () => null,
+      progress: async () => {},
+      upload: async (key: string, body: Buffer | string) => { uploads.set(key, Buffer.from(body)); return key },
+      addPage: async (_id: string, page: { url: string; desktopKey: string; mobileKey: string | null }) => { pages.push(page) },
+      complete: async () => {},
+    }
+    await captureJob(browser, api as never, {
+      id: "inview", url, mode: "crawl", maxPages: 2, attempt: "a".repeat(32), resume: null, options: null,
+      recordingFormats: ["gif", "webm"], features: ["sections", "live"],
+    })
+    assert.equal(pages.length, 2)
+    const px = async (key: string, x: number, y: number) => [...(await sharp(uploads.get(key)!).extract({ left: x, top: y, width: 1, height: 1 }).raw().toBuffer())]
+    for (const page of pages) {
+      assert.ok(teal(await px(page.desktopKey, 100, 1150)), `${page.url}: the desktop shot shows the reveal`)
+      assert.ok(teal(await px(page.mobileKey!, 100, Math.round(1150 * 1.5))), `${page.url}: the mobile shot shows the reveal`)
+    }
+  } finally {
+    await browser.close()
+    await new Promise<void>((resolve) => { server.closeAllConnections(); server.close(() => resolve()) })
+    if (previous === undefined) delete process.env.ALLOW_PRIVATE_URLS
+    else process.env.ALLOW_PRIVATE_URLS = previous
   }
 })
