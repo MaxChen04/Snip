@@ -66,7 +66,9 @@ try {
   copy(license, path.join(stage, 'node/LICENSE'))
   fs.mkdirSync(app)
   for (const file of APP_FILES) copy(path.join(here, file), path.join(app, file))
-  fs.writeFileSync(path.join(app, 'package.json'), JSON.stringify({ ...manifest, version, productName: identity.name }) + '\n')
+  // Preserve stable's package identity: Electron uses it to locate existing
+  // profile data before main.cjs runs. Only Dev gets a new productName.
+  fs.writeFileSync(path.join(app, 'package.json'), JSON.stringify({ ...manifest, version, ...(nightly ? { productName: identity.name } : {}) }) + '\n')
   // The Settings window is a static Vite bundle built from the staged source, not from
   // the checkout; it must exist next to main.cjs so it loads with no local Worker.
   copy(path.join(stage, 'web/dist-settings'), path.join(app, 'settings'))
