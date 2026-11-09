@@ -52,7 +52,7 @@ test("hosted OAuth guards reject before KV and preserve normal OAuth and local r
     // Sessions are checked against the owners table (sign out all devices).
     d1Databases: ["DB"],
     bindings: {
-      PUBLIC_URL: "https://snip.test", ALLOWED_GITHUB_LOGINS: "alice", SESSION_SECRET: "test-secret",
+      PUBLIC_URL: "https://Snip.TEST/", ALLOWED_GITHUB_LOGINS: "alice", SESSION_SECRET: "test-secret",
       GITHUB_CLIENT_ID: "test-client", GITHUB_CLIENT_SECRET: "test-client-secret",
     },
     ratelimits: {
@@ -177,6 +177,9 @@ test("hosted OAuth guards reject before KV and preserve normal OAuth and local r
         assert.equal(response.status, status, path)
         assert.equal(response.headers.get("x-test-guard-keys"), "[]", path)
       }
+      // PUBLIC_URL is "https://Snip.TEST/": the resource id must still be the canonical origin.
+      const metadata = await (await request("/.well-known/oauth-protected-resource/mcp")).json()
+      assert.equal(metadata.resource, "https://snip.test/mcp")
     })
 
     await t.test("desktop and development keep working with existing configs without bindings", async () => {

@@ -18,7 +18,8 @@ function getProvider(env: Env) {
     scopesSupported: ["references"],
     accessTokenTTL: 60 * 60 * 24 * 7,
     resourceMetadata: {
-      resource: `${env.PUBLIC_URL.replace(/\/$/, "")}/mcp`,
+      // .origin lowercases the host (the provider rejects mixed case) and drops a trailing slash.
+      resource: `${new URL(env.PUBLIC_URL).origin}/mcp`,
       resource_name: "Snip design references",
     },
   })
