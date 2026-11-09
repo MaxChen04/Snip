@@ -32,6 +32,8 @@ const LIVE_QUANTIZER = Math.min(63, Math.max(0, Number(process.env.SNIP_LIVE_QUA
 const LIVE_CLIP_BYTES = Math.max(100_000, Number(process.env.SNIP_LIVE_CLIP_BYTES ?? 2_500_000))
 const LIVE_PAGE_BYTES = Math.max(100_000, Number(process.env.SNIP_LIVE_PAGE_BYTES ?? 8_000_000))
 const OTHER_SCHEME_CHANGED = 0.15 // share of the viewport that must change when the color scheme flips: the page has a theme for it
+const IN_VIEW_CHANGED = 0.02 // share of a section that must differ in view from the full-page shot to patch it in
+const IN_VIEW_EXTRA = 3 // further frames down a tall section that is patched
 const LIVE_CRAWL_PAGES = Math.max(0, Number(process.env.SNIP_LIVE_PAGES ?? 20)) // pages of a crawl that get clips
 const DISMISS_POPUPS = process.env.DISMISS_POPUPS !== "false"
 const run = <T>(page: PwPage, source: string, arg?: unknown) => page.evaluate(`(${source})(${JSON.stringify(arg ?? null)})`) as Promise<T>
@@ -399,15 +401,40 @@ export const liveSignature = (s: Omit<PageSection, "key">) => (/^Section \d+$/.t
 /** Share of pixels that differ in one band of two same-size frames, compared at quarter size. */
 async function changedShare(a: Buffer, b: Buffer, band: { top: number; height: number }) {
   const { width } = imageSize(a)
-  const region = (img: Buffer) =>
-    sharp(img).extract({ left: 0, top: band.top, width, height: band.height }).resize({ width: Math.max(1, Math.round(width / 4)) }).removeAlpha().raw().toBuffer()
-  const [x, y] = await Promise.all([region(a), region(b)])
+  const out = { width: Math.max(1, Math.round(width / 4)), height: Math.max(1, Math.round(band.height / 4)) }
+  return pixelShare(...(await Promise.all([bandPixels(a, band, out), bandPixels(b, band, out)])))
+}
+
+/** A full-width horizontal band of an image, scaled to `out` (RGB, 8 bit), for comparing bands of images of different sizes. */
+const bandPixels = (img: Buffer, band: { top: number; height: number }, out: { width: number; height: number }) =>
+  sharp(img).extract({ left: 0, top: band.top, width: imageSize(img).width, height: band.height }).resize({ ...out, fit: "fill" }).removeAlpha().raw().toBuffer()
+
+/** Share of pixels that differ between two same-size RGB buffers. */
+function pixelShare(x: Buffer, y: Buffer) {
   let changed = 0
   for (let i = 0; i < x.length; i += 3) {
     // 16 levels: well above JPEG noise at the screencast's quality, low enough for a slow drift caught over a short span.
     if (Math.abs(x[i]! - y[i]!) > 16 || Math.abs(x[i + 1]! - y[i + 1]!) > 16 || Math.abs(x[i + 2]! - y[i + 2]!) > 16) changed++
   }
   return changed / (x.length / 3)
+}
+
+/** Part of the page as it looked scrolled into view: `jpeg` covers `height` CSS px from document y `y`, at page width. */
+export type InViewPatch = { y: number; height: number; jpeg: Buffer }
+
+/**
+ * Paste in-view patches into a full-page screenshot (CSS px = image px: the desktop shot is taken at DPR 1).
+ * Returns the shot unchanged when there are none.
+ */
+export async function patchInView(shot: Buffer, patches: InViewPatch[]): Promise<Buffer> {
+  if (!patches.length) return shot
+  const { width, height } = imageSize(shot)
+  const inputs = await Promise.all(patches.filter((p) => p.y < height).map(async (p) => ({
+    input: await sharp(p.jpeg).resize({ width, height: Math.min(p.height, height - p.y), fit: "fill" }).toBuffer(),
+    left: 0,
+    top: p.y,
+  })))
+  return sharp(shot).composite(inputs).jpeg({ quality: 80 }).toBuffer()
 }
 
 /**
@@ -433,6 +460,7 @@ export async function recordLiveSections(
   cuts: Omit<PageSection, "key">[],
   format: Recording["ext"],
   seen: ReadonlyMap<string, LiveReuse> = new Map(),
+  inView?: { shot: Buffer; patches: InViewPatch[] },
 ): Promise<(LiveClip | null)[]> {
   const out: (LiveClip | null)[] = cuts.map(() => null)
   if (!LIVE_SECTIONS || format !== "webm" || !MAX_LIVE || !cuts.length) return out
@@ -488,6 +516,35 @@ export async function recordLiveSections(
     return { frames, from, to: Date.now() }
   }
   const scale = async (frame: string) => imageSize(Buffer.from(frame, "base64")).width / vw // screencast pixels per CSS px
+
+  /**
+   * The section as it looks scrolled into view, against the full-page shot. Content whose state follows the scroll
+   * position or visibility (reveals that reset, scroll-driven overlays, carousels) shows its "not reached yet" state
+   * in a shot taken from the top. If over IN_VIEW_CHANGED of the band differs, the in-view frame is kept as a patch,
+   * plus further frames down the section where it is taller than the viewport.
+   */
+  const collectInView = async (s: Omit<PageSection, "key">, top: number, height: number, k: number, frame: Buffer) => {
+    const shot = inView!.shot
+    const shotH = imageSize(shot).height
+    if (s.y + height > shotH) return
+    const out = { width: 360, height: Math.max(1, Math.round((height * 360) / vw)) }
+    const seen = await bandPixels(frame, { top: Math.round(top * k), height: Math.max(1, Math.round(height * k)) }, out)
+    const shown = await bandPixels(shot, { top: s.y, height }, out)
+    if (pixelShare(seen, shown) < IN_VIEW_CHANGED) return
+    const piece = async (img: Buffer, at: number, viewTop: number, h: number) =>
+      inView!.patches.push({ y: at, height: h, jpeg: await sharp(img).extract({ left: 0, top: Math.round(viewTop * k), width: Math.round(vw * k), height: Math.max(1, Math.round(h * k)) }).jpeg({ quality: 90 }).toBuffer() })
+    await piece(frame, s.y, top, height)
+    // The rest of a tall section, a viewport at a time, up to the shot's bottom.
+    for (let off = height, extra = 0; off < s.height && extra < IN_VIEW_EXTRA; extra++) {
+      const at = s.y + off
+      const viewTop = await showAt(at)
+      const h = Math.min(s.height - off, vh - viewTop, shotH - at)
+      if (viewTop < 0 || h < 40) break
+      const { data } = await cdp.send("Page.captureScreenshot", { format: "jpeg", quality: 90, optimizeForSpeed: true } as { format: "jpeg" })
+      await piece(Buffer.from(data, "base64"), at, viewTop, h)
+      off += h
+    }
+  }
   try {
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur?.()).catch(() => {}) // no caret
 
@@ -504,11 +561,14 @@ export async function recordLiveSections(
         const height = Math.min(s.height, vh - top)
         if (top < 0 || height < 40) continue
         const { frames } = await screencast(LIVE_PROBE_MS, 1)
-        // A still page sends one frame. Two or more are compared, since a busy machine can slow the screencast to a trickle.
-        if (frames.length < 2) continue
+        if (!frames.length) continue
         const k = await scale(frames[0]!.data)
         const band = { top: Math.round(top * k), height: Math.max(1, Math.round(height * k)) }
-        moving[i] = (await changedShare(Buffer.from(frames[0]!.data, "base64"), Buffer.from(frames.at(-1)!.data, "base64"), band)) >= LIVE_MIN_CHANGED
+        const last = Buffer.from(frames.at(-1)!.data, "base64")
+        if (inView) await collectInView(s, top, height, k, last)
+        // A still page sends one frame. Two or more are compared, since a busy machine can slow the screencast to a trickle.
+        if (frames.length < 2) continue
+        moving[i] = (await changedShare(Buffer.from(frames[0]!.data, "base64"), last, band)) >= LIVE_MIN_CHANGED
       } catch (e) {
         log(`  live probe of "${s.label}" skipped:`, (e as Error).message.split("\n")[0])
       }
@@ -1023,7 +1083,15 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       const sectionCuts = features.has("sections") ? (await findSections(dPage)).filter((s) => s.y < desktopShot.height) : []
       // In a crawl, only the first pages get clips: later pages mostly repeat the same chrome, at the same cost.
       const liveOn = features.has("live") && (job.mode !== "crawl" || captured < LIVE_CRAWL_PAGES)
-      const liveClips = await recordLiveSections(dPage, sectionCuts, liveOn ? recordingFormat : "gif", liveSeen)
+      const inView = { shot: desktopShot.buf, patches: [] as InViewPatch[] }
+      const liveClips = await recordLiveSections(dPage, sectionCuts, liveOn ? recordingFormat : "gif", liveSeen, inView)
+      // Sections that look different scrolled into view replace their band in the full-page shot, before it is cut.
+      if (inView.patches.length) {
+        desktopShot.buf = await patchInView(desktopShot.buf, inView.patches).catch((e) => {
+          log("  in-view patches skipped:", (e as Error).message.split("\n")[0])
+          return desktopShot.buf
+        })
+      }
       const desktopThumb = await thumbnail(await dPage.screenshot({ type: "jpeg", quality: 75 }), THUMB_WIDTH.desktop)
       const other = features.has("schemes") ? await captureOtherScheme(dPage, job.options?.colorScheme === "dark" ? "dark" : "light") : null
       const styles = await run<{ tokens: DesignTokens }>(dPage, STYLES_JS, { maxElements: 3000 })
@@ -1162,7 +1230,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       allTokens.push(styles.tokens)
       captured++
       titles.set(url, pageMeta.title)
-      log(`  ✓ ${path} (${animations.length} recordings, ${upload.sections?.length ?? 0} sections, ${new Set(liveClips.filter(Boolean)).size} live clips${other ? `, ${other.scheme} scheme` : ""})`)
+      log(`  ✓ ${path} (${animations.length} recordings, ${upload.sections?.length ?? 0} sections, ${new Set(liveClips.filter(Boolean)).size} live clips${other ? `, ${other.scheme} scheme` : ""}${inView.patches.length ? `, ${inView.patches.length} in-view patches` : ""})`)
     } catch (e) {
       network?.assertAllowed()
       if (e instanceof JobGoneError || e instanceof PrivateAddressError) throw e

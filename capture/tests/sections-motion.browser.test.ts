@@ -215,3 +215,37 @@ test("a full-page shot doesn't send the page a resize, and paints content-visibi
     await browser.close()
   }
 })
+
+test("sections that look different scrolled into view are patched into the full-page shot, down tall sections too", async () => {
+  const { recordLiveSections, patchInView, fullPageShotForTest } = await import("../src/capture")
+  const { closeRenderer } = await import("../src/sheet")
+  const sharp = (await import("sharp")).default
+  const browser = await launch()
+  try {
+    const page = await browser.newPage({ viewport: { width: 800, height: 600 } })
+    // Reveals that undo themselves out of view: a shot taken from the top shows them hidden.
+    await page.setContent(`<style>body { margin: 0 } .box { height: 200px; background: rgb(0, 128, 128); opacity: 0 } .box.in { opacity: 1 }</style>
+      <section style="height: 600px">top</section>
+      <section style="height: 1500px; position: relative"><div class="box" style="margin-top: 50px"></div><div class="box" style="position: absolute; top: 1250px; width: 100%"></div></section>
+      <section style="height: 600px">end</section>
+      <script>const io = new IntersectionObserver((es) => es.forEach((e) => e.target.classList.toggle("in", e.isIntersecting))); document.querySelectorAll(".box").forEach((b) => io.observe(b))</script>`)
+    await page.waitForTimeout(100)
+    const shot = await fullPageShotForTest(page)
+    const px = async (img: Buffer, x: number, y: number) => [...(await sharp(img).extract({ left: x, top: y, width: 1, height: 1 }).raw().toBuffer())]
+    assert.deepEqual((await px(shot.buf, 400, 750)).slice(0, 3), [255, 255, 255], "the shot from the top misses the reveal")
+
+    const cuts = [{ kind: "section" as const, label: "Top", y: 0, height: 600 }, { kind: "section" as const, label: "Tall", y: 600, height: 1500 }, { kind: "section" as const, label: "End", y: 2100, height: 600 }]
+    const inView = { shot: shot.buf, patches: [] as { y: number; height: number; jpeg: Buffer }[] }
+    await recordLiveSections(page, cuts, "webm", new Map(), inView)
+    assert.ok(inView.patches.length >= 2, `the tall section is patched in several frames, got ${inView.patches.length}`)
+    assert.ok(inView.patches.every((p) => p.y >= 600 && p.y < 2100), "only the section that differs")
+    const patched = await patchInView(shot.buf, inView.patches)
+    const teal = (rgb: number[]) => rgb[0]! < 40 && rgb[1]! > 100 && rgb[2]! > 100
+    assert.ok(teal(await px(patched, 400, 750)), "the top reveal is in")
+    assert.ok(teal(await px(patched, 400, 1950)), "the reveal far down the tall section is in")
+    assert.deepEqual((await px(patched, 400, 300)).slice(0, 3), (await px(shot.buf, 400, 300)).slice(0, 3), "sections that match are left alone")
+  } finally {
+    await closeRenderer()
+    await browser.close()
+  }
+})
