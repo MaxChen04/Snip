@@ -11,7 +11,7 @@ test('source Snip Dev and packaged nightlies share only their isolated test libr
   const root = path.join(temp, 'source');
   fs.mkdirSync(root);
   const stable = prepareRuntimeLayout({ root, userData: path.join(temp, 'Snip'), release: false });
-  const options = { root, userData: path.join(temp, 'Snip Dev'), resourcesPath: path.join(temp, 'Snip Dev.app/Contents/Resources'), isolated: true, port: 5175 };
+  const options = { root, userData: path.join(temp, 'Snip Dev'), resourcesPath: path.join(temp, 'Snip Dev.app/Contents/Resources'), isolated: true, port: 5273 };
   fs.mkdirSync(options.resourcesPath, { recursive: true });
   const source = prepareRuntimeLayout({ ...options, release: false, recordSource: true });
   const packaged = prepareRuntimeLayout({ ...options, release: true });
@@ -19,7 +19,7 @@ test('source Snip Dev and packaged nightlies share only their isolated test libr
   assert.equal(source.runtimeRoot, root);
   assert.equal(source.dataRoot, path.join(options.userData, 'library'));
   assert.equal(packaged.dataRoot, source.dataRoot);
-  assert.match(fs.readFileSync(source.webEnvPath, 'utf8'), /PUBLIC_URL=http:\/\/localhost:5175/);
+  assert.match(fs.readFileSync(source.webEnvPath, 'utf8'), /PUBLIC_URL=http:\/\/localhost:5273/);
   assert.equal(fs.existsSync(path.join(root, 'web')), false);
   fs.writeFileSync(source.pointerPath, JSON.stringify({ path: root }));
   assert.throws(() => prepareRuntimeLayout({ ...options, release: true }), { code: 'SNIP_LIBRARY_LOCATION' });
@@ -32,7 +32,7 @@ test('a symlink cannot redirect the test library outside its profile', t => {
   const userData = path.join(temp, 'Snip Dev'), outside = path.join(temp, 'stable');
   fs.mkdirSync(userData); fs.mkdirSync(outside);
   fs.symlinkSync(outside, path.join(userData, 'library'));
-  assert.throws(() => prepareRuntimeLayout({ root: temp, userData, release: false, isolated: true, port: 5175 }), /test library/);
+  assert.throws(() => prepareRuntimeLayout({ root: temp, userData, release: false, isolated: true, port: 5273 }), /test library/);
   assert.deepEqual(fs.readdirSync(outside), []);
 });
 

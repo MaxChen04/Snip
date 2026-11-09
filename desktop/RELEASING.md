@@ -17,7 +17,7 @@ Snip Dev is a separate app, not a renamed stable installation:
 | App / icon | `Snip.app` / gold | `Snip Dev.app` / blue blueprint |
 | Bundle ID | `dev.snip.desktop` | `dev.snip.desktop.nightly` |
 | Update source | Published stable `vX.Y.Z` release | Published `nightly-v0.0.N` prerelease |
-| Default port | 5173 | 5175 |
+| Default port | 5173 | 5273 |
 | Library | Existing stable library | `~/Library/Application Support/Snip Dev/library` |
 
 Snip Dev has its own Electron profile, cookies, settings, logs and update cache.

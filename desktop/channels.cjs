@@ -1,6 +1,6 @@
 const channels = Object.freeze({
   stable: Object.freeze({ name: "Snip", bundleId: "dev.snip.desktop", icon: "Snip.icns", port: 5173 }),
-  nightly: Object.freeze({ name: "Snip Dev", bundleId: "dev.snip.desktop.nightly", icon: "Snip-dev.icns", port: 5175 }),
+  nightly: Object.freeze({ name: "Snip Dev", bundleId: "dev.snip.desktop.nightly", icon: "Snip-dev.icns", port: 5273 }),
 })
 
 function channelConfig(channel = "stable") {
