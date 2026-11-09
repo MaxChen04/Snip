@@ -81,9 +81,27 @@ export interface Page {
   tokens: DesignTokens | null
   /** The desktop page cut into its visual sections, top to bottom. Empty for captures made before sections existed. */
   sections: PageSection[]
+  /** The page in its other color scheme, when the site has a theme for it. Desktop only. */
+  altScheme: AltScheme | null
+  /** Whether sections were looked for at capture. False for older captures; true with no sections for a page that doesn't break into any. */
+  sectionsCaptured: boolean
   /** Collections this page was saved to on its own (not through its website). */
   collectionIds: string[]
   createdAt: string
+}
+
+/**
+ * The desktop page in the color scheme it was not captured in (dark for a light capture), when flipping
+ * prefers-color-scheme repainted it. Sections are cut at the same lines as the main capture.
+ */
+export interface AltScheme {
+  scheme: "light" | "dark"
+  desktopKey: string
+  desktopThumbKey: string
+  desktopWidth: number
+  desktopHeight: number
+  /** One per page section, in order; null where the section starts below this scheme's page. */
+  sectionKeys: (string | null)[]
 }
 
 /** One visual section of a page (header, hero, a content block, footer), found from the DOM at capture time. */
@@ -96,6 +114,14 @@ export interface PageSection {
   height: number
   /** JPEG of just this section, at desktop width. */
   key: string
+  /**
+   * A short looping WebM of the section playing in real time (canvas and WebGL backgrounds, marquees, carousels),
+   * recorded only when something in it moved. It covers `height` CSS px from its own `y` (at most one viewport),
+   * at desktop width, with the page's fixed bars hidden so it lines up with the screenshot. Touching sections
+   * that move are recorded together, so neighbours can share one clip (same key and y). Absent when still.
+   * Clips from before sharing have no `y`: theirs is the section's.
+   */
+  live?: { key: string; y?: number; height: number; durationMs: number }
 }
 
 /**
@@ -204,6 +230,8 @@ export interface Job {
   options: CaptureOptions | null
   /** Formats the serving Worker can display. Older Workers omit this and require GIF. Not persisted. */
   recordingFormats?: ("gif" | "webm")[]
+  /** What the serving Worker stores beyond the basics: page sections, and live clips of them. Older Workers omit this. Not persisted. */
+  features?: ("sections" | "live" | "schemes")[]
 }
 
 /** Crawl position saved when a capture pauses. */
@@ -241,6 +269,7 @@ export interface PageUpload {
   tokens: DesignTokens | null
   /** Older agents send none. */
   sections?: PageSection[]
+  altScheme?: AltScheme
   animations: {
     kind: AnimationKind
     label: string | null

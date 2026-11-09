@@ -11,7 +11,7 @@
     if (op !== "install") return []
     const seen = new WeakSet()
     const log = []
-    const LIMIT = 1000
+    const LIMIT = 5000
     const sel = (el) => {
       if (!el || el.nodeType !== 1) return null
       let s = el.tagName.toLowerCase()
@@ -22,11 +22,16 @@
       return p && p !== document.body && p.tagName ? `${p.tagName.toLowerCase()} > ${s}` : s
     }
     const round = (v) => (typeof v === "number" && isFinite(v) ? Math.round(v) : v)
+    // Only the animation and when it started are kept here: reading keyframes forces a style recalculation, which
+    // on a large page stalls it for milliseconds per animation. They are read once, in take.
     const record = (a) => {
       if (!a || seen.has(a)) return
       seen.add(a)
+      if (log.length < LIMIT) log.push({ a, startMs: Math.round(performance.now() - m.t0), scrollY: Math.round(scrollY) })
+    }
+    const describe = ({ a, startMs, scrollY }) => {
       const e = a.effect
-      if (!e || !e.getKeyframes || log.length >= LIMIT) return
+      if (!e || !e.getKeyframes) return null
       const t = e.getTiming()
       const name = a.constructor && a.constructor.name
       const keyframes = e.getKeyframes().slice(0, 8).map((k) => {
@@ -37,7 +42,7 @@
         }
         return o
       })
-      log.push({
+      return {
         type: name === "CSSTransition" ? "transition" : name === "CSSAnimation" ? "animation" : "web-animation",
         target: sel(e.target) + (e.pseudoElement || ""),
         // Web Animations don't name a property: list what their keyframes animate.
@@ -47,9 +52,9 @@
         easing: t.easing,
         iterations: t.iterations === Infinity ? "infinite" : t.iterations,
         keyframes,
-        startMs: Math.round(performance.now() - m.t0),
-        scrollY: Math.round(scrollY),
-      })
+        startMs,
+        scrollY,
+      }
     }
     // Transitions and CSS animations announce themselves; element.animate() (Motion, Framer Motion) is wrapped.
     // Short effects can finish before anyone polls, so record each one as it starts.
@@ -62,7 +67,7 @@
       try { record(a) } catch {}
       return a
     }
-    m = window.__snipMotion = { t0: performance.now(), log, record }
+    m = window.__snipMotion = { t0: performance.now(), log, record, describe }
     document.getAnimations().forEach((a) => seen.add(a))
     return []
   }
@@ -70,7 +75,9 @@
   document.getAnimations().forEach(m.record)
   // The same effect on many elements (each letter of a heading, every card in a grid) is one entry with a count.
   const groups = new Map()
-  for (const e of m.log.splice(0)) {
+  for (const raw of m.log.splice(0)) {
+    const e = m.describe(raw)
+    if (!e) continue
     const { startMs, scrollY, ...rest } = e
     const key = JSON.stringify(rest)
     const g = groups.get(key)
