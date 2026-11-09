@@ -103,9 +103,10 @@ function createContext({ root, dataRoot, flags = {}, emit, api, wrangler, releas
                 });
                 return Number(rows[0] && rows[0].rows);
               };
-              // Uploaded images count too: a library of only images and boards isn't empty. Before the images
-              // table existed its query throws, which the catch below treats as "not empty".
-              empty = (await count('refs')) === 0 && (await count('images')) === 0;
+              // Anything the owner made counts: websites, uploaded images, and boards (which hold sticky notes and
+              // groups even with no saves on them). Before the images table existed its query throws, which the
+              // catch below treats as "not empty".
+              empty = (await count('refs')) === 0 && (await count('images')) === 0 && (await count('collections')) === 0;
             } catch {
               // An unreadable library is never treated as empty: the empty path is
               // the one that skips the copy, so it has to be proven.

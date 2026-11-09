@@ -23,6 +23,7 @@ import { filterOf, itemAspect, RELOAD_EVENT, type CanvasFilter, type CanvasItem 
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Spinner } from "@/components/ui/spinner"
 import { useDesktopState } from "@/hooks/use-desktop-state"
+import { LIVE_POLL, usePoll } from "@/hooks/use-poll"
 import { api, type BoardGroup, type BoardItem, type BoardItemKind, type BoardItemPlacement, type Collection, type LibraryTypeCounts, type SavedImage } from "@/lib/api"
 import { useCollections } from "@/lib/collections"
 import { cn } from "@/lib/utils"
@@ -396,6 +397,12 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
 
   const nodes = board?.nodes ?? []
   const groups = board?.groups ?? []
+  // Websites still capturing (added from the header or pasted onto the board) refresh while they run: the capture
+  // card that polls captures lives on the home canvas, not here. Steady while capturing, backing off while queued
+  // or paused (a queued one may wait for a Mac that is off).
+  const statuses = nodes.flatMap((x) => (x.item?.kind === "website" ? [x.item.reference.status] : []))
+  const capturing = statuses.includes("capturing")
+  usePoll(load, capturing || statuses.includes("queued") || statuses.includes("paused"), capturing ? LIVE_POLL : undefined)
   const collection = collections.find((c) => c.id === id) ?? board?.collection
   const title = collection?.name ?? "Board"
   useEffect(() => {

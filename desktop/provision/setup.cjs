@@ -115,7 +115,8 @@ async function classifyAccount(ctx) {
   if (hasSchema) {
     counts = await cloudCounts(ctx, accountId, database.id).catch(() => ({ refs: 1, pages: 1, collections: 0, images: 0 }));
   }
-  const empty = Number(counts.refs) === 0 && Number(counts.pages) === 0 && Number(counts.images) === 0;
+  // Boards count as content: they hold sticky notes and groups even with nothing saved on them.
+  const empty = Number(counts.refs) === 0 && Number(counts.pages) === 0 && Number(counts.images) === 0 && Number(counts.collections) === 0;
   return {
     ...base,
     counts,
