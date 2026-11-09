@@ -82,6 +82,8 @@ test("page sections and logged motion are stored, checked and described over MCP
     assert.equal(dark.content[1].mimeType, "image/jpeg", "the dark viewport screenshot is inlined")
     assert.equal(dark.structuredContent.schemeUnavailable, undefined)
     assert.equal((await rpc("get_page", { page_id: pageId, scheme: "light", image: "none" })).structuredContent.schemeUnavailable, undefined, "light is the scheme it was captured in")
+    const darkSection = (await rpc("get_page", { page_id: pageId, section: 0, scheme: "dark" })).structuredContent.section
+    assert.ok(darkSection.url.includes("section-0-dark.jpg"), "a section asked for in dark links to the dark image")
     const one = await rpc("get_page", { page_id: pageId, section: 1 })
     assert.deepEqual({ ...one.structuredContent.section, url: "" }, { index: 1, label: "Ship faster", included: true, url: "" })
     assert.ok(one.structuredContent.section.url.includes("section-1.jpg"), "the inlined section carries its own URL")

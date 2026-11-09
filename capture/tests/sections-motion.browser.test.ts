@@ -159,11 +159,14 @@ test("one-shot reveals and a focused caret don't make clips, and a section seen 
     assert.deepEqual(await recordLiveSections(page, cuts, "webm"), [null, null, null])
 
     const earlier = { key: "refs/r/a/p0/section-2-live.webm", height: 500, durationMs: 3000 }
-    const reused = await recordLiveSections(page, cuts, "webm", new Map([[liveSignature(cuts[2]!)!, earlier]]))
+    const seenCut = { ...cuts[2]!, fp: "abc" }
+    const reused = await recordLiveSections(page, [cuts[0]!, cuts[1]!, seenCut], "webm", new Map([[liveSignature(seenCut)!, earlier]]))
     assert.deepEqual([reused[0], reused[1]], [null, null])
     assert.equal(reused[2]!.recording, null, "nothing recorded again")
     assert.deepEqual(reused[2]!.reuse, earlier)
-    assert.equal(liveSignature({ kind: "section", label: "Section 4", y: 0, height: 500 }), null, "generic labels are never reused")
+    assert.equal(liveSignature({ kind: "section", label: "Section 4", y: 0, height: 500, fp: "abc" }), null, "generic labels are never reused")
+    assert.equal(liveSignature({ kind: "section", label: "Overview", y: 0, height: 500 }), null, "nor sections without a content fingerprint")
+    assert.notEqual(liveSignature({ kind: "hero", label: "Overview", y: 0, height: 500, fp: "a" }), liveSignature({ kind: "hero", label: "Overview", y: 0, height: 500, fp: "b" }), "same label and height, different content")
   } finally {
     await closeRenderer()
     await browser.close()
@@ -197,8 +200,9 @@ test("a full-page shot doesn't send the page a resize, and paints content-visibi
     await context.addInitScript(HOLD_RESIZE_FOR_TEST)
     const page = await context.newPage()
     // A real navigation, as in a capture: setContent rewrites the document in place, which drops the init script's listeners.
-    const html = `<style>body { margin: 0 } .far { content-visibility: auto; contain-intrinsic-size: auto 600px; height: 600px; background: rgb(0, 160, 0) }</style>
-      <div style="height: 2400px"></div><div class="far"></div>
+    const html = `<style>body { margin: 0 } .far { content-visibility: auto; contain-intrinsic-size: auto 600px; height: 600px; background: rgb(0, 160, 0) }
+      .off { content-visibility: hidden; contain-intrinsic-size: 600px; height: 600px } .off div { height: 600px; background: rgb(200, 0, 0) }</style>
+      <div style="height: 2400px"></div><div class="far"></div><div class="off"><div></div></div>
       <script>window.resizes = 0; addEventListener("resize", () => window.resizes++)</script>`
     await context.route("http://snip.test/", (route) => route.fulfill({ contentType: "text/html", body: html }))
     await page.goto("http://snip.test/")
@@ -206,7 +210,9 @@ test("a full-page shot doesn't send the page a resize, and paints content-visibi
     assert.equal(await page.evaluate(() => (window as unknown as { resizes: number }).resizes), 0, "the site never saw the screenshot's resize")
     const { data } = await sharp(shot.buf).extract({ left: 400, top: 2700, width: 1, height: 1 }).raw().toBuffer({ resolveWithObject: true })
     assert.ok(data[1]! > 120 && data[0]! < 60, `the content-visibility block is painted green, got ${[...data]}`)
-    assert.equal(await page.evaluate(() => document.querySelectorAll("style[data-snip-full-page]").length), 0, "the forcing style is removed afterwards")
+    const hidden = [...(await sharp(shot.buf).extract({ left: 400, top: 3300, width: 1, height: 1 }).raw().toBuffer())]
+    assert.ok(hidden[0]! > 200 && hidden[1]! > 200, `content-visibility: hidden stays unpainted, got ${hidden}`)
+    assert.deepEqual(await page.evaluate(() => [document.querySelectorAll("[data-snip-cv]").length, (document.querySelector(".far") as HTMLElement).style.cssText]), [0, ""], "the override is removed afterwards")
     assert.equal(await page.evaluate(() => (window as unknown as { __snipHoldResize: boolean }).__snipHoldResize), false)
     await page.setViewportSize({ width: 700, height: 600 })
     await page.waitForTimeout(100)

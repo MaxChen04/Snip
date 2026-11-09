@@ -377,7 +377,7 @@ const takeMotion = (page: PwPage) => run<MotionEntry[]>(page, MOTION_JS, { op: "
 
 /** Where the page breaks into its visual sections (see inpage/sections.js). The page must be scrolled to the top. */
 const findSections = (page: PwPage) =>
-  run<Omit<PageSection, "key">[]>(page, SECTIONS_JS, { maxPx: MAX_SHOT_PX, max: MAX_SECTIONS }).catch((e) => {
+  run<SectionCut[]>(page, SECTIONS_JS, { maxPx: MAX_SHOT_PX, max: MAX_SECTIONS }).catch((e) => {
     log("  sections skipped:", (e as Error).message.split("\n")[0])
     return []
   })
@@ -392,11 +392,15 @@ export type LiveReuse = { key: string; height: number; durationMs: number }
  */
 type LiveClip = { recording: Recording | null; reuse?: LiveReuse; y: number; height: number; durationMs: number; sig: string | null }
 
+/** A section as sections.js finds it: `fp` fingerprints its text and media, and is not stored. */
+type SectionCut = Omit<PageSection, "key"> & { fp?: string }
+
 /**
  * What identifies the same section on another page of a site: shared chrome like a logo marquee or animated
- * footer. Generic labels ("Section 4") name nothing, so those are never reused.
+ * footer. Kind, label and height alone would match two different pages' "Overview" heroes, so the content
+ * fingerprint must match too. Generic labels ("Section 4") name nothing, so those are never reused.
  */
-export const liveSignature = (s: Omit<PageSection, "key">) => (/^Section \d+$/.test(s.label) ? null : `${s.kind}|${s.label}|${s.height}`)
+export const liveSignature = (s: SectionCut) => (!s.fp || /^Section \d+$/.test(s.label) ? null : `${s.kind}|${s.label}|${s.height}|${s.fp}`)
 
 /** Share of pixels that differ in one band of two same-size frames, compared at quarter size. */
 async function changedShare(a: Buffer, b: Buffer, band: { top: number; height: number }) {
@@ -457,7 +461,7 @@ export async function patchInView(shot: Buffer, patches: InViewPatch[]): Promise
  */
 export async function recordLiveSections(
   page: PwPage,
-  cuts: Omit<PageSection, "key">[],
+  cuts: SectionCut[],
   format: Recording["ext"],
   seen: ReadonlyMap<string, LiveReuse> = new Map(),
   inView?: { shot: Buffer; patches: InViewPatch[] },
@@ -693,14 +697,16 @@ async function fullPageShot(page: PwPage, dpr: number) {
   const width = page.viewportSize()!.width
   const clipH = Math.min(height, Math.floor(MAX_SHOT_PX / dpr))
   // content-visibility: auto parts of the page outside the viewport aren't painted in a full-page capture (blank
-  // sections on vercel.com); show them for the shot. contain-intrinsic-size keeps their measured size, so the
-  // layout doesn't move. Both the flag and the style are undone afterwards, so the HTML snapshot never sees them.
+  // sections on vercel.com); show them for the shot. Only `auto`: `hidden` is content the site keeps unpainted on
+  // purpose (inactive panels). contain-intrinsic-size keeps their measured size, so the layout doesn't move. The
+  // flag and inline styles are undone afterwards, so the HTML snapshot never sees them.
   await page.evaluate(() => {
     ;(window as unknown as { __snipHoldResize: boolean }).__snipHoldResize = true
-    const style = document.createElement("style")
-    style.dataset.snipFullPage = ""
-    style.textContent = "*{content-visibility:visible!important}"
-    document.head.append(style)
+    for (const el of document.querySelectorAll<HTMLElement>("body *")) {
+      if (getComputedStyle(el).getPropertyValue("content-visibility") !== "auto") continue
+      el.dataset.snipCv = el.style.getPropertyValue("content-visibility")
+      el.style.setProperty("content-visibility", "visible", "important")
+    }
   }).catch(() => {})
   try {
     const buf = await page.screenshot({ type: "jpeg", quality: 80, fullPage: true, clip: { x: 0, y: 0, width, height: clipH } })
@@ -709,7 +715,11 @@ async function fullPageShot(page: PwPage, dpr: number) {
     // Late resize events from restoring the viewport are held too: wait two frames before letting them through.
     await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => {
       ;(window as unknown as { __snipHoldResize: boolean }).__snipHoldResize = false
-      document.querySelectorAll("style[data-snip-full-page]").forEach((s) => s.remove())
+      document.querySelectorAll<HTMLElement>("[data-snip-cv]").forEach((el) => {
+        el.style.removeProperty("content-visibility")
+        if (el.dataset.snipCv) el.style.setProperty("content-visibility", el.dataset.snipCv)
+        delete el.dataset.snipCv
+      })
       done()
     })))).catch(() => {})
   }
@@ -1187,7 +1197,8 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
             const clip = liveClips[i]
             const key = clip ? await clipKey(clip, i) : null
             const live = clip && key ? { key, y: clip.y, height: clip.height, durationMs: clip.durationMs } : null
-            return { ...s, key: await retryOnce(() => api.upload(`${p}/section-${i}.jpg`, crops[i]!, "image/jpeg")), ...(live ? { live } : {}) }
+            const { fp: _fp, ...section } = s as SectionCut
+            return { ...section, key: await retryOnce(() => api.upload(`${p}/section-${i}.jpg`, crops[i]!, "image/jpeg")), ...(live ? { live } : {}) }
           })
         } catch (e) {
           if (e instanceof JobGoneError) throw e
