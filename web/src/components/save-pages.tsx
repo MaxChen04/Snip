@@ -11,14 +11,14 @@ import { cn } from "@/lib/utils"
 const pagesLabel = (n: number) => (n === 1 ? "1 page" : `${n} pages`)
 
 /**
- * Save one or more pages to collections. A saved page stays in its website and can be in any
- * number of collections; collections point at the same stored screenshots, nothing is copied.
- * A collection shows as checked when every given page is already in it.
+ * Save one or more pages to boards. A saved page stays in its website and can be on any
+ * number of boards; boards point at the same stored screenshots, nothing is copied.
+ * A board shows as checked when every given page is already on it.
  */
 export function SavePagesButton({
   pages,
   onChange,
-  label = "Add to collection",
+  label = "Add to board",
   className,
 }: {
   pages: Page[]
@@ -36,7 +36,7 @@ export function SavePagesButton({
     if (pending.current) return
     pending.current = true
     setBusy(true)
-    const name = collections.find((c) => c.id === cid)?.name ?? "the new collection"
+    const name = collections.find((c) => c.id === cid)?.name ?? "the new board"
     // Only pages whose membership actually changes, so a failed save rolls back just those.
     const changing = pages.filter((p) => p.collectionIds.includes(cid) !== member).map((p) => p.id)
     onChange(changing, cid, member)
@@ -53,7 +53,7 @@ export function SavePagesButton({
       setBusy(false)
     }
     // A successful save must not be rolled back if refreshing counts fails.
-    await refresh().catch(() => toast.error("Pages saved, but collection counts could not refresh."))
+    await refresh().catch(() => toast.error("Pages saved, but board counts could not refresh."))
   }
 
   return (

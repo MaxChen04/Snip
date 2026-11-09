@@ -7,7 +7,8 @@ const http = require('node:http');
 const crypto = require('node:crypto');
 const { StepError } = require('./engine.cjs');
 
-const KEY_RE = /^refs\/[a-z0-9]+\/[A-Za-z0-9._\/-]+$/;
+// Capture files and the owner's uploaded images.
+const KEY_RE = /^(refs|uploads)\/[a-z0-9]+\/[A-Za-z0-9._\/-]+$/;
 
 function validKey(key) {
   return typeof key === 'string' && KEY_RE.test(key) && !key.includes('..');

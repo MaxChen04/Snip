@@ -23,10 +23,10 @@ import { STOPPED_EMPTY } from "../shared/capture-errors"
 
 // Data access shared by the HTTP API and the MCP server.
 
-const now = () => new Date().toISOString()
+export const now = () => new Date().toISOString()
 export const newId = () => crypto.randomUUID().replace(/-/g, "").slice(0, 16)
 
-const parse = <T>(s: unknown): T | null => {
+export const parse = <T>(s: unknown): T | null => {
   if (typeof s !== "string" || !s) return null
   try {
     return JSON.parse(s) as T
@@ -35,9 +35,9 @@ const parse = <T>(s: unknown): T | null => {
   }
 }
 
-type Row = Record<string, unknown>
+export type Row = Record<string, unknown>
 
-function toReference(r: Row): Reference {
+export function toReference(r: Row): Reference {
   return {
     id: r.id as string,
     url: r.url as string,
@@ -66,7 +66,7 @@ function toReference(r: Row): Reference {
   }
 }
 
-function toPage(r: Row): Page {
+export function toPage(r: Row): Page {
   return {
     id: r.id as string,
     referenceId: r.reference_id as string,
@@ -92,7 +92,7 @@ function toPage(r: Row): Page {
 }
 
 /** Selects a page row plus the collections it was saved to individually. Alias the pages table as `t`. */
-const PAGE_COLLECTIONS = `(SELECT group_concat(pc.collection_id) FROM page_collections pc WHERE pc.reference_id = t.reference_id AND pc.page_path = t.path) AS collection_ids`
+export const PAGE_COLLECTIONS = `(SELECT group_concat(pc.collection_id) FROM page_collections pc WHERE pc.reference_id = t.reference_id AND pc.page_path = t.path) AS collection_ids`
 
 function toAnimation(r: Row): Animation {
   return {
@@ -113,8 +113,8 @@ function toAnimation(r: Row): Animation {
 }
 
 // Cursor = base64("<sortValue>|<id>")
-const encodeCursor = (v: string | number, id: string) => btoa(`${v}|${id}`)
-const decodeCursor = (c?: string | null): [string, string] | null => {
+export const encodeCursor = (v: string | number, id: string) => btoa(`${v}|${id}`)
+export const decodeCursor =(c?: string | null): [string, string] | null => {
   if (!c) return null
   try {
     const s = atob(c)
@@ -137,13 +137,16 @@ export interface ListFilter {
   cursor?: string | null
 }
 
-const REF_SELECT = `SELECT r.*, (SELECT group_concat(collection_id) FROM reference_collections rc WHERE rc.reference_id = r.id) AS collection_ids,
+export const REF_SELECT = `SELECT r.*, (SELECT group_concat(collection_id) FROM reference_collections rc WHERE rc.reference_id = r.id) AS collection_ids,
   (SELECT group_concat(k, '|') FROM (SELECT coalesce(p.desktop_thumb_key, p.mobile_thumb_key) AS k FROM pages p
     WHERE p.reference_id = r.id AND coalesce(p.desktop_thumb_key, p.mobile_thumb_key) IS NOT NULL ORDER BY p.ord LIMIT 3)) AS preview_keys
   FROM refs r`
 
-export async function listReferences(db: D1Database, f: ListFilter): Promise<Paged<Reference>> {
-  const limit = Math.min(Math.max(f.limit ?? 24, 1), 100)
+export type Where = { where: string[]; args: unknown[] }
+export const whereSql = (where: string[]) => (where.length ? "WHERE " + where.join(" AND ") : "")
+
+/** The websites feed's filters, everything but the cursor. Alias refs as `r`. */
+export function referenceWhere(f: ListFilter): Where {
   const where: string[] = []
   const args: unknown[] = []
   if (f.q) {
@@ -164,6 +167,12 @@ export async function listReferences(db: D1Database, f: ListFilter): Promise<Pag
     where.push(`r.status = ? AND coalesce(r.capture_control, '') != 'paused'`)
     args.push(f.status)
   }
+  return { where, args }
+}
+
+export async function listReferences(db: D1Database, f: ListFilter): Promise<Paged<Reference>> {
+  const limit = Math.min(Math.max(f.limit ?? 24, 1), 100)
+  const { where, args } = referenceWhere(f)
   const sort = f.sort ?? "newest"
   const cur = decodeCursor(f.cursor)
   let order: string
@@ -186,7 +195,7 @@ export async function listReferences(db: D1Database, f: ListFilter): Promise<Pag
       args.push(cur[0], cur[0], cur[1])
     }
   }
-  const sql = `${REF_SELECT} ${where.length ? "WHERE " + where.join(" AND ") : ""} ${order} LIMIT ?`
+  const sql = `${REF_SELECT} ${whereSql(where)} ${order} LIMIT ?`
   const { results } = await db.prepare(sql).bind(...args, limit + 1).all<Row>()
   const rows = results.slice(0, limit).map(toReference)
   const last = rows[rows.length - 1]
@@ -226,14 +235,8 @@ export async function getPage(db: D1Database, id: string) {
   return r ? toPage(r) : null
 }
 
-// Cross-reference feeds for the "Pages" and "Animations" gallery views.
-async function listChildren<T>(
-  db: D1Database,
-  table: "pages" | "animations",
-  map: (r: Row) => T,
-  f: ListFilter,
-): Promise<Paged<T & { reference: { id: string; title: string | null; domain: string } }>> {
-  const limit = Math.min(Math.max(f.limit ?? 24, 1), 100)
+/** The pages or animations feed's q and collection filters. Alias the table as `t` and its refs row as `r`. */
+export function childWhere(table: "pages" | "animations", f: ListFilter): Where {
   const where: string[] = []
   const args: unknown[] = []
   if (f.q) {
@@ -252,6 +255,18 @@ async function listChildren<T>(
     where.push(`(EXISTS (SELECT 1 FROM reference_collections rc WHERE rc.reference_id = t.reference_id AND rc.collection_id = ?) OR ${pinned})`)
     args.push(f.collectionId, f.collectionId)
   }
+  return { where, args }
+}
+
+// Cross-reference feeds for the "Pages" and "Animations" gallery views.
+async function listChildren<T>(
+  db: D1Database,
+  table: "pages" | "animations",
+  map: (r: Row) => T,
+  f: ListFilter,
+): Promise<Paged<T & { reference: { id: string; title: string | null; domain: string } }>> {
+  const limit = Math.min(Math.max(f.limit ?? 24, 1), 100)
+  const { where, args } = childWhere(table, f)
   const asc = f.sort === "oldest"
   const cur = decodeCursor(f.cursor)
   if (cur) {
@@ -259,9 +274,7 @@ async function listChildren<T>(
     args.push(cur[0], cur[0], cur[1])
   }
   const dir = asc ? "ASC" : "DESC"
-  const sql = `SELECT t.*, r.title AS ref_title, r.domain AS ref_domain${table === "pages" ? `, ${PAGE_COLLECTIONS}` : ""} FROM ${table} t JOIN refs r ON r.id = t.reference_id ${
-    where.length ? "WHERE " + where.join(" AND ") : ""
-  } ORDER BY t.created_at ${dir}, t.id ${dir} LIMIT ?`
+  const sql = `SELECT t.*, r.title AS ref_title, r.domain AS ref_domain${table === "pages" ? `, ${PAGE_COLLECTIONS}` : ""} FROM ${table} t JOIN refs r ON r.id = t.reference_id ${whereSql(where)} ORDER BY t.created_at ${dir}, t.id ${dir} LIMIT ?`
   const { results } = await db.prepare(sql).bind(...args, limit + 1).all<Row>()
   const page = results.slice(0, limit)
   const items = page.map((r) => ({
@@ -355,6 +368,8 @@ export async function deleteReference(db: D1Database, id: string) {
   const prefix = `refs/${id}/`
   await db.batch([
     db.prepare(`INSERT OR IGNORE INTO capture_cleanup (prefix) SELECT ? FROM refs WHERE id = ?`).bind(prefix, id),
+    // Board positions of the website and of its pages (keyed by reference id) on every board.
+    db.prepare(`DELETE FROM board_items WHERE item_id = ? AND kind IN ('reference', 'page')`).bind(id),
     db.prepare(`DELETE FROM refs WHERE id = ?`).bind(id),
   ])
 }
@@ -370,33 +385,38 @@ export async function deletePrefix(files: R2Bucket, prefix: string) {
 
 // Collections
 
+export const COLLECTION_SELECT = `SELECT c.*, (SELECT count(*) FROM reference_collections rc WHERE rc.collection_id = c.id) AS reference_count,
+    (SELECT count(*) FROM page_collections pc WHERE pc.collection_id = c.id
+      AND EXISTS (SELECT 1 FROM pages p WHERE p.reference_id = pc.reference_id AND p.path = pc.page_path)) AS page_count,
+    (SELECT count(*) FROM image_collections ic WHERE ic.collection_id = c.id) AS image_count,
+    (SELECT group_concat(k, '|') FROM (
+      SELECT k FROM (
+        SELECT r.cover_key AS k, rc.added_at AS at FROM reference_collections rc JOIN refs r ON r.id = rc.reference_id
+          WHERE rc.collection_id = c.id AND r.cover_key IS NOT NULL
+        UNION ALL
+        SELECT coalesce(p.desktop_thumb_key, p.mobile_thumb_key) AS k, pc.added_at AS at FROM page_collections pc
+          JOIN pages p ON p.reference_id = pc.reference_id AND p.path = pc.page_path
+          WHERE pc.collection_id = c.id AND coalesce(p.desktop_thumb_key, p.mobile_thumb_key) IS NOT NULL
+        UNION ALL
+        SELECT i.thumb_key AS k, ic.added_at AS at FROM image_collections ic JOIN images i ON i.id = ic.image_id
+          WHERE ic.collection_id = c.id
+      ) ORDER BY at DESC LIMIT 3)) AS cover_keys
+  FROM collections c`
+
+export const toCollection = (r: Row): Collection => ({
+  id: r.id as string,
+  name: r.name as string,
+  description: (r.description as string) ?? null,
+  referenceCount: r.reference_count as number,
+  pageCount: r.page_count as number,
+  imageCount: r.image_count as number,
+  coverKeys: r.cover_keys ? String(r.cover_keys).split("|") : [],
+  createdAt: r.created_at as string,
+})
+
 export async function listCollections(db: D1Database): Promise<Collection[]> {
-  const { results } = await db
-    .prepare(
-      `SELECT c.*, (SELECT count(*) FROM reference_collections rc WHERE rc.collection_id = c.id) AS reference_count,
-        (SELECT count(*) FROM page_collections pc WHERE pc.collection_id = c.id
-          AND EXISTS (SELECT 1 FROM pages p WHERE p.reference_id = pc.reference_id AND p.path = pc.page_path)) AS page_count,
-        (SELECT group_concat(k, '|') FROM (
-          SELECT k FROM (
-            SELECT r.cover_key AS k, rc.added_at AS at FROM reference_collections rc JOIN refs r ON r.id = rc.reference_id
-              WHERE rc.collection_id = c.id AND r.cover_key IS NOT NULL
-            UNION ALL
-            SELECT coalesce(p.desktop_thumb_key, p.mobile_thumb_key) AS k, pc.added_at AS at FROM page_collections pc
-              JOIN pages p ON p.reference_id = pc.reference_id AND p.path = pc.page_path
-              WHERE pc.collection_id = c.id AND coalesce(p.desktop_thumb_key, p.mobile_thumb_key) IS NOT NULL
-          ) ORDER BY at DESC LIMIT 3)) AS cover_keys
-      FROM collections c ORDER BY lower(c.name)`,
-    )
-    .all<Row>()
-  return results.map((r) => ({
-    id: r.id as string,
-    name: r.name as string,
-    description: (r.description as string) ?? null,
-    referenceCount: r.reference_count as number,
-    pageCount: r.page_count as number,
-    coverKeys: r.cover_keys ? String(r.cover_keys).split("|") : [],
-    createdAt: r.created_at as string,
-  }))
+  const { results } = await db.prepare(`${COLLECTION_SELECT} ORDER BY lower(c.name)`).all<Row>()
+  return results.map(toCollection)
 }
 
 export async function createCollection(db: D1Database, name: string, description?: string | null) {
@@ -420,7 +440,10 @@ export async function setReferenceCollection(db: D1Database, referenceId: string
       .bind(referenceId, collectionId, now())
       .run()
   } else {
-    await db.prepare(`DELETE FROM reference_collections WHERE reference_id = ? AND collection_id = ?`).bind(referenceId, collectionId).run()
+    await db.batch([
+      db.prepare(`DELETE FROM reference_collections WHERE reference_id = ? AND collection_id = ?`).bind(referenceId, collectionId),
+      db.prepare(`DELETE FROM board_items WHERE item_id = ? AND collection_id = ? AND kind = 'reference'`).bind(referenceId, collectionId),
+    ])
   }
 }
 
@@ -458,11 +481,17 @@ export async function setPageCollection(db: D1Database, collectionId: string, pa
         .bind(ids, collectionId)
   // Validation and the guarded write share one D1 transaction, so a recapture cannot replace
   // pages between checking their IDs and changing membership. A stale batch changes nothing.
+  // Taking pages off a board also drops their positions on its canvas.
+  const unplace = db
+    .prepare(`${selection} DELETE FROM board_items WHERE collection_id = ?2 AND kind = 'page'
+      AND (item_id, page_path) IN (SELECT reference_id, path FROM selected) AND ${canWrite}`)
+    .bind(ids, collectionId)
   const [validation, result] = await db.batch<{ collection_exists: number; pages_exist: number; missing: string }>([
     db.prepare(`${selection} SELECT *, (
       SELECT json_group_array(value) FROM json_each(?1) WHERE value NOT IN (SELECT id FROM selected)
     ) AS missing FROM valid`).bind(ids, collectionId),
     mutation,
+    ...(member ? [] : [unplace]),
   ])
   const valid = validation!.results[0]!
   if (!valid.collection_exists) return null
@@ -794,16 +823,17 @@ export async function getCaptureStatus(db: D1Database, ref: Reference): Promise<
 
 // ---------- Owner and library counts (cloud status and the transfer surface) ----------
 
-export type LibraryCounts = { refs: number; pages: number; animations: number; collections: number }
+export type LibraryCounts = { refs: number; pages: number; animations: number; collections: number; images: number }
 
 export async function libraryCounts(db: D1Database): Promise<LibraryCounts> {
   const row = await db
     .prepare(
       `SELECT (SELECT count(*) FROM refs) AS refs, (SELECT count(*) FROM pages) AS pages,
-              (SELECT count(*) FROM animations) AS animations, (SELECT count(*) FROM collections) AS collections`,
+              (SELECT count(*) FROM animations) AS animations, (SELECT count(*) FROM collections) AS collections,
+              (SELECT count(*) FROM images) AS images`,
     )
     .first<LibraryCounts>()
-  return row ?? { refs: 0, pages: 0, animations: 0, collections: 0 }
+  return row ?? { refs: 0, pages: 0, animations: 0, collections: 0, images: 0 }
 }
 
 /**

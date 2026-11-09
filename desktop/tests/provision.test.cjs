@@ -1827,6 +1827,16 @@ test('step messages name an adopted library, not an empty one', async () => {
   assert.match(step.skipMessage(ctx), /existing cloud library/);
 });
 
+test('a library of only uploaded images is not empty, so the move copies it', async () => {
+  for (const [images, empty] of [[3, false], [0, true]]) {
+    const library = fakeLibrary();
+    stateModule.beginEnabling(library.root);
+    const localQuery = async (_wrangler, options) => [{ rows: /FROM images/.test(options.sql) ? images : 0 }];
+    const ctx = createContext({ root: library.root, dataRoot: library.root, flags: {}, emit: collectedEmitter().emit, api: {}, wrangler: { bin: '/x', run: async () => ({ ok: true }) }, deps: { local: LOCAL_FAKE, deploy: { ...deploy, localQuery } } });
+    assert.equal((await ctx.libraryFacts()).empty, empty, `${images} images`);
+  }
+});
+
 test('imports drop SQLite internals a fresh database does not have', () => {
   const statements = [
     'PRAGMA defer_foreign_keys=TRUE;',

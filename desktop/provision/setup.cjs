@@ -111,11 +111,11 @@ async function classifyAccount(ctx) {
 
   if (!hasSchema && !hasBindings && !legacyMatches) return { ...base, outcome: 'foreign' };
 
-  let counts = { refs: 0, pages: 0, collections: 0 };
+  let counts = { refs: 0, pages: 0, collections: 0, images: 0 };
   if (hasSchema) {
-    counts = await cloudCounts(ctx, accountId, database.id).catch(() => ({ refs: 1, pages: 1, collections: 0 }));
+    counts = await cloudCounts(ctx, accountId, database.id).catch(() => ({ refs: 1, pages: 1, collections: 0, images: 0 }));
   }
-  const empty = Number(counts.refs) === 0 && Number(counts.pages) === 0;
+  const empty = Number(counts.refs) === 0 && Number(counts.pages) === 0 && Number(counts.images) === 0;
   return {
     ...base,
     counts,
@@ -129,7 +129,9 @@ async function cloudCounts(ctx, accountId, databaseId) {
     const rows = await ctx.api.d1Query(accountId, databaseId, `SELECT COUNT(*) AS rows FROM "${table}"`);
     return Number((rows[0] && rows[0].rows) || 0);
   };
-  return { refs: await row('refs'), pages: await row('pages'), collections: await row('collections') };
+  // A cloud library from before uploaded images has no images table: none there.
+  const images = await row('images').catch(() => 0);
+  return { refs: await row('refs'), pages: await row('pages'), collections: await row('collections'), images };
 }
 
 /** A legacy install's own record: web/wrangler.deploy.jsonc from the old script. */

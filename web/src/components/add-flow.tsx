@@ -3,13 +3,14 @@ import { useLocation } from "wouter"
 import { XIcon } from "@/components/icons"
 import { toast } from "sonner"
 import { AddReferenceDialog, extractUrls } from "@/components/add-reference-dialog"
+import { trackCapture } from "@/components/canvas/capture-card"
 import { ConnectMcpDialog } from "@/components/connect-mcp-dialog"
 import { notify } from "@/components/notify"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
 import { api } from "@/lib/api"
 import { useCollections } from "@/lib/collections"
 
-// One place that owns the "Create" dialogs so the top bar, collection header and empty
+// One place that owns the "Create" dialogs so the top bar, board views and empty
 // states on any page open the same flow.
 
 type Ctx = { addReference: (collectionId?: string, url?: string) => void; newCollection: () => void; connectMcp: () => void }
@@ -22,6 +23,9 @@ const typing = (target: EventTarget | null) => {
   return !!el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))
 }
 const dialogOpen = () => !!document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"]')
+/** The board being viewed (/b/:id, or the older /?collection=:id), so new material lands on it. */
+const currentBoard = () =>
+  window.location.pathname.match(/^\/b\/([^/]+)/)?.[1] ?? new URLSearchParams(window.location.search).get("collection") ?? undefined
 
 export function AddFlowProvider({ children }: { children: ReactNode }) {
   const [adding, setAdding] = useState<{ collection?: string; url?: string; n: number } | null>(null)
@@ -42,11 +46,12 @@ export function AddFlowProvider({ children }: { children: ReactNode }) {
   // Paste a URL anywhere in the app to add it; "/" jumps to search.
   useEffect(() => {
     const onPaste = (e: ClipboardEvent) => {
-      if (typing(e.target) || dialogOpen()) return
+      // The canvas capture card takes its own pastes (data-capture-input).
+      if (typing(e.target) || (e.target as Element | null)?.closest?.("[data-capture-input]") || dialogOpen()) return
       const text = e.clipboardData?.getData("text") ?? ""
       if (!extractUrls(text).length) return
       e.preventDefault()
-      open(new URLSearchParams(window.location.search).get("collection") ?? undefined, text)
+      open(currentBoard(), text)
     }
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey || typing(e.target) || dialogOpen()) return
@@ -79,6 +84,8 @@ export function AddFlowProvider({ children }: { children: ReactNode }) {
         defaultCollection={adding?.collection}
         defaultUrl={adding?.url}
         onOpenChange={(o) => !o && setAdding(null)}
+        // Captures started here show on the canvas capture card too.
+        onCreated={(r) => trackCapture(r.id)}
         onAdded={() => {
           setAdding(null)
           window.dispatchEvent(new Event("rs:reload"))
@@ -104,9 +111,9 @@ function NewCollectionDialog({ open, onOpenChange }: { open: boolean; onOpenChan
       const { id } = await api.createCollection(name.trim())
       await refresh()
       onOpenChange(false)
-      notify(`Created “${name.trim()}”`)
+      notify(`Created board “${name.trim()}”`)
       setName("")
-      navigate(`/?collection=${id}`)
+      navigate(`/b/${id}`)
     } catch (err) {
       toast.error((err as Error).message)
     } finally {
@@ -119,8 +126,8 @@ function NewCollectionDialog({ open, onOpenChange }: { open: boolean; onOpenChan
       <DialogContent showCloseButton={false} className="gap-0 p-0 sm:max-w-[400px]">
         <form onSubmit={submit}>
           <div className="flex items-center justify-between px-5 pt-5 pb-4">
-            <DialogTitle className="text-base font-medium">New collection</DialogTitle>
-            <DialogDescription className="sr-only">Name a collection to group references.</DialogDescription>
+            <DialogTitle className="text-base font-medium">New board</DialogTitle>
+            <DialogDescription className="sr-only">Name a board to group saves by project or mood.</DialogDescription>
             <DialogClose className="press -mr-1.5 grid size-7 place-items-center rounded-md text-ink-10 hover:bg-ink-3 hover:text-foreground active:scale-[0.92]" aria-label="Close">
               <XIcon className="size-4" />
             </DialogClose>
@@ -131,7 +138,7 @@ function NewCollectionDialog({ open, onOpenChange }: { open: boolean; onOpenChan
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. Pricing pages"
-              aria-label="Collection name"
+              aria-label="Board name"
               className="well h-10 w-full rounded-lg px-3 text-sm outline-none placeholder:text-ink-10 focus:bg-ink-4 pointer-coarse:text-base"
             />
           </div>
@@ -141,7 +148,7 @@ function NewCollectionDialog({ open, onOpenChange }: { open: boolean; onOpenChan
               disabled={!name.trim() || busy}
               className="press h-10 w-full rounded-lg bg-primary px-3.5 text-sm font-medium tracking-[-0.01em] text-primary-foreground shadow-primary hover:bg-(--primary-hover) disabled:opacity-60 disabled:active:scale-100 dark:disabled:bg-ink-4 dark:disabled:text-ink-8 dark:disabled:opacity-100 dark:disabled:shadow-none"
             >
-              {busy ? "Creating…" : "Create collection"}
+              {busy ? "Creating…" : "Create board"}
             </button>
           </div>
         </form>

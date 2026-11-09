@@ -187,7 +187,9 @@ export interface Collection {
   referenceCount: number
   /** Pages saved individually. They point at the same stored files as the page in its website. */
   pageCount: number
-  /** Covers of the most recently added websites and pages, newest first (max 3). */
+  /** Uploaded images on this board. */
+  imageCount: number
+  /** Covers of the most recently added websites, pages and images, newest first (max 3). */
   coverKeys: string[]
   createdAt: string
 }
@@ -300,4 +302,134 @@ export interface StorageUsage {
 export interface Paged<T> {
   items: T[]
   nextCursor: string | null
+}
+
+// ---------- Canvas: uploaded images, sections, boards ----------
+
+/** The source a page or section came from, embedded so a tile can label itself. */
+export interface RefSummary {
+  id: string
+  title: string | null
+  domain: string
+}
+
+/** An image the owner uploaded as moodboard material (not captured from a website). */
+export interface SavedImage {
+  id: string
+  /** The file name it was uploaded with, without extension. */
+  title: string | null
+  /** Full-size original, stored at uploads/<id>/original.<ext>. */
+  key: string
+  /** At most 800 px wide, made in the browser at upload: uploads/<id>/thumb.webp, or thumb.jpg where the browser can't encode WebP. */
+  thumbKey: string
+  width: number
+  height: number
+  mime: string
+  /** Up to 6 hex colours ("#a1b2c3") pulled from the image in the browser at upload, most prominent first. */
+  palette: string[]
+  /** Boards (collections) it is on. */
+  collectionIds: string[]
+  createdAt: string
+}
+
+/** One section of a captured page, listed on its own for the canvas Sections filter. */
+export interface SectionItem {
+  /** `${pageId}:${index}`, stable while the page row lives. */
+  id: string
+  pageId: string
+  referenceId: string
+  /** Position in the page's sections array. */
+  index: number
+  kind: PageSection["kind"]
+  label: string
+  /** JPEG of just this section (PageSection.key). */
+  key: string
+  /** Size in desktop CSS px: the page's desktop width by the section's height. */
+  width: number
+  height: number
+  path: string
+  url: string
+  reference: RefSummary
+  createdAt: string
+}
+
+/** How many of each kind of material match a filter (the canvas filter dock). */
+export interface LibraryTypeCounts {
+  websites: number
+  pages: number
+  sections: number
+  animations: number
+  images: number
+}
+
+export type BoardItemKind = "reference" | "page" | "image" | "note"
+
+/**
+ * Something on a board's canvas. References, pages and images are the board's members (collection membership);
+ * notes exist only on the board. x/y are null until the item is first placed, and the client lays those out.
+ */
+export interface BoardItem {
+  kind: BoardItemKind
+  /** Reference id, page id (the current row), image id or note id. */
+  id: string
+  /** Top-left corner in canvas px. */
+  x: number | null
+  y: number | null
+  /** Display width in canvas px; null means the kind's default. Height follows the item's aspect ratio. */
+  w: number | null
+  groupId: string | null
+  /** How it looks on this board; absent is the plain default. */
+  style?: BoardItemStyle
+  /** Notes only. */
+  text?: string
+  reference?: Reference
+  page?: Page & { reference: RefSummary }
+  image?: SavedImage
+}
+
+/**
+ * An item's look on a board (the layer menu). Every key is optional; absent means the default: rot 0 (degrees,
+ * -180..180), op 1 (0..1), round 6 (corner radius px, 0..40), blur 0 (px, 0..20), every flag false.
+ */
+export interface BoardItemStyle {
+  rot?: number
+  flip?: boolean
+  op?: number
+  round?: number
+  blur?: number
+  crop?: boolean
+  mask?: boolean
+  outline?: boolean
+  hidden?: boolean
+  locked?: boolean
+}
+
+/** A titled frame that groups items on a board. Moving it moves the items whose groupId points at it. */
+export interface BoardGroup {
+  id: string
+  name: string
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+export interface BoardCanvas {
+  collection: Collection
+  items: BoardItem[]
+  groups: BoardGroup[]
+}
+
+/** A position write for one board item (PUT /api/boards/:id/items). */
+export interface BoardItemPlacement {
+  kind: BoardItemKind
+  id: string
+  x: number
+  y: number
+  /** Omitted: keep the stored width. null: back to the default. */
+  w?: number | null
+  /** Omitted: keep the stored group. null: out of any group. */
+  groupId?: string | null
+  /** Omitted: keep the stored style. null: back to the plain look. */
+  style?: BoardItemStyle | null
 }

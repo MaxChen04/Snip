@@ -9,12 +9,12 @@ import {
   requireCaptureToken,
   crossSiteWrite,
   requireSession,
-  sameOriginWrites,
   signOutAll,
   startLogin,
   verifyFileSig,
 } from "./auth"
 import * as db from "./db"
+import { canvas } from "./canvas"
 import { signInPath } from "../shared/safe-next"
 import { loginOptions, loginVerify, registerOptions, registerVerify, listDevices, removeDevice } from "./passkeys"
 import { ownerLinkPage, ownerLinkSubmit } from "./owner"
@@ -135,11 +135,14 @@ app.post("/authorize", async (c) => {
 
 // ---------- Files (R2) ----------
 
+// Capture files. The agent may only write these.
 const KEY_RE = /^refs\/[a-z0-9]+\/[A-Za-z0-9._\/-]+$/
+// Served files: capture files plus the owner's uploaded images.
+const FILE_KEY_RE = /^(refs|uploads)\/[a-z0-9]+\/[A-Za-z0-9._\/-]+$/
 
 app.get("/files/*", async (c) => {
   const key = decodeURIComponent(c.req.path.slice("/files/".length))
-  if (!KEY_RE.test(key) || key.includes("..")) return c.notFound()
+  if (!FILE_KEY_RE.test(key) || key.includes("..")) return c.notFound()
   const signedOk = await verifyFileSig(c.env, key, c.req.query("exp"), c.req.query("sig"))
   if (!signedOk && !(await getSession(c))) return c.json({ error: "unauthorized" }, 401)
   // Byte ranges, which Safari needs before it will play a video. R2 reads the Range header itself.
@@ -176,7 +179,17 @@ app.get("/files/*", async (c) => {
 // ---------- Web API ----------
 
 const api = new Hono<AppEnv>()
-api.use("*", sameOriginWrites)
+api.use("*", async (c, next) => {
+  // An image upload is multipart, so it skips the JSON-only rule. It is still refused from any
+  // other origin or site, and the Lax session cookie never rides a cross-site POST.
+  const upload = c.req.method === "POST" && c.req.path === "/api/images"
+  const refused = crossSiteWrite(c.req.raw, { json: !upload })
+  if (refused) return c.json({ error: refused }, 403)
+  // Without the JSON rule, an upload must prove it comes from this origin rather than merely not deny it.
+  if (upload && c.req.header("origin") !== new URL(c.req.url).origin && c.req.header("sec-fetch-site") !== "same-origin")
+    return c.json({ error: "upload must come from this site" }, 403)
+  await next()
+})
 api.use("*", requireSession)
 
 api.get("/me", (c) => {
@@ -331,6 +344,9 @@ api.delete("/collections/:id", async (c) => {
   await db.deleteCollection(c.env.DB, c.req.param("id"))
   return c.json({ ok: true })
 })
+
+// Images, sections, counts and board canvases.
+api.route("/", canvas)
 
 app.route("/api", api)
 

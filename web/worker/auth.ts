@@ -312,12 +312,6 @@ export function crossSiteWrite(req: Request, { json = true, allowNullOrigin = fa
   return null
 }
 
-export const sameOriginWrites: MiddlewareHandler<AppEnv> = async (c, next) => {
-  const refused = crossSiteWrite(c.req.raw)
-  if (refused) return c.json({ error: refused }, 403)
-  await next()
-}
-
 // ---------- GitHub (the second-person path) ----------
 
 /**

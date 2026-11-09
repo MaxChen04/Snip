@@ -1,13 +1,14 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from "react"
-import { Route, Switch } from "wouter"
+import { Redirect, Route, Switch, useSearch } from "wouter"
 import { Spinner } from "@/components/ui/spinner"
 import { api, UnauthorizedError, type Me } from "@/lib/api"
 import { CollectionsProvider } from "@/lib/collections"
-import { GalleryPage } from "@/components/gallery-page"
+import { CanvasHome } from "@/components/canvas/canvas-home"
+import { BoardCanvas } from "@/components/canvas/board-canvas"
 import { ReferencePage } from "@/components/reference-page"
 import { AddFlowProvider } from "@/components/add-flow"
 
-// Signed-out and account pages are split out so the gallery bundle doesn't carry them.
+// Signed-out and account pages are split out so the canvas bundle doesn't carry them.
 const GuidePage = lazy(() => import("@/components/guide-page").then((m) => ({ default: m.GuidePage })))
 const LandingPage = lazy(() => import("@/components/landing-page").then((m) => ({ default: m.LandingPage })))
 const SignInPage = lazy(() => import("@/components/auth/sign-in-page").then((m) => ({ default: m.SignInPage })))
@@ -18,6 +19,16 @@ const Loading = () => (
     <Spinner className="size-5 text-muted-foreground" />
   </div>
 )
+
+/** All saves. Links from before the canvas (?collection=, ?view=) go to their new homes. */
+function Home({ login }: { login: string }) {
+  const params = new URLSearchParams(useSearch())
+  const collection = params.get("collection")
+  const view = params.get("view")
+  if (collection) return <Redirect to={`/b/${encodeURIComponent(collection)}`} replace />
+  if (view) return <Redirect to={`/?filter=${encodeURIComponent(view)}`} replace />
+  return <CanvasHome login={login} />
+}
 
 export function App() {
   const [state, setState] = useState<"loading" | "anon" | "offline" | Me>("loading")
@@ -94,8 +105,9 @@ export function App() {
           </Suspense>
         </Route>
         <Route path="/r/:id">{(p) => <ReferencePage key={p.id} id={p.id} login={state.login} />}</Route>
+        <Route path="/b/:id">{(p) => <BoardCanvas key={p.id} login={state.login} id={p.id} />}</Route>
         <Route>
-          <GalleryPage login={state.login} />
+          <Home login={state.login} />
         </Route>
       </Switch>
       </AddFlowProvider>
