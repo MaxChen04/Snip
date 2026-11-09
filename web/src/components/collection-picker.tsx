@@ -5,7 +5,7 @@ import { api, fileUrl, type Collection } from "@/lib/api"
 import { useCollections } from "@/lib/collections"
 import { cn } from "@/lib/utils"
 
-/** Square cover for a collection: newest reference cover, or a soft 2x2 placeholder. */
+/** Square cover for a board: newest cover, or a soft 2x2 placeholder. */
 export function CollectionThumb({ c, className }: { c?: Collection; className?: string }) {
   const key = c?.coverKeys[0]
   return key ? (
@@ -21,9 +21,13 @@ export function CollectionThumb({ c, className }: { c?: Collection; className?: 
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
 
-/** "2 websites · 5 pages", leaving out whichever is zero. */
-export function collectionCountLabel(c: Pick<Collection, "referenceCount" | "pageCount">) {
-  const parts = [c.referenceCount && plural(c.referenceCount, "website", "websites"), c.pageCount && plural(c.pageCount, "page", "pages")].filter(Boolean)
+/** "2 websites · 5 pages · 3 images", leaving out whichever is zero. */
+export function collectionCountLabel(c: Pick<Collection, "referenceCount" | "pageCount" | "imageCount">) {
+  const parts = [
+    c.referenceCount && plural(c.referenceCount, "website", "websites"),
+    c.pageCount && plural(c.pageCount, "page", "pages"),
+    c.imageCount && plural(c.imageCount, "image", "images"),
+  ].filter(Boolean)
   return parts.length ? parts.join(" · ") : "Empty"
 }
 
@@ -41,7 +45,7 @@ export function CheckCircle({ on }: { on: boolean }) {
 }
 
 /**
- * Cosmos "save to" list: search, a "New collection" row and one row per collection with a
+ * Cosmos "save to" list: search, a "New board" row and one row per board (collection) with a
  * round check. Selection is controlled so it works both before a reference exists (add flow)
  * and for live membership toggles.
  */
@@ -84,7 +88,8 @@ export function CollectionPicker({
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Search collections…"
+            placeholder="Find a board…"
+            aria-label="Find a board"
             className="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-ink-10"
           />
         </label>
@@ -109,7 +114,8 @@ export function CollectionPicker({
                   setCreating(false)
                 }
               }}
-              placeholder="Collection name"
+              placeholder="Board name"
+              aria-label="Board name"
               className="well h-8 min-w-0 flex-1 rounded-lg px-2.5 text-xs outline-none focus:bg-ink-4"
             />
             <button type="submit" className="press h-8 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground shadow-primary hover:bg-(--primary-hover)">
@@ -122,8 +128,8 @@ export function CollectionPicker({
               <PlusIcon className="size-4 text-ink-11" />
             </span>
             <span className="grid min-w-0 flex-1">
-              <span className="truncate text-sm font-medium">{q.trim() ? `Create “${q.trim()}”` : "New collection"}</span>
-              <span className="text-2xs text-ink-11">Group references by project or mood</span>
+              <span className="truncate text-sm font-medium">{q.trim() ? `Create “${q.trim()}”` : "New board"}</span>
+              <span className="text-2xs text-ink-11">Group saves by project or mood</span>
             </span>
           </button>
         )}

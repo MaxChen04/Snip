@@ -28,15 +28,21 @@ import {
   Folder01Icon,
   FolderAddIcon,
   FolderMinusIcon as HFolderMinus,
+  FullScreenIcon,
   Globe02Icon,
   HardDriveIcon as HHardDrive,
+  GridViewIcon,
   HierarchyIcon,
+  Image01Icon,
   InformationCircleIcon,
   Key01Icon,
   LaptopIcon as HLaptop,
+  Layers01Icon,
+  Layout01Icon,
   Link02Icon,
   Loading03Icon,
   Logout01Icon,
+  McpServerIcon as HMcpServer,
   MinusSignIcon,
   Moon02Icon,
   MoreHorizontalIcon as HMoreHorizontal,
@@ -47,15 +53,33 @@ import {
   PanelRightOpenIcon as HPanelRightOpen,
   Plug01Icon,
   ServerStack01Icon,
+  Share08Icon,
   ShieldKeyIcon,
   SmartPhone01Icon,
   SparklesIcon as HSparkles,
   SquareArrowUpRightIcon,
   StopIcon as HStop,
   SquareLock02Icon,
+  StickyNote02Icon,
   Search01Icon,
   Sun03Icon,
   Tick02Icon,
+  Upload01Icon,
+  // The board's layer menu
+  AlignLeftIcon as HAlignLeft,
+  ArrowExpandDiagonal01Icon,
+  BlurIcon as HBlur,
+  BorderFullIcon,
+  ContrastIcon,
+  CropIcon as HCrop,
+  DistributeHorizontalCenterIcon,
+  FlipHorizontalIcon,
+  GroupItemsIcon,
+  LayerMaskIcon,
+  LockedIcon,
+  RotateClockwiseIcon,
+  SquareRoundCornerIcon,
+  ViewOffSlashIcon,
 } from "@hugeicons/core-free-icons"
 
 // Hugeicons behind the names the app already uses, so a component only swaps its import line.
@@ -131,3 +155,27 @@ export const Terminal = TerminalIcon
 export const Trash2Icon = make(Delete02Icon, "Trash2Icon")
 export const TriangleAlertIcon = make(Alert02Icon, "TriangleAlertIcon")
 export const XIcon = make(Cancel01Icon, "XIcon")
+export const GridIcon = make(GridViewIcon, "GridIcon")
+export const ImageIcon = make(Image01Icon, "ImageIcon")
+export const LayersIcon = make(Layers01Icon, "LayersIcon")
+export const MaximizeIcon = make(FullScreenIcon, "MaximizeIcon")
+export const McpServerIcon = make(HMcpServer, "McpServerIcon")
+export const SectionsIcon = make(Layout01Icon, "SectionsIcon")
+export const ShareIcon = make(Share08Icon, "ShareIcon")
+export const StickyNoteIcon = make(StickyNote02Icon, "StickyNoteIcon")
+export const UploadIcon = make(Upload01Icon, "UploadIcon")
+// The board's layer menu
+export const AlignLeftIcon = make(HAlignLeft, "AlignLeftIcon")
+export const AutoLayoutIcon = make(DistributeHorizontalCenterIcon, "AutoLayoutIcon")
+export const BlurIcon = make(HBlur, "BlurIcon")
+export const CropIcon = make(HCrop, "CropIcon")
+export const FlipIcon = make(FlipHorizontalIcon, "FlipIcon")
+export const GroupIcon = make(GroupItemsIcon, "GroupIcon")
+export const HideIcon = make(ViewOffSlashIcon, "HideIcon")
+export const LockIcon = make(LockedIcon, "LockIcon")
+export const MaskIcon = make(LayerMaskIcon, "MaskIcon")
+export const OpacityIcon = make(ContrastIcon, "OpacityIcon")
+export const OutlineIcon = make(BorderFullIcon, "OutlineIcon")
+export const ResizeIcon = make(ArrowExpandDiagonal01Icon, "ResizeIcon")
+export const RotateIcon = make(RotateClockwiseIcon, "RotateIcon")
+export const RoundCornersIcon = make(SquareRoundCornerIcon, "RoundCornersIcon")

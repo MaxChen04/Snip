@@ -1,14 +1,15 @@
 import { useId, useState } from "react"
 import { Link } from "wouter"
 import { motion, useReducedMotion } from "motion/react"
-import { BookmarkIcon, FolderPlusIcon, GlobeIcon, KeyRound, LogOutIcon, MonitorIcon, MoonIcon, PlugIcon, PlusIcon, SearchIcon, SunIcon, TerminalIcon, XIcon } from "@/components/icons"
+import { BookmarkIcon, ChevronDownIcon, KeyRound, LogOutIcon, McpServerIcon, MonitorIcon, MoonIcon, SearchIcon, SunIcon, XIcon } from "@/components/icons"
 import { BookmarkletDialog } from "@/components/bookmarklet-dialog"
 import { api, type StorageUsage } from "@/lib/api"
 import { useAddFlow } from "@/components/add-flow"
+import { BoardsList } from "@/components/canvas/boards-list"
 import { isLocalOrigin } from "@/lib/mcp"
+import { useCollections } from "@/lib/collections"
 import { useTheme } from "next-themes"
 import { Logo } from "@/components/brand"
-import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -18,153 +19,130 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import { useGridSize, type GridSize } from "@/lib/prefs"
 
-// Cosmos-style chrome: three floating pills (brand + nav, search, actions).
-
-export type View = "websites" | "pages" | "animations"
-const VIEWS: { value: View; label: string }[] = [
-  { value: "websites", label: "Websites" },
-  { value: "pages", label: "Pages" },
-  { value: "animations", label: "Animations" },
-]
+// Cosmos-style chrome: three floating pills (brand + board switcher, search, actions).
 
 // Raised white pills: a fine ring and a crisp drop instead of a border.
 const pill = "flex h-10 items-center rounded-full bg-control/90 shadow-button backdrop-blur-md"
 
 export function TopBar({
   login,
-  view,
-  onView,
   query,
   onQuery,
-  collection,
+  boardId,
   solid,
+  floating,
 }: {
   login: string
-  view?: View
-  onView?: (v: View) => void
   query?: string
   onQuery?: (q: string) => void
-  /** Preselected in the add flow when browsing a collection. */
-  collection?: string
+  /** The board in view, named in the switcher. Undefined is All saves. */
+  boardId?: string
   /** Opaque background, for pages with their own sticky bar underneath so content can't show through. */
   solid?: boolean
+  /** Over a canvas: laid on top of it, and only the pills take the pointer so the gaps between them still pan. */
+  floating?: boolean
 }) {
   return (
-    <header className={cn("sticky top-0 z-30 flex items-center gap-3 px-4 py-3 sm:px-6", solid && "bg-background")}>
-      <div className={cn(pill, "shrink-0 gap-1 p-1")}>
-        <Link href="/" className="press grid size-8 place-items-center rounded-full hover:bg-ink-2 active:scale-[0.92]" aria-label="Snip home">
-          <Logo className="size-7" />
-        </Link>
-        <nav className="hidden items-center sm:flex">
-          {VIEWS.map((v) =>
-            onView ? (
-              <button
-                key={v.value}
-                onClick={() => onView(v.value)}
-                aria-current={view === v.value ? "page" : undefined}
-                className={cn(
-                  "press h-8 rounded-full px-3 text-xs font-medium text-ink-11 hover:bg-ink-2 hover:text-foreground",
-                  view === v.value && "bg-ink-3 text-foreground hover:bg-ink-3",
-                )}
-              >
-                {v.label}
-              </button>
-            ) : (
-              <Link key={v.value} href={`/?view=${v.value}`} className="press h-8 content-center rounded-full px-3 text-xs font-medium text-ink-11 hover:bg-ink-2 hover:text-foreground">
-                {v.label}
-              </Link>
-            ),
-          )}
-        </nav>
-      </div>
+    <header
+      className={cn(
+        "flex items-center gap-3 px-4 py-3 sm:px-6",
+        floating ? "pointer-events-none absolute inset-x-0 top-0 z-50 *:pointer-events-auto" : "sticky top-0 z-30",
+        solid && "bg-background",
+      )}
+    >
+      <BoardSwitcher boardId={boardId} />
 
-      <div className="mx-auto min-w-0 max-w-md flex-1">
-        {onQuery ? (
-          <label className="well flex h-10 items-center gap-2 rounded-full px-3.5">
-            <SearchIcon className="size-4 shrink-0 text-ink-9" />
-            <input
-              data-search
-              value={query}
-              onChange={(e) => onQuery(e.target.value)}
-              onKeyDown={(e) => e.key === "Escape" && e.currentTarget.blur()}
-              placeholder="Search Snip…"
-              aria-keyshortcuts="/"
-              className="peer h-full min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-ink-10"
-            />
-            {!query && (
-              <kbd aria-hidden className="hidden h-5 min-w-5 place-items-center rounded-sm bg-ink-3 px-1 text-2xs text-ink-10 pointer-fine:grid pointer-fine:peer-focus:hidden">
-                /
-              </kbd>
-            )}
-            {query && (
-              <button onClick={() => onQuery("")} aria-label="Clear search" className="press grid size-5 place-items-center rounded-full bg-control text-ink-10 shadow-button hover:text-foreground active:scale-[0.92]">
-                <XIcon className="size-3" />
-              </button>
-            )}
-          </label>
-        ) : null}
-      </div>
+      {onQuery ? (
+        // Compact until it's in use: it widens while focused or holding a query, so the canvas doesn't feel crowded.
+        <label
+          className={cn(
+            pill,
+            "mx-auto w-60 min-w-0 gap-2 px-3 transition-[width] duration-200 ease-out focus-within:w-80 has-[input:not(:placeholder-shown)]:w-80 motion-reduce:transition-none has-focus-visible:outline-2 has-focus-visible:outline-offset-2",
+          )}
+        >
+          <SearchIcon className="size-3.5 shrink-0 text-ink-9" />
+          <input
+            data-search
+            value={query}
+            onChange={(e) => onQuery(e.target.value)}
+            onKeyDown={(e) => e.key === "Escape" && e.currentTarget.blur()}
+            placeholder="Search…"
+            aria-label="Search your saves"
+            aria-keyshortcuts="/"
+            className="peer h-full min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-ink-10 pointer-coarse:text-base"
+          />
+          {!query && (
+            <kbd aria-hidden className="hidden h-5 min-w-5 place-items-center rounded-sm bg-ink-3 px-1 text-2xs text-ink-10 pointer-fine:grid pointer-fine:peer-focus:hidden">
+              /
+            </kbd>
+          )}
+          {query && (
+            <button onClick={() => onQuery("")} aria-label="Clear search" className="press grid size-5 place-items-center rounded-full bg-control text-ink-10 shadow-button hover:text-foreground active:scale-[0.92]">
+              <XIcon className="size-3" />
+            </button>
+          )}
+        </label>
+      ) : (
+        <div className="flex-1" />
+      )}
 
       <div className={cn(pill, "shrink-0 gap-1.5 p-1")}>
-        <ConnectButton />
-        <CreateMenu collection={collection} />
+        <McpButton />
         <AccountMenu login={login} />
       </div>
     </header>
   )
 }
 
-function ConnectButton() {
-  const { connectMcp } = useAddFlow()
+/** The logo goes home; the board name opens the boards popover. */
+function BoardSwitcher({ boardId }: { boardId?: string }) {
+  const { collections } = useCollections()
+  const [open, setOpen] = useState(false)
+  const name = boardId ? (collections.find((c) => c.id === boardId)?.name ?? "Board") : "All saves"
   return (
-    <Button size="sm" variant="ghost" onClick={connectMcp} aria-label="Connect MCP" title="Connect your agent over MCP" className="rounded-full">
-      <PlugIcon data-icon="inline-start" />
-      <span className="hidden sm:inline">Connect MCP</span>
-    </Button>
+    <div className={cn(pill, "shrink-0 gap-0.5 p-1")}>
+      <Link href="/" className="press grid size-8 place-items-center rounded-full hover:bg-ink-2 active:scale-[0.92]" aria-label="Snip home">
+        <Logo className="size-7" />
+      </Link>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger
+          aria-label={`${name}, switch board`}
+          className="press group/board flex h-8 max-w-[40vw] items-center gap-1 rounded-full pr-2.5 pl-1.5 text-xs font-medium hover:bg-ink-2 data-popup-open:bg-ink-3 sm:max-w-56"
+        >
+          <span className="truncate">{name}</span>
+          <ChevronDownIcon className="size-3.5 shrink-0 text-ink-10 transition-transform duration-150 ease-out group-data-popup-open/board:rotate-180" />
+        </PopoverTrigger>
+        <PopoverContent align="start" sideOffset={8} className="w-auto p-1.5">
+          <BoardsList activeId={boardId} onNavigate={() => setOpen(false)} />
+        </PopoverContent>
+      </Popover>
+    </div>
   )
 }
 
-function CreateMenu({ collection }: { collection?: string }) {
-  const { addReference, newCollection, connectMcp } = useAddFlow()
-  const item = "flex items-start gap-3 px-2.5 py-2"
+function McpButton() {
+  const { connectMcp } = useAddFlow()
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger aria-label="Create" render={<Button size="sm" className="rounded-full" />}>
-        <PlusIcon data-icon="inline-start" />
-        <span className="hidden sm:inline">Create</span>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" sideOffset={10} className="w-64 p-1.5">
-        <DropdownMenuGroup>
-          <DropdownMenuItem className={item} onClick={() => addReference(collection)}>
-            <GlobeIcon className="mt-0.5" />
-            <span className="grid">
-              <span className="font-medium">Reference</span>
-              <span className="text-2xs text-muted-foreground">Capture a page or crawl a site</span>
-            </span>
-          </DropdownMenuItem>
-          <DropdownMenuItem className={item} onClick={newCollection}>
-            <FolderPlusIcon className="mt-0.5" />
-            <span className="grid">
-              <span className="font-medium">Collection</span>
-              <span className="text-2xs text-muted-foreground">Group references together</span>
-            </span>
-          </DropdownMenuItem>
-          <DropdownMenuItem
-            className={item}
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
             onClick={connectMcp}
-          >
-            <TerminalIcon className="mt-0.5" />
-            <span className="grid">
-              <span className="font-medium">Connect an agent</span>
-              <span className="text-2xs text-muted-foreground">MCP URL and setup steps</span>
-            </span>
-          </DropdownMenuItem>
-        </DropdownMenuGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
+            aria-label="Connect MCP"
+            className="press grid size-8 place-items-center rounded-full text-ink-11 hover:bg-ink-3 hover:text-foreground active:scale-[0.92]"
+          />
+        }
+      >
+        <McpServerIcon className="size-4" />
+      </TooltipTrigger>
+      <TooltipContent side="bottom">Connect your agent over MCP</TooltipContent>
+    </Tooltip>
   )
 }
 

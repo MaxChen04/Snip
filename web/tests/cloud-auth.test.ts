@@ -464,12 +464,12 @@ test("the migration ledger is excluded from the copy, so a version skew cannot f
     assert.equal("passkeys" in manifest.tables, true)
     assert.equal(manifest.excluded.includes("owners") || manifest.excluded.includes("passkeys"), false)
 
-    // /transfer/status and /api/cloud-status read counts from libraryCounts, which names its four
+    // /transfer/status and /api/cloud-status read counts from libraryCounts, which names its
     // tables explicitly, so the ledger cannot disturb guard, verify or the Settings copy.
     const status = (await (await call("/transfer/status", { headers: bearer }, withFiles)).json()) as { counts: Record<string, number> }
-    assert.deepEqual(status.counts, { refs: 1, pages: 0, animations: 0, collections: 0 })
+    assert.deepEqual(status.counts, { refs: 1, pages: 0, animations: 0, collections: 0, images: 0 })
     const cloud = (await (await local("/api/cloud-status", {}, { DEV_LOGIN: "max" })).json()) as { counts: Record<string, number> }
-    assert.deepEqual(cloud.counts, { refs: 1, pages: 0, animations: 0, collections: 0 })
+    assert.deepEqual(cloud.counts, { refs: 1, pages: 0, animations: 0, collections: 0, images: 0 })
   }))
 
 test("the content-type fallback is batched, and costs nothing when the listing carries it", () =>
@@ -608,7 +608,7 @@ test("cloud status reports the owner, methods, counts and the capture agent", ()
     assert.deepEqual(Object.keys(initial).sort(), ["counts", "hasOwner", "lastCapture", "methods", "ownerId", "version"])
     assert.equal(initial.hasOwner, false)
     assert.deepEqual(initial.methods, [], "no GitHub credentials and no passkeys")
-    assert.deepEqual(initial.counts, { refs: 0, pages: 0, animations: 0, collections: 0 })
+    assert.deepEqual(initial.counts, { refs: 0, pages: 0, animations: 0, collections: 0, images: 0 })
     assert.deepEqual(initial.lastCapture, { at: null, activity: null, stale: true })
 
     await database.prepare(`INSERT INTO owners (id, label, created_at) VALUES ('max', 'Max', '2026-01-01T00:00:00Z')`).run()

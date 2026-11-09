@@ -1827,6 +1827,39 @@ test('step messages name an adopted library, not an empty one', async () => {
   assert.match(step.skipMessage(ctx), /existing cloud library/);
 });
 
+test('a library of only uploaded images or boards is not empty, so the move copies it', async () => {
+  // A board of sticky notes alone is a collections row with nothing in refs or images.
+  for (const [table, rows, empty] of [['images', 3, false], ['collections', 1, false], ['images', 0, true]]) {
+    const library = fakeLibrary();
+    stateModule.beginEnabling(library.root);
+    const localQuery = async (_wrangler, options) => [{ rows: new RegExp(`FROM ${table}\\b`).test(options.sql) ? rows : 0 }];
+    const ctx = createContext({ root: library.root, dataRoot: library.root, flags: {}, emit: collectedEmitter().emit, api: {}, wrangler: { bin: '/x', run: async () => ({ ok: true }) }, deps: { local: LOCAL_FAKE, deploy: { ...deploy, localQuery } } });
+    assert.equal((await ctx.libraryFacts()).empty, empty, `${rows} ${table}`);
+  }
+});
+
+test('a cloud library holding only a board is adopted as existing, not empty', async () => {
+  const model = buildModel({
+    deployed: true,
+    schema: true,
+    bindings: [{ name: 'DB' }, { name: 'FILES' }, { name: 'OAUTH_KV' }],
+    d1: [{ id: 'legacy-d1', name: 'snip', tables: 6 }],
+    remoteRows: { refs: 0, pages: 0, collections: 1 },
+  });
+  const ctx = {
+    cloud: { accountId: 'acct', url: null },
+    api: fakeApi(model),
+    wrangler: fakeWrangler(model),
+    deps: { cloud: { listD1: async () => [{ id: 'legacy-d1', name: 'snip' }], listKv: async () => [] } },
+    state: () => ({}),
+    dataRoot: model.root,
+  };
+  const facts = await setup.classifyAccount(ctx);
+  assert.equal(facts.outcome, 'adopt-existing');
+  model.remoteRows.collections = 0;
+  assert.equal((await setup.classifyAccount(ctx)).outcome, 'adopt-empty');
+});
+
 test('imports drop SQLite internals a fresh database does not have', () => {
   const statements = [
     'PRAGMA defer_foreign_keys=TRUE;',

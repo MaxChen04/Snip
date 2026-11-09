@@ -30,6 +30,7 @@ export function AddReferenceDialog({
   open,
   onOpenChange,
   onAdded,
+  onCreated,
   defaultCollection,
   defaultUrl,
 }: {
@@ -37,6 +38,8 @@ export function AddReferenceDialog({
   onOpenChange: (o: boolean) => void
   /** null after adding several websites at once. */
   onAdded: (r: Reference | null) => void
+  /** Each reference as it is created, including the ones saved before a bulk add fails part way. */
+  onCreated?: (r: Reference) => void
   defaultCollection?: string
   defaultUrl?: string
 }) {
@@ -76,7 +79,7 @@ export function AddReferenceDialog({
     let lastError = ""
     for (const u of bulk) {
       try {
-        await api.addReference(body(u))
+        onCreated?.(await api.addReference(body(u)))
         added++
       } catch (err) {
         if (err instanceof DuplicateError) saved++
@@ -106,6 +109,7 @@ export function AddReferenceDialog({
     try {
       if (bulk.length) return await submitBulk()
       const ref = await api.addReference(body(parsed!, allowDuplicate))
+      onCreated?.(ref)
       setUrl("")
       onAdded(ref)
       notify(mode === "crawl" ? `Crawling ${parsed!.hostname}` : "Added 1 reference", {
@@ -344,7 +348,7 @@ export function AddReferenceDialog({
               )}
             </div>
 
-            {/* Collections */}
+            {/* Boards */}
             <div className="flex min-h-0 flex-col gap-1.5">
               <span className="px-1 text-xs font-medium text-ink-11">Save to</span>
               <CollectionPicker

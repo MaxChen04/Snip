@@ -18,7 +18,6 @@ import { CollectionPicker } from "@/components/collection-picker"
 import { diagnoseCaptureError, RetryCaptureButton } from "@/components/capture-retry"
 import { CaptureControls, captureLabel } from "@/components/capture-controls"
 import { EMPTY_SELECTION, SelectCheck, SelectionBar, toggleIn, type Selection } from "@/components/prompt-selection"
-import { Masonry } from "@/components/gallery-page"
 import { SavePagesButton } from "@/components/save-pages"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { TokensPanel } from "@/components/tokens-panel"
@@ -41,6 +40,12 @@ import { isVideoKey } from "../../shared/types"
 import { useCollections } from "@/lib/collections"
 import { referenceViewUrl, useDesktopState } from "@/hooks/use-desktop-state"
 import { LIVE_POLL, usePoll } from "@/hooks/use-poll"
+import { masonryCols, useGridSize } from "@/lib/prefs"
+
+function Masonry({ children }: { children: React.ReactNode }) {
+  const [grid] = useGridSize()
+  return <div className={cn(masonryCols[grid], "gap-4 lg:gap-5 [&>*]:mb-4 lg:[&>*]:mb-5 [&>*]:break-inside-avoid")}>{children}</div>
+}
 
 /** A failed capture: what went wrong in plain terms, the raw error, and Retry. */
 function CaptureFailure({ id, error, onRetried }: { id: string; error: string | null; onRetried: () => void }) {
@@ -187,7 +192,7 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
         <div className="max-w-2xl">
           <p className="text-xs text-ink-10">
             <Link href="/" className="hover:text-foreground">
-              Everything
+              All saves
             </Link>
             {inCollections.length > 0 && (
               <>
@@ -195,7 +200,7 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
                 {inCollections.map((c, i) => (
                   <span key={c.id}>
                     {i > 0 && ", "}
-                    <Link href={`/?collection=${c.id}`} className="hover:text-foreground">
+                    <Link href={`/b/${c.id}`} className="hover:text-foreground">
                       {c.name}
                     </Link>
                   </span>

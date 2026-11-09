@@ -1,7 +1,44 @@
-import type { AgentPresence, Animation, CaptureMode, CaptureOptions, Collection, Page, Paged, Reference, StorageUsage } from "../../shared/types"
+import type {
+  AgentPresence,
+  Animation,
+  BoardCanvas,
+  BoardGroup,
+  BoardItem,
+  BoardItemKind,
+  BoardItemPlacement,
+  CaptureMode,
+  CaptureOptions,
+  Collection,
+  LibraryTypeCounts,
+  Page,
+  Paged,
+  Reference,
+  RefSummary,
+  SavedImage,
+  SectionItem,
+  StorageUsage,
+} from "../../shared/types"
 
-export type { AgentPresence, Animation, CaptureMode, CaptureOptions, Collection, Page, Paged, Reference, StorageUsage }
-export type RefSummary = { id: string; title: string | null; domain: string }
+export type {
+  AgentPresence,
+  Animation,
+  BoardCanvas,
+  BoardGroup,
+  BoardItem,
+  BoardItemKind,
+  BoardItemPlacement,
+  CaptureMode,
+  CaptureOptions,
+  Collection,
+  LibraryTypeCounts,
+  Page,
+  Paged,
+  Reference,
+  RefSummary,
+  SavedImage,
+  SectionItem,
+  StorageUsage,
+}
 export type PageWithRef = Page & { reference: RefSummary }
 export type AnimationWithRef = Animation & { reference: RefSummary }
 
@@ -53,11 +90,57 @@ export const api = {
   removePasskey: (id: string) => request<{ ok: true }>(`/api/passkeys/${id}`, { method: "DELETE" }),
   /** Signs out every browser and the desktop app. MCP tokens are a separate credential and stay valid. */
   signOutAll: () => request<{ ok: true; epoch: number }>("/api/sign-out-all", { method: "POST", body: "{}" }),
-  references: (f: Filters, cursor?: string | null) =>
-    request<Paged<Reference>>(`/api/references?${qs({ ...f, cursor, limit: 24 })}`),
-  pages: (f: Filters, cursor?: string | null) => request<Paged<PageWithRef>>(`/api/pages?${qs({ ...f, cursor, limit: 30 })}`),
-  animations: (f: Filters, cursor?: string | null) =>
-    request<Paged<AnimationWithRef>>(`/api/animations?${qs({ ...f, cursor, limit: 30 })}`),
+  references: (f: Filters, cursor?: string | null, limit = 24) =>
+    request<Paged<Reference>>(`/api/references?${qs({ ...f, cursor, limit })}`),
+  pages: (f: Filters, cursor?: string | null, limit = 30) => request<Paged<PageWithRef>>(`/api/pages?${qs({ ...f, cursor, limit })}`),
+  animations: (f: Filters, cursor?: string | null, limit = 30) =>
+    request<Paged<AnimationWithRef>>(`/api/animations?${qs({ ...f, cursor, limit })}`),
+  /** Sections of captured pages, newest page first, each page's sections top to bottom. */
+  sections: (f: Filters, cursor?: string | null, limit = 60) => request<Paged<SectionItem>>(`/api/sections?${qs({ ...f, cursor, limit })}`),
+  /** Uploaded images, newest first. q matches the title; collection narrows to a board. */
+  images: (f: Filters, cursor?: string | null, limit = 60) => request<Paged<SavedImage>>(`/api/images?${qs({ ...f, cursor, limit })}`),
+  /** Counts per kind for the filter dock, for the whole library or one board, matching q. */
+  counts: (f: Pick<Filters, "q" | "collection"> = {}) => request<LibraryTypeCounts>(`/api/counts?${qs({ ...f })}`),
+  /**
+   * Upload one image (multipart). The browser makes the thumbnail and palette; see lib/images.ts.
+   * With collectionId it is also put on that board.
+   */
+  uploadImage: async (body: { file: Blob; fileName: string; thumb: Blob; width: number; height: number; palette: string[]; collectionId?: string }) => {
+    const form = new FormData()
+    form.set("file", body.file, body.fileName)
+    // WebP, or JPEG where the browser can't encode WebP.
+    form.set("thumb", body.thumb, body.thumb.type === "image/jpeg" ? "thumb.jpg" : "thumb.webp")
+    form.set("width", String(body.width))
+    form.set("height", String(body.height))
+    form.set("palette", JSON.stringify(body.palette))
+    if (body.collectionId) form.set("collectionId", body.collectionId)
+    // No content-type header: the browser sets the multipart boundary.
+    const res = await fetch("/api/images", { method: "POST", body: form })
+    if (res.status === 401) throw new UnauthorizedError("Not signed in")
+    if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error ?? `Upload failed (${res.status})`)
+    return (await res.json()) as SavedImage
+  },
+  deleteImage: (id: string) => request<{ ok: true }>(`/api/images/${id}`, { method: "DELETE" }),
+  /** Put images on a board or take them off. */
+  setImageMembership: (cid: string, imageIds: string[], member: boolean) =>
+    request<{ ok: true; changed: number }>(`/api/collections/${cid}/images`, { method: "POST", body: JSON.stringify({ imageIds, member }) }),
+  /** A board's members, notes and groups with their canvas positions. */
+  board: (id: string) => request<BoardCanvas>(`/api/boards/${id}`),
+  /** Save positions (and optionally width and group) for up to 200 items at once. */
+  placeBoardItems: (id: string, items: BoardItemPlacement[]) =>
+    request<{ ok: true }>(`/api/boards/${id}/items`, { method: "PUT", body: JSON.stringify({ items }) }),
+  addBoardNote: (id: string, note: { text: string; x: number; y: number; w?: number | null; groupId?: string | null }) =>
+    request<BoardItem>(`/api/boards/${id}/notes`, { method: "POST", body: JSON.stringify(note) }),
+  updateBoardNote: (id: string, noteId: string, text: string) =>
+    request<{ ok: true }>(`/api/boards/${id}/notes/${noteId}`, { method: "PATCH", body: JSON.stringify({ text }) }),
+  deleteBoardNote: (id: string, noteId: string) => request<{ ok: true }>(`/api/boards/${id}/notes/${noteId}`, { method: "DELETE" }),
+  /** Frame items in a titled group. The items' groupId is set to the new group. */
+  createBoardGroup: (id: string, group: Omit<BoardGroup, "id"> & { items: { kind: BoardItemKind; id: string }[] }) =>
+    request<BoardGroup>(`/api/boards/${id}/groups`, { method: "POST", body: JSON.stringify(group) }),
+  updateBoardGroup: (id: string, groupId: string, patch: Partial<Omit<BoardGroup, "id">>) =>
+    request<{ ok: true }>(`/api/boards/${id}/groups/${groupId}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  /** Remove the frame. Its items stay where they are, ungrouped. */
+  deleteBoardGroup: (id: string, groupId: string) => request<{ ok: true }>(`/api/boards/${id}/groups/${groupId}`, { method: "DELETE" }),
   reference: (id: string) => request<{ reference: Reference; pages: Page[]; animations: Animation[] }>(`/api/references/${id}`),
   addReference: async (body: {
     url: string

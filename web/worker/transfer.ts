@@ -5,7 +5,7 @@ import { WORKER_VERSION } from "./version"
 
 // The transfer surface exists only while TRANSFER_TOKEN is set: the provisioning engine sets it
 // before a move or a pull and deletes it afterwards. It is mounted outside /api so it inherits
-// neither sameOriginWrites nor requireSession, and every body is streamed — a move can carry
+// neither the /api origin checks nor requireSession, and every body is streamed — a move can carry
 // gigabytes through it.
 
 export const MAX_TRANSFER_BYTES = 100 * 1024 * 1024
@@ -13,7 +13,8 @@ export const MAX_TRANSFER_BYTES = 100 * 1024 * 1024
 /** How many fallback `HEAD`s the manifest runs at once; see the content-type note below. */
 export const MANIFEST_HEAD_CONCURRENCY = 8
 
-const KEY_RE = /^refs\/[a-z0-9]+\/[A-Za-z0-9._\/-]+$/
+// Capture files and uploaded images: a move carries both.
+const KEY_RE = /^(refs|uploads)\/[a-z0-9]+\/[A-Za-z0-9._\/-]+$/
 const validKey = (key: string) => KEY_RE.test(key) && !key.includes("..")
 const keyFromPath = (path: string) => decodeURIComponent(path.slice("/transfer/file/".length))
 

@@ -94,13 +94,19 @@ function createContext({ root, dataRoot, flags = {}, emit, api, wrangler, releas
           let empty = false;
           if (localConfig) {
             try {
-              const rows = await ctx.deps.deploy.localQuery(ctx.wrangler, {
-                dataRoot,
-                sql: 'SELECT COUNT(*) AS rows FROM refs',
-                config: localConfig,
-                persistTo: ctx.deps.local.localStatePath(dataRoot),
-              });
-              empty = Number(rows[0] && rows[0].rows) === 0;
+              const count = async (table) => {
+                const rows = await ctx.deps.deploy.localQuery(ctx.wrangler, {
+                  dataRoot,
+                  sql: `SELECT COUNT(*) AS rows FROM ${table}`,
+                  config: localConfig,
+                  persistTo: ctx.deps.local.localStatePath(dataRoot),
+                });
+                return Number(rows[0] && rows[0].rows);
+              };
+              // Anything the owner made counts: websites, uploaded images, and boards (which hold sticky notes and
+              // groups even with no saves on them). Before the images table existed its query throws, which the
+              // catch below treats as "not empty".
+              empty = (await count('refs')) === 0 && (await count('images')) === 0 && (await count('collections')) === 0;
             } catch {
               // An unreadable library is never treated as empty: the empty path is
               // the one that skips the copy, so it has to be proven.
