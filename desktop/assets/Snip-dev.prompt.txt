@@ -1,0 +1,7 @@
+Generated with the built-in image_gen tool from a PNG export of desktop/assets/Snip.icns.
+Snip-dev.png is the generated master; Snip-dev.icns contains macOS icon sizes
+16, 32, 128, 256 and 512 points, each at 1x and 2x (resized with sips,
+then packaged with iconutil).
+
+Prompt:
+Use case: precise-object-edit. Create a development-environment variant of the supplied Snip macOS app icon. The supplied image is the edit target. Preserve the exact paper mascot identity, running pose, silhouette, pixel-art stepped edges, cream paper, red bookmark, red scissors, face, hands, feet and yellow exclamation marks. Preserve its size and placement and the rounded-square app tile silhouette and margins. Change only the golden rounded-square tile behind the mascot into a rich cobalt/Prussian blue blueprint background: fine crisp cyan-white square drafting grid lines, subtly stronger major grid lines at regular intervals, restrained technical construction arcs and registration marks visible around the mascot. Keep the blueprint grid behind the mascot and unobtrusive. Adapt the tile bevel and shadow to blue. Premium polished macOS icon, legible at small size, clean transparent exterior outside the rounded-square tile. No letters, no DEV badge, no numbers, no added objects, no watermark. Output square 1024px icon.
