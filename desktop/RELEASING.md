@@ -1,6 +1,82 @@
 # Publishing Snip for macOS
 
-Snip ships only for Apple Silicon on macOS 14 or later. The local `build.mjs` launcher remains useful for development; `release.mjs` creates an independent bundle containing the web app, capture engine, Node 24 and Chromium. Both use the approved golden app icon in `assets/Snip.icns`.
+Snip ships only for Apple Silicon on macOS 14 or later. The local `build.mjs` launcher remains useful for development; `release.mjs` creates an independent bundle containing the web app, capture engine, Node 24 and Chromium. Stable builds use the golden icon in `assets/Snip.icns`; Snip Dev uses the blueprint icon in `assets/Snip-dev.icns`.
+
+## Stable and Snip Dev in one repository
+
+`main` is the integration branch. Stable releases select an approved commit with
+a `vX.Y.Z` tag; there is no long-lived `dev` branch. Pushing that tag builds a
+signed **draft** stable release. The tag must belong to `main` and match the
+desktop package version. Publishing the draft remains a deliberate release step.
+The manual stable workflow is also available for an existing tag.
+
+Snip Dev is a separate app, not a renamed stable installation:
+
+| | Snip | Snip Dev |
+| --- | --- | --- |
+| App / icon | `Snip.app` / gold | `Snip Dev.app` / blue blueprint |
+| Bundle ID | `dev.snip.desktop` | `dev.snip.desktop.nightly` |
+| Update source | Published stable `vX.Y.Z` release | Published `nightly-v0.0.N` prerelease |
+| Default port | 5173 | 5175 |
+| Library | Existing stable library | `~/Library/Application Support/Snip Dev/library` |
+
+Snip Dev has its own Electron profile, cookies, settings, logs and update cache.
+It creates a fresh local test library, with new credentials, on first launch and
+does not import or follow a stable library pointer. It retains the test library
+across updates. Existing source builds of Snip keep their current library behavior.
+Cloud settings start empty too; only explicitly connect a separate test deployment.
+
+The **Snip Dev nightly** workflow runs from `main` daily at **10:23 UTC** (02:23
+Pacific in winter, 03:23 in summer), or manually on `main`. Tests, capture smoke
+checks and bundle verification must pass before publishing. GitHub schedules
+may be delayed and only run after the workflow is on the default branch.
+Each run uses version `0.0.<workflow run number>` and an immutable
+`nightly-v0.0.N` tag, with `Snip-Dev-0.0.N-darwin-arm64.zip`. Nightlies are
+prereleases and never become GitHub's latest stable release. Do not reset this
+workflow's run-number sequence or overwrite existing nightly tags/assets. If a
+run already created a draft before failing publication, dispatch a fresh run;
+the old draft is not offered to clients.
+
+### Without Apple Developer credentials
+
+When none of the six Apple secrets below are configured, nightlies are ad-hoc
+signed, with native installation disabled. Snip Dev checks for newer nightlies
+on launch (after a short delay) and at most every six hours, and offers a download.
+Download and unzip, quit Snip Dev, and replace **Snip Dev.app** in Applications.
+The test library stays outside the app. macOS may require allowing the download
+in **System Settings → Privacy & Security**. Do not replace **Snip.app**.
+
+Once all six secrets are configured, the same nightly workflow signs and notarizes
+builds. A partial configuration fails instead of silently producing an unsigned
+build. Install the first Developer ID signed Snip Dev manually; subsequent signed
+versions can use the native updater. Downloads and restarts require a user action,
+and active captures finish before installation. A real signed A→B update remains
+a required acceptance check before claiming native updates have been proven.
+
+### Local development
+
+```sh
+npm ci
+npm run app:dev:build   # build/install a repo-backed Snip Dev.app with test data
+npm run app:dev         # hot reload, same isolated test library
+```
+
+Quit the installed Snip Dev before starting hot reload; they deliberately share
+the Snip Dev profile and single-instance lock. The source launcher has no native
+binary updater; rebuild it or manually install a standalone nightly. Stable and
+Dev can run alongside each other. `SNIP_DESKTOP_PROFILE` and `SNIP_DESKTOP_PORT`
+remain explicit overrides for disposable acceptance tests, not channel switches.
+
+For a self-contained local nightly, supply an official verified Node 24 ARM64
+distribution as described below and run:
+
+```sh
+SNIP_NIGHTLY_BUILD=1 node desktop/release.mjs --standalone --nightly
+node desktop/scripts/release-smoke.cjs 'desktop/dist/Snip Dev-darwin-arm64/Snip Dev.app'
+```
+
+Use `--release --nightly` for a Developer ID signed nightly. Stable
+`--standalone` builds remain acceptance fixtures and must not be published.
 
 ## Before enabling updates
 
@@ -11,7 +87,7 @@ Snip ships only for Apple Silicon on macOS 14 or later. The local `build.mjs` la
 
 ## Build and review a release
 
-Set `desktop/package.json` and the root entry in `desktop/package-lock.json` to the same stable `X.Y.Z`. Merge the reviewed changes, create the matching `vX.Y.Z` tag, and manually run **Build draft macOS release** for that version. It checks the tag/version, native architecture, public access and credentials; builds and tests; signs and notarizes; exercises the standalone bundle; and creates a **draft** GitHub release. Review its asset and notes before publishing. Drafts and prereleases are never offered as updates.
+Set `desktop/package.json` and the root entry in `desktop/package-lock.json` to the same stable `X.Y.Z`. Merge the reviewed changes, create the matching `vX.Y.Z` tag, and manually run **Build draft macOS release** for that version. It checks the tag/version, native architecture, public access and credentials; builds and tests; signs and notarizes; exercises the standalone bundle; and creates a **draft** GitHub release. Review its asset and notes before publishing. Stable Snip never offers drafts or prereleases as updates; Snip Dev only offers published nightly prereleases.
 
 The asset name must be `Snip-X.Y.Z-darwin-arm64.zip`. The updater accepts only that exact repository/tag/architecture URL and valid SHA-256 digest and size from GitHub's release API. It supplies those to Electron's native Squirrel updater, which also verifies the new app against the current app's signing requirement. No custom replacement helper bypasses macOS checks.
 
@@ -24,7 +100,7 @@ SNIP_NODE_DISTRIBUTION=/absolute/path/to/node-v24.x.y-darwin-arm64 node desktop/
 node desktop/scripts/release-smoke.cjs
 ```
 
-`--standalone` is ad-hoc signed with updates disabled and must not be published. For a signed/notarized build use `--release`, `SNIP_SIGN_IDENTITY`, and either `APPLE_NOTARY_KEYCHAIN_PROFILE` or the Apple ID credentials above. Signing credentials are excluded from dependency/build subprocess environments. The first measured standalone bundle was approximately 1.5 GiB installed / 510 MiB zipped; allow several GiB of free build space for staging and caches. Native downloads stream to disk.
+Stable `--standalone` is ad-hoc signed with updates disabled and must not be published. `--standalone --nightly` is the explicit manual-installation nightly channel described above. For a signed/notarized build use `--release`, `SNIP_SIGN_IDENTITY`, and either `APPLE_NOTARY_KEYCHAIN_PROFILE` or the Apple ID credentials above. Signing credentials are excluded from dependency/build subprocess environments. The first measured standalone bundle was approximately 1.5 GiB installed / 510 MiB zipped; allow several GiB of free build space for staging and caches. Native downloads stream to disk.
 
 ## Required first-release acceptance
 
@@ -38,4 +114,4 @@ Imported D1, R2 and KV storage identities are retained in the library's `.snip/s
 
 Include disk-usage checks after failed signed installations in release acceptance. The native installer owns its pending app and recovery copies; do not delete those files while installation or recovery is in progress.
 
-Automatic checks issue at most one metadata request every six hours and persist the cooldown across restarts. Downloads require user action. Once downloaded, Squirrel can install on the next normal quit/relaunch even after **Later**. Public updates and signed acceptance remain unavailable until the prerequisites and this check are completed.
+Automatic update check cycles run at most every six hours and persist the cooldown across restarts; manual checks are available. Stable checks use one metadata request, while nightly discovery can page through up to 100 recent releases in five requests. Downloads require user action. Once downloaded, Squirrel can install on the next normal quit/relaunch even after **Later**. Native signed update acceptance remains unproven until the prerequisites and this check are completed; ad-hoc signed nightlies use manual installation.

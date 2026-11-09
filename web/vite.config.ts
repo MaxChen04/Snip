@@ -10,7 +10,14 @@ export default defineConfig({
   // storage identities), else the tracked web/wrangler.jsonc. Cloud deploys do not
   // build here at all: the provisioning engine copies this build into the library's
   // cloud directory and patches the emitted config to name the deployed resources.
-  plugins: [react(), tailwindcss(), cloudflare({ configPath: process.env.SNIP_WRANGLER_CONFIG || localConfigPath(__dirname) })],
+  plugins: [react(), tailwindcss(), cloudflare({
+    configPath: process.env.SNIP_WRANGLER_CONFIG || localConfigPath(__dirname),
+    ...(process.env.SNIP_DESKTOP_DATA_ROOT ? {
+      persistState: { path: path.join(process.env.SNIP_DESKTOP_DATA_ROOT, "web/.wrangler/state") },
+      inspectorPort: false,
+      remoteBindings: false,
+    } : {}),
+  })],
   // One output directory. `npm run build -w web` produces what the app serves and
   // what the engine deploys; there is no separate deploy build.
   build: { outDir: process.env.SNIP_OUT_DIR || "dist" },

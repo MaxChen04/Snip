@@ -16,6 +16,7 @@
     "typecheck": "npm run typecheck -w web && npm run typecheck -w capture",
     "app": "npm ci --prefix desktop && npm run build -w web && npm run build --prefix desktop",
     "app:dev": "npm start --prefix desktop -- --dev",
+    "app:dev:build": "npm ci --prefix desktop && npm run build -w web && npm run build --prefix desktop -- --nightly",
     "update": "node scripts/update.mjs",
     "setup:cloudflare": "node scripts/cloudflare.mjs",
     "db:migrate:remote": "node scripts/cloudflare.mjs migrate",

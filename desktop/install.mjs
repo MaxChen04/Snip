@@ -1,14 +1,13 @@
 import { execFileSync } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
-
-const BUNDLE_ID = "dev.snip.desktop"
+import channels from "./channels.cjs"
 
 function pathExists(location) {
   try { fs.lstatSync(location); return true } catch (error) { if (error.code === "ENOENT") return false; throw error }
 }
 
-function assertOwnBundle(bundle) {
+function assertOwnBundle(bundle, bundleId) {
   // Do not follow a link supplied in place of the app or its identity file.
   for (const [part, directory] of [[bundle, true], [path.join(bundle, "Contents"), true], [path.join(bundle, "Contents", "Info.plist"), false]]) {
     const stat = fs.lstatSync(part)
@@ -22,17 +21,18 @@ function assertOwnBundle(bundle) {
   } catch {
     throw new Error(`Cannot read bundle identity: ${bundle}`)
   }
-  if (id !== BUNDLE_ID) throw new Error(`Refusing to replace an app that is not ${BUNDLE_ID}: ${bundle}`)
+  if (id !== bundleId) throw new Error(`Refusing to replace an app that is not ${bundleId}: ${bundle}`)
 }
 
 /** Install using a verified staged copy and keep the old app recoverable until replacement succeeds. */
 export function installApp(built, appsDir, overrides = {}) {
+  const { name, bundleId } = channels.channelConfig(overrides.channel)
   const copy = overrides.copy ?? ((source, destination) => execFileSync("/usr/bin/ditto", [source, destination], { stdio: "inherit" }))
   const verify = overrides.verify ?? (bundle => execFileSync("/usr/bin/codesign", ["--verify", "--deep", "--strict", bundle], { stdio: "inherit" }))
-  const identity = overrides.identity ?? assertOwnBundle
+  const identity = overrides.identity ?? (bundle => assertOwnBundle(bundle, bundleId))
   const rename = overrides.rename ?? fs.renameSync
   fs.mkdirSync(appsDir, { recursive: true })
-  const target = path.join(appsDir, "Snip.app")
+  const target = path.join(appsDir, `${name}.app`)
   const exists = pathExists(target)
   if (exists) identity(target)
 

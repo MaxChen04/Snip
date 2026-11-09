@@ -3,7 +3,7 @@ const assert = require("node:assert/strict")
 const { EventEmitter } = require("node:events")
 const { Service, stopServices } = require("../service.cjs")
 
-function fixture(key = "web", { missing = false, development = false } = {}) {
+function fixture(key = "web", { missing = false } = {}) {
   const children = [], kills = [], output = [], logs = []
   const service = new Service(key, {
     kill: (...args) => kills.push(args),
@@ -16,7 +16,7 @@ function fixture(key = "web", { missing = false, development = false } = {}) {
       return child
     },
   })
-  const start = () => service.start({ executable: "/node", args: [], cwd: "/repo", env: {}, development, log: { write(chunk) { logs.push(chunk.toString()) }, end(chunk) { logs.push(chunk) } } })
+  const start = () => service.start({ executable: "/node", args: [], cwd: "/repo", env: {}, log: { write(chunk) { logs.push(chunk.toString()) }, end(chunk) { logs.push(chunk) } } })
   start()
   return { service, children, kills, output, logs, start }
 }
@@ -46,17 +46,13 @@ test("IPC readiness and connectivity describe usable services rather than spawne
   assert.deepEqual(f.output, [{ type: "snip:stop" }])
 })
 
-test("development readiness accepts split output and only loopback HTTP URLs", () => {
-  const f = fixture("web", { development: true })
-  f.service.ready("https://example.com")
+test("web readiness accepts only loopback HTTP IPC and shutdown falls back if IPC closes", () => {
+  const f = fixture("web")
+  f.children[0].emit("message", { type: "snip:web-ready", url: "https://example.com" })
   assert.equal(f.service.status, "starting")
-  f.children[0].stdout.emit("data", Buffer.from("Local: http://local"))
-  // A partial hostname is rejected, then the accumulated complete line succeeds.
-  assert.equal(f.service.status, "starting")
-  f.children[0].stdout.emit("data", Buffer.from("host:51"))
-  assert.equal(f.service.status, "starting")
-  f.children[0].stdout.emit("data", Buffer.from("73/\n"))
+  f.children[0].emit("message", { type: "snip:web-ready", url: "http://localhost:5173/" })
   assert.equal(f.service.url, "http://localhost:5173")
+  f.children[0].connected = false
   void f.service.stop()
   assert.deepEqual(f.output, ["SIGTERM"])
 })
