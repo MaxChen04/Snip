@@ -291,7 +291,9 @@ async function listChildren<T>(
   }
 }
 
-export const listPages = (db: D1Database, f: ListFilter) => listChildren(db, "pages", toPage, f)
+// Lists leave out each page's design tokens (about 26 KB a page, most of the response); getPage and getReference carry them.
+// ponytail: the row is still read with tokens_json; select columns explicitly if the D1 read ever shows up.
+export const listPages = (db: D1Database, f: ListFilter) => listChildren(db, "pages", (r) => toPage({ ...r, tokens_json: null }), f)
 export const listAnimations = (db: D1Database, f: ListFilter) => listChildren(db, "animations", toAnimation, f)
 
 export function normalizeUrl(input: string): URL {

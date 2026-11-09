@@ -78,6 +78,7 @@ export interface Page {
   mobileHeight: number | null
   snapshotKey: string | null
   stylesKey: string | null
+  /** Null in list responses (the pages feed), which leave tokens out; a page fetched with its website has them. */
   tokens: DesignTokens | null
   /** The desktop page cut into its visual sections, top to bottom. Empty for captures made before sections existed. */
   sections: PageSection[]

@@ -218,6 +218,12 @@ export function CanvasHome({ login, boardId }: { login: string; boardId?: string
     setParamsRef.current({ open: keyOf(item) }, false)
   }, [])
   const list = items ?? []
+  // Each feed stops at CAP items. Say so, or a big library looks like it lost its older saves.
+  const inFilter = counts && !boardId ? countOf(counts, filter) : 0
+  const caption =
+    firstRun || q || !total ? undefined
+    : list.length >= CAP && list.length < inFilter ? `Showing the newest ${list.length} of ${inFilter}. Search to find older saves.`
+    : `${total} saved`
   const index = open ? list.findIndex((it) => keyOf(it) === open) : -1
   const openItem = index >= 0 && list[index]!.kind !== "website" ? list[index] : undefined
   const close = () => {
@@ -237,7 +243,7 @@ export function CanvasHome({ login, boardId }: { login: string; boardId?: string
   const plaza = useMemo(
     () => (
       <div ref={measurePlaza} className="absolute top-0 left-0 flex w-max -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-4">
-        <CaptureCard boardId={boardId} firstRun={firstRun} caption={!firstRun && !q && total ? `${total} saved` : undefined} />
+        <CaptureCard boardId={boardId} firstRun={firstRun} caption={caption} />
         {error ? (
           <p className="flex items-center gap-2 text-xs text-ink-11" role="alert">
             Couldn't load your saves.
@@ -259,7 +265,7 @@ export function CanvasHome({ login, boardId }: { login: string; boardId?: string
         ) : null}
       </div>
     ),
-    [boardId, firstRun, q, total, error, items, setQuery, measurePlaza],
+    [boardId, firstRun, q, caption, error, items, setQuery, measurePlaza],
   )
   const ghosts = useMemo(() => (!items || (items.length === 0 && !q) ? <Ghosts loading={!items && !error} plazaH={plazaH} /> : null), [items, q, error, plazaH])
   const tileOpen = filter === "websites" ? undefined : onOpen
