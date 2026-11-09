@@ -467,7 +467,13 @@ export async function recordLiveSections(
   const browser = page.context().browser()!
   const { width: vw, height: vh } = page.viewportSize()!
   const cdp = await page.context().newCDPSession(page)
-  /** "all" hides every fixed and sticky element; "bottom" only those in the lower half of the viewport (chat bubbles, cookie bars). */
+  /**
+   * Hide the page's bars while it is scrolled away from the top: the full-page shot shows a fixed header only at
+   * the top, so a clip or in-view frame must not show it over another section. A bar is a fixed element, or a
+   * sticky one that is currently stuck, that is less than half the viewport tall and sits in the top or bottom
+   * quarter of it. Fixed backgrounds and pinned content inside a section (a sticky image column) are larger or
+   * not stuck, so they stay. "all" hides top and bottom bars; "bottom" only bottom ones (chat bubbles, cookie bars).
+   */
   const bars = (hide: "none" | "bottom" | "all") => page.evaluate((hide) => {
     document.querySelectorAll<HTMLElement>("[data-snip-live-hidden]").forEach((el) => {
       el.style.visibility = el.dataset.snipLiveHidden!
@@ -475,8 +481,17 @@ export async function recordLiveSections(
     })
     if (hide === "none") return
     for (const el of document.querySelectorAll<HTMLElement>("body *")) {
-      const pos = getComputedStyle(el).position
-      if ((pos === "fixed" || pos === "sticky") && (hide === "all" || el.getBoundingClientRect().top > innerHeight / 2)) {
+      const cs = getComputedStyle(el)
+      if (cs.position !== "fixed" && cs.position !== "sticky") continue
+      const r = el.getBoundingClientRect()
+      if (r.height < 1 || r.width < 1 || r.height > innerHeight / 2) continue
+      if (cs.position === "sticky") {
+        const stuck = Math.abs(r.top - parseFloat(cs.top)) < 2 || Math.abs(innerHeight - r.bottom - parseFloat(cs.bottom)) < 2
+        if (!stuck) continue
+      }
+      const top = r.top < innerHeight / 4
+      const bottom = r.bottom > (innerHeight * 3) / 4
+      if (hide === "all" ? top || bottom : bottom) {
         el.dataset.snipLiveHidden = el.style.visibility
         el.style.visibility = "hidden"
       }

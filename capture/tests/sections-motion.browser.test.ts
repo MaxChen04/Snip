@@ -249,3 +249,36 @@ test("sections that look different scrolled into view are patched into the full-
     await browser.close()
   }
 })
+
+test("only bars pinned to the viewport edges are hidden: fixed backgrounds and pinned section content stay", async () => {
+  const { recordLiveSections } = await import("../src/capture")
+  const sharp = (await import("sharp")).default
+  const { closeRenderer } = await import("../src/sheet")
+  const browser = await launch()
+  try {
+    const page = await browser.newPage({ viewport: { width: 800, height: 600 } })
+    // The only motion on the page is a full-screen fixed background, and a header bar that blinks.
+    await page.setContent(`<style>
+      body { margin: 0 } section { height: 600px; position: relative }
+      #bg { position: fixed; inset: 0; z-index: -1; background: linear-gradient(90deg, red, blue); animation: fade 0.8s linear infinite alternate }
+      #bar { position: fixed; top: 0; left: 0; right: 0; height: 40px; background: navy; animation: blink 0.3s steps(1) infinite }
+      @keyframes fade { to { opacity: 0.2 } } @keyframes blink { 50% { background: gold } }
+      .col { position: sticky; top: 0; height: 400px; width: 200px; background: green }
+    </style><div id="bg"></div><div id="bar"></div>
+      <section>hero</section><section><div class="col"></div></section><section>end</section>`)
+    const cuts = [0, 600, 1200].map((y, i) => ({ kind: "section" as const, label: `Part ${i}`, y, height: 600 }))
+    // A blank shot, so every section differs and keeps its in-view frame: that frame shows what was hidden.
+    const blank = await sharp({ create: { width: 800, height: 1800, channels: 3, background: "white" } }).jpeg().toBuffer()
+    const inView = { shot: blank, patches: [] as { y: number; height: number; jpeg: Buffer }[] }
+    const clips = await recordLiveSections(page, cuts, "webm", new Map(), inView)
+    assert.ok(clips[1] && clips[2], "the fixed background is kept, so lower sections still move")
+    const frame = inView.patches.find((p) => p.y === 600)!
+    const px = [...(await sharp(frame.jpeg).extract({ left: 100, top: 20, width: 1, height: 1 }).raw().toBuffer())]
+    assert.ok(px[1]! > 100 && px[0]! < 80 && px[2]! < 80, `the sticky column shows where the hidden header bar would be, got ${px}`)
+    await page.evaluate(() => scrollTo(0, 600))
+    assert.deepEqual(await page.evaluate(() => ["#bar", "#bg", ".col"].map((s) => getComputedStyle(document.querySelector(s)!).visibility)), ["visible", "visible", "visible"], "everything is restored afterwards")
+  } finally {
+    await closeRenderer()
+    await browser.close()
+  }
+})
