@@ -1,5 +1,7 @@
 name: Build draft macOS release
 on:
+  push:
+    tags: ['v[0-9]*']
   workflow_dispatch:
     inputs:
       version:
@@ -16,13 +18,16 @@ jobs:
       contents: write
     steps:
       - name: Validate version
+        id: version
         env:
-          VERSION: ${{ inputs.version }}
+          VERSION: ${{ inputs.version || github.ref_name }}
         run: |
+          VERSION="${VERSION#v}"
           [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: v${{ inputs.version }}
+          ref: v${{ steps.version.outputs.version }}
           fetch-depth: 0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -33,9 +38,10 @@ jobs:
             desktop/package-lock.json
       - name: Verify tag, version and native architecture
         env:
-          VERSION: ${{ inputs.version }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           test "$(git rev-parse HEAD)" = "$(git rev-list -n 1 "refs/tags/v$VERSION")"
+          git merge-base --is-ancestor HEAD origin/main
           node -e 'if (process.arch !== "arm64" || require("./desktop/package.json").version !== process.env.VERSION) process.exit(1)'
       - name: Require public repository for updater
         run: node --input-type=module -e "import { requirePublicRepository } from './desktop/release-contract.mjs'; await requirePublicRepository()"
@@ -82,5 +88,5 @@ jobs:
       - name: Create draft release
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ inputs.version }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: gh release create "v$VERSION" "desktop/dist/Snip-$VERSION-darwin-arm64.zip" --draft --verify-tag --title "Snip $VERSION"

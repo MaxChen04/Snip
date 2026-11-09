@@ -2,6 +2,7 @@ const { EventEmitter } = require("node:events")
 const fs = require("node:fs/promises")
 const path = require("node:path")
 const { pathToFileURL } = require("node:url")
+const { channelConfig } = require("./channels.cjs")
 
 const REPOSITORY = "MaxChen04/Snip"
 const CHECK_INTERVAL = 6 * 60 * 60 * 1000
@@ -13,11 +14,16 @@ function newer(candidate, current) {
   return false
 }
 
-function releaseFrom(data, current) {
-  if (!data || data.draft || data.prerelease || typeof data.tag_name !== "string") return null
-  const version = data.tag_name.replace(/^v/, "")
+function releaseFrom(data, current, channel = "stable") {
+  const identity = channelConfig(channel)
+  if (!data || data.draft || typeof data.tag_name !== "string") return null
+  const nightly = channel === "nightly"
+  if (Boolean(data.prerelease) !== nightly) return null
+  const pattern = nightly ? /^nightly-v(0\.0\.[1-9]\d*)$/ : /^v((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))$/
+  const version = data.tag_name.match(pattern)?.[1]
+  if (!version) return null
   if (!newer(version, current)) return null
-  const name = `Snip-${version}-darwin-arm64.zip`
+  const name = `${identity.name.replaceAll(" ", "-")}-${version}-darwin-arm64.zip`
   const asset = data.assets?.find(item => item.name === name && item.state === "uploaded")
   const expected = `https://github.com/${REPOSITORY}/releases/download/${encodeURIComponent(data.tag_name)}/${name}`
   if (!asset || asset.browser_download_url !== expected || !Number.isSafeInteger(asset.size) || asset.size <= 0 || asset.size > 3 * 1024 ** 3 || !/^sha256:[a-f0-9]{64}$/.test(asset.digest || "")) {
@@ -26,8 +32,8 @@ function releaseFrom(data, current) {
   return { version, url: expected, size: asset.size, sha256: asset.digest.slice(7) }
 }
 
-async function latestRelease(fetcher = fetch) {
-  const response = await fetcher(`https://api.github.com/repos/${REPOSITORY}/releases/latest`, {
+async function releaseMetadata(endpoint, fetcher) {
+  const response = await fetcher(`https://api.github.com/repos/${REPOSITORY}/${endpoint}`, {
     headers: { accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" },
     signal: AbortSignal.timeout(15000), redirect: "error",
   })
@@ -44,12 +50,29 @@ async function latestRelease(fetcher = fetch) {
   return JSON.parse(Buffer.concat(chunks).toString("utf8"))
 }
 
+async function latestRelease(fetcher = fetch, channel = "stable") {
+  channelConfig(channel)
+  if (channel === "stable") return releaseMetadata("releases/latest", fetcher)
+  // GitHub's latest endpoint intentionally excludes prereleases. Search recent
+  // releases without accepting stable builds or unrelated prerelease tags.
+  for (let page = 1; page <= 5; page++) {
+    const releases = await releaseMetadata(`releases?per_page=20&page=${page}`, fetcher)
+    if (!Array.isArray(releases)) throw new Error("The update service returned an unexpected response.")
+    const candidates = releases.filter(item => item && !item.draft && item.prerelease === true && /^nightly-v0\.0\.[1-9]\d*$/.test(item.tag_name))
+    candidates.sort((a, b) => newer(a.tag_name.slice(9), b.tag_name.slice(9)) ? -1 : newer(b.tag_name.slice(9), a.tag_name.slice(9)) ? 1 : 0)
+    if (candidates.length) return candidates[0]
+    if (releases.length < 20) break
+  }
+  throw new Error("No public Snip Dev nightly is available yet.")
+}
+
 // Owns release discovery and the native updater lifecycle. The caller drains
 // library services before Squirrel is allowed to close the app.
 class Updates extends EventEmitter {
-  constructor({ native, version, directory, enabled, fetchRelease = latestRelease, drain, installFailed = () => {}, now = Date.now, timers = globalThis }) {
+  constructor({ native, version, directory, enabled, nativeEnabled = true, channel = "stable", fetchRelease = () => latestRelease(fetch, channel), drain, installFailed = () => {}, now = Date.now, timers = globalThis }) {
     super()
-    Object.assign(this, { native, version, directory, fetchRelease, drain, installFailed, now, timers, enabled, phase: enabled ? "idle" : "disabled", release: null, error: "", lastCheck: 0, timer: null, disposed: false })
+    channelConfig(channel)
+    Object.assign(this, { native, version, channel, directory, fetchRelease, drain, installFailed, now, timers, enabled, nativeEnabled, phase: enabled ? "idle" : "disabled", release: null, error: "", lastCheck: 0, timer: null, disposed: false })
     this.handlers = {
       "update-downloaded": () => { if (this.phase === "downloading") this.change("ready") },
       "update-not-available": () => { if (this.phase === "downloading") this.change("error", "The update is no longer available. Check again later.") },
@@ -58,7 +81,7 @@ class Updates extends EventEmitter {
         else if (["downloading", "ready"].includes(this.phase)) this.change("error", "The update could not be downloaded or verified. Your current version is unchanged. Try again later.")
       },
     }
-    if (enabled) for (const [event, handler] of Object.entries(this.handlers)) native.on(event, handler)
+    if (enabled && nativeEnabled) for (const [event, handler] of Object.entries(this.handlers)) native.on(event, handler)
   }
   change(phase, error = "") { this.phase = phase; this.error = error; this.emit("change") }
   async start() {
@@ -81,7 +104,7 @@ class Updates extends EventEmitter {
     this.change("checking")
     this.lastCheck = this.now()
     try {
-      const release = releaseFrom(await this.fetchRelease(), this.version)
+      const release = releaseFrom(await this.fetchRelease(), this.version, this.channel)
       if (this.disposed) return
       this.release = release
       this.change(release ? "available" : "current")
@@ -95,6 +118,7 @@ class Updates extends EventEmitter {
     }
   }
   async download() {
+    if (!this.nativeEnabled) return
     if (this.disposed || !this.release || !["available", "error"].includes(this.phase)) return
     this.change("downloading")
     try {
@@ -131,7 +155,7 @@ class Updates extends EventEmitter {
   dispose() {
     this.disposed = true
     this.timers.clearTimeout(this.timer)
-    if (this.enabled) for (const [event, handler] of Object.entries(this.handlers)) this.native.removeListener(event, handler)
+    if (this.enabled && this.nativeEnabled) for (const [event, handler] of Object.entries(this.handlers)) this.native.removeListener(event, handler)
   }
 }
 

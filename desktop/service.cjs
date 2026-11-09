@@ -12,7 +12,7 @@ class Service extends EventEmitter {
 
   changed() { this.emit("change") }
 
-  start({ executable, args, cwd, env, log, development = false }) {
+  start({ executable, args, cwd, env, log }) {
     if (this.proc) return
     Object.assign(this, { status: "starting", detail: "", url: null, tail: "", stopping: false })
     let finish
@@ -29,7 +29,6 @@ class Service extends EventEmitter {
       return
     }
     this.proc = child
-    this.stopWithIPC = !development
     let ended = false
     let spawnError = null
     let startupFailure = null
@@ -60,10 +59,6 @@ class Service extends EventEmitter {
       if (ended) return
       log.write(chunk)
       this.tail = (this.tail + decoder.write(chunk)).slice(-4000)
-      if (development && !this.url && !this.stopping) {
-        const match = this.tail.replace(/\x1b\[[0-9;]*m/g, "").match(/Local:\s+(https?:\/\/[^\s]+)(?=\s)/)
-        if (match) this.ready(match[1])
-      }
     }
     child.stdout.on("data", data)
     child.stderr.on("data", data)
@@ -111,7 +106,7 @@ class Service extends EventEmitter {
     if (!this.proc || this.stopping) return this.closed
     this.stopping = true
     this.status = "stopping"
-    if (!this.stopWithIPC || !this.send({ type: "snip:stop" })) this.proc.kill("SIGTERM")
+    if (!this.send({ type: "snip:stop" })) this.proc.kill("SIGTERM")
     this.changed()
     return this.closed
   }

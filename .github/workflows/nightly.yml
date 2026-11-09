@@ -1,0 +1,116 @@
+name: Snip Dev nightly
+on:
+  schedule:
+    # 02:23 Pacific in winter / 03:23 in summer. GitHub schedules use UTC.
+    - cron: '23 10 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: snip-dev-nightly
+  cancel-in-progress: false
+jobs:
+  nightly:
+    if: github.repository == 'MaxChen04/Snip' && github.ref == 'refs/heads/main'
+    runs-on: macos-15
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            desktop/package-lock.json
+      - name: Select signing mode
+        id: signing
+        env:
+          CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [[ -z "$CERTIFICATE$CERTIFICATE_PASSWORD$SIGN_IDENTITY$APPLE_ID$APPLE_APP_SPECIFIC_PASSWORD$APPLE_TEAM_ID" ]]; then
+            echo 'signed=false' >> "$GITHUB_OUTPUT"
+            echo 'Building an ad-hoc signed nightly for manual installation.'
+          else
+            test -n "$CERTIFICATE" && test -n "$CERTIFICATE_PASSWORD" && test -n "$SIGN_IDENTITY" && test -n "$APPLE_ID" && test -n "$APPLE_APP_SPECIFIC_PASSWORD" && test -n "$APPLE_TEAM_ID" || { echo 'Partial Apple signing configuration; complete all six secrets.'; exit 1; }
+            echo 'signed=true' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Verify architecture and public update source
+        run: |
+          node -e 'if (process.arch !== "arm64") process.exit(1)'
+          node --input-type=module -e "import { requirePublicRepository } from './desktop/release-contract.mjs'; await requirePublicRepository()"
+      - run: npm ci
+      - run: npm ci --prefix desktop
+      - run: npm run typecheck
+      - run: npm run build -w web
+      - run: npx --no-install playwright install chromium
+      - run: npm test
+      - run: npm run test:desktop
+      - name: Import Developer ID certificate
+        if: steps.signing.outputs.signed == 'true'
+        env:
+          CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          echo "$CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$RUNNER_TEMP" snip-nightly.keychain
+          security set-keychain-settings -lut 7200 snip-nightly.keychain
+          security unlock-keychain -p "$RUNNER_TEMP" snip-nightly.keychain
+          security import "$RUNNER_TEMP/certificate.p12" -k snip-nightly.keychain -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$RUNNER_TEMP" snip-nightly.keychain
+          security list-keychains -d user -s snip-nightly.keychain
+          rm "$RUNNER_TEMP/certificate.p12"
+      - name: Build Snip Dev
+        env:
+          SIGNED: ${{ steps.signing.outputs.signed }}
+          SNIP_NIGHTLY_BUILD: ${{ github.run_number }}
+          SNIP_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          export SNIP_NODE_DISTRIBUTION="$(dirname "$(dirname "$(command -v node)")")"
+          if [[ "$SIGNED" == true ]]; then
+            node desktop/release.mjs --release --nightly
+          else
+            node desktop/release.mjs --standalone --nightly
+          fi
+      - name: Verify capture and library persistence
+        run: node desktop/scripts/release-smoke.cjs 'desktop/dist/Snip Dev-darwin-arm64/Snip Dev.app'
+      - name: Publish nightly prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD: ${{ github.run_number }}
+          COMMIT: ${{ github.sha }}
+          SIGNED: ${{ steps.signing.outputs.signed }}
+        run: |
+          VERSION="0.0.$BUILD"
+          TAG="nightly-v$VERSION"
+          ARCHIVE="desktop/dist/Snip-Dev-$VERSION-darwin-arm64.zip"
+          {
+            echo "Snip Dev built from main commit $COMMIT."
+            echo
+            echo 'Uses a separate test library. Install Snip Dev.app alongside Snip.app.'
+            echo
+            if [[ "$SIGNED" == true ]]; then
+              echo 'Signed and notarized. Existing Developer ID signed Snip Dev installations can update in-app.'
+            else
+              echo 'Ad-hoc signed; manual installation required. Download and unzip, quit Snip Dev, then replace Snip Dev.app in Applications. macOS may require approval in System Settings > Privacy & Security. Native automatic installation is disabled.'
+            fi
+          } > "$RUNNER_TEMP/nightly-notes.md"
+          # Immutable per-run tags: never move a tag or overwrite a published ZIP.
+          gh release create "$TAG" "$ARCHIVE" --target "$COMMIT" --draft --prerelease --latest=false --title "Snip Dev $VERSION" --notes-file "$RUNNER_TEMP/nightly-notes.md"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq '.assets[] | select(.name == "Snip-Dev-'"$VERSION"'-darwin-arm64.zip") | .digest' | grep -Eq '^sha256:[a-f0-9]{64}$'
+          gh release edit "$TAG" --draft=false --prerelease --latest=false
+      - name: Remove temporary signing keychain
+        if: always() && steps.signing.outputs.signed == 'true'
+        run: security delete-keychain snip-nightly.keychain || true
