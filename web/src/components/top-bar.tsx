@@ -58,17 +58,23 @@ export function TopBar({
       <BoardSwitcher boardId={boardId} />
 
       {onQuery ? (
-        <label className={cn(pill, "mx-auto min-w-0 max-w-[400px] flex-1 gap-2 px-3.5 has-focus-visible:outline-2 has-focus-visible:outline-offset-2")}>
-          <SearchIcon className="size-4 shrink-0 text-ink-9" />
+        // Compact until it's in use: it widens while focused or holding a query, so the canvas doesn't feel crowded.
+        <label
+          className={cn(
+            pill,
+            "mx-auto w-60 min-w-0 gap-2 px-3 transition-[width] duration-200 ease-out focus-within:w-80 has-[input:not(:placeholder-shown)]:w-80 motion-reduce:transition-none has-focus-visible:outline-2 has-focus-visible:outline-offset-2",
+          )}
+        >
+          <SearchIcon className="size-3.5 shrink-0 text-ink-9" />
           <input
             data-search
             value={query}
             onChange={(e) => onQuery(e.target.value)}
             onKeyDown={(e) => e.key === "Escape" && e.currentTarget.blur()}
-            placeholder="Search your saves…"
+            placeholder="Search…"
             aria-label="Search your saves"
             aria-keyshortcuts="/"
-            className="peer h-full min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-ink-10 pointer-coarse:text-base"
+            className="peer h-full min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-ink-10 pointer-coarse:text-base"
           />
           {!query && (
             <kbd aria-hidden className="hidden h-5 min-w-5 place-items-center rounded-sm bg-ink-3 px-1 text-2xs text-ink-10 pointer-fine:grid pointer-fine:peer-focus:hidden">
