@@ -6,16 +6,21 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { packager } from '@electron/packager'
 import { APP_FILES, REPOSITORY, stableVersion, releaseCredentials, subprocessEnvironment, requirePublicRepository, repairAndValidateRuntime } from './release-contract.mjs'
+import channels from './channels.cjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const root = path.dirname(here)
 const args = process.argv.slice(2)
 const release = args.includes('--release')
 const standalone = args.includes('--standalone')
-if (release === standalone || args.some(arg => !['--release', '--standalone'].includes(arg))) throw new Error('Choose exactly one of --release or --standalone.')
+const nightly = args.includes('--nightly')
+const channel = nightly ? 'nightly' : 'stable'
+const identity = channels.channelConfig(channel)
+if (release === standalone || args.some(arg => !['--release', '--standalone', '--nightly'].includes(arg))) throw new Error('Choose exactly one of --release or --standalone, optionally with --nightly.')
 if (process.platform !== 'darwin' || process.arch !== 'arm64') throw new Error('Build requires native Apple Silicon macOS.')
 const manifest = JSON.parse(fs.readFileSync(path.join(here, 'package.json')))
 if (!stableVersion(manifest.version)) throw new Error('Desktop version must be a stable X.Y.Z version.')
+const version = nightly ? channels.nightlyVersion(process.env.SNIP_NIGHTLY_BUILD) : manifest.version
 const signing = release ? releaseCredentials(process.env) : null
 if (release) await requirePublicRepository()
 const nodeDistribution = process.env.SNIP_NODE_DISTRIBUTION
@@ -61,26 +66,30 @@ try {
   copy(license, path.join(stage, 'node/LICENSE'))
   fs.mkdirSync(app)
   for (const file of APP_FILES) copy(path.join(here, file), path.join(app, file))
+  // Preserve stable's package identity: Electron uses it to locate existing
+  // profile data before main.cjs runs. Only Dev gets a new productName.
+  fs.writeFileSync(path.join(app, 'package.json'), JSON.stringify({ ...manifest, version, ...(nightly ? { productName: identity.name } : {}) }) + '\n')
   // The Settings window is a static Vite bundle built from the staged source, not from
   // the checkout; it must exist next to main.cjs so it loads with no local Worker.
   copy(path.join(stage, 'web/dist-settings'), path.join(app, 'settings'))
   fs.rmSync(path.join(stage, 'web/dist-settings'), { recursive: true, force: true })
-  fs.writeFileSync(path.join(app, 'release.json'), JSON.stringify({ channel: 'stable', repository: REPOSITORY, updatesEnabled: release }) + '\n')
-  const icon = path.join(here, 'assets/Snip.icns')
+  fs.writeFileSync(path.join(app, 'release.json'), JSON.stringify({ channel, repository: REPOSITORY, updatesEnabled: release }) + '\n')
+  const icon = path.join(here, 'assets', identity.icon)
   const electronVersion = JSON.parse(fs.readFileSync(path.join(here, 'node_modules/electron/package.json'))).version
-  const [result] = await packager({ dir: app, name: 'Snip', platform: 'darwin', arch: 'arm64', electronVersion, asar: false, out, overwrite: true, icon, appBundleId: 'dev.snip.desktop', appCategoryType: 'public.app-category.developer-tools', extendInfo: { LSMinimumSystemVersion: '14.0' }, extraResource: stage, prune: false,
+  const [result] = await packager({ dir: app, name: identity.name, appVersion: version, buildVersion: version, platform: 'darwin', arch: 'arm64', electronVersion, asar: false, out, overwrite: true, icon, appBundleId: identity.bundleId, appCategoryType: 'public.app-category.developer-tools', extendInfo: { LSMinimumSystemVersion: '14.0' }, extraResource: stage, prune: false,
+    download: { checksums: JSON.parse(fs.readFileSync(path.join(here, 'node_modules/electron/checksums.json'))) },
     // Packager's copy resolves symlinks to staging paths. Rewrite them before signing.
-    afterCopyExtraResources: [({ buildPath }) => repairAndValidateRuntime(stage, path.join(buildPath, 'Snip.app/Contents/Resources/runtime'))],
+    afterCopyExtraResources: [({ buildPath }) => repairAndValidateRuntime(stage, path.join(buildPath, `${identity.name}.app/Contents/Resources/runtime`))],
     ...(!release && process.env.SNIP_SMOKE_ELECTRON_ZIP_DIR ? { electronZipDir: process.env.SNIP_SMOKE_ELECTRON_ZIP_DIR } : {}),
     ...(release ? { osxSign: { identity: signing.identity, hardenedRuntime: true }, osxNotarize: signing.notarize } : {}) })
-  const built = path.join(result, 'Snip.app')
+  const built = path.join(result, `${identity.name}.app`)
   if (!release) run('codesign', ['--force', '--deep', '--sign', '-', built])
   run('codesign', ['--verify', '--deep', '--strict', built])
-  if (release) {
-    run('xcrun', ['stapler', 'validate', built])
-    const archive = path.join(out, `Snip-${manifest.version}-darwin-arm64.zip`)
+  if (release) run('xcrun', ['stapler', 'validate', built])
+  if (release || nightly) {
+    const archive = path.join(out, `${identity.name.replaceAll(' ', '-')}-${version}-darwin-arm64.zip`)
     fs.rmSync(archive, { force: true })
     run('ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', built, archive])
-    console.log(`Signed and notarized release: ${archive}`)
+    console.log(`${release ? 'Signed and notarized release' : 'Ad-hoc signed nightly (manual installation only)'}: ${archive}`)
   } else console.log(`Standalone smoke-test app: ${built} (updates disabled; do not publish)`)
 } finally { fs.rmSync(work, { recursive: true, force: true }) }

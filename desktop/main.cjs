@@ -8,6 +8,7 @@ const { resolveNode } = require("./node-runtime.cjs")
 const { createLog } = require("./rotating-log.cjs")
 const { Service, stopServices } = require("./service.cjs")
 const { Updates } = require("./updates.cjs")
+const { channelConfig } = require("./channels.cjs")
 const { SourceUpdates } = require("./source-updates.cjs")
 const { prepareRuntimeLayout, selectExistingLibrary } = require("./runtime-layout.cjs")
 const windowOrigin = require("./window-origin.cjs")
@@ -23,25 +24,34 @@ const { resolveSettingsAsset, contentType, settingsCsp, settingsUrl, SETTINGS_OR
 // modules, CSS and navigator.clipboard behave exactly as they do over HTTP.
 protocol.registerSchemesAsPrivileged([{ scheme: "snip", privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } }])
 
-// Explicit alternate profiles support isolated acceptance tests and separate libraries.
+// Resolve the channel before Electron chooses cookies, locks, logs or settings.
+const releaseFile = path.join(__dirname, "release.json")
+const releaseBuild = app.isPackaged && fs.existsSync(releaseFile)
+const releaseConfig = releaseBuild ? JSON.parse(fs.readFileSync(releaseFile, "utf8")) : null
+let sourceConfig = {}
+try { sourceConfig = JSON.parse(fs.readFileSync(path.join(__dirname, "repo.json"), "utf8")) } catch {}
+const development = !releaseBuild && process.argv.includes("--dev")
+const channel = releaseConfig?.channel ?? (development ? "nightly" : sourceConfig.channel ?? "stable")
+const identity = channelConfig(channel)
+const nightly = channel === "nightly"
+const ROOT = releaseBuild ? path.join(process.resourcesPath, "runtime") : sourceConfig.root ?? path.resolve(__dirname, "..")
+const fromRepo = createRequire(path.join(ROOT, "package.json"))
+if (nightly) {
+  app.setName(identity.name)
+  app.setPath("userData", path.join(app.getPath("appData"), identity.name))
+}
+// Explicit alternate profiles support isolated acceptance tests.
 if (process.env.SNIP_DESKTOP_PROFILE) {
   if (!path.isAbsolute(process.env.SNIP_DESKTOP_PROFILE)) throw new Error("SNIP_DESKTOP_PROFILE must be an absolute path.")
   app.setPath("userData", process.env.SNIP_DESKTOP_PROFILE)
-  app.setPath("logs", path.join(process.env.SNIP_DESKTOP_PROFILE, "logs"))
+}
+if (nightly || process.env.SNIP_DESKTOP_PROFILE) {
+  app.setPath("sessionData", app.getPath("userData"))
+  app.setPath("logs", path.join(app.getPath("userData"), "logs"))
 }
 if (!app.requestSingleInstanceLock()) app.exit(0)
-// Bound disposable HTTP cache separately from the user's captured library.
 app.commandLine.appendSwitch("disk-cache-size", String(64 * 1024 * 1024))
-function repoRoot() {
-  try { return JSON.parse(fs.readFileSync(path.join(__dirname, "repo.json"), "utf8")).root }
-  catch { return path.resolve(__dirname, "..") }
-}
-const releaseFile = path.join(__dirname, "release.json")
-const releaseBuild = app.isPackaged && fs.existsSync(releaseFile)
-const ROOT = releaseBuild ? path.join(process.resourcesPath, "runtime") : repoRoot()
-const fromRepo = createRequire(path.join(ROOT, "package.json"))
-const development = process.argv.includes("--dev")
-const PORT = Number(process.env.SNIP_DESKTOP_PORT || 5173)
+const PORT = Number(process.env.SNIP_DESKTOP_PORT || identity.port)
 const idleSeconds = Number(process.env.SNIP_WINDOW_IDLE_SECONDS ?? 120)
 const idleMs = Number.isFinite(idleSeconds) && idleSeconds >= 0 ? idleSeconds * 1000 : 120000
 const services = { web: new Service("web"), capture: new Service("capture") }
@@ -136,10 +146,10 @@ function start(key) {
     let args, cwd
     if (key === "web") {
       cwd = path.join(ROOT, "web")
-      if (development) args = [path.join(ROOT, "node_modules/vite/bin/vite.js"), "--host", "localhost", "--port", String(PORT), "--strictPort"]
+      if (development) args = [path.join(__dirname, "dev-server.cjs"), ROOT, String(PORT), layout.dataRoot]
       else {
         if (!fs.existsSync(path.join(cwd, "dist/snip/wrangler.json"))) throw new Error("Build the web app first: npm run build -w web")
-        args = [path.join(__dirname, "local-server.cjs"), ROOT, String(PORT), layout.dataRoot, ...(releaseBuild ? ["release"] : [])]
+        args = [path.join(__dirname, "local-server.cjs"), ROOT, String(PORT), layout.dataRoot, ...(releaseBuild || nightly ? ["release"] : [])]
       }
     } else {
       cwd = path.join(ROOT, "capture")
@@ -147,7 +157,7 @@ function start(key) {
       args = ["--max-semi-space-size=4", "--import", fromRepo.resolve("tsx"), path.join(cwd, "src/index.ts")]
     }
     const env = key === "capture" && captureEnvFile() ? { ...node.env, SNIP_CAPTURE_ENV_FILE: captureEnvFile().path } : node.env
-    services[key].start({ executable: node.executable, args, cwd, env, log: makeLog(key), development: key === "web" && development })
+    services[key].start({ executable: node.executable, args, cwd, env, log: makeLog(key) })
     if (key === "web" && services.web.proc) {
       clearTimeout(readyTimer)
       readyTimer = setTimeout(() => {
@@ -156,7 +166,7 @@ function start(key) {
           services.web.forceStop()
           showLoading()
         }
-      }, releaseBuild ? 300000 : 60000)
+      }, releaseBuild || nightly ? 300000 : 60000)
     }
   } catch (error) {
     services[key].status = "crashed"
@@ -253,7 +263,8 @@ function createWindow() {
   const webPreferences = { contextIsolation: true, sandbox: true, nodeIntegration: false }
   // The cloud window gets no preload on purpose: the bridge only exists on pages we ship.
   if (!cloud) Object.assign(webPreferences, { preload: path.join(__dirname, "preload.cjs"), additionalArguments: [`--snip-ui-state=${restore}`] })
-  win = new BrowserWindow({ width: 1280, height: 860, minWidth: 720, minHeight: 480, title: "Snip", backgroundColor: "#f6f5f2", webPreferences })
+  win = new BrowserWindow({ width: 1280, height: 860, minWidth: 720, minHeight: 480, title: identity.name, backgroundColor: "#f6f5f2", webPreferences })
+  if (nightly) win.on("page-title-updated", event => { event.preventDefault(); win.setTitle("Snip Dev — Test library") })
   pinWindow(win, pin)
   configureLinks(win, pin)
   const current = win
@@ -336,7 +347,7 @@ function createSettingsWindow() {
     return null
   }
   settingsWin = new BrowserWindow({
-    width: 760, height: 760, minWidth: 560, minHeight: 480, title: "Snip Settings", show: false,
+    width: 760, height: 760, minWidth: 560, minHeight: 480, title: `${identity.name} Settings`, show: false,
     titleBarStyle: "hiddenInset", trafficLightPosition: { x: 18, y: 18 },
     backgroundColor: nativeTheme.shouldUseDarkColors ? "#111110" : "#f6f5f2",
     webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, preload: path.join(__dirname, "preload-settings.cjs") },
@@ -730,17 +741,24 @@ async function updateDialog(check = false) {
   if (check) await updates.check()
   if (quitting) return
   const phase = updates.phase
+  if (phase === "available" && !updates.nativeEnabled) {
+    const { response } = await dialog.showMessageBox({ type: "info", buttons: ["Download Snip Dev", "Later"], defaultId: 0, cancelId: 1,
+      message: `Snip Dev ${updates.release.version} is available`,
+      detail: "This nightly uses manual installation. Download and unzip it, quit Snip Dev, then replace Snip Dev.app in Applications. Your test library stays in place. macOS may require you to allow the app in Privacy & Security because it is not signed with an Apple Developer ID." })
+    if (response === 0) await shell.openExternal(updates.release.url)
+    return
+  }
   if (phase === "available") {
     const { response } = await dialog.showMessageBox({ type: "info", buttons: ["Download update", "Later"], defaultId: 0, cancelId: 1,
-      message: `Snip ${updates.release.version} is available`, detail: "You can keep using Snip while it downloads. Restart when you’re ready; active captures will finish first." })
+      message: `${identity.name} ${updates.release.version} is available`, detail: "You can keep using Snip while it downloads. Restart when you’re ready; active captures will finish first." })
     if (response === 0) await updates.download()
   } else if (phase === "ready") {
     const { response } = await dialog.showMessageBox({ type: "info", buttons: ["Restart and update", "Later"], defaultId: 0, cancelId: 1,
       message: "Your Snip update is ready", detail: updates.error || "Snip will finish the current capture, install the update, and reopen. Your saved references and settings stay in place. You can also leave this until your next restart." })
     if (response === 0) await updates.install()
   } else if (!["checking", "downloading", "installing"].includes(phase)) {
-    await dialog.showMessageBox({ type: phase === "error" ? "warning" : "info", message: phase === "disabled" ? "This is a local development build" : phase === "error" ? "Couldn’t check for updates" : "Snip is up to date",
-      detail: phase === "disabled" ? "In-app updates are available in signed release builds of Snip." : updates.error || `You’re running Snip ${app.getVersion()}.` })
+    await dialog.showMessageBox({ type: phase === "error" ? "warning" : "info", message: phase === "disabled" ? "This is a local development build" : phase === "error" ? "Couldn’t check for updates" : `${identity.name} is up to date`,
+      detail: phase === "disabled" ? "In-app updates are available in signed release builds of Snip." : updates.error || `You’re running ${identity.name} ${app.getVersion()}.` })
   }
 }
 function updateItems() {
@@ -751,7 +769,7 @@ function updateItems() {
   }
   if (!updates) return []
   const phase = updates.phase
-  const label = phase === "available" ? `Download Snip ${updates.release.version}…` : phase === "downloading" ? "Downloading update…" : phase === "ready" ? "Restart and update Snip…" : phase === "installing" ? "Finishing capture before updating…" : phase === "checking" ? "Checking for updates…" : "Check for updates…"
+  const label = phase === "available" ? `Download ${identity.name} ${updates.release.version}…` : phase === "downloading" ? "Downloading update…" : phase === "ready" ? "Restart and update Snip…" : phase === "installing" ? "Finishing capture before updating…" : phase === "checking" ? "Checking for updates…" : "Check for updates…"
   return [{ id: "snip-update", label, enabled: !quitting && !["checking", "downloading", "installing"].includes(phase), click: () => void updateDialog(!["available", "ready", "disabled"].includes(phase)) }]
 }
 async function drainForQuit() {
@@ -788,11 +806,11 @@ function configureSourceUpdates() {
   sourceUpdates.start()
 }
 function configureUpdates() {
-  if (!releaseBuild && !development && fs.existsSync(path.join(ROOT, ".git"))) return configureSourceUpdates()
-  let config
-  if (releaseBuild) config = JSON.parse(fs.readFileSync(releaseFile, "utf8"))
-  updates = new Updates({ native: autoUpdater, version: app.getVersion(), directory: path.join(app.getPath("userData"), "updates"),
-    enabled: releaseBuild && !development && config?.channel === "stable" && config?.repository === "MaxChen04/Snip" && config?.updatesEnabled === true,
+  if (!releaseBuild && !nightly && !development && fs.existsSync(path.join(ROOT, ".git"))) return configureSourceUpdates()
+  const config = releaseConfig
+  updates = new Updates({ native: autoUpdater, version: nightly && !releaseBuild ? "0.0.0" : app.getVersion(), channel, directory: path.join(app.getPath("userData"), "updates"),
+    enabled: nightly || (releaseBuild && config?.repository === "MaxChen04/Snip" && config?.updatesEnabled === true),
+    nativeEnabled: releaseBuild && config?.repository === "MaxChen04/Snip" && config?.updatesEnabled === true,
     drain: drainForQuit,
     installFailed: () => { quitting = false; finishedQuit = false; autoCapture = true; start("web"); showApp() },
   })
@@ -801,7 +819,7 @@ function configureUpdates() {
     refresh()
     if (updates.phase === "available" && notifiedVersion !== updates.release.version) {
       notifiedVersion = updates.release.version
-      const note = new Notification({ title: "A Snip update is available", body: `Snip ${updates.release.version} is ready to download from the menu bar.` })
+      const note = new Notification({ title: "A Snip update is available", body: `${identity.name} ${updates.release.version} is ready to download from the menu bar.` })
       note.on("click", () => void updateDialog())
       note.show()
     } else if (updates.phase === "ready" && previous !== "ready") {
@@ -829,12 +847,12 @@ function serviceItems(key) {
 function refresh() {
   if (!tray) return
   Menu.setApplicationMenu(Menu.buildFromTemplate([
-    { label: "Snip", submenu: [{ role: "about" }, { id: "snip-settings", label: "Settings…", accelerator: "Cmd+,", enabled: !quitting, click: openSettings }, ...updateItems(), { type: "separator" }, { role: "hide" }, { role: "hideOthers" }, { role: "unhide" }, { type: "separator" }, { label: "Quit Snip", enabled: !quitting, accelerator: "Cmd+Q", click: () => app.quit() }] },
+    { label: identity.name, submenu: [{ role: "about" }, { id: "snip-settings", label: "Settings…", accelerator: "Cmd+,", enabled: !quitting, click: openSettings }, ...updateItems(), { type: "separator" }, { role: "hide" }, { role: "hideOthers" }, { role: "unhide" }, { type: "separator" }, { label: `Quit ${identity.name}`, enabled: !quitting, accelerator: "Cmd+Q", click: () => app.quit() }] },
     { role: "editMenu" }, { role: "windowMenu" },
   ]))
-  tray.setToolTip(quitting ? "Snip: finishing capture before quitting" : `Snip: ${STATUS[services.capture.status]}`)
+  tray.setToolTip(quitting ? `${identity.name}: finishing capture before quitting` : `${identity.name}: ${STATUS[services.capture.status]}`)
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: mode() === "cloud" ? "Open cloud library" : "Open Snip", enabled: !quitting, click: showApp },
+    { label: mode() === "cloud" ? "Open cloud library" : `Open ${identity.name}`, enabled: !quitting, click: showApp },
     ...(mode() === "cloud" && cloudOrigin() ? [{ label: windowOrigin.parse(cloudState.cloud.url)?.host ?? "Cloud library", enabled: false }] : []),
     { id: "snip-settings-tray", label: "Settings…", enabled: !quitting, click: openSettings }, { type: "separator" },
     ...(!node ? [{ label: resolvingNode ? "Finding Node.js…" : "Retry setup", enabled: !resolvingNode && !quitting, click: () => void setup() }] : []),
@@ -842,7 +860,7 @@ function refresh() {
     ...updateItems(), { type: "separator" },
     { label: "Show logs", click: () => shell.openPath(app.getPath("logs")) },
     ...(quitting || shutdown || services.capture.stopping ? [{ label: "Force quit Snip…", click: () => void forceQuit() }] : []),
-    { label: quitting ? "Finishing capture before quitting…" : "Quit Snip", enabled: !quitting, accelerator: "Cmd+Q", click: () => app.quit() },
+    { label: quitting ? "Finishing capture before quitting…" : `Quit ${identity.name}`, enabled: !quitting, accelerator: "Cmd+Q", click: () => app.quit() },
   ]))
 }
 app.on("second-instance", showApp)
@@ -866,8 +884,8 @@ async function setup() {
   try {
     if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) throw new Error("SNIP_DESKTOP_PORT must be between 1 and 65535.")
     if (!fs.existsSync(path.join(ROOT, "node_modules"))) throw new Error(`Install Snip's dependencies with npm ci in ${ROOT}`)
-    const options = { root: ROOT, resourcesPath: process.resourcesPath, userData: app.getPath("userData"), release: releaseBuild, port: PORT }
-    if (releaseBuild && !fs.existsSync(path.join(options.userData, "library-location.json"))) {
+    const options = { root: ROOT, resourcesPath: process.resourcesPath, userData: app.getPath("userData"), release: releaseBuild, isolated: nightly, port: PORT }
+    if (releaseBuild && !nightly && !fs.existsSync(path.join(options.userData, "library-location.json"))) {
       const { response } = await dialog.showMessageBox({ type: "question", buttons: ["Use an existing library", "Start a new library", "Quit"], defaultId: 0, cancelId: 2,
         message: "Set up your Snip library", detail: "If you’ve used a local build before, select its Snip project folder to keep your saved references and settings." })
       if (response === 2) { app.quit(); return }
@@ -879,7 +897,7 @@ async function setup() {
     }
     try { layout = prepareRuntimeLayout(options) }
     catch (error) {
-      if (!releaseBuild || error.code !== "SNIP_LIBRARY_LOCATION") throw error
+      if (nightly || !releaseBuild || error.code !== "SNIP_LIBRARY_LOCATION") throw error
       const { response } = await dialog.showMessageBox({ type: "warning", buttons: ["Locate existing library", "Cancel"], defaultId: 0, cancelId: 1,
         message: "Snip couldn’t open its saved library", detail: `${error.message}\nChoose its current project folder. The old location will be preserved until a valid replacement is selected.` })
       if (response !== 0) throw error
@@ -888,7 +906,7 @@ async function setup() {
       selectExistingLibrary(options, choice.filePaths[0], { replace: true })
       layout = prepareRuntimeLayout(options)
     }
-    if (releaseBuild) {
+    if (releaseBuild || nightly) {
       // Catch a development server still owning this library's port before migration.
       await new Promise((resolve, reject) => {
         const probe = require("node:net").createServer()
@@ -907,7 +925,7 @@ async function setup() {
       }
     }
     const resolved = releaseBuild ? { executable: layout.nativeNode, env: { ...process.env } } : await resolveNode({ cacheFile: path.join(app.getPath("userData"), "node-path.json") })
-    if (!releaseBuild) prepareRuntimeLayout({ ...options, recordSource: true })
+    if (!releaseBuild && !nightly) prepareRuntimeLayout({ ...options, recordSource: true })
     node = resolved
     node.env = { ...node.env, PATH: [path.dirname(node.executable), node.env.PATH].filter(Boolean).join(path.delimiter), FORCE_COLOR: "0", NO_COLOR: "1", BROWSER: "none", WRANGLER_SEND_METRICS: "false", WRANGLER_WRITE_LOGS: "false" }
     // Release builds ship their browser inside the signed bundle; never download into it.
@@ -924,13 +942,14 @@ async function setup() {
   finally { resolvingNode = false; refresh() }
 }
 app.whenReady().then(async () => {
-  app.setName("Snip")
+  app.setName(identity.name)
   if (process.platform !== "darwin" || process.arch !== "arm64" || Number(os.release().split(".")[0]) < 23) {
     dialog.showErrorBox("Snip", "Snip requires Apple Silicon and macOS 14 or later. Intel and Rosetta are not supported.")
     app.exit(1)
     return
   }
   serveSettings()
+  if (nightly && !releaseBuild) app.dock.setIcon(path.join(ROOT, "desktop/assets/Snip-dev.png"))
   const icon = nativeImage.createFromPath(path.join(ROOT, "web/public/favicon-32.png")).resize({ width: 18, height: 18 })
   tray = new Tray(icon)
   createWindow() // Never wait for shell initialization before displaying the UI.

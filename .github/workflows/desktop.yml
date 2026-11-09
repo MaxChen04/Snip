@@ -9,6 +9,8 @@ on:
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/desktop.yml'
+      - '.github/workflows/nightly.yml'
+      - '.github/workflows/release.yml'
   push:
     branches: [main]
     paths:
@@ -18,6 +20,8 @@ on:
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/desktop.yml'
+      - '.github/workflows/nightly.yml'
+      - '.github/workflows/release.yml'
 permissions:
   contents: read
 jobs:
@@ -43,8 +47,16 @@ jobs:
       - run: npm run test:desktop
       - run: npm run build --prefix desktop -- --no-install
       - run: codesign --verify --deep --strict desktop/dist/Snip-darwin-arm64/Snip.app
+      - run: npm run build --prefix desktop -- --nightly --no-install
+      - run: codesign --verify --deep --strict 'desktop/dist/Snip Dev-darwin-arm64/Snip Dev.app'
+      - run: node desktop/scripts/dev-smoke.cjs
       - name: Build standalone release runtime (unsigned)
         run: |
           export SNIP_NODE_DISTRIBUTION="$(dirname "$(dirname "$(command -v node)")")"
           node desktop/release.mjs --standalone
       - run: node desktop/scripts/release-smoke.cjs
+      - name: Build and verify isolated Snip Dev runtime
+        run: |
+          export SNIP_NODE_DISTRIBUTION="$(dirname "$(dirname "$(command -v node)")")"
+          SNIP_NIGHTLY_BUILD=1 node desktop/release.mjs --standalone --nightly
+          node desktop/scripts/release-smoke.cjs 'desktop/dist/Snip Dev-darwin-arm64/Snip Dev.app'

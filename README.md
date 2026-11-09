@@ -21,7 +21,10 @@ cp web/.dev.vars.example web/.dev.vars   # set SESSION_SECRET and CAPTURE_TOKEN,
 npm run db:migrate:local -w web
 cp capture/.env.example capture/.env      # SNIP_URL stays http://localhost:5173; paste the same CAPTURE_TOKEN
 npm run app                              # builds Snip.app and installs it in /Applications
+npm run app:dev:build                    # separate Snip Dev.app with its own test library
 ```
+
+Snip Dev uses the blue blueprint icon and separate test data. Nightlies follow `main`; stable releases use `vX.Y.Z` tags. See [desktop release channels](desktop/RELEASING.md#stable-and-snip-dev-in-one-repository) for downloads, updates and Apple signing setup.
 
 Open **Snip** from Applications or the menu bar. Paste a URL, pick **Single page** or **Crawl site**, and the capture agent starts working. `npm run doctor` checks the checkout, the two config files and the capture browser if something looks off; add `--check` to have it ask the cloud library whether it answers.
 

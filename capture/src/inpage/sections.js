@@ -88,6 +88,15 @@
   if (cuts.length < 2) return []
 
   const clean = (s) => (s || "").replace(/\s+/g, " ").trim().slice(0, 60)
+  // What the section shows (its text and media sources), so the same section can be recognised on another page.
+  // Independent of animation state: a marquee's text and images are the same whatever its position.
+  const fingerprint = (el) => {
+    const media = Array.from(el.querySelectorAll("img, video, source, image"), (m) => m.currentSrc || m.src || m.getAttribute("href") || "").slice(0, 30)
+    const text = `${(el.innerText || el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 3000)}|${media.join(",")}|${el.querySelectorAll("svg, canvas").length}`
+    let h = 5381
+    for (let i = 0; i < text.length; i++) h = ((h << 5) + h + text.charCodeAt(i)) | 0
+    return (h >>> 0).toString(36)
+  }
   const kindOf = (el, i) => {
     if (i === 0 && isHeader(el)) return "header"
     if (i === cuts.length - 1 && (isFooter(el) || el.querySelector("footer"))) return "footer"
@@ -108,6 +117,6 @@
     if (half && headingText === `${half} ${half}`) headingText = half
     const named = clean(s.el.getAttribute("aria-label")) || (kind === "header" || kind === "footer" ? "" : clean(headingText)) || clean(id)
     const label = named || { header: "Header", hero: "Hero", footer: "Footer", section: `Section ${i + 1}` }[kind]
-    return { kind, label, y: s.top, height: s.bottom - s.top }
+    return { kind, label, y: s.top, height: s.bottom - s.top, fp: fingerprint(s.el) }
   })
 }

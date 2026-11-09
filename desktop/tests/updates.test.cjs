@@ -12,6 +12,11 @@ const release = (version = "1.2.0") => ({ tag_name: `v${version}`, draft: false,
   browser_download_url: `https://github.com/MaxChen04/Snip/releases/download/v${version}/Snip-${version}-darwin-arm64.zip`, digest: `sha256:${"a".repeat(64)}`,
 }] })
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r }); return { promise, resolve } }
+const nightlyRelease = (build = 42) => {
+  const version = `0.0.${build}`, name = `Snip-Dev-${version}-darwin-arm64.zip`
+  return { tag_name: `nightly-v${version}`, draft: false, prerelease: true, assets: [{ name, state: 'uploaded', size: 123,
+    browser_download_url: `https://github.com/MaxChen04/Snip/releases/download/nightly-v${version}/${name}`, digest: `sha256:${'a'.repeat(64)}` }] }
+}
 async function setup(t, overrides = {}) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "snip-updates-"))
   const calls = []
@@ -141,4 +146,45 @@ test("metadata errors are bounded and private or absent releases do not look up 
     return Response.json(release())
   })
   assert.equal(value.tag_name, "v1.2.0")
+})
+
+test('channels never cross over and nightly builds only advance', () => {
+  assert.equal(releaseFrom(nightlyRelease(), '0.0.1'), null)
+  assert.equal(releaseFrom(release(), '0.0.1', 'nightly'), null)
+  assert.equal(releaseFrom(nightlyRelease(41), '0.0.42', 'nightly'), null)
+  assert.equal(releaseFrom(nightlyRelease(42), '0.0.42', 'nightly'), null)
+  assert.equal(releaseFrom(nightlyRelease(43), '0.0.42', 'nightly').version, '0.0.43')
+  assert.equal(releaseFrom({ ...nightlyRelease(), draft: true }, '0.0.1', 'nightly'), null)
+  assert.equal(releaseFrom({ ...nightlyRelease(), prerelease: false }, '0.0.1', 'nightly'), null)
+  for (const change of [{ name: 'Snip-0.0.42-darwin-arm64.zip' }, { browser_download_url: 'https://example.com/nightly.zip' }, { digest: null }]) {
+    const value = nightlyRelease(); Object.assign(value.assets[0], change)
+    assert.throws(() => releaseFrom(value, '0.0.1', 'nightly'), /complete, verified/)
+  }
+})
+
+test('nightly discovery skips stable releases, drafts and unrelated previews', async () => {
+  const value = await latestRelease(async (url, options) => {
+    assert.match(url, /releases\?per_page=20&page=1$/)
+    assert.equal(options.redirect, 'error')
+    return Response.json([release(), { ...nightlyRelease(100), draft: true }, { ...nightlyRelease(90), tag_name: 'beta-v0.0.90' }, nightlyRelease(9), nightlyRelease(12)])
+  }, 'nightly')
+  assert.equal(value.tag_name, 'nightly-v0.0.12')
+  await assert.rejects(latestRelease(async () => Response.json([]), 'nightly'), /No public Snip Dev nightly/)
+  const urls = []
+  const paged = await latestRelease(async url => {
+    urls.push(url)
+    return Response.json(urls.length === 1 ? Array(20).fill(release()) : [nightlyRelease()])
+  }, 'nightly')
+  assert.equal(paged.tag_name, 'nightly-v0.0.42')
+  assert.match(urls[1], /page=2$/)
+})
+
+test('unsigned nightlies discover updates but never invoke the native installer', async t => {
+  const { updates, native, calls } = await setup(t, { channel: 'nightly', version: '0.0.1', nativeEnabled: false, fetchRelease: async () => nightlyRelease() })
+  await updates.check()
+  assert.equal(updates.phase, 'available')
+  assert.equal(updates.release.version, '0.0.42')
+  await updates.download(); await updates.install()
+  assert.deepEqual(calls, [])
+  assert.equal(native.eventNames().length, 0)
 })

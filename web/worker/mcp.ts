@@ -464,11 +464,13 @@ Signed file URLs expire after 24 hours.`,
       if (section != null) {
         const s = p.sections[section]
         if (!s) return fail(p.sections.length ? `Pass section as an index from 0 to ${p.sections.length - 1}.` : "This page has no sections. Use image \"desktop\" or the fullPageUrl.")
-        const res = await inlineImage(other?.sectionKeys[section] ?? s.key)
+        // The image in the requested color scheme, for both the inline copy and the URL.
+        const key = other?.sectionKeys[section] ?? s.key
+        const res = await inlineImage(key)
         if ("image" in res) {
           images.push(res.image)
-          data.section = { index: section, label: s.label, included: true, url: await url(s.key) }
-        } else data.section = { index: section, label: s.label, included: false, reason: res.reason, url: await url(s.key), alternatives: ["section.url, if your environment can fetch URLs"] }
+          data.section = { index: section, label: s.label, included: true, url: await url(key) }
+        } else data.section = { index: section, label: s.label, included: false, reason: res.reason, url: await url(key), alternatives: ["section.url, if your environment can fetch URLs"] }
       }
       if (image !== "none") {
         const res = await inlineImage(image === "mobile" ? p.mobileThumbKey : (other?.desktopThumbKey ?? p.desktopThumbKey))

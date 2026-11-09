@@ -30,12 +30,12 @@ function validateDataRoot(dataRoot, resourcesPath) {
   if (appRoot && within(dataRoot, appRoot)) throw locationError('Library location cannot be inside the application bundle.');
   return path.resolve(dataRoot);
 }
-function resolveRuntimeLayout({ root, resourcesPath, userData, release }) {
+function resolveRuntimeLayout({ root, resourcesPath, userData, release, isolated = false }) {
   if (!path.isAbsolute(userData) || (!release && !path.isAbsolute(root)) || (release && !path.isAbsolute(resourcesPath))) throw new Error('Runtime paths must be absolute.');
   const runtimeRoot = release ? path.join(resourcesPath, 'runtime') : root;
   const pointerPath = path.join(userData, 'library-location.json');
-  let dataRoot = release ? path.join(userData, 'library') : root;
-  if (release && fs.existsSync(pointerPath)) {
+  let dataRoot = release || isolated ? path.join(userData, 'library') : root;
+  if ((release || isolated) && fs.existsSync(pointerPath)) {
     let pointer;
     try { pointer = JSON.parse(fs.readFileSync(pointerPath, 'utf8')); }
     catch { throw locationError('Library location file is invalid.'); }
@@ -48,6 +48,9 @@ function resolveRuntimeLayout({ root, resourcesPath, userData, release }) {
     } catch { throw locationError('The saved library configuration is unavailable.'); }
   }
   dataRoot = validateDataRoot(dataRoot, resourcesPath);
+  if (isolated && (path.resolve(dataRoot) !== path.join(userData, 'library') || !within(dataRoot, userData))) {
+    throw locationError('Snip Dev uses its own test library. It cannot open an external or stable Snip library.');
+  }
   return { runtimeRoot, dataRoot, pointerPath, nativeNode: path.join(runtimeRoot, 'node/bin/node'), browsersPath: path.join(runtimeRoot, 'browsers'), webEnvPath: path.join(dataRoot, 'web/.dev.vars'), captureEnvPath: path.join(dataRoot, 'capture/.env') };
 }
 function writePointer(pointerPath, dataRoot, replace = false) {
@@ -81,7 +84,7 @@ function configuredLibrary(dataRoot) {
 }
 function prepareRuntimeLayout(options) {
   const layout = resolveRuntimeLayout(options);
-  if (!options.release) {
+  if (!options.release && !options.isolated) {
     if (options.recordSource && configuredLibrary(layout.dataRoot) && !fs.existsSync(layout.pointerPath)) writePointer(layout.pointerPath, layout.dataRoot);
     return layout;
   }
@@ -117,6 +120,7 @@ function prepareRuntimeLayout(options) {
   return layout;
 }
 function selectExistingLibrary(options, dataRoot, { replace = false } = {}) {
+  if (options.isolated) throw locationError('Snip Dev uses its own test library. Importing an existing library is disabled.');
   if (!options.release) throw new Error('Selecting a library requires a release profile.');
   if (!path.isAbsolute(options.userData) || !path.isAbsolute(options.resourcesPath)) throw new Error('Runtime paths must be absolute.');
   const pointerPath = path.join(options.userData, 'library-location.json');

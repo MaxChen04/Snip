@@ -87,3 +87,14 @@ test("replaces our existing app and installs when absent", t => {
   assert.equal(fs.readFileSync(path.join(s.target, "marker"), "utf8"), "new")
   assert.deepEqual(fs.readdirSync(s.apps), ["Snip.app"])
 })
+
+test("Snip Dev installs alongside stable and cannot replace a foreign channel", t => {
+  const s = setup(t)
+  bundle(s.built, "dev.snip.desktop.nightly", "nightly")
+  const dev = path.join(s.apps, "Snip Dev.app")
+  assert.equal(installApp(s.built, s.apps, { ...s.options, channel: "nightly" }), dev)
+  assert.equal(fs.readFileSync(path.join(s.target, "marker"), "utf8"), "old")
+  assert.equal(fs.readFileSync(path.join(dev, "marker"), "utf8"), "nightly")
+  assert.throws(() => installApp(s.built, s.apps, s.options), /Refusing to replace/)
+  assert.equal(fs.readFileSync(path.join(s.target, "marker"), "utf8"), "old")
+})

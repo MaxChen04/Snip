@@ -22,7 +22,10 @@ async function main() {
   const port = await listen(reservation)
   await new Promise(resolve => reservation.close(resolve))
   const resourcesPath = path.join(bundle, 'Contents/Resources')
-  const layout = prepareRuntimeLayout({ release: true, resourcesPath, userData: profile, port })
+  const config = JSON.parse(await fs.readFile(path.join(resourcesPath, 'app/release.json'), 'utf8'))
+  const nightly = config.channel === 'nightly'
+  const name = nightly ? 'Snip Dev' : 'Snip'
+  const layout = prepareRuntimeLayout({ release: true, isolated: nightly, resourcesPath, userData: profile, port })
   // Simulate a library whose deployment uses storage identities that differ
   // from the release bundle. Later launches must use its retained identities.
   const libraryConfig = path.join(layout.dataRoot, 'web/wrangler.jsonc')
@@ -39,9 +42,10 @@ async function main() {
   let application, moved = false
   const movedBundle = path.join(temp, 'Updated Snip.app')
   const origin = `http://localhost:${port}`
-  const launch = location => _electron.launch({ executablePath: path.join(location, 'Contents/MacOS/Snip'), env: { ...process.env, SNIP_DESKTOP_PROFILE: profile, SNIP_DESKTOP_PORT: String(port), WRANGLER_SEND_METRICS: 'false', WRANGLER_WRITE_LOGS: 'false' }, timeout: 30000 })
+  const launch = location => _electron.launch({ executablePath: path.join(location, `Contents/MacOS/${name}`), env: { ...process.env, SNIP_DESKTOP_PROFILE: profile, SNIP_DESKTOP_PORT: String(port), WRANGLER_SEND_METRICS: 'false', WRANGLER_WRITE_LOGS: 'false' }, timeout: 30000 })
   try {
     application = await launch(bundle)
+    assert.equal(await application.evaluate(({ app }) => app.getName()), name)
     let page = await application.firstWindow()
     await page.waitForURL(`${origin}/`, { timeout: 120000 })
     assert.equal((await page.evaluate(() => fetch('/api/me').then(r => r.json()))).login, 'local')

@@ -254,7 +254,7 @@ async function main() {
   if (!stopping && process.send) process.send({ type: 'snip:web-ready', url: url.origin });
 }
 
-main().catch(error => {
+if (require.main === module) main().catch(error => {
   if (stopping) return;
   const message = error.userMessage || 'Local server failed to start. Check the built assets and Wrangler configuration.';
   if (process.send && process.connected) {
@@ -264,3 +264,5 @@ main().catch(error => {
     process.exit(1);
   }
 });
+
+module.exports = { storageConfig, migrate };
