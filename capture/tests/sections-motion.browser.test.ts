@@ -472,3 +472,58 @@ test("a moving section taller than the viewport is recorded whole, unless growin
     await browser.close()
   }
 })
+
+test("a tall section is recorded whole only if growing the viewport leaves the page where it was cut", { timeout: 240_000 }, async (t) => {
+  const { recordLiveSections } = await import("../src/capture")
+  const { closeRenderer } = await import("../src/sheet")
+  const sharp = (await import("sharp")).default
+  const browser = await launch()
+  // The viewport is 600 tall and grows to 800 for the 800px section "b", cut at y=600 of a 1800px page. Every case
+  // keeps the page 1800px tall at both heights, so only where the sections sit tells whether the layout moved.
+  const sec = (cls: string, height: string) => `<section class="${cls}" style="height: ${height}"></section>`
+  const b = `<section class="b" style="height: 800px"><div id="spin"></div></section>`
+  const grow = (px: number) => `${px / 200} * (100vh - 600px)` // px taller at 800, no change at 600
+  const cases: [string, string, number][] = [
+    ["sections sized 100vh and calc(1400px - 100vh)", `${sec("a", "100vh")}<section class="b" style="height: calc(1400px - 100vh)"><div id="spin"></div></section>${sec("c", "400px")}`, 600],
+    ["a section above grows by 3px", `${sec("a", `calc(600px + ${grow(3)})`)}${b}${sec("c", `calc(400px - ${grow(3)})`)}`, 600],
+    ["the section itself grows by 100px", `${sec("a", "600px")}<section class="b" style="height: calc(800px + ${grow(100)})"><div id="spin"></div></section>${sec("c", `calc(400px - ${grow(100)})`)}`, 600],
+    ["a section above grows by 1px (rounding)", `${sec("a", `calc(600px + ${grow(1)})`)}${b}${sec("c", `calc(400px - ${grow(1)})`)}`, 800],
+    ["sections above trade 100px, so the section stays put", `${sec("a", `calc(300px + ${grow(100)})`)}${sec("a", `calc(300px - ${grow(100)})`)}${b}${sec("c", "400px")}`, 800],
+    ["fixed and sticky bars follow the viewport", `<div style="position: fixed; inset: 0; pointer-events: none"></div><div style="position: fixed; bottom: 0; left: 0; right: 0; height: 60px; background: gray"></div>
+      <header style="position: sticky; top: 0; height: 50px; background: gray"></header>${sec("a", "550px")}${b}${sec("c", "360px")}<footer style="position: sticky; bottom: 0; height: 40px; background: gray"></footer>`, 800],
+  ]
+  const pixel = async (jpeg: Buffer, x: number, y: number) => {
+    const { data, info } = await sharp(jpeg).raw().toBuffer({ resolveWithObject: true })
+    const at = (y * info.width + x) * info.channels
+    return [data[at]!, data[at + 1]!, data[at + 2]!]
+  }
+  try {
+    for (const [name, html, want] of cases) await t.test(name, async () => {
+      const page = await browser.newPage({ viewport: { width: 800, height: 600 } })
+      await page.setContent(`<style>
+        body { margin: 0 } .a { background: #ff2020 } .b { background: #2040ff } .c { background: #20c040 }
+        #spin { width: 80px; height: 80px; background: tomato; animation: move 1s linear infinite } @keyframes move { to { transform: translateX(600px) } }
+      </style>${html}`)
+      const height = () => page.evaluate(() => document.documentElement.scrollHeight)
+      await page.setViewportSize({ width: 800, height: 800 })
+      assert.equal(await height(), 1800, `${name}: the page is as tall grown as not`)
+      await page.setViewportSize({ width: 800, height: 600 })
+      assert.equal(await height(), 1800)
+
+      const blank = await sharp({ create: { width: 800, height: 1800, channels: 3, background: "white" } }).jpeg().toBuffer()
+      const inView = { shot: blank, patches: [] as { y: number; height: number; jpeg: Buffer }[] }
+      const clips = await recordLiveSections(page, [{ kind: "section" as const, label: "b", y: 600, height: 800 }], "webm", new Map(), inView)
+      assert.deepEqual([clips[0]?.height, clips[0]?.recording?.height], [want, want], name)
+      assert.deepEqual(page.viewportSize(), { width: 800, height: 600 }, `${name}: the viewport is put back`)
+      // The clip's first frame is pasted into the screenshot at the section's place: it must show the section, not the one above it.
+      const last = inView.patches.at(-1)!
+      assert.deepEqual([last.y, last.height], [600, want], name)
+      const [red, , blue] = await pixel(last.jpeg, 400, 100)
+      assert.ok(blue! > 200 && red! < 100, `${name}: the first frame shows section b (r ${red}, b ${blue})`)
+      await page.close()
+    })
+  } finally {
+    await closeRenderer()
+    await browser.close()
+  }
+})
