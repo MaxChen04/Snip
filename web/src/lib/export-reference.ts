@@ -31,7 +31,7 @@ export function exportPlan(r: Reference, pages: Page[], animations: Animation[])
   })
   const metadata = {
     exportedAt: new Date().toISOString(),
-    reference: { ...r, previewKeys: undefined, coverKey: undefined },
+    reference: { ...r, previewKeys: undefined, coverKey: undefined, favicon: undefined },
     pages: pages.map((p) => ({ id: p.id, url: p.url, path: p.path, title: p.title, folder: pageDir.get(p.id), tokens: p.tokens, desktop: { width: p.desktopWidth, height: p.desktopHeight }, mobile: { width: p.mobileWidth, height: p.mobileHeight } })),
     animations: animations.map((a) => ({ id: a.id, pageId: a.pageId, kind: a.kind, label: a.label, selector: a.selector, viewport: a.viewport, width: a.width, height: a.height, meta: a.meta })),
   }

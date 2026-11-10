@@ -207,7 +207,7 @@ async function listSections(database: D1Database, f: db.ListFilter): Promise<Pag
     args.push(cur[0], cur[0], pageId, pageId, Number(cur[1].slice(at + 1)))
   }
   const { results } = await database
-    .prepare(`SELECT t.id, t.reference_id, t.url, t.path, t.desktop_width, t.created_at, r.title AS ref_title, r.domain AS ref_domain, s.key AS idx, s.value AS section
+    .prepare(`SELECT t.id, t.reference_id, t.url, t.path, t.desktop_width, t.created_at, r.title AS ref_title, r.domain AS ref_domain, r.favicon AS ref_favicon, s.key AS idx, s.value AS section
       FROM pages t JOIN refs r ON r.id = t.reference_id JOIN json_each(t.sections_json) s
       ${db.whereSql(where)} ORDER BY t.created_at DESC, t.id DESC, s.key LIMIT ?`)
     .bind(...args, limit + 1)
@@ -227,7 +227,7 @@ async function listSections(database: D1Database, f: db.ListFilter): Promise<Pag
       height: s.height,
       path: r.path as string,
       url: r.url as string,
-      reference: { id: r.reference_id as string, title: (r.ref_title as string) ?? null, domain: r.ref_domain as string },
+      reference: db.refSummary(r),
       createdAt: r.created_at as string,
     }
   })
@@ -299,7 +299,7 @@ async function getBoard(database: D1Database, id: string): Promise<BoardCanvas |
     database.prepare(`SELECT * FROM board_items WHERE collection_id = ?`).bind(id),
     database.prepare(`${db.REF_SELECT} WHERE r.id IN (SELECT reference_id FROM reference_collections WHERE collection_id = ?) ORDER BY r.created_at DESC, r.id DESC`).bind(id),
     // Saved pages point at (website, path); resolve them to the current page rows.
-    database.prepare(`SELECT t.*, r.title AS ref_title, r.domain AS ref_domain, ${db.PAGE_COLLECTIONS} FROM page_collections pc
+    database.prepare(`SELECT t.*, r.title AS ref_title, r.domain AS ref_domain, r.favicon AS ref_favicon, ${db.PAGE_COLLECTIONS} FROM page_collections pc
       JOIN pages t ON t.reference_id = pc.reference_id AND t.path = pc.page_path JOIN refs r ON r.id = t.reference_id
       WHERE pc.collection_id = ? ORDER BY pc.added_at DESC, t.id`).bind(id),
     database.prepare(`${IMAGE_SELECT} WHERE i.id IN (SELECT image_id FROM image_collections WHERE collection_id = ?) ORDER BY i.created_at DESC, i.id DESC`).bind(id),
@@ -319,7 +319,7 @@ async function getBoard(database: D1Database, id: string): Promise<BoardCanvas |
       ...refs!.results.map((r) => ({ ...item("reference", r.id as string, itemKey("reference", r.id as string, "")), reference: db.toReference(r) })),
       ...pages!.results.map((r) => ({
         ...item("page", r.id as string, itemKey("page", r.reference_id as string, r.path as string)),
-        page: { ...db.toPage(r), reference: { id: r.reference_id as string, title: (r.ref_title as string) ?? null, domain: r.ref_domain as string } },
+        page: { ...db.toPage(r), reference: db.refSummary(r) },
       })),
       ...images!.results.map((r) => ({ ...item("image", r.id as string, itemKey("image", r.id as string, "")), image: toImage(r) })),
       ...placed!.results.filter((p) => p.kind === "note").map((p) => ({ ...item("note", p.item_id as string, itemKey("note", p.item_id as string, "")), text: p.text as string })),

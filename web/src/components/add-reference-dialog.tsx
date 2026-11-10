@@ -19,13 +19,6 @@ const MODES: { value: CaptureMode; title: string; description: string; icon: typ
 ]
 const LIMITS = [10, 25, 50, 100]
 
-function Favicon({ host }: { host?: string }) {
-  const [broken, setBroken] = useState(false)
-  useEffect(() => setBroken(false), [host])
-  if (!host || broken) return <GlobeIcon className="size-5 text-muted-foreground" />
-  return <img src={`https://icons.duckduckgo.com/ip3/${host}.ico`} alt="" onError={() => setBroken(true)} className="size-5 rounded-[5px]" />
-}
-
 export function AddReferenceDialog({
   open,
   onOpenChange,
@@ -168,7 +161,7 @@ export function AddReferenceDialog({
                 <ul className="flex max-h-32 flex-col gap-1.5 overflow-y-auto">
                   {bulk.map((u) => (
                     <li key={u.href} className="flex items-center gap-2 text-xs text-ink-11">
-                      <Favicon host={u.hostname} />
+                      <GlobeIcon className="size-5 shrink-0 text-muted-foreground" />
                       <span className="truncate">{u.hostname + (u.pathname === "/" ? "" : u.pathname)}</span>
                       <button type="button" aria-label={`Remove ${u.hostname}`} onClick={() => setBulk((b) => b.filter((x) => x.href !== u.href))} className="press ml-auto grid size-5 shrink-0 place-items-center rounded-full text-ink-10 hover:text-foreground">
                         <XIcon className="size-3" />
@@ -181,7 +174,7 @@ export function AddReferenceDialog({
             ) : (
             <div>
               <label className="well flex h-12 items-center gap-3 rounded-lg px-3.5">
-                <Favicon host={parsed?.hostname} />
+                <GlobeIcon className="size-5 shrink-0 text-muted-foreground" />
                 <input
                   autoFocus
                   inputMode="url"

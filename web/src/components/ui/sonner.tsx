@@ -1,7 +1,7 @@
 "use client"
 
 import { cn } from "cn"
-import { useTheme } from "next-themes"
+import { useTheme } from "@/components/theme-provider"
 import { Toaster as Sonner, type ToasterProps } from "sonner"
 import {
   CircleCheckIcon,
@@ -18,7 +18,7 @@ const Toaster = ({
   toastOptions,
   ...props
 }: ToasterProps) => {
-  const { theme = "system" } = useTheme()
+  const { theme } = useTheme()
   const classNames = toastOptions?.classNames
 
   return (

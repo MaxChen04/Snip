@@ -8,7 +8,7 @@ import { useAddFlow } from "@/components/add-flow"
 import { BoardsList } from "@/components/canvas/boards-list"
 import { isLocalOrigin } from "@/lib/mcp"
 import { useCollections } from "@/lib/collections"
-import { useTheme } from "next-themes"
+import { useTheme } from "@/components/theme-provider"
 import { Logo } from "@/components/brand"
 import {
   DropdownMenu,
@@ -207,7 +207,7 @@ function AccountMenu({ login }: { login: string }) {
         <div className="flex items-center justify-between px-2 py-1.5 text-xs">
           Theme
           <Segmented
-            value={theme ?? "system"}
+            value={theme}
             onChange={setTheme}
             options={[
               { value: "light", label: <SunIcon className="size-3.5" />, title: "Light" },
