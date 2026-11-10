@@ -687,6 +687,7 @@ export async function requestStop(db: D1Database, id: string) {
   const results = await db.batch([
     db.prepare(`UPDATE refs SET status = 'ready', progress = NULL, error = NULL, capture_control = NULL,
       title = coalesce(json_extract(crawl_state, '$.meta.title'), title), description = coalesce(json_extract(crawl_state, '$.meta.description'), description),
+      favicon = CASE WHEN instr(json_extract(crawl_state, '$.meta.favicon'), 'refs/' || id || '/' || capture_attempt || '/') = 1 THEN json_extract(crawl_state, '$.meta.favicon') ELSE favicon END,
       tokens_json = json_extract(crawl_state, '$.tokens'), crawl_state = NULL, updated_at = ?
       WHERE id = ? AND status = 'queued' AND crawl_state IS NOT NULL AND page_count > 0`).bind(ts, id),
     db.prepare(`UPDATE refs SET status = 'failed', progress = NULL, error = ?, capture_control = NULL, crawl_state = NULL, updated_at = ?

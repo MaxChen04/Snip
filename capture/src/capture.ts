@@ -378,17 +378,17 @@ export function iconType(b: Buffer): { ext: string; type: string } | null {
 /**
  * Save the site's icon with the capture so Snip shows it from its own files, never by asking the site (or anyone else) again.
  * Null when the icon can't be fetched, is too big or isn't an image: the website then shows its first letter.
+ * Never throws: it runs beside the first page and must not fail the capture. A job that went away fails the
+ * capture's own next call.
  */
-async function storeIcon(context: BrowserContext, api: SnipApi, url: string | undefined, prefix: string): Promise<string | null> {
-  if (!url) return null
+async function storeIcon(context: BrowserContext, api: SnipApi, url: string, prefix: string): Promise<string | null> {
   try {
     const res = await context.request.get(url, { timeout: 10_000 })
     if (!res.ok() || Number(res.headers()["content-length"]) > ICON_MAX_BYTES) return null
     const body = await res.body()
     const icon = body.length <= ICON_MAX_BYTES ? iconType(body) : null
     return icon ? await api.upload(`${prefix}/icon.${icon.ext}`, body, icon.type) : null
-  } catch (e) {
-    if (e instanceof JobGoneError) throw e
+  } catch {
     return null
   }
 }
@@ -1092,6 +1092,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
   const allTokens: DesignTokens[] = resume?.tokens ? [resume.tokens] : []
   let meta: CrawlState["meta"] = resume?.meta ?? null
   let coverKey: string | null = null
+  let iconTask: Promise<void> | undefined
   let captured = resume?.captured ?? 0
   let failures = resume?.failures ?? 0
   let navLinksQueued = resume?.navLinksQueued ?? false
@@ -1176,6 +1177,12 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
         continue
       }
       if (!meta) meta = pageMeta
+      // The icon is saved beside the first page's own work, never ahead of it, and nothing waits for it. Its key replaces
+      // the URL in `meta` when it lands, so the next pause checkpoint, or completion, carries whichever it has by then.
+      // A resumed crawl whose checkpoint already holds the key (not a URL) keeps it; one that only has the URL tries once.
+      if (features.has("icon") && !iconTask && meta.favicon && !meta.favicon.startsWith("refs/")) {
+        iconTask = storeIcon(desktop, api, meta.favicon, prefix).then((key) => { if (key && meta) meta = { ...meta, favicon: key } })
+      }
 
       if (job.mode === "crawl") {
         const links = rankLinks(pageMeta.links).flatMap((l) => normalize(l.href, root) ?? [])
@@ -1391,8 +1398,8 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
   await api.complete(job.id, {
     title: meta?.title ?? null,
     description: meta?.description ?? null,
-    // A Worker that predates saved icons keeps the site's icon URL and shows it from there.
-    favicon: features.has("icon") ? await storeIcon(desktop, api, meta?.favicon ?? undefined, prefix) : (meta?.favicon ?? null),
+    // The saved icon's key, or the site's icon URL when it isn't saved (the Worker keeps only a key; an older one keeps the URL).
+    favicon: meta?.favicon ?? null,
     // A resumed crawl already has its cover from its first page; null keeps it.
     coverKey: resume?.captured ? null : coverKey,
     tokens: mergeTokens(allTokens),

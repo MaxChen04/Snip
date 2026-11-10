@@ -250,6 +250,7 @@ export interface CrawlState {
   navLinksQueued: boolean
   /** Hover effects already recorded, as selector|label. */
   hoverSeen: string[]
+  /** `favicon` is the site's icon URL until the icon has been saved, then the saved file's key. */
   meta: { title: string | null; description: string | null; favicon: string | null } | null
   /** Tokens merged from the pages captured so far. */
   tokens: DesignTokens | null

@@ -174,3 +174,87 @@ test("agent control and pause routes are fenced by the capture lease", async () 
     await mf.dispose()
   }
 })
+
+test("a website's saved icon survives pause, resume and stop, and only an icon from the capture's own files is kept", async () => {
+  const { mf, database } = await setup()
+  try {
+    const ctx = { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext
+    const env = { DB: database, CAPTURE_TOKEN: "test-token" } as Env
+    const finish = (id: string, attempt: string, favicon: string | null) => app.request(`https://snip.test/agent/jobs/${id}/complete`, {
+      method: "POST", body: JSON.stringify({ title: null, description: null, favicon, coverKey: null, tokens: null }),
+      headers: { authorization: "Bearer test-token", "content-type": "application/json", "x-snip-capture-protocol": "3", "x-snip-capture-attempt": attempt },
+    }, env, ctx)
+    const icon = async (id: string) => (await db.getReference(database, id))!.reference.favicon
+    const withIcon = (favicon: string | null): CrawlState => ({ ...state(1), meta: { title: "Example", description: null, favicon } })
+    const crawl = async (url: string) => {
+      const ref = await db.createReference(database, { url, mode: "crawl", maxPages: 5 })
+      const job = (await db.claimJob(database))!
+      assert.ok(await db.addPage(database, ref.id, job.attempt, page(ref.id, job.attempt, 0)))
+      return { ref, job, key: `refs/${ref.id}/${job.attempt}/icon.png` }
+    }
+    const pause = async (id: string, attempt: string, favicon: string | null) => {
+      await db.requestPause(database, id)
+      assert.equal(await db.pauseJob(database, id, attempt, withIcon(favicon)), "paused")
+    }
+
+    // Pause, resume, finish: the checkpoint hands the saved key back, and it is still under the capture's own prefix
+    // because a resumed crawl keeps its attempt.
+    const a = await crawl("https://resume.example")
+    await pause(a.ref.id, a.job.attempt, a.key)
+    assert.equal(await icon(a.ref.id), null, "nothing is shown until the capture ends")
+    assert.ok(await db.resumeReference(database, a.ref.id))
+    const resumed = (await db.claimJob(database))!
+    assert.equal(resumed.attempt, a.job.attempt)
+    assert.equal(resumed.resume!.meta!.favicon, a.key, "the resumed agent reuses the saved icon instead of fetching again")
+    assert.equal((await finish(a.ref.id, resumed.attempt, resumed.resume!.meta!.favicon)).status, 200)
+    assert.equal(await icon(a.ref.id), a.key)
+
+    // Pause, stop: the server finishes the crawl from the checkpoint, icon included.
+    const b = await crawl("https://stop.example")
+    await pause(b.ref.id, b.job.attempt, b.key)
+    assert.equal(await db.requestStop(database, b.ref.id), true)
+    assert.equal((await db.getReference(database, b.ref.id))!.reference.status, "ready")
+    assert.equal(await icon(b.ref.id), b.key)
+    // ...and the same when the pause was resumed but not picked up yet.
+    const c = await crawl("https://waiting.example")
+    await pause(c.ref.id, c.job.attempt, c.key)
+    await db.resumeReference(database, c.ref.id)
+    assert.equal(await db.requestStop(database, c.ref.id), true)
+    assert.equal(await icon(c.ref.id), c.key)
+
+    // A checkpoint whose icon was not saved yet still holds the site's URL: nothing is kept, and the stop still finishes.
+    const d = await crawl("https://unsaved.example")
+    await pause(d.ref.id, d.job.attempt, "https://unsaved.example/favicon.ico")
+    assert.equal(await db.requestStop(database, d.ref.id), true)
+    assert.equal(await icon(d.ref.id), null)
+    assert.equal((await db.getReference(database, d.ref.id))!.reference.status, "ready")
+
+    // Only a key under the capture's own prefix is kept, however the capture ends: not another website's, not an
+    // earlier attempt's, not a URL (what an older agent sends).
+    const e = await crawl("https://other.example")
+    let live = e.job
+    for (const wrong of [b.key, `refs/${e.ref.id}/${"0".repeat(32)}/icon.png`, "https://other.example/favicon.ico"]) {
+      assert.equal((await finish(e.ref.id, live.attempt, wrong)).status, 200)
+      assert.equal(await icon(e.ref.id), null)
+      await db.requeueReference(database, e.ref.id)
+      live = (await db.claimJob(database))!
+    }
+    const f = await crawl("https://wrong.example")
+    await pause(f.ref.id, f.job.attempt, b.key)
+    await db.requestStop(database, f.ref.id)
+    assert.equal(await icon(f.ref.id), null, "a checkpoint cannot point the website at another capture's file")
+
+    // A recapture clears the icon with the retired attempt, and the old key cannot come back under the new one.
+    await db.requeueReference(database, b.ref.id)
+    assert.equal(await icon(b.ref.id), null)
+    const retired = (await database.prepare("SELECT group_concat(prefix) AS p FROM capture_cleanup").first<{ p: string }>())!.p
+    assert.ok(retired.includes(`refs/${b.ref.id}/${b.job.attempt}/`), "the old attempt's files, icon included, are retired")
+    const next = (await db.claimJob(database))!
+    assert.notEqual(next.attempt, b.job.attempt)
+    assert.equal(next.resume, null, "a recapture starts over, with no checkpoint to restore an icon from")
+    assert.equal((await finish(b.ref.id, next.attempt, b.key)).status, 200)
+    assert.equal(await icon(b.ref.id), null)
+  } finally {
+    await mf.dispose()
+  }
+})
