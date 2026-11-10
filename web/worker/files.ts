@@ -43,3 +43,18 @@ export function acceptsGzip(request: Request) {
     return coding === "gzip" && !params.some((p) => /^q=0(\.0{0,3})?$/.test(p))
   })
 }
+
+/**
+ * One gzip member of a split styles file (shared/style-parts.ts), parsed, or null when the file or the range is
+ * missing or doesn't decode: the caller then reads the full styles file instead. The file's name never matches
+ * isGzipKey, so `/files/*` and getFile leave its bytes alone.
+ */
+export async function readStylePart<T>(bucket: R2Bucket, key: string, [offset, length]: [number, number]): Promise<T | null> {
+  try {
+    const object = await bucket.get(key, { range: { offset, length } })
+    if (!object) return null
+    return (await new Response(object.body.pipeThrough(new DecompressionStream("gzip"))).json()) as T
+  } catch {
+    return null
+  }
+}

@@ -1,3 +1,4 @@
+import type { StylesSummary } from "./style-parts"
 // Types shared by the Worker, the web app and the capture agent.
 
 export type CaptureMode = "single" | "crawl"
@@ -248,9 +249,9 @@ export interface Job {
   recordingFormats?: ("gif" | "webm")[]
   /**
    * What the serving Worker stores beyond the basics: page sections, live clips of them, "icon" (it keeps a site icon saved with the capture), and "gzip" (it reads text files
-   * uploaded under a gzipKey). Older Workers omit this. Not persisted.
+   * uploaded under a gzipKey), and "style-parts" (it takes a split styles file and its summary, shared/style-parts.ts). Older Workers omit this. Not persisted.
    */
-  features?: ("sections" | "live" | "schemes" | "icon" | "gzip")[]
+  features?: ("sections" | "live" | "schemes" | "icon" | "gzip" | "style-parts")[]
 }
 
 /** Crawl position saved when a capture pauses. */
@@ -286,6 +287,8 @@ export interface PageUpload {
   mobileHeight: number | null
   snapshotKey: string | null
   stylesKey: string | null
+  /** Where the split styles file (styles-parts.gzm) keeps each part. Sent only to a Worker with "style-parts"; older agents send none. */
+  stylesSummary?: StylesSummary | null
   tokens: DesignTokens | null
   /** Older agents send none. */
   sections?: PageSection[]

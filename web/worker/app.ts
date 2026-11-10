@@ -15,6 +15,7 @@ import {
   verifyFileSig,
 } from "./auth"
 import * as db from "./db"
+import { validStylesSummary } from "../shared/style-parts"
 import { canvas } from "./canvas"
 import { signInPath } from "../shared/safe-next"
 import { loginOptions, loginVerify, registerOptions, registerVerify, listDevices, removeDevice } from "./passkeys"
@@ -383,7 +384,7 @@ agent.post("/jobs/claim", async (c) => {
   c.executionCtx.waitUntil(db.cleanupRetiredFiles(c.env.DB, c.env.FILES))
   await db.touchPresence(c.env.DB, job ? "busy" : "idle", job?.id ?? null)
   // Advertise on every claim, including resumed jobs: the destination may have been upgraded since the last one.
-  return job ? c.json({ ...job, recordingFormats: ["gif", "webm"], features: ["sections", "live", "schemes", "icon", "gzip"] }) : c.body(null, 204)
+  return job ? c.json({ ...job, recordingFormats: ["gif", "webm"], features: ["sections", "live", "schemes", "icon", "gzip", "style-parts"] }) : c.body(null, 204)
 })
 
 agent.post("/heartbeat", async (c) => {
@@ -461,7 +462,9 @@ agent.post("/jobs/:id/pages", async (c) => {
     return c.json({ error: "bad altScheme" }, 400)
   const keys = [page.desktopKey, page.desktopThumbKey, page.mobileKey, page.mobileThumbKey, page.snapshotKey, page.stylesKey, ...(page.sections ?? []).flatMap((s) => [s.key, s.live?.key]), alt?.desktopKey, alt?.desktopThumbKey, ...(alt?.sectionKeys ?? []), ...page.animations.flatMap((a) => [a.gifKey, a.sheetKey])]
   if (keys.some((key) => key && !key.startsWith(prefix))) return c.json({ error: "bad file key" }, 400)
-  const pageId = await db.addPage(c.env.DB, id, attempt, page)
+  // A summary that doesn't check out is dropped, not refused: the page still has its full styles file.
+  const stylesSummary = page.stylesKey && validStylesSummary(page.stylesSummary, prefix) ? page.stylesSummary : null
+  const pageId = await db.addPage(c.env.DB, id, attempt, { ...page, stylesSummary })
   return pageId ? c.json({ id: pageId }) : c.json({ error: "job is gone" }, 410)
 })
 

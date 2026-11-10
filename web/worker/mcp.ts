@@ -4,7 +4,8 @@ import { z } from "zod"
 import { isVideoKey, type Animation, type DesignTokens, type Page, type Reference } from "../shared/types"
 import { isLocalOrigin, signFileUrl } from "./auth"
 import * as db from "./db"
-import { readText } from "./files"
+import { readStylePart, readText } from "./files"
+import { packStyles, stylePartsKey, type CapturedStyles, type StyleElement, type StyleIndexEntry, type StyleRules, type StylesSummary } from "../shared/style-parts"
 import { bounded, decodeCursor, encodeCursor } from "./mcp-bounds"
 import {
   TASKS_EXTENSION, WAIT_DEFAULT_SECONDS, WAIT_MAX_SECONDS, WAIT_STEP_MS,
@@ -91,7 +92,7 @@ function tokenSummary(t: DesignTokens | null, perGroup = 6) {
 
 const PAGE_CLIP_PX = 15_990 // capture clips full-page screenshots near 16,000 physical px
 
-function buildServer(env: Env, origin: string) {
+function buildServer(env: Env, origin: string, ctx: ExecutionContext) {
   const url = (key: string | null) => (key ? signFileUrl(env, origin, key) : Promise.resolve(null))
 
   async function inlineImage(key: string | null): Promise<{ image: Content } | { reason: string }> {
@@ -160,10 +161,10 @@ function buildServer(env: Env, origin: string) {
     collectionIds: p.collectionIds,
   })
 
-  const representations = (a: Animation) => ({
+  const representations = (a: Pick<Animation, "sheetKey" | "gifKey">, frameCount: number) => ({
     manifest: true,
     contact_sheet: !!a.sheetKey,
-    frame: (a.meta?.frames.length ?? 0) > 0,
+    frame: frameCount > 0,
     gif: !isVideoKey(a.gifKey),
   })
 
@@ -183,10 +184,10 @@ function buildServer(env: Env, origin: string) {
     gifUrl: isVideoKey(a.gifKey) ? null : await url(a.gifKey),
     width: a.width,
     height: a.height,
-    representations: representations(a),
+    representations: representations(a, a.meta?.frames.length ?? 0),
   })
 
-  const listedAnimation = (a: Animation) => ({ id: a.id, pageId: a.pageId, kind: a.kind, label: a.label, representations: representations(a) })
+  const listedAnimation = (a: db.ListedAnimation) => ({ id: a.id, pageId: a.pageId, kind: a.kind, label: a.label, representations: representations(a, a.frameCount) })
 
   // The same constant the HTTP routes report, so MCP and the update check cannot disagree (§5.4).
   const server = new McpServer({ name: "snip", version: WORKER_VERSION }, { instructions: INSTRUCTIONS })
@@ -203,9 +204,9 @@ function buildServer(env: Env, origin: string) {
         ...fail(`Capture of ${ref.url} did not finish${ref.error ? `: ${ref.error}` : ""}. Tell the user; they can retry it from the Snip app (${origin}/r/${ref.id}).`),
         structuredContent: { ...extra, referenceId: ref.id, state: ref.status, error: ref.error, galleryUrl: `${origin}/r/${ref.id}` },
       }
-    const r = await db.getReference(env.DB, ref.id)
-    const full = r?.reference ?? ref
-    const pages = r?.pages ?? []
+    const full = (await db.getReferenceRecord(env.DB, ref.id)) ?? ref
+    // Ten pages are listed; the eleventh row only says whether more exist.
+    const pages = await db.listReferencePages(env.DB, ref.id, null, 11)
     const images: Content[] = []
     const skipped: { pageId: string; reason: string }[] = []
     let bytes = 0
@@ -221,7 +222,7 @@ function buildServer(env: Env, origin: string) {
       bytes += size
       images.push(got.image)
     }
-    const listed = bounded(pages.map((p) => ({ id: p.id, path: p.path, title: p.title })), 0, 10)
+    const listed = bounded(pages.slice(0, 10).map((p) => ({ id: p.id, path: p.path, title: p.title })), 0, 10)
     const tokens = tokenSummary(full.tokens, 4)
     return ok(
       {
@@ -237,7 +238,7 @@ function buildServer(env: Env, origin: string) {
         images: images.length ? `${images.length} page thumbnail${images.length === 1 ? "" : "s"} attached, in page order` : "none attached",
         ...(skipped.length ? { imagesUnavailable: skipped } : {}),
         pages: listed.items,
-        ...(listed.total > listed.items.length ? { omittedPages: listed.total - listed.items.length } : {}),
+        ...(full.pageCount > listed.items.length ? { omittedPages: full.pageCount - listed.items.length } : {}),
         tokens: tokens ? { colors: tokens.colors, fonts: tokens.fonts } : null,
         next: [
           "Show the user the thumbnails and galleryUrl.",
@@ -341,9 +342,20 @@ Signed file URLs expire after 24 hours.`,
     },
     async ({ id, part = "full", token_group, limit: limitArg, cursor }) => {
       const limit = limitArg ?? 25
-      const r = await db.getReference(env.DB, id)
-      if (!r) return fail(`No reference with id "${id}". Call search_references to find ids.`)
-      const ref = r.reference
+      // Every part but "full" reads the reference row and at most a page of child rows, however large the reference is.
+      const ref = part === "full" ? null : await db.getReferenceRecord(env.DB, id)
+      const r = part === "full" ? await db.getReference(env.DB, id) : null
+      if (part === "full" && r) {
+        return ok({
+          ...(await summarizeRef(r.reference)),
+          description: r.reference.description,
+          tokens: r.reference.tokens,
+          pages: await Promise.all(r.pages.map((pg) => describePage(pg))),
+          animations: await Promise.all(r.animations.map(describeAnimation)),
+          note: "Legacy full read. Prefer part \"overview\" and the per-item tools to keep results small.",
+        })
+      }
+      if (!ref) return fail(`No reference with id "${id}". Call search_references to find ids.`)
       const rev = ref.updatedAt
       const cur = decodeCursor(cursor)
       if (cursor && !cur) return fail("cursor is not valid. Call again without cursor to start from the beginning.")
@@ -351,24 +363,29 @@ Signed file URLs expire after 24 hours.`,
       if (cur && cur.rev !== rev) return fail("This reference was recaptured or changed since that cursor was issued. Call again without cursor.")
       if (cur && (cur.part !== part || (cur.group ?? null) !== (token_group ?? null)))
         return fail(`That cursor belongs to part "${cur.part}"${cur.group ? ` group "${cur.group}"` : ""}. Pass the same part and token_group.`)
+      const keyed = part === "pages" || part === "animations"
+      if (cur && keyed && cur.offset > 0 && !cur.key) return fail("That cursor is from an older version of Snip. Call again without cursor.")
       const offset = cur?.offset ?? 0
-      const nextCursor = (n: number | null) => (n == null ? null : encodeCursor({ referenceId: id, part, group: token_group, offset: n, rev }))
+      const nextCursor = (n: number | null, key?: (string | number)[]) => (n == null ? null : encodeCursor({ referenceId: id, part, group: token_group, offset: n, rev, ...(key ? { key } : {}) }))
 
-      if (part === "full") {
-        return ok({
-          ...(await summarizeRef(ref)),
-          description: ref.description,
-          tokens: ref.tokens,
-          pages: await Promise.all(r.pages.map((pg) => describePage(pg))),
-          animations: await Promise.all(r.animations.map(describeAnimation)),
-          note: "Legacy full read. Prefer part \"overview\" and the per-item tools to keep results small.",
-        })
+      /** A byte-bounded page of rows read with one row to spare, and where the next page starts. */
+      const page = <R extends { key: (string | number)[] }, T>(rows: R[], map: (row: R) => T, total: number) => {
+        const res = bounded(rows.slice(0, limit).map(map), 0, limit)
+        const taken = res.items.length
+        const more = taken < rows.length
+        const nextOffset = more ? offset + taken : null
+        return { items: res.items, total, offset, nextOffset, nextCursor: nextCursor(nextOffset, more ? rows[taken - 1]!.key : undefined) }
       }
 
       if (part === "overview") {
-        const pages = bounded(r.pages.map((p) => ({ id: p.id, path: p.path, title: p.title })), 0, Math.min(limit, 20))
-        const anims = bounded(r.animations.map(listedAnimation), 0, Math.min(limit, 20))
-        const status = ref.status === "ready" ? null : await db.getCaptureStatus(env.DB, ref)
+        const n = Math.min(limit, 20)
+        const [pageRows, animRows, status] = await Promise.all([
+          db.listReferencePages(env.DB, id, null, n),
+          db.listReferenceAnimations(env.DB, id, null, n),
+          ref.status === "ready" ? null : db.getCaptureStatus(env.DB, ref),
+        ])
+        const pages = bounded(pageRows.map((p) => ({ id: p.id, path: p.path, title: p.title })), 0, n)
+        const anims = bounded(animRows.map(listedAnimation), 0, n)
         return ok({
           ...(await summarizeRef(ref)),
           description: ref.description,
@@ -377,44 +394,37 @@ Signed file URLs expire after 24 hours.`,
           animations: anims.items,
           tokens: tokenSummary(ref.tokens),
           omitted: {
-            pages: pages.total - pages.items.length,
-            animations: anims.total - anims.items.length,
+            pages: Math.max(0, ref.pageCount - pages.items.length),
+            animations: Math.max(0, ref.animationCount - anims.items.length),
             tokens: ref.tokens ? "Only the first values of each group are shown." : "No tokens captured yet.",
           },
           next: [
-            pages.total > pages.items.length && `get_reference(id, part "pages") for all ${pages.total} pages`,
-            anims.total > anims.items.length && `get_reference(id, part "animations") for all ${anims.total} animations`,
+            ref.pageCount > pages.items.length && `get_reference(id, part "pages") for all ${ref.pageCount} pages`,
+            ref.animationCount > anims.items.length && `get_reference(id, part "animations") for all ${ref.animationCount} animations`,
             "get_page(page_id) for a screenshot and page styles",
-            r.animations.length && "get_animation(animation_id) for a contact sheet of an animation",
+            ref.animationCount && "get_animation(animation_id) for a contact sheet of an animation",
             ref.tokens && `get_reference(id, part "tokens", token_group) for a complete token group`,
           ].filter(Boolean),
         })
       }
 
       if (part === "pages") {
-        const res = bounded(
-          r.pages.map((p) => ({
-            id: p.id,
-            path: p.path,
-            title: p.title,
-            url: p.url,
-            desktop: p.desktopKey ? { width: p.desktopWidth, height: p.desktopHeight, coverage: coverage(p.desktopHeight) } : null,
-            mobile: p.mobileKey ? { width: p.mobileWidth, height: p.mobileHeight, coverage: coverage(p.mobileHeight) } : null,
-          })),
-          offset,
-          limit,
-        )
-        return ok({ referenceId: id, ...res, nextCursor: nextCursor(res.nextOffset), next: "get_page(page_id)" })
+        const rows = await db.listReferencePages(env.DB, id, (cur?.key as db.PageKey | undefined) ?? null, limit + 1)
+        const res = page(rows, (p) => ({
+          id: p.id,
+          path: p.path,
+          title: p.title,
+          url: p.url,
+          desktop: p.desktopKey ? { width: p.desktopWidth, height: p.desktopHeight, coverage: coverage(p.desktopHeight) } : null,
+          mobile: p.mobileKey ? { width: p.mobileWidth, height: p.mobileHeight, coverage: coverage(p.mobileHeight) } : null,
+        }), ref.pageCount)
+        return ok({ referenceId: id, ...res, next: "get_page(page_id)" })
       }
 
       if (part === "animations") {
-        const pathOf = new Map(r.pages.map((p) => [p.id, p.path]))
-        const res = bounded(
-          r.animations.map((a) => ({ ...listedAnimation(a), pagePath: a.pageId ? (pathOf.get(a.pageId) ?? null) : null, selector: a.selector })),
-          offset,
-          limit,
-        )
-        return ok({ referenceId: id, ...res, nextCursor: nextCursor(res.nextOffset), next: "get_animation(animation_id)" })
+        const rows = await db.listReferenceAnimations(env.DB, id, (cur?.key as db.AnimationKey | undefined) ?? null, limit + 1)
+        const res = page(rows, (a) => ({ ...listedAnimation(a), pagePath: a.pagePath, selector: a.selector }), ref.animationCount)
+        return ok({ referenceId: id, ...res, next: "get_animation(animation_id)" })
       }
 
       // tokens
@@ -527,55 +537,102 @@ Signed file URLs expire after 24 hours.`,
     async ({ page_id, section = "summary", selector_contains, text_contains, limit = 40, offset = 0 }) => {
       const p = await db.getPage(env.DB, page_id)
       if (!p) return fail(`No page with id "${page_id}". Use get_reference(id, part "pages") to list page ids.`)
-      const raw = p.stylesKey ? await readText(env.FILES, p.stylesKey) : null
-      if (raw === null) return ok({ pageId: page_id, unavailable: p.stylesKey ? "styles file missing from storage" : "styles were not captured for this page" })
-      type Styles = {
-        elementCount?: number
-        truncated?: boolean
-        elements?: { sel?: string; text?: string }[]
-        keyframes?: { name: string; css: string }[]
-        hoverRules?: string[]
-        fontFaces?: string[]
-        cssVariables?: Record<string, string>
-        viewport?: unknown
-        document?: unknown
-      }
-      let s: Styles
-      try {
-        s = JSON.parse(raw) as Styles
-      } catch {
-        return fail("The styles file for this page could not be parsed. Use computedStylesUrl from get_page instead.")
-      }
+      if (!p.stylesKey) return ok({ pageId: page_id, unavailable: "styles were not captured for this page" })
       const provenance = "Computed styles sampled from the desktop render at capture time."
-      if (section === "summary") {
-        const names = bounded((s.keyframes ?? []).map((k) => k.name), 0, 40)
+      const filters = { sel: selector_contains?.toLowerCase(), txt: text_contains?.toLowerCase() }
+
+      const summaryResult = (sum: Omit<StylesSummary, "v" | "chunkSize" | "parts">) => {
+        const names = bounded(sum.keyframes, 0, 40)
         return ok({
           pageId: page_id,
           provenance,
-          viewport: s.viewport,
-          document: s.document,
-          elements: { total: s.elements?.length ?? 0, captureTruncated: !!s.truncated },
+          viewport: sum.viewport,
+          document: sum.document,
+          elements: { total: sum.elements, captureTruncated: sum.captureTruncated },
           keyframes: names.items,
-          keyframesOmitted: names.total - names.items.length,
-          hoverRules: s.hoverRules?.length ?? 0,
-          fontFaces: s.fontFaces?.length ?? 0,
-          cssVariables: Object.keys(s.cssVariables ?? {}).length,
+          keyframesOmitted: sum.keyframeCount - names.items.length,
+          hoverRules: sum.hoverRules,
+          fontFaces: sum.fontFaces,
+          cssVariables: sum.cssVariables,
           next: "section \"elements\" with selector_contains, or \"keyframes\" / \"hover_rules\" / \"css_variables\"",
         })
       }
-      let all: unknown[]
-      if (section === "elements") {
-        const sel = selector_contains?.toLowerCase()
-        const txt = text_contains?.toLowerCase()
-        all = (s.elements ?? []).filter((e) => (!sel || e.sel?.toLowerCase().includes(sel)) && (!txt || e.text?.toLowerCase().includes(txt)))
-      } else if (section === "keyframes") all = s.keyframes ?? []
-      else if (section === "hover_rules") all = s.hoverRules ?? []
-      else if (section === "font_faces") all = (s.fontFaces ?? []).map((f) => f.replace(/url\("data:[^"]{200,}"\)/g, 'url("data:…")'))
-      else all = Object.entries(s.cssVariables ?? {}).map(([name, value]) => ({ name, value }))
-      const res = bounded(all, offset, limit)
-      return ok({ pageId: page_id, section, provenance, ...res, ...(s.truncated && section === "elements" ? { captureTruncated: true } : {}) })
+      const listResult = (res: { items: unknown[]; total: number; offset: number; nextOffset: number | null }, truncated: boolean) =>
+        ok({ pageId: page_id, section, provenance, ...res, ...(truncated && section === "elements" ? { captureTruncated: true } : {}) })
+      const rulesSection = (r: StyleRules): unknown[] =>
+        section === "keyframes" ? r.keyframes
+          : section === "hover_rules" ? r.hoverRules
+            : section === "font_faces" ? r.fontFaces.map((f) => f.replace(/url\("data:[^"]{200,}"\)/g, 'url("data:…")'))
+              : Object.entries(r.cssVariables).map(([name, value]) => ({ name, value }))
+      const matches = (sel: string | null | undefined, txt: string | null | undefined) =>
+        (!filters.sel || (sel != null && sel.includes(filters.sel))) && (!filters.txt || (txt != null && txt.includes(filters.txt)))
+
+      // Pages with a summary: the summary is on the row, and a list reads only the parts it needs. Any part that
+      // can't be read falls through to the full styles file below.
+      const sum = p.stylesSummary
+      if (sum) {
+        if (section === "summary") return summaryResult(sum)
+        const key = sum.parts.key
+        if (section !== "elements") {
+          const rules = await readStylePart<StyleRules>(env.FILES, key, sum.parts.rules)
+          if (rules) return listResult(bounded(rulesSection(rules), offset, limit), false)
+        } else {
+          let total = sum.elements
+          let want: number[] = []
+          let readable = true
+          if (filters.sel || filters.txt) {
+            const index = await readStylePart<StyleIndexEntry[]>(env.FILES, key, sum.parts.index)
+            if (index) {
+              const hits: number[] = []
+              index.forEach(([sel, txt], i) => matches(sel, txt) && hits.push(i))
+              total = hits.length
+              want = hits.slice(offset, offset + limit)
+            } else readable = false
+          } else for (let i = offset; i < Math.min(total, offset + limit); i++) want.push(i)
+          const chunkIds = [...new Set(want.map((i) => Math.floor(i / sum.chunkSize)))]
+          const chunks = readable ? await Promise.all(chunkIds.map((c) => (sum.parts.elements[c] ? readStylePart<StyleElement[]>(env.FILES, key, sum.parts.elements[c]) : null))) : []
+          const byId = new Map(chunkIds.map((c, k) => [c, chunks[k]]))
+          const items = want.map((i) => byId.get(Math.floor(i / sum.chunkSize))?.[i % sum.chunkSize])
+          if (readable && items.every(Boolean)) {
+            const res = bounded(items, 0, limit)
+            const next = offset + res.items.length
+            return listResult({ items: res.items, total, offset, nextOffset: next < total ? next : null }, sum.captureTruncated)
+          }
+        }
+      }
+
+      // Pages captured before summaries: read and parse the whole styles file, then save its parts for next time.
+      const raw = await readText(env.FILES, p.stylesKey)
+      if (raw === null) return ok({ pageId: page_id, unavailable: "styles file missing from storage" })
+      let s: CapturedStyles
+      try {
+        s = JSON.parse(raw) as CapturedStyles
+      } catch {
+        return fail("The styles file for this page could not be parsed. Use computedStylesUrl from get_page instead.")
+      }
+      const partsKey = stylePartsKey(p.stylesKey)
+      if (!sum && partsKey) ctx.waitUntil(saveStyleParts(p.id, p.stylesKey, partsKey, s).catch(() => {}))
+      if (section === "summary") {
+        const names = [...new Set((s.keyframes ?? []).map((k) => k.name))]
+        return summaryResult({
+          viewport: s.viewport, document: s.document, elements: s.elements?.length ?? 0, captureTruncated: !!s.truncated,
+          keyframes: names, keyframeCount: names.length,
+          hoverRules: s.hoverRules?.length ?? 0, fontFaces: s.fontFaces?.length ?? 0, cssVariables: Object.keys(s.cssVariables ?? {}).length,
+        })
+      }
+      const all = section === "elements"
+        ? (s.elements ?? []).filter((e) => matches(e.sel?.toLowerCase(), e.text?.toLowerCase()))
+        : rulesSection({ keyframes: s.keyframes ?? [], hoverRules: s.hoverRules ?? [], fontFaces: s.fontFaces ?? [], cssVariables: s.cssVariables ?? {} })
+      return listResult(bounded(all, offset, limit), !!s.truncated)
     },
   )
+
+  /** Splits an older page's styles file once, so its later get_page_styles calls read only the parts they need. */
+  async function saveStyleParts(pageId: string, stylesKey: string, partsKey: string, styles: CapturedStyles) {
+    const { bytes, summary } = await packStyles(styles, partsKey)
+    await env.FILES.put(partsKey, bytes, { httpMetadata: { contentType: "application/octet-stream" } })
+    await db.setStylesSummary(env.DB, pageId, stylesKey, summary)
+  }
 
   server.registerTool(
     "get_animation",
@@ -611,7 +668,7 @@ Scroll timing is synthetic playback; hover offsets are measured. Treat easing an
         recording: await recording(a),
         // Kept for clients written before recordings became video: null when the recording is a video.
         gif: isVideoKey(a.gifKey) ? null : { width: a.width, height: a.height, url: await url(a.gifKey) },
-        representations: representations(a),
+        representations: representations(a, m?.frames.length ?? 0),
         timing: m
           ? {
               frameCount: m.frameCount,
@@ -974,7 +1031,7 @@ export const mcpApiHandler = {
     const ownerId = (ctx as ExecutionContext & { props?: McpProps }).props?.ownerId
     if (typeof ownerId !== "string" || !ownerId) return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: { "content-type": "application/json" } })
     const origin = new URL(request.url).origin
-    const handler = createMcpHandler(() => buildServer(env, origin), { route: "/mcp" })
+    const handler = createMcpHandler(() => buildServer(env, origin, ctx), { route: "/mcp" })
     return handler(request, env, ctx)
   },
 }

@@ -21,7 +21,8 @@ export function bounded<T>(all: T[], offset: number, limit: number, bytes = 24_0
   return { items, total: all.length, offset, nextOffset: next < all.length ? next : null }
 }
 
-export type ReferenceCursor = { referenceId: string; part: string; group?: string; offset: number; rev: string }
+/** `key` is the last row's sort key for parts read from the database a page at a time ("pages", "animations"). */
+export type ReferenceCursor = { referenceId: string; part: string; group?: string; offset: number; rev: string; key?: (string | number)[] }
 export const encodeCursor = (cursor: ReferenceCursor) => btoa(JSON.stringify(cursor))
 export function decodeCursor(value: string | undefined): ReferenceCursor | null {
   if (!value) return null
@@ -30,7 +31,8 @@ export function decodeCursor(value: string | undefined): ReferenceCursor | null 
     if (!c || typeof c !== "object" || Array.isArray(c)
       || typeof c.referenceId !== "string" || typeof c.part !== "string" || typeof c.rev !== "string"
       || (c.group !== undefined && typeof c.group !== "string")
-      || !Number.isSafeInteger(c.offset) || c.offset < 0) return null
+      || !Number.isSafeInteger(c.offset) || c.offset < 0
+      || (c.key !== undefined && !(Array.isArray(c.key) && c.key.length <= 3 && c.key.every((v: unknown) => typeof v === "string" || typeof v === "number")))) return null
     return c
   } catch {
     return null
