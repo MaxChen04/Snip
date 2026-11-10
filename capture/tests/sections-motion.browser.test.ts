@@ -113,7 +113,15 @@ test("live clips are recorded only for sections that move, cropped to the sectio
       #spin { width: 80px; height: 80px; background: tomato; animation: move 1s linear infinite } @keyframes move { to { transform: translateX(600px) } }
     </style><div id="bar"></div><section>still hero</section><section><div id="spin"></div></section><section>still</section>`)
     const cuts = [0, 500, 1000].map((y, i) => ({ kind: "section" as const, label: `s${i}`, y, height: 500 }))
-    const clips = await recordLiveSections(page, cuts, "webm")
+    const sharp = (await import("sharp")).default
+    const blank = await sharp({ create: { width: 800, height: 1500, channels: 3, background: "white" } }).jpeg().toBuffer()
+    const inView = { shot: blank, patches: [] as { y: number; height: number; jpeg: Buffer }[] }
+    const clips = await recordLiveSections(page, cuts, "webm", new Map(), inView)
+    // The clip's first frame is the last patch of its band, so the screenshot shows the frame the clip starts on.
+    const last = inView.patches.at(-1)!
+    assert.deepEqual([last.y, last.height, last.jpeg === clips[1]!.still], [500, 500, true], "the clip's first frame is patched into the shot, over any in-view patch")
+    const size = await sharp(last.jpeg).metadata()
+    assert.deepEqual([size.width, size.height], [800, 500])
     assert.equal(clips[0], null, "a still section is not recorded")
     assert.equal(clips[2], null)
     const clip = clips[1]!
@@ -379,5 +387,27 @@ test("a crawl page past the clip limit and the mobile shot still get in-view pat
     await new Promise<void>((resolve) => { server.closeAllConnections(); server.close(() => resolve()) })
     if (previous === undefined) delete process.env.ALLOW_PRIVATE_URLS
     else process.env.ALLOW_PRIVATE_URLS = previous
+  }
+})
+
+test("a moving section taller than the viewport is recorded whole, unless growing the viewport moves the layout", { timeout: 120_000 }, async () => {
+  const { recordLiveSections } = await import("../src/capture")
+  const { closeRenderer } = await import("../src/sheet")
+  const browser = await launch()
+  try {
+    for (const [name, css, height, want] of [["fixed height", "height: 800px", 800, 800], ["viewport-sized", "height: 130vh", 780, 600]] as const) {
+      const page = await browser.newPage({ viewport: { width: 800, height: 600 } })
+      await page.setContent(`<style>
+        body { margin: 0 } section { ${css} } .rest { height: 1200px }
+        #spin { width: 80px; height: 80px; background: tomato; animation: move 1s linear infinite } @keyframes move { to { transform: translateX(600px) } }
+      </style><section><div id="spin"></div></section><div class="rest"></div>`)
+      const clips = await recordLiveSections(page, [{ kind: "hero" as const, label: "hero", y: 0, height }], "webm")
+      assert.deepEqual([clips[0]?.height, clips[0]?.recording?.height], [want, want], name)
+      assert.deepEqual(page.viewportSize(), { width: 800, height: 600 }, `${name}: the viewport is put back`)
+      await page.close()
+    }
+  } finally {
+    await closeRenderer()
+    await browser.close()
   }
 })
