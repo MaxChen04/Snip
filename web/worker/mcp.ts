@@ -690,7 +690,7 @@ Scroll timing is synthetic playback; hover offsets are measured. Treat easing an
     {
       title: "Find a copied selection in the current capture",
       description:
-        "Check items from a copied Snip prompt against the reference's current capture. Pass the prompt's Selection object as is. A recapture gives every page and animation a new id and new token values: this finds each item again (pages by path, sections by kind and label, animations by page, kind, viewport, selector and label), says whether each is unchanged, recaptured or missing, whether the picked viewport and color scheme still exist, whether copied token values are stale, and the exact next call for each item. Call it when a result's captureRun differs from the prompt's capture run, or when an id from the prompt is not found.",
+        "Check items from a copied Snip prompt against the reference's current capture. Pass the prompt's Selection object as is. A recapture gives every page and animation a new id and new token values: this finds each item again by its key (pages by path, sections by kind and label, animations by page, kind, viewport, selector and label), never by position or nearest guess. Each item is unchanged, recaptured, missing, ambiguous (several items share the key; candidates listed, none chosen) or unavailable (found, but not in the picked viewport or color scheme). It also says whether copied token values are stale, and gives a next call only for items that were recovered exactly. Call it when a result's captureRun differs from the prompt's capture run, or when an id from the prompt is not found.",
       inputSchema: z.object({
         reference_id: z.string(),
         capture_run: z.number().int().min(1).describe("The prompt's capture run"),

@@ -68,44 +68,63 @@ test("a copied prompt names the view and capture run, and its Selection finds ev
     assert.deepEqual([got.captureRun, got.capturedScheme], [1, "light"])
     assert.equal((await rpc("get_animation", { animation_id: first.animations[0]!.id, representation: "manifest" })).structuredContent.captureRun, 1)
     const same = (await rpc("resolve_selection", copied)).structuredContent
-    assert.equal(same.recaptured, false)
-    assert.equal(same.pages[0].match, "unchanged")
+    assert.deepEqual([same.recaptured, same.resolved, same.pages[0].status], [false, true, "unchanged"])
     assert.deepEqual(same.tokens, { stale: false })
 
     // Recapture: new ids, a new "Announcement" section pushes Plans down, new token values.
-    await db.requeueReference(database, ref.id)
-    const job2 = (await db.claimJob(database))!
-    const p2 = `refs/${ref.id}/${job2.attempt}/p0`
-    await db.addPage(database, ref.id, job2.attempt, pageUpload(p2, "/pricing/", [section("header", "Header", 0, `${p2}/s0.jpg`), section("section", "Announcement", 100, `${p2}/s1.jpg`), section("section", "Plans", 200, `${p2}/s2.jpg`), section("footer", "Footer", 300, `${p2}/s3.jpg`)], "button.buy"))
-    await db.completeJob(database, ref.id, job2.attempt, { title: "Example", description: null, favicon: null, coverKey: null, tokens: tokens("#222") } as never)
-    const second = (await db.getReference(database, ref.id))!
+    const recapture = async (upload: (prefix: string) => PageUpload, color: string) => {
+      await db.requeueReference(database, ref.id)
+      const j = (await db.claimJob(database))!
+      await db.addPage(database, ref.id, j.attempt, upload(`refs/${ref.id}/${j.attempt}/p0`))
+      await db.completeJob(database, ref.id, j.attempt, { title: "Example", description: null, favicon: null, coverKey: null, tokens: tokens(color) } as never)
+      return (await db.getReference(database, ref.id))!
+    }
+    const second = await recapture((p2) => pageUpload(p2, "/pricing/", [section("header", "Header", 0, `${p2}/s0.jpg`), section("section", "Announcement", 100, `${p2}/s1.jpg`), section("section", "Plans", 200, `${p2}/s2.jpg`), section("footer", "Footer", 300, `${p2}/s3.jpg`)], "button.buy"), "#222")
 
     const gone = await rpc("get_page", { page_id: page.id })
     assert.equal(gone.isError, true)
     assert.match(gone.content[0].text, /resolve_selection/)
 
     const res = (await rpc("resolve_selection", copied)).structuredContent
-    assert.deepEqual([res.copiedRun, res.captureRun, res.recaptured], [1, 2, true])
+    assert.deepEqual([res.copiedRun, res.captureRun, res.recaptured, res.resolved], [1, 2, true, true])
     const rp = res.pages[0]
-    assert.equal(rp.match, "recaptured")
+    assert.equal(rp.status, "recaptured")
     assert.equal(rp.pageId, second.pages[0]!.id)
-    assert.deepEqual(rp.scheme, { requested: "dark", captured: "light", available: true })
-    assert.deepEqual(rp.sections.map((s: { index: number; match: string }) => [s.index, s.match]), [[2, "label"]], "Plans is found by its label at its new index")
+    assert.deepEqual(rp.sections.map((s: { index: number; status: string }) => [s.index, s.status]), [[2, "found"]], "Plans is found by its kind and label at its new index")
     assert.deepEqual(rp.next, [`get_page(page_id "${second.pages[0]!.id}", section 2, scheme "dark")`])
-    assert.equal(res.animations[0].match, "recaptured")
+    assert.equal(res.animations[0].status, "recaptured")
     assert.equal(res.animations[0].animationId, second.animations[0]!.id)
     assert.equal(res.tokens.stale, true)
 
     // A page that's gone from the new capture is reported, not substituted.
     const lost = (await rpc("resolve_selection", { ...copied, pages: [{ ...copied.pages[0], page_id: "old", path: "/about" }] })).structuredContent
-    assert.equal(lost.pages[0].match, "missing")
-    assert.match(lost.summary, /could not be found/)
+    assert.deepEqual([lost.pages[0].status, lost.resolved], ["missing", false])
+    assert.match(lost.summary, /1 missing/)
 
     // A picked section the recapture no longer has is reported, and the whole page is not fetched in its place.
     const noSection = (await rpc("resolve_selection", { ...copied, pages: [{ ...copied.pages[0], sections: [{ index: 1, kind: "section", label: "Testimonials" }] }] })).structuredContent
-    assert.equal(noSection.pages[0].sections[0].match, "missing")
+    assert.equal(noSection.pages[0].sections[0].status, "missing")
     assert.deepEqual(noSection.pages[0].next, [])
-    assert.match(noSection.summary, /1 item \(1 of them page sections\) could not be found/)
+    assert.equal(noSection.resolved, false)
+    assert.match(noSection.summary, /1 section missing/)
+
+    // Another recapture: two sections called "Plans", no mobile screenshot and no dark theme.
+    const third = await recapture((p3) => ({
+      ...pageUpload(p3, "/pricing", [section("section", "Plans", 0, `${p3}/s0.jpg`), section("section", "Plans", 100, `${p3}/s1.jpg`)], "button.buy"),
+      mobileKey: null, mobileThumbKey: null, mobileWidth: null, mobileHeight: null, altScheme: null,
+    }), "#333")
+    const light = { ...copied.pages[0], scheme: "light" }
+    const twin = (await rpc("resolve_selection", { ...copied, pages: [light] })).structuredContent.pages[0]
+    assert.equal(twin.status, "recaptured")
+    assert.equal(twin.sections[0].status, "ambiguous", "two sections share the label: neither is chosen")
+    assert.deepEqual(twin.sections[0].candidates.map((c: { index: number }) => c.index), [0, 1])
+    assert.deepEqual(twin.next, [])
+    const dark = (await rpc("resolve_selection", { ...copied, pages: [{ ...copied.pages[0], sections: undefined }] })).structuredContent
+    assert.deepEqual([dark.pages[0].status, dark.pages[0].next, dark.resolved], ["unavailable", [], false], "the dark view is gone, so the light page is not offered in its place")
+    assert.match(dark.pages[0].unavailable[0], /no dark version/)
+    const mobile = (await rpc("resolve_selection", { ...copied, pages: [{ page_id: "old", path: "/pricing", viewport: "mobile" }] })).structuredContent.pages[0]
+    assert.deepEqual([mobile.status, mobile.pageId], ["unavailable", third.pages[0]!.id])
+    assert.match(mobile.unavailable[0], /no mobile screenshot/)
 
     // The app forgets picks the recapture replaced.
     const pruned = pruneSelection(sel, second.pages, second.animations)
