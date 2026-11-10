@@ -12,6 +12,7 @@ import {
 import { notify } from "@/components/notify"
 import { TokensPanel } from "@/components/tokens-panel"
 import { SavePagesButton } from "@/components/save-pages"
+import { LiveClips, LiveTag, LookToggles, usePageLook, type PageLook } from "@/components/page-look"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
@@ -29,8 +30,6 @@ const DEFAULT_WIDTH = 360
 const WIDTH_KEY = "snip.viewer.sidebarWidth"
 const OPEN_KEY = "snip.viewer.sidebarOpen"
 const TAB_KEY = "snip.viewer.sidebarTab"
-const LIVE_KEY = "snip.viewer.live"
-const SCHEME_KEY = "snip.viewer.scheme"
 
 const maxWidth = () => Math.max(MIN_WIDTH, Math.min(960, Math.round(window.innerWidth * 0.6)))
 const clampWidth = (w: number) => Math.round(Math.min(maxWidth(), Math.max(MIN_WIDTH, w)))
@@ -132,16 +131,8 @@ export function PageViewer({ page, onClose, onCollectionsChange }: {
   onCollectionsChange: (pageIds: string[], collectionId: string, member: boolean) => void
 }) {
   const [device, setDevice] = useState<"desktop" | "mobile">("desktop")
-  // A page whose site has a theme for the other color scheme carries it as altScheme (desktop only).
-  const alt = page.altScheme
-  const baseScheme = alt ? (alt.scheme === "dark" ? "light" : "dark") : null
-  const [schemePref, setSchemePrefState] = useState(() => readPref<string>(SCHEME_KEY, ""))
-  const setSchemePref = (v: string) => {
-    setSchemePrefState(v)
-    writePref(SCHEME_KEY, v)
-  }
-  const showAlt = device === "desktop" && !!alt && schemePref === alt.scheme
-  const key = device === "desktop" ? (showAlt ? alt!.desktopKey : page.desktopKey) : page.mobileKey
+  const look = usePageLook(page, device === "desktop")
+  const key = device === "desktop" ? (look.alt?.desktopKey ?? page.desktopKey) : page.mobileKey
   const [width, setWidth, commitWidth] = useSidebarWidth()
   const [open, setOpenState] = useState(() => readPref(OPEN_KEY, window.innerWidth >= 1024 ? "1" : "0") === "1")
   const setOpen = (v: boolean) => {
@@ -171,19 +162,6 @@ export function PageViewer({ page, onClose, onCollectionsChange }: {
   }, [onClose])
 
   const showSidebar = open && tabs.length > 0
-
-  // Live plays each moving section's clip over the screenshot. Off by default for people who ask for less motion.
-  // Neighbouring sections recorded together share one clip: draw each clip once, at its own top edge.
-  const liveClips = useMemo(
-    () => [...new Map(page.sections.flatMap((s) => (s.live ? [[s.live.key, { key: s.live.key, y: s.live.y ?? s.y, height: s.live.height }] as const] : []))).values()],
-    [page.sections],
-  )
-  const hasLive = liveClips.length > 0
-  const [live, setLiveState] = useState(() => readPref(LIVE_KEY, window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "0" : "1") === "1")
-  const setLive = (v: boolean) => {
-    setLiveState(v)
-    writePref(LIVE_KEY, v ? "1" : "0")
-  }
 
   // Sections are measured on the desktop screenshot; map their capture px onto the image as displayed.
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -229,25 +207,7 @@ export function PageViewer({ page, onClose, onCollectionsChange }: {
             <SmartphoneIcon /> <span className="hidden sm:inline">Mobile</span>
           </ToggleGroupItem>
         </ToggleGroup>
-        {alt && device === "desktop" && (
-          <ToggleGroup variant="outline" size="sm" value={[showAlt ? alt.scheme : baseScheme!]} onValueChange={(v) => v[0] && setSchemePref(v[0] as string)}>
-            {(["light", "dark"] as const).map((s) => (
-              <ToggleGroupItem key={s} value={s} aria-label={`${s === "light" ? "Light" : "Dark"} mode`}>
-                {s === "light" ? "Light" : "Dark"}
-              </ToggleGroupItem>
-            ))}
-          </ToggleGroup>
-        )}
-        {hasLive && device === "desktop" && !showAlt && (
-          <ToggleGroup variant="outline" size="sm" value={[live ? "live" : "static"]} onValueChange={(v) => v[0] && setLive(v[0] === "live")}>
-            <ToggleGroupItem value="static" aria-label="Static screenshot" title="Static screenshot">
-              Static
-            </ToggleGroupItem>
-            <ToggleGroupItem value="live" aria-label="Live: play sections that move" title="Play sections that move, as recorded">
-              Live
-            </ToggleGroupItem>
-          </ToggleGroup>
-        )}
+        <LookToggles look={look} />
         <div className="flex flex-1 basis-0 justify-end gap-2">
           <SavePagesButton pages={[page]} onChange={onCollectionsChange} label={page.collectionIds.length ? "Saved" : "Save"} className="h-8 px-3" />
           {tabs.length > 0 && (
@@ -273,15 +233,7 @@ export function PageViewer({ page, onClose, onCollectionsChange }: {
               className={cn("relative mx-auto overflow-hidden shadow-card", device === "desktop" ? "w-full max-w-6xl rounded-lg" : "w-[390px] max-w-full rounded-3xl")}
             >
               <img src={fileUrl(key)} alt="" className="block w-full" />
-              {device === "desktop" && live && !showAlt && page.desktopHeight
-                ? liveClips.map((c) => (
-                    <LiveClip
-                      key={c.key}
-                      src={fileUrl(c.key)!}
-                      style={{ top: `${(c.y / page.desktopHeight!) * 100}%`, height: `${(c.height / page.desktopHeight!) * 100}%` }}
-                    />
-                  ))
-                : null}
+              <LiveClips page={page} look={look} />
             </div>
           ) : (
             <p className="py-24 text-center text-sm text-muted-foreground">No {device} screenshot.</p>
@@ -314,7 +266,7 @@ export function PageViewer({ page, onClose, onCollectionsChange }: {
                 </div>
                 {page.sections.length > 0 && (
                   <TabsContent value="sections" className="min-h-0 overflow-y-auto px-4 pt-2 pb-6">
-                    <SectionsPanel page={page} keys={showAlt ? alt!.sectionKeys : null} active={device === "desktop" ? active : -1} onSelect={goToSection} />
+                    <SectionsPanel page={page} look={look} active={device === "desktop" ? active : -1} onSelect={goToSection} />
                   </TabsContent>
                 )}
                 {page.tokens && (
@@ -343,23 +295,9 @@ export function PageViewer({ page, onClose, onCollectionsChange }: {
 
 // ---------- Sections ----------
 
-/** One section's recorded clip, laid over its place in the screenshot. Plays only while on screen. */
-function LiveClip({ src, style }: { src: string; style: React.CSSProperties }) {
-  const ref = useRef<HTMLVideoElement>(null)
-  useEffect(() => {
-    const video = ref.current
-    if (!video) return
-    const io = new IntersectionObserver(([entry]) => (entry?.isIntersecting ? video.play().catch(() => {}) : video.pause()), { rootMargin: "200px" })
-    io.observe(video)
-    return () => io.disconnect()
-  }, [])
-  return <video ref={ref} src={src} muted loop playsInline preload="metadata" aria-hidden className="pointer-events-none absolute inset-x-0 w-full object-cover object-top" style={style} />
-}
-
 const SECTION_KIND = { header: "Header", hero: "Hero", section: null, footer: "Footer" } as const
 
-/** `keys` swaps in the other color scheme's crops, where it has one. */
-function SectionsPanel({ page, keys, active, onSelect }: { page: Page; keys: (string | null)[] | null; active: number; onSelect: (i: number) => void }) {
+function SectionsPanel({ page, look, active, onSelect }: { page: Page; look: PageLook; active: number; onSelect: (i: number) => void }) {
   return (
     <ol className="flex flex-col gap-3">
       {page.sections.map((s, i) => {
@@ -376,7 +314,7 @@ function SectionsPanel({ page, keys, active, onSelect }: { page: Page; keys: (st
               )}
             >
               <img
-                src={fileUrl(keys?.[i] ?? s.key)}
+                src={fileUrl(look.sectionKey(s, i))}
                 alt=""
                 loading="lazy"
                 className={cn("max-h-56 w-full rounded-lg object-cover object-top ring-1 ring-border", i === active && "ring-2 ring-primary")}
@@ -386,7 +324,7 @@ function SectionsPanel({ page, keys, active, onSelect }: { page: Page; keys: (st
                 <span className="truncate font-medium">{s.label}</span>
                 <span className="ml-auto flex shrink-0 items-baseline gap-1.5 text-2xs text-muted-foreground">
                   {kind && kind !== s.label && <span>{kind}</span>}
-                  {s.live && <span className="font-medium text-primary" title="This section moves; turn on Live to play it">Live</span>}
+                  {s.live && <LiveTag />}
                 </span>
               </span>
             </button>

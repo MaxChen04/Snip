@@ -20,6 +20,7 @@ import {
 } from "@/components/icons"
 import { CollectionPicker } from "@/components/collection-picker"
 import { notify } from "@/components/notify"
+import { LiveClips, LiveTag, LookToggles, usePageLook, type PageLook } from "@/components/page-look"
 import { RecordingTile } from "@/components/reference-page"
 import { SiteIcon } from "@/components/site-icon"
 import { TokensPanel } from "@/components/tokens-panel"
@@ -195,6 +196,7 @@ function Body({
   const hasDesktop = !!(page?.desktopKey ?? page?.desktopThumbKey)
   const hasMobile = !!(page?.mobileKey ?? page?.mobileThumbKey)
   const [device, setDevice] = useState<Device>(hasDesktop || !hasMobile ? "desktop" : "mobile")
+  const look = usePageLook(showsPage ? page : undefined, device === "desktop")
   const initial = item.kind === "section" ? item.section.index : null
   const [active, setActive] = useState<number | null>(initial)
   const [hover, setHover] = useState<number | null>(null)
@@ -321,6 +323,10 @@ function Body({
           )}
           <CloseButton className="tactile lg:hidden" />
         </div>
+        {/* A row of its own: beside the device switch, the step buttons and Close run out of room on phones. */}
+        <div className="flex flex-wrap items-center gap-2 empty:hidden">
+          <LookToggles look={look} />
+        </div>
 
         {item.kind === "image" ? (
           <ImagePreview image={item.image} />
@@ -329,7 +335,7 @@ function Body({
         ) : item.kind === "website" ? (
           <WebsitePreview reference={item.reference} pages={detail?.pages} failed={!!error} />
         ) : page ? (
-          <PagePreview page={page} device={device} active={active} hover={hover} onHover={setHover} onPick={setActive} scrollTo={scrollTo} />
+          <PagePreview page={page} look={look} device={device} active={active} hover={hover} onHover={setHover} onPick={setActive} scrollTo={scrollTo} />
         ) : item.kind === "section" ? (
           <SectionStill section={item.section} />
         ) : null}
@@ -435,7 +441,7 @@ function Body({
               </TabsList>
               {page && (
                 <TabsContent value="sections" className="min-h-0 overflow-y-auto">
-                  <SectionList page={page} active={device === "desktop" ? active : null} hover={hover} onHover={setHover} onSelect={pickSection} />
+                  <SectionList page={page} look={look} active={device === "desktop" ? active : null} hover={hover} onHover={setHover} onSelect={pickSection} />
                 </TabsContent>
               )}
               {item.kind === "image" && (
@@ -505,6 +511,7 @@ const frame = "min-h-0 flex-1 overflow-y-auto overscroll-contain rounded-xl bg-s
 
 function PagePreview({
   page,
+  look,
   device,
   active,
   hover,
@@ -513,6 +520,7 @@ function PagePreview({
   scrollTo,
 }: {
   page: Page
+  look: PageLook
   device: Device
   active: number | null
   hover: number | null
@@ -523,16 +531,21 @@ function PagePreview({
 }) {
   const box = useRef<HTMLDivElement>(null)
   const reduce = useReducedMotion()
-  const src = device === "desktop" ? (page.desktopKey ?? page.desktopThumbKey) : (page.mobileKey ?? page.mobileThumbKey)
+  const src = device === "desktop" ? (look.alt?.desktopKey ?? page.desktopKey ?? page.desktopThumbKey) : (page.mobileKey ?? page.mobileThumbKey)
   const [loadedSrc, setLoadedSrc] = useState<string | null>(null)
   const loaded = !!src && loadedSrc === src
   const W = page.desktopWidth
   // Sections are measured on the full desktop screenshot in CSS px; cqw maps them onto it as displayed.
   const sections = device === "desktop" && page.desktopKey && W ? page.sections : []
 
+  // Each scrollTo scrolls once. A new screenshot (the other color scheme) loads again but must not pull the view back
+  // to the last section picked; the mobile screenshot resets this, so coming back to desktop still lands on it.
+  const scrolled = useRef<typeof scrollTo>(null)
   useEffect(() => {
+    if (device !== "desktop") scrolled.current = null
     const el = scrollTo && loaded ? box.current?.querySelector<HTMLElement>(`[data-section="${scrollTo.i}"]`) : null
-    if (!box.current || !el) return
+    if (!box.current || !el || scrolled.current === scrollTo) return
+    scrolled.current = scrollTo
     const top = el.getBoundingClientRect().top - box.current.getBoundingClientRect().top + box.current.scrollTop - 32
     box.current.scrollTo({ top, behavior: scrollTo?.smooth && !reduce ? "smooth" : "auto" })
   }, [scrollTo, loaded])
@@ -558,6 +571,7 @@ function PagePreview({
           className={cn("block w-full", !loaded && "animate-pulse bg-ink-3")}
           style={!loaded && W && page.desktopHeight && page.desktopKey ? { aspectRatio: `${W} / ${page.desktopHeight}` } : undefined}
         />
+        <LiveClips page={page} look={look} />
         {W
           ? sections.map((s, i) => {
             const on = i === active
@@ -679,12 +693,14 @@ function WebsitePreview({ reference, pages, failed }: { reference: Reference; pa
 
 function SectionList({
   page,
+  look,
   active,
   hover,
   onHover,
   onSelect,
 }: {
   page: Page
+  look: PageLook
   active: number | null
   hover: number | null
   onHover: (i: number | null) => void
@@ -708,14 +724,17 @@ function SectionList({
             )}
           >
             <img
-              src={fileUrl(s.key)}
+              src={fileUrl(look.sectionKey(s, i))}
               alt=""
               loading="lazy"
               className="h-11 w-[72px] shrink-0 rounded-sm bg-ink-4 object-cover object-top outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10"
             />
             <span className="grid min-w-0">
               <span className="truncate text-xs text-ink-12">{s.label}</span>
-              <span className="text-2xs text-ink-10 tabular-nums">{page.desktopWidth ? `${page.desktopWidth} × ${Math.round(s.height)}` : s.kind}</span>
+              <span className="flex items-baseline gap-1.5 text-2xs text-ink-10 tabular-nums">
+                {page.desktopWidth ? `${page.desktopWidth} × ${Math.round(s.height)}` : s.kind}
+                {s.live && <LiveTag />}
+              </span>
             </span>
           </button>
         </li>
