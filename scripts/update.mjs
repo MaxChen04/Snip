@@ -83,9 +83,27 @@ function appRunning() {
   if (!mac) return false
   return spawnSync("pgrep", ["-f", "Snip.app/Contents/MacOS/Snip"], { stdio: "ignore" }).status === 0
 }
+/** The checkout a folder belongs to: the nearest folder at or above it with a .git entry (a file, in a worktree). */
+export function checkoutOf(dir) {
+  for (let at = dir; ; at = path.dirname(at)) {
+    if (fs.existsSync(path.join(at, ".git"))) return at
+    if (at === path.dirname(at)) return null
+  }
+}
+const workingDir = pid => spawnSync("lsof", ["-a", "-d", "cwd", "-Fn", "-p", pid], { encoding: "utf8" }).stdout?.match(/^n(.+)$/m)?.[1]
+/**
+ * Whether a dev server or capture agent found running belongs to this checkout. Snip Dev.app's engine, another
+ * worktree's dev server and other checkouts have their own database, so they don't hold this update up. One whose
+ * folder can't be read counts as ours: stopping is the safe mistake.
+ */
+export const usesCheckout = (cwd, root) => !cwd || checkoutOf(cwd) === root
 // A terminal dev server or capture agent keeps writing to the database, so a
 // backup or migration taken under it may be inconsistent. Run after Snip.app quits.
-const terminalServices = () => spawnSync("pgrep", ["-f", "tsx[^ ]*( --[^ ]+)* src/index\\.ts|capture/src/index\\.ts|node_modules/\\.bin/vite"], { stdio: "ignore" }).status === 0
+function terminalServices() {
+  const found = spawnSync("pgrep", ["-f", "tsx[^ ]*( --[^ ]+)* src/index\\.ts|capture/src/index\\.ts|node_modules/\\.bin/vite"], { encoding: "utf8" })
+  const root = fs.realpathSync(ROOT)
+  return (found.stdout || "").split("\n").filter(Boolean).some(pid => usesCheckout(workingDir(pid), root))
+}
 async function quitApp() {
   log("Quitting Snip.app (active captures finish first)…")
   spawnSync("osascript", ["-e", `tell application id "${APP_ID}" to quit`], { stdio: "ignore" })
