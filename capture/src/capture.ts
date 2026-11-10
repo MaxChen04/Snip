@@ -575,11 +575,6 @@ export async function recordLiveSections(
     cdp.off("Page.screencastFrame", onFrame)
     return { frames, from, to: Date.now() }
   }
-  /**
-   * Make the viewport `height` tall (the page's own events for it are held, as in fullPageShot). False, with the
-   * viewport put back, if that moved the layout: the page sizes things by the viewport, so its sections are no
-   * longer where they were cut.
-   */
   const holdResize = (on: boolean) => page.evaluate((on) => new Promise<void>((done) => {
     if (on) (window as unknown as { __snipHoldResize: boolean }).__snipHoldResize = true
     requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -587,12 +582,57 @@ export async function recordLiveSections(
       done()
     }))
   }), on).catch(() => {})
-  const viewport = async (height: number) => {
-    const before = await docHeight(page)
+  /**
+   * The vertical extent [top, bottom], in document px, of each element that takes room in the page's flow, by its
+   * place in `body *`. Taken from offsets, which ignore transforms: the section being recorded is always moving.
+   * Fixed and sticky elements and what they hold follow the viewport, not the layout, so they are left out.
+   */
+  type Layout = { count: number; at: Record<number, [number, number]> }
+  const layout = () => page.evaluate((): Layout => {
+    const all = Array.from(document.body.querySelectorAll("*"))
+    const at: Layout["at"] = {}
+    let pinned: Element | null = null
+    for (const [i, el] of all.entries()) {
+      if (pinned?.contains(el)) continue
+      const { position } = getComputedStyle(el)
+      pinned = position === "fixed" || position === "sticky" ? el : null
+      if (pinned || !(el instanceof HTMLElement) || !el.offsetParent || !el.offsetWidth || !el.offsetHeight) continue
+      let top = 0 // offsetTop is from the offset parent: add up the few positioned ancestors
+      for (let up: Element | null = el; up instanceof HTMLElement; up = up.offsetParent) top += up.offsetTop
+      at[i] = [top, top + el.offsetHeight]
+    }
+    return { count: all.length, at }
+  })
+  const measure = () => Promise.all([docHeight(page), layout()]).catch((e) => {
+    log("  page layout not measured:", (e as Error).message.split("\n")[0])
+    return null
+  })
+  const slack = 2 // px the layout may move when the viewport grows (rounding) and still count as where it was
+  /** Whether everything touching document rows `keep` in `after` sits where it did in `before`, give or take `slack`. */
+  const placed = (before: Layout, after: Layout, keep: { y: number; height: number }) => {
+    const touches = (r?: [number, number]) => !!r && r[0] < keep.y + keep.height && r[1] > keep.y
+    return before.count === after.count && Object.keys({ ...before.at, ...after.at }).every((i) => {
+      const [then, now] = [before.at[+i], after.at[+i]]
+      return (!touches(then) && !touches(now)) || (!!then && !!now && Math.abs(then[0] - now[0]) <= slack && Math.abs(then[1] - now[1]) <= slack)
+    })
+  }
+  /**
+   * Make the viewport `height` tall (the page's own events for it are held, as in fullPageShot). Pages size things by
+   * the viewport, so a taller one can move or resize sections while the total height stays put. It is only kept if
+   * the page is as it was: the same total height, and nothing touching the rows `keep` (the whole page unless the
+   * caller says which rows its coordinates and patches rely on) moved or resized. Otherwise, or if that can't be
+   * measured, the viewport is put back and this returns false.
+   */
+  const viewport = async (height: number, keep = { y: 0, height: Infinity }) => {
+    const grow = height !== vh
+    const before = grow ? await measure() : null
+    if (grow && !before) return false
     await holdResize(true)
     await page.setViewportSize({ width: vw, height })
-    await holdResize(height !== vh)
-    if (height === vh || Math.abs((await docHeight(page)) - before) <= 2) return true
+    await holdResize(grow)
+    if (!grow) return true
+    const after = await measure()
+    if (before && after && Math.abs(after[0] - before[0]) <= slack && placed(before[1], after[1], keep)) return true
     await viewport(vh)
     return false
   }
@@ -700,7 +740,7 @@ export async function recordLiveSections(
           continue
         }
         const band = cuts[j]!.y + cuts[j]!.height - y
-        if (band > vh && band <= vh * LIVE_TALL) tall = await viewport(Math.ceil(band))
+        if (band > vh && band <= vh * LIVE_TALL) tall = await viewport(Math.ceil(band), { y, height: band })
         const view = tall ? Math.ceil(band) : vh
         const top = await showAt(y)
         const height = Math.floor(Math.min(band, view - top) / 2) * 2
