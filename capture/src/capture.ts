@@ -29,6 +29,9 @@ const LIVE_BUSY_FRAMES = 4 // frames in the probe window that count as repaintin
 const LIVE_FRAME_MS = 33 // ~30 fps; the screencast is asked for every second frame of up to ~60
 const LIVE_SETTLE_MS = Math.max(0, Number(process.env.SNIP_LIVE_SETTLE_MS ?? 400)) // longest wait for one-shot animations (scroll reveals) to finish before probing
 const LIVE_MIN_CHANGED = 0.002 // share of a section's pixels that must change between probe frames (a caret is far less)
+// A moving section up to this many viewports tall is recorded whole, in a viewport grown to fit it.
+// ponytail: fixed cap; taller sections keep a viewport-high clip over a still remainder. Raise it if clips stay in budget.
+const LIVE_TALL = Math.max(1, Number(process.env.SNIP_LIVE_TALL ?? 1.5))
 const LIVE_QUIET_MS = 1000 // no frame for this long before the window ends: the motion stopped, so it doesn't loop
 const LIVE_QUANTIZER = Math.min(63, Math.max(0, Number(process.env.SNIP_LIVE_QUANTIZER ?? 40)))
 const LIVE_CLIP_BYTES = Math.max(100_000, Number(process.env.SNIP_LIVE_CLIP_BYTES ?? 2_500_000))
@@ -387,14 +390,15 @@ const findSections = (page: PwPage) =>
   })
 
 /** A clip uploaded for an earlier page of the same capture, reused for the same section on later pages. */
-export type LiveReuse = { key: string; height: number; durationMs: number }
+export type LiveReuse = { key: string; height: number; durationMs: number; still?: Buffer }
 
 /**
  * One clip. Touching sections that move are recorded together, so several sections can share one clip.
  * `reuse` points at a clip already uploaded for this section on an earlier page; `recording` is then null.
- * `sig` names a single-section clip so later pages can reuse it.
+ * `sig` names a single-section clip so later pages can reuse it. `still` is the clip's first frame (JPEG, the
+ * clip's own band): it is pasted into the full-page shot, so the screenshot is the frame the clip starts on.
  */
-type LiveClip = { recording: Recording | null; reuse?: LiveReuse; y: number; height: number; durationMs: number; sig: string | null }
+type LiveClip = { recording: Recording | null; reuse?: LiveReuse; y: number; height: number; durationMs: number; sig: string | null; still?: Buffer }
 
 /** A section as sections.js finds it: `fp` fingerprints its text and media, and is not stored. */
 type SectionCut = Omit<PageSection, "key"> & { fp?: string }
@@ -569,7 +573,7 @@ export async function recordLiveSections(
     return y - (await page.evaluate(() => Math.round(window.scrollY)))
   }
   /** Screencast frames (JPEG, viewport size) for `ms`, with when each arrived. */
-  const screencast = async (ms: number, everyNthFrame: number) => {
+  const screencast = async (ms: number, everyNthFrame: number, maxHeight = vh) => {
     const frames: { data: string; t: number }[] = []
     const onFrame = ({ data, sessionId }: { data: string; sessionId: number }) => {
       cdp.send("Page.screencastFrameAck", { sessionId }).catch(() => {})
@@ -578,11 +582,32 @@ export async function recordLiveSections(
     }
     cdp.on("Page.screencastFrame", onFrame)
     const from = Date.now()
-    await cdp.send("Page.startScreencast", { format: "jpeg", quality: FRAME_JPEG_QUALITY, maxWidth: vw, maxHeight: vh, everyNthFrame })
+    await cdp.send("Page.startScreencast", { format: "jpeg", quality: FRAME_JPEG_QUALITY, maxWidth: vw, maxHeight, everyNthFrame })
     await sleep(ms)
     await cdp.send("Page.stopScreencast").catch(() => {})
     cdp.off("Page.screencastFrame", onFrame)
     return { frames, from, to: Date.now() }
+  }
+  /**
+   * Make the viewport `height` tall (the page's own events for it are held, as in fullPageShot). False, with the
+   * viewport put back, if that moved the layout: the page sizes things by the viewport, so its sections are no
+   * longer where they were cut.
+   */
+  const holdResize = (on: boolean) => page.evaluate((on) => new Promise<void>((done) => {
+    if (on) (window as unknown as { __snipHoldResize: boolean }).__snipHoldResize = true
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (!on) (window as unknown as { __snipHoldResize: boolean }).__snipHoldResize = false
+      done()
+    }))
+  }), on).catch(() => {})
+  const viewport = async (height: number) => {
+    const before = await docHeight(page)
+    await holdResize(true)
+    await page.setViewportSize({ width: vw, height })
+    await holdResize(height !== vh)
+    if (height === vh || Math.abs((await docHeight(page)) - before) <= 2) return true
+    await viewport(vh)
+    return false
   }
   const scale = async (frame: string) => imageSize(Buffer.from(frame, "base64")).width / vw // screencast pixels per CSS px
   // A viewport still at the page's DPR: CDP's own captureScreenshot is at DPR 1 under mobile emulation.
@@ -671,6 +696,7 @@ export async function recordLiveSections(
     // ---- Record each run of touching, moving sections that fits in one viewport ----
     let made = 0
     let pageBytes = 0
+    let tall = false // the viewport is grown to fit the section being recorded
     for (let i = 0; live && i < cuts.length && made < MAX_LIVE; i++) {
       if (!moving[i]) continue
       let j = i
@@ -680,18 +706,39 @@ export async function recordLiveSections(
       try {
         const reuse = sig ? seen.get(sig) : undefined
         if (reuse) {
-          out[i] = { recording: null, reuse, y, height: Math.min(reuse.height, cuts[i]!.height), durationMs: reuse.durationMs, sig }
+          const height = Math.min(reuse.height, cuts[i]!.height)
+          out[i] = { recording: null, reuse, y, height, durationMs: reuse.durationMs, sig, still: reuse.still }
+          if (inView && reuse.still) {
+            // The viewer shows a reused clip from its top, cut to this section's height: cut the still the same way.
+            const size = imageSize(reuse.still)
+            const jpeg = height < reuse.height
+              ? await sharp(reuse.still).extract({ left: 0, top: 0, width: size.width, height: Math.max(1, Math.round((size.height * height) / reuse.height)) }).jpeg({ quality: 90 }).toBuffer()
+              : reuse.still
+            inView.patches.push({ y, height, jpeg })
+          }
           continue
         }
+        const band = cuts[j]!.y + cuts[j]!.height - y
+        if (band > vh && band <= vh * LIVE_TALL) tall = await viewport(Math.ceil(band))
+        const view = tall ? Math.ceil(band) : vh
         const top = await showAt(y)
-        const height = Math.floor(Math.min(cuts[j]!.y + cuts[j]!.height - y, vh - top) / 2) * 2
+        const height = Math.floor(Math.min(band, view - top) / 2) * 2
         if (top < 0 || height < 40) continue
-        const { frames, to } = await screencast(LIVE_MS, 2)
+        const { frames, to } = await screencast(LIVE_MS, 2, view)
         if (frames.length < 2 || to - frames.at(-1)!.t > LIVE_QUIET_MS) continue // still, or the motion stopped: it wouldn't loop
 
         const k = await scale(frames[0]!.data)
         const crop = { x: 0, y: Math.round(top * k), width: Math.round(vw * k), height: Math.round(height * k) }
+        let clipHeight = height
         const durationMs = Math.round(Math.min(LIVE_MS, frames.at(-1)!.t - frames[0]!.t + LIVE_FRAME_MS))
+        // The clip loops, so it can start anywhere: start it on its fullest frame, which becomes the screenshot.
+        // A frame's JPEG size stands for how much is on screen; one the page rested on (no new frame for a while)
+        // counts for more than one passed through. Even indexes only, so the half-rate encode keeps it first.
+        // ponytail: size-and-rest heuristic, can land mid-transition; compare frames to neighbours if it picks badly.
+        const score = (n: number) => frames[n]!.data.length * Math.min(500, Math.max(100, (frames[n + 1]?.t ?? frames[0]!.t + durationMs) - frames[n]!.t))
+        let start = 0
+        for (let n = 2; n < frames.length; n += 2) if (score(n) > score(start)) start = n
+        frames.push(...frames.splice(0, start).map((f) => ({ ...f, t: f.t + durationMs })))
         const encode = async (quantizer: number, step: number) => {
           const writer = await recordingWriter(browser, { format: "webm", quantizer })
           if (writer.format !== "webm") return null // no VP9 here: a GIF of a whole section would be far too big
@@ -705,17 +752,30 @@ export async function recordLiveSections(
         let recording = await encode(LIVE_QUANTIZER, 1)
         if (!recording) break
         if (recording.bytes.length > LIVE_CLIP_BYTES) recording = (await encode(52, 2)) ?? recording // half the frames, coarser
+        if (recording.bytes.length > LIVE_CLIP_BYTES && height > vh) {
+          // A whole tall section is over budget: keep its first viewport rather than nothing.
+          clipHeight = Math.floor(vh / 2) * 2
+          crop.height = Math.round(clipHeight * k)
+          recording = (await encode(LIVE_QUANTIZER, 1)) ?? recording
+          if (recording.bytes.length > LIVE_CLIP_BYTES) recording = (await encode(52, 2)) ?? recording
+        }
         if (recording.bytes.length > LIVE_CLIP_BYTES || pageBytes + recording.bytes.length > LIVE_PAGE_BYTES) {
           log(`  live clip of "${cuts[i]!.label}" dropped: ${recording.bytes.length} bytes is over budget`)
           continue
         }
         pageBytes += recording.bytes.length
-        const clip: LiveClip = { recording, y, height, durationMs, sig }
+        // The clip's first frame becomes this band of the full-page shot (after any in-view patch of it, so it
+        // wins): the viewer can then swap screenshot and clip with nothing moving.
+        const still = await sharp(Buffer.from(frames[0]!.data, "base64")).extract({ left: crop.x, top: crop.y, width: crop.width, height: crop.height }).jpeg({ quality: 90 }).toBuffer()
+        inView?.patches.push({ y, height: clipHeight, jpeg: still })
+        const clip: LiveClip = { recording, y, height: clipHeight, durationMs, sig, still }
         for (let n = i; n <= j; n++) out[n] = clip
         made++
       } catch (e) {
         log(`  live clip of "${cuts[i]!.label}" skipped:`, (e as Error).message.split("\n")[0])
       } finally {
+        if (tall) await viewport(vh).catch(() => {})
+        tall = false
         i = j
       }
     }
@@ -1283,7 +1343,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
               const rec = clip.recording!
               clipKeys.set(clip, retryOnce(() => api.upload(`${p}/section-${i}-live.webm`, rec.bytes, rec.contentType)).then(
                 (key) => {
-                  if (clip.sig) liveSeen.set(clip.sig, { key, height: clip.height, durationMs: clip.durationMs })
+                  if (clip.sig) liveSeen.set(clip.sig, { key, height: clip.height, durationMs: clip.durationMs, still: clip.still })
                   return key
                 },
                 (e) => {
