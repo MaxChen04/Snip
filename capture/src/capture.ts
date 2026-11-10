@@ -24,6 +24,8 @@ const LIVE_SECTIONS = process.env.SNIP_LIVE_SECTIONS !== "false"
 const MAX_LIVE = Math.max(0, Number(process.env.SNIP_LIVE_MAX ?? 8))
 const LIVE_MS = Math.min(8000, Math.max(1000, Number(process.env.SNIP_LIVE_MS ?? 3000)))
 const LIVE_PROBE_MS = 400
+const LIVE_RECHECK_MS = 900 // further watching of a section that kept repainting but had not changed yet (see recordLiveSections)
+const LIVE_BUSY_FRAMES = 4 // frames in the probe window that count as repainting: a one-off repaint (a transition ending) sends two or three
 const LIVE_FRAME_MS = 33 // ~30 fps; the screencast is asked for every second frame of up to ~60
 const LIVE_SETTLE_MS = Math.max(0, Number(process.env.SNIP_LIVE_SETTLE_MS ?? 400)) // longest wait for one-shot animations (scroll reveals) to finish before probing
 const LIVE_MIN_CHANGED = 0.002 // share of a section's pixels that must change between probe frames (a caret is far less)
@@ -415,6 +417,15 @@ async function changedShare(a: Buffer, b: Buffer, band: { top: number; height: n
   return pixelShare(...(await Promise.all([bandPixels(a, band, out), bandPixels(b, band, out)])))
 }
 
+/**
+ * `height` CSS px from `top` as rows of an image `rows` tall, at `k` image px per CSS px. Both edges are rounded, not
+ * the top and the height apart: at a fractional scale those can add up to a row past the image (example.com on a phone).
+ */
+const bandRows = (top: number, height: number, k: number, rows: number) => {
+  const first = Math.min(rows - 1, Math.max(0, Math.round(top * k)))
+  return { top: first, height: Math.max(1, Math.min(rows, Math.round((top + height) * k)) - first) }
+}
+
 /** A full-width horizontal band of an image, scaled to `out` (RGB, 8 bit), for comparing bands of images of different sizes. */
 const bandPixels = (img: Buffer, band: { top: number; height: number }, out: { width: number; height: number }) =>
   sharp(img).extract({ left: 0, top: band.top, width: imageSize(img).width, height: band.height }).resize({ ...out, fit: "fill" }).removeAlpha().raw().toBuffer()
@@ -480,11 +491,13 @@ const likelyInView = (page: PwPage, cuts: Omit<PageSection, "key">[]) =>
  *
  * Each section is probed first: once one-shot animations (scroll reveals) have finished, the screencast is
  * watched briefly. A still page sends a frame or two; otherwise the section's own pixels are compared across
- * the window, so motion elsewhere on screen or a blinking caret doesn't count. Touching sections that both move,
- * such as a transparent header over a hero gradient, are recorded as one clip when they fit in the viewport:
- * clips made at different moments would show the same animation out of step at their shared edge. A clip whose
- * motion stops before the window ends is dropped, since it wouldn't loop. Oversized clips are re-encoded
- * smaller from the frames already held, then dropped if still over the per-clip or per-page byte budget.
+ * the window, so motion elsewhere on screen or a blinking caret doesn't count. If frames kept coming (the
+ * section is repainting) but it hasn't changed, the watch is extended once: a loop can hold still for a
+ * second, or start after a beat. Touching sections that both move, such as a transparent header over a hero
+ * gradient, are recorded as one clip when they fit in the viewport: clips made at different moments would show
+ * the same animation out of step at their shared edge. A clip whose motion stops before the window ends is
+ * dropped, since it wouldn't loop. Oversized clips are re-encoded smaller from the frames already held, then
+ * dropped if still over the per-clip or per-page byte budget.
  *
  * Fixed and sticky bars are hidden below the top of the page, since the full-page screenshot shows them only
  * there. Frames come from the screencast at viewport size and are cropped by the encoder. `seen` holds clips
@@ -652,11 +665,11 @@ export async function recordLiveSections(
     const shotH = Math.floor(imageSize(shot).height / d) // in CSS px
     if (s.y + height > shotH) return
     const out = { width: 360, height: Math.max(1, Math.round((height * 360) / vw)) }
-    const seen = await bandPixels(frame, { top: Math.round(top * k), height: Math.max(1, Math.round(height * k)) }, out)
-    const shown = await bandPixels(shot, { top: Math.round(s.y * d), height: Math.max(1, Math.round(height * d)) }, out)
+    const seen = await bandPixels(frame, bandRows(top, height, k, imageSize(frame).height), out)
+    const shown = await bandPixels(shot, bandRows(s.y, height, d, imageSize(shot).height), out)
     if (pixelShare(seen, shown) < IN_VIEW_CHANGED) return
     const piece = async (img: Buffer, at: number, viewTop: number, h: number) =>
-      inView!.patches.push({ y: at, height: h, jpeg: await sharp(img).extract({ left: 0, top: Math.round(viewTop * k), width: Math.round(vw * k), height: Math.max(1, Math.round(h * k)) }).jpeg({ quality: 90 }).toBuffer() })
+      inView!.patches.push({ y: at, height: h, jpeg: await sharp(img).extract({ left: 0, width: Math.round(vw * k), ...bandRows(viewTop, h, k, imageSize(img).height) }).jpeg({ quality: 90 }).toBuffer() })
     await piece(frame, s.y, top, height)
     // The rest of a tall section, a viewport at a time, up to the shot's bottom.
     for (let off = height, extra = 0; off < s.height && extra < IN_VIEW_EXTRA; extra++) {
@@ -705,10 +718,16 @@ export async function recordLiveSections(
         if (inView) await collectInView(s, top, height, k, last)
         // A still page sends one frame. Two or more are compared, since a busy machine can slow the screencast to a trickle.
         if (frames.length < 2) continue
-        // The middle frame too: a back-and-forth animation can be at the same point at both ends of the window.
-        const first = Buffer.from(frames[0]!.data, "base64")
-        moving[i] = (await changedShare(first, last, band)) >= LIVE_MIN_CHANGED
-          || (frames.length > 2 && (await changedShare(first, Buffer.from(frames[frames.length >> 1]!.data, "base64"), band)) >= LIVE_MIN_CHANGED)
+        // The first frame against the last, and against the middle one: a back-and-forth animation can be at the same point at both ends.
+        const changes = async (fs: { data: string }[]) => {
+          const at = (n: number) => Buffer.from(fs[n]!.data, "base64")
+          return (await changedShare(at(0), at(fs.length - 1), band)) >= LIVE_MIN_CHANGED
+            || (fs.length > 2 && (await changedShare(at(0), at(fs.length >> 1), band)) >= LIVE_MIN_CHANGED)
+        }
+        moving[i] = await changes(frames)
+        // Frames kept coming but the section hasn't changed: its motion may hold still (a video on its last frame) or start a beat
+        // after it scrolls in (a demo that loads on view). Watch on before calling it still.
+        if (!moving[i] && frames.length >= LIVE_BUSY_FRAMES) moving[i] = await changes([...frames, ...(await screencast(LIVE_RECHECK_MS, 1)).frames])
       } catch (e) {
         log(`  live probe of "${s.label}" skipped:`, (e as Error).message.split("\n")[0])
       }
