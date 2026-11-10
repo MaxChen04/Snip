@@ -156,8 +156,8 @@ app.get("/files/*", async (c) => {
   headers.set("accept-ranges", "bytes")
   headers.set("cache-control", "private, max-age=86400, immutable")
   headers.set("x-content-type-options", "nosniff")
-  if (key.endsWith(".html")) {
-    // Captured third-party HTML: no scripts, opaque origin, no access to our cookies.
+  if (key.endsWith(".html") || key.endsWith(".svg")) {
+    // Captured third-party HTML, or a site's SVG icon opened on its own: no scripts, opaque origin, no access to our cookies.
     headers.set("content-security-policy", "sandbox allow-popups; script-src 'none'; object-src 'none'; base-uri *")
   }
   if (key.endsWith(".json") && c.req.query("download")) {
@@ -370,7 +370,7 @@ agent.post("/jobs/claim", async (c) => {
   c.executionCtx.waitUntil(db.cleanupRetiredFiles(c.env.DB, c.env.FILES))
   await db.touchPresence(c.env.DB, job ? "busy" : "idle", job?.id ?? null)
   // Advertise on every claim, including resumed jobs: the destination may have been upgraded since the last one.
-  return job ? c.json({ ...job, recordingFormats: ["gif", "webm"], features: ["sections", "live", "schemes"] }) : c.body(null, 204)
+  return job ? c.json({ ...job, recordingFormats: ["gif", "webm"], features: ["sections", "live", "schemes", "icon"] }) : c.body(null, 204)
 })
 
 agent.post("/heartbeat", async (c) => {
@@ -456,7 +456,10 @@ agent.post("/jobs/:id/complete", async (c) => {
   const id = c.req.param("id")
   const attempt = attemptFrom(c)
   const body = await c.req.json<JobComplete>()
-  if (body.coverKey && !body.coverKey.startsWith(`refs/${id}/${attempt}/`)) return c.json({ error: "bad file key" }, 400)
+  const prefix = `refs/${id}/${attempt}/`
+  if (body.coverKey && !body.coverKey.startsWith(prefix)) return c.json({ error: "bad file key" }, 400)
+  // Only an icon saved with this capture is kept. An older agent sends the site's icon URL instead, which Snip never loads.
+  if (!body.favicon?.startsWith(prefix)) body.favicon = null
   if (!validAttempt(attempt) || !(await db.completeJob(c.env.DB, id, attempt, body))) return c.json({ error: "job is gone" }, 410)
   await db.touchPresence(c.env.DB, "idle", null)
   return c.json({ ok: true })

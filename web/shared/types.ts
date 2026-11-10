@@ -35,6 +35,7 @@ export interface Reference {
   domain: string
   title: string | null
   description: string | null
+  /** File key of the site's icon, saved with the capture. Null for websites captured before icons were saved. */
   favicon: string | null
   mode: CaptureMode
   maxPages: number
@@ -234,7 +235,7 @@ export interface Job {
   /** Formats the serving Worker can display. Older Workers omit this and require GIF. Not persisted. */
   recordingFormats?: ("gif" | "webm")[]
   /** What the serving Worker stores beyond the basics: page sections, and live clips of them. Older Workers omit this. Not persisted. */
-  features?: ("sections" | "live" | "schemes")[]
+  features?: ("sections" | "live" | "schemes" | "icon")[]
 }
 
 /** Crawl position saved when a capture pauses. */
@@ -290,6 +291,7 @@ export interface PageUpload {
 export interface JobComplete {
   title: string | null
   description: string | null
+  /** File key of the saved icon when the Worker advertises "icon"; otherwise the site's icon URL, which the Worker does not keep. */
   favicon: string | null
   coverKey: string | null
   tokens: DesignTokens | null
@@ -341,6 +343,7 @@ export interface RefSummary {
   id: string
   title: string | null
   domain: string
+  favicon: string | null
 }
 
 /** An image the owner uploaded as moodboard material (not captured from a website). */

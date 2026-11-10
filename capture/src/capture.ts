@@ -361,6 +361,38 @@ async function retryOnce<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
+const ICON_MAX_BYTES = 256 * 1024
+
+/** What a site's icon is, judged by its bytes (the site's Content-Type is not trusted). Null for anything that is not an image. */
+export function iconType(b: Buffer): { ext: string; type: string } | null {
+  const at = (...bytes: number[]) => bytes.every((x, i) => b[i] === x)
+  if (at(0x89, 0x50, 0x4e, 0x47)) return { ext: "png", type: "image/png" }
+  if (at(0, 0, 1, 0)) return { ext: "ico", type: "image/x-icon" }
+  if (at(0x47, 0x49, 0x46, 0x38)) return { ext: "gif", type: "image/gif" }
+  if (at(0xff, 0xd8, 0xff)) return { ext: "jpg", type: "image/jpeg" }
+  if (b.toString("latin1", 0, 4) === "RIFF" && b.toString("latin1", 8, 12) === "WEBP") return { ext: "webp", type: "image/webp" }
+  if (/^[\s\uFEFF]*(<\?xml[^>]*>\s*)?(<!--[\s\S]*?-->\s*)?<svg[\s>]/.test(b.toString("utf8", 0, 2048))) return { ext: "svg", type: "image/svg+xml" }
+  return null
+}
+
+/**
+ * Save the site's icon with the capture so Snip shows it from its own files, never by asking the site (or anyone else) again.
+ * Null when the icon can't be fetched, is too big or isn't an image: the website then shows its first letter.
+ */
+async function storeIcon(context: BrowserContext, api: SnipApi, url: string | undefined, prefix: string): Promise<string | null> {
+  if (!url) return null
+  try {
+    const res = await context.request.get(url, { timeout: 10_000 })
+    if (!res.ok() || Number(res.headers()["content-length"]) > ICON_MAX_BYTES) return null
+    const body = await res.body()
+    const icon = body.length <= ICON_MAX_BYTES ? iconType(body) : null
+    return icon ? await api.upload(`${prefix}/icon.${icon.ext}`, body, icon.type) : null
+  } catch (e) {
+    if (e instanceof JobGoneError) throw e
+    return null
+  }
+}
+
 /** Map `items` with at most `n` calls running at once, keeping order. */
 async function pool<T, R>(items: T[], n: number, fn: (item: T, i: number) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length)
@@ -1359,7 +1391,8 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
   await api.complete(job.id, {
     title: meta?.title ?? null,
     description: meta?.description ?? null,
-    favicon: meta?.favicon ?? null,
+    // A Worker that predates saved icons keeps the site's icon URL and shows it from there.
+    favicon: features.has("icon") ? await storeIcon(desktop, api, meta?.favicon ?? undefined, prefix) : (meta?.favicon ?? null),
     // A resumed crawl already has its cover from its first page; null keeps it.
     coverKey: resume?.captured ? null : coverKey,
     tokens: mergeTokens(allTokens),

@@ -17,6 +17,7 @@ import {
   type AltScheme,
   type PageUpload,
   type Paged,
+  type RefSummary,
   type Reference,
   type StorageUsage,
 } from "../shared/types"
@@ -38,6 +39,9 @@ export const parse = <T>(s: unknown): T | null => {
 
 export type Row = Record<string, unknown>
 
+/** A saved icon is a file key. Older captures hold the site's own icon URL, which Snip no longer loads. */
+const iconKey = (v: unknown) => (typeof v === "string" && v.startsWith("refs/") ? v : null)
+
 export function toReference(r: Row): Reference {
   return {
     id: r.id as string,
@@ -45,7 +49,7 @@ export function toReference(r: Row): Reference {
     domain: r.domain as string,
     title: (r.title as string) ?? null,
     description: (r.description as string) ?? null,
-    favicon: (r.favicon as string) ?? null,
+    favicon: iconKey(r.favicon),
     mode: r.mode as CaptureMode,
     maxPages: r.max_pages as number,
     status: r.capture_control === "paused" ? "paused" : (r.status as Reference["status"]),
@@ -261,13 +265,16 @@ export function childWhere(table: "pages" | "animations", f: ListFilter): Where 
   return { where, args }
 }
 
+/** The website a page, section or recording came from, for a tile to label itself. Needs ref_title, ref_domain and ref_favicon in the row. */
+export const refSummary = (r: Row): RefSummary => ({ id: r.reference_id as string, title: (r.ref_title as string) ?? null, domain: r.ref_domain as string, favicon: iconKey(r.ref_favicon) })
+
 // Cross-reference feeds for the "Pages" and "Animations" gallery views.
 async function listChildren<T>(
   db: D1Database,
   table: "pages" | "animations",
   map: (r: Row) => T,
   f: ListFilter,
-): Promise<Paged<T & { reference: { id: string; title: string | null; domain: string } }>> {
+): Promise<Paged<T & { reference: RefSummary }>> {
   const limit = Math.min(Math.max(f.limit ?? 24, 1), 100)
   const { where, args } = childWhere(table, f)
   const asc = f.sort === "oldest"
@@ -277,12 +284,12 @@ async function listChildren<T>(
     args.push(cur[0], cur[0], cur[1])
   }
   const dir = asc ? "ASC" : "DESC"
-  const sql = `SELECT t.*, r.title AS ref_title, r.domain AS ref_domain${table === "pages" ? `, ${PAGE_COLLECTIONS}` : ""} FROM ${table} t JOIN refs r ON r.id = t.reference_id ${whereSql(where)} ORDER BY t.created_at ${dir}, t.id ${dir} LIMIT ?`
+  const sql = `SELECT t.*, r.title AS ref_title, r.domain AS ref_domain, r.favicon AS ref_favicon${table === "pages" ? `, ${PAGE_COLLECTIONS}` : ""} FROM ${table} t JOIN refs r ON r.id = t.reference_id ${whereSql(where)} ORDER BY t.created_at ${dir}, t.id ${dir} LIMIT ?`
   const { results } = await db.prepare(sql).bind(...args, limit + 1).all<Row>()
   const page = results.slice(0, limit)
   const items = page.map((r) => ({
     ...map(r),
-    reference: { id: r.reference_id as string, title: (r.ref_title as string) ?? null, domain: r.ref_domain as string },
+    reference: refSummary(r),
   }))
   const last = page[page.length - 1]
   return {
@@ -362,7 +369,7 @@ export async function requeueReference(db: D1Database, id: string) {
     db.prepare(`DELETE FROM pages WHERE reference_id = ?`).bind(id), // animations cascade
     db
       .prepare(
-        `UPDATE refs SET status = 'queued', progress = 'Waiting for your Mac', error = NULL, page_count = 0, animation_count = 0, cover_key = NULL, tokens_json = NULL, claimed_at = NULL, capture_control = NULL, crawl_state = NULL, capture_run = capture_run + 1, updated_at = ? WHERE id = ?`,
+        `UPDATE refs SET status = 'queued', progress = 'Waiting for your Mac', error = NULL, page_count = 0, animation_count = 0, cover_key = NULL, favicon = NULL, tokens_json = NULL, claimed_at = NULL, capture_control = NULL, crawl_state = NULL, capture_run = capture_run + 1, updated_at = ? WHERE id = ?`,
       )
       .bind(now(), id),
   ])
@@ -680,7 +687,7 @@ export async function requestStop(db: D1Database, id: string) {
   const results = await db.batch([
     db.prepare(`UPDATE refs SET status = 'ready', progress = NULL, error = NULL, capture_control = NULL,
       title = coalesce(json_extract(crawl_state, '$.meta.title'), title), description = coalesce(json_extract(crawl_state, '$.meta.description'), description),
-      favicon = coalesce(json_extract(crawl_state, '$.meta.favicon'), favicon), tokens_json = json_extract(crawl_state, '$.tokens'), crawl_state = NULL, updated_at = ?
+      tokens_json = json_extract(crawl_state, '$.tokens'), crawl_state = NULL, updated_at = ?
       WHERE id = ? AND status = 'queued' AND crawl_state IS NOT NULL AND page_count > 0`).bind(ts, id),
     db.prepare(`UPDATE refs SET status = 'failed', progress = NULL, error = ?, capture_control = NULL, crawl_state = NULL, updated_at = ?
       WHERE id = ? AND status = 'queued'`).bind(STOPPED_EMPTY, ts, id),
