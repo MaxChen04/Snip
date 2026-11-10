@@ -3,7 +3,8 @@
 // frames. Script-driven motion that writes styles every frame (GSAP, scroll libraries) doesn't create animations
 // and is not seen here.
 //   { op: "install" }  start logging; anything already running counts as seen
-//   { op: "take" }  return what started since the last take, and restart the clock for startMs
+//   { op: "take", max? }  return what started since the last take (up to max groups, default 100), and restart the clock
+// Installed as an init script too, so animations that play as the page loads are logged from the first frame.
 (arg) => {
   const op = arg && arg.op
   let m = window.__snipMotion
@@ -49,7 +50,8 @@
         property: a.transitionProperty || a.animationName || [...new Set(keyframes.flatMap((k) => Object.keys(k)).filter((p) => p !== "offset" && p !== "easing"))].join(", ") || null,
         durationMs: round(typeof t.duration === "number" ? t.duration : 0),
         delayMs: round(t.delay),
-        easing: t.easing,
+        // A CSS animation's animation-timing-function lives on its keyframes; its own timing is always linear.
+        easing: name === "CSSAnimation" && keyframes[0] && keyframes[0].easing ? keyframes[0].easing : t.easing,
         iterations: t.iterations === Infinity ? "infinite" : t.iterations,
         keyframes,
         startMs,
@@ -85,5 +87,5 @@
     else groups.set(key, e)
   }
   m.t0 = performance.now()
-  return [...groups.values()].slice(0, 100)
+  return [...groups.values()].slice(0, (arg && arg.max) || 100)
 }

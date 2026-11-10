@@ -150,6 +150,51 @@ export interface MotionEntry {
   count?: number
 }
 
+/** One easing the page used, with how it moves. Overshoot is how far past the end value it goes (0.04 = 4%). */
+export interface MotionEasing {
+  easing: string
+  count: number
+  shape: "linear" | "ease-out" | "ease-in" | "ease-in-out" | "spring" | "steps" | "unknown"
+  overshoot?: number
+}
+
+/**
+ * A page's motion summed up across the load, the scroll and the hovers: which technologies move it, the named tokens,
+ * the easing and duration mix, staggers, and what is drawn on canvases and so is only visible as pixels. Stored in the
+ * page's styles file (styles.json, `motionProfile`). Absent for pages captured before it existed.
+ */
+export interface MotionProfile {
+  version: 1
+  tech: {
+    /** Animation libraries and runtimes found on the page (gsap 3.12, three.js r175, Rive, Lenis…). */
+    libraries: string[]
+    cssKeyframes: number
+    /** Effects the browser ran, by kind, over the whole capture. */
+    effects: { transitions: number; animations: number; webAnimations: number }
+    /** CSS rules with a scroll-driven animation-timeline (scroll() / view() / named timelines). */
+    scrollDriven: string[]
+    viewTransitions: boolean
+    canvases: { context: string | null; width: number; height: number; y: number }[]
+    /** Distinct WebGL shader programs the page compiled, and the first few sources. */
+    shaders: { count: number; sources: string[] }
+    /** Motion files the page downloaded: Rive, Lottie, Spline, 3D models, videos. */
+    files: { kind: string; url: string }[]
+  }
+  /** Custom properties on :root that name a duration, easing, delay or spring. Tailwind's internal --tw-* are left out. */
+  tokens: Record<string, string>
+  easings: MotionEasing[]
+  durations: { ms: number; count: number }[]
+  /** The same effect started on several elements with a fixed step between them. */
+  staggers: { property: string | null; stepMs: number; items: number; durationMs: number; easing: string; phase: string }[]
+  load: MotionEntry[]
+  scroll: MotionEntry[]
+  hovers: { label: string; motion: Pick<MotionEntry, "type" | "property" | "durationMs" | "delayMs" | "easing">[] }[]
+  /** Motion that can't be read as numbers. */
+  pixelOnly: string[]
+  /** Plain observations derived from the numbers above, to orient a reader. */
+  observations: string[]
+}
+
 export type AnimationKind = "scroll" | "hover"
 
 /** Whether an animation's recording is a video (WebM). Older captures stored GIFs under the same field. */

@@ -7,6 +7,7 @@ import { imageSize, type Frame } from "./gif"
 import { allowPrivateUrls, assertPublicUrl, createCaptureNetwork, PrivateAddressError } from "./network-guard"
 import { buildStills, closeRenderer, cropBands, sampleIndexes } from "./sheet"
 import { encodeRecording, recordingWriter, type Recording } from "./video"
+import { motionFileKind, motionProfile, type PageTech } from "./motion-profile"
 
 // In-page scripts live in plain .js files so the TS toolchain can't inject helpers into them.
 const script = (name: string) => readFileSync(new URL(`./inpage/${name}.js`, import.meta.url), "utf8")
@@ -18,6 +19,7 @@ const DISMISS_JS = script("dismiss")
 const TRANSITION_JS = script("transition-ms")
 const SECTIONS_JS = script("sections")
 const MOTION_JS = script("motion")
+const TECH_JS = script("tech")
 const MAX_SECTIONS = 24
 // Live section clips: a section is recorded only if two stills taken LIVE_PROBE_MS apart differ.
 const LIVE_SECTIONS = process.env.SNIP_LIVE_SECTIONS !== "false"
@@ -1178,6 +1180,8 @@ export async function captureJob(browser: Browser, api: SnipApi, job: Job) {
     const mobile = await browser.newContext({ ...common, viewport: MOBILE, deviceScaleFactor: MOBILE_DPR, isMobile: true, hasTouch: true, userAgent: MOBILE_UA })
     contexts.push(mobile)
     await Promise.all(contexts.flatMap((context) => [context.addInitScript(HOLD_RESIZE_JS), context.addInitScript(OBSERVED_JS)]))
+    // Motion and canvas logging start before the page's own scripts, so what plays as it loads is logged too.
+    await desktop.addInitScript(`(${MOTION_JS})({ op: "install" }); (${TECH_JS})({ op: "install" })`)
     await capturePages(browser, api, job, desktop, mobile, network)
   } finally {
     await Promise.allSettled(contexts.map(context => context.close()))
@@ -1281,6 +1285,12 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
     try {
       // ---- Desktop ----
       const dPage = await newPage(desktop)
+      // ponytail: motion files are told apart by URL and content type only; a Lottie JSON under a plain name is missed.
+      const motionFiles: { kind: string; url: string }[] = []
+      dPage.on("response", (res) => {
+        const kind = motionFileKind(res.url(), res.headers()["content-type"] ?? "")
+        if (kind && motionFiles.length < 30 && !motionFiles.some((f) => f.url === res.url())) motionFiles.push({ kind, url: res.url() })
+      })
       const status = await load(dPage, url, network)
       const pageMeta = await run<{ canonical: string | null; title: string | null; description: string | null; favicon: string | null; links: { href: string; nav: boolean }[] }>(dPage, META_JS)
       // Both checks run before any screenshots or recordings. A skipped URL stays in `visited`, so it is not queued again, and it is not counted as captured.
@@ -1341,7 +1351,8 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
         }
       })()
 
-      await run(dPage, MOTION_JS, { op: "install" }).catch(() => {})
+      // Everything since the page started loading; the scroll's log starts from here.
+      const loadMotion = await run<MotionEntry[]>(dPage, MOTION_JS, { op: "take", max: 300 }).catch(() => [])
       const scroll = await recordScroll(dPage, true, recordingFormat)
       const scrollMotion = await takeMotion(dPage)
       await dismissBanners(dPage) // popups that only appear after scrolling
@@ -1360,9 +1371,20 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       }
       const desktopThumb = await thumbnail(await dPage.screenshot({ type: "jpeg", quality: 75 }), THUMB_WIDTH.desktop)
       const other = features.has("schemes") ? await captureOtherScheme(dPage, job.options?.colorScheme === "dark" ? "dark" : "light") : null
-      const styles = await run<{ tokens: DesignTokens }>(dPage, STYLES_JS, { maxElements: 3000 })
+      const styles = await run<{ tokens: DesignTokens; motionRules?: { scrollDriven: string[]; viewTransitions: boolean } }>(dPage, STYLES_JS, { maxElements: 3000 })
       const html = await buildSnapshot(dPage, desktop)
       const hovers = await recordHovers(dPage, hoverSeen, recordingFormat)
+      const tech = await run<PageTech>(dPage, TECH_JS, { op: "take" }).catch(() => null)
+      const profile = motionProfile({
+        load: loadMotion,
+        scroll: scrollMotion,
+        hovers: hovers.map((h) => ({ label: h.label, motion: h.motion })),
+        tech,
+        files: motionFiles,
+        cssVariables: styles.tokens.cssVariables,
+        keyframes: styles.tokens.keyframes,
+        motionRules: styles.motionRules ?? null,
+      })
       await dPage.close()
       const mobileShots = await mobileTask
       const mobileShot = mobileShots?.shot ?? null
@@ -1486,7 +1508,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
         mobileWidth: mobileShot?.width ?? null,
         mobileHeight: mobileShot?.height ?? null,
         snapshotKey: await uploadText(api, `${p}/snapshot.html`, html, "text/html; charset=utf-8", features.has("gzip")),
-        stylesKey: await uploadText(api, `${p}/styles.json`, JSON.stringify(styles), "application/json", features.has("gzip")),
+        stylesKey: await uploadText(api, `${p}/styles.json`, JSON.stringify({ ...styles, motionProfile: profile }), "application/json", features.has("gzip")),
         tokens: styles.tokens,
         sections: await uploadSections(),
         altScheme: await uploadOtherScheme(),

@@ -197,11 +197,18 @@
   const keyframes = []
   const fontFaces = []
   const hoverSelectors = []
+  const scrollDriven = []
+  let viewTransitions = false
   const visit = (rules) => {
     for (const rule of rules) {
       if (rule.type === CSSRule.KEYFRAMES_RULE) keyframes.push({ name: rule.name, css: rule.cssText })
       else if (rule.type === CSSRule.FONT_FACE_RULE) fontFaces.push(rule.cssText)
       else if (rule.type === CSSRule.STYLE_RULE && rule.selectorText.includes(":hover")) hoverSelectors.push(rule.cssText.slice(0, 500))
+      if (rule.type === CSSRule.STYLE_RULE) {
+        const timeline = rule.style.animationTimeline || rule.style.getPropertyValue("view-timeline-name") || rule.style.getPropertyValue("scroll-timeline-name")
+        if (timeline && timeline !== "auto" && timeline !== "none" && scrollDriven.length < 20) scrollDriven.push(rule.cssText.slice(0, 400))
+        if (rule.selectorText.includes("::view-transition")) viewTransitions = true
+      } else if (rule.constructor && rule.constructor.name === "CSSViewTransitionRule") viewTransitions = true
       if (rule.cssRules) visit(rule.cssRules)
     }
   }
@@ -251,6 +258,7 @@
     keyframes,
     fontFaces,
     hoverRules: hoverSelectors.slice(0, 400),
+    motionRules: { scrollDriven, viewTransitions },
     cssVariables,
     tokens,
   }

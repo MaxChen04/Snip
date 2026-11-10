@@ -56,7 +56,7 @@ export function buildAgentPrompt({ reference: r, pages, animations, tokens, mcpU
   }
   if (animations.length) {
     out.push(
-      `${step++}. For each animation, call get_animation with its animation_id. It returns a contact sheet of sampled frames plus timing and the element's observed styles. Request representation "frame" with a frame index for a closer look at one moment.`,
+      `${step++}. For each animation, call get_animation with its animation_id. It returns a contact sheet of sampled frames plus timing and the element's observed styles. Request representation "frame" with a frame index for a closer look at one moment. For how the page moves overall (animation technologies, motion tokens, easings, staggers, what is only pixels), call get_motion_profile with the page_id first.`,
       ...animations.map((a) => {
         const where = pagePath(a.pageId)
         return `   - ${a.kind === "scroll" ? "Scroll" : "Hover"}${a.label ? ` "${a.label}"` : ""}${where ? ` on ${where}` : ""}: animation_id "${a.id}"`

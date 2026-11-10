@@ -7,6 +7,7 @@ import { chromium } from "playwright"
 process.env.SNIP_LIVE_PAGES = "1"
 const SECTIONS_JS = readFileSync(new URL("../src/inpage/sections.js", import.meta.url), "utf8")
 const MOTION_JS = readFileSync(new URL("../src/inpage/motion.js", import.meta.url), "utf8")
+const TECH_JS = readFileSync(new URL("../src/inpage/tech.js", import.meta.url), "utf8")
 const launch = () => chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined })
 
 test("sections are found through wrapper divs, open up a tall main, join heading bands, fold slivers and tile the page", async () => {
@@ -45,6 +46,31 @@ test("sections are found through wrapper divs, open up a tall main, join heading
     assert.equal((await page.evaluate(`(${SECTIONS_JS})({ max: 3 })`) as unknown[]).length, 3, "merged down to the cap")
     await page.setContent(`<div style="height:3000px">one long block</div>`)
     assert.deepEqual(await page.evaluate(`(${SECTIONS_JS})({})`), [], "a page that doesn't break up has no sections")
+  } finally {
+    await browser.close()
+  }
+})
+
+test("installed before load, motion and canvas logging see what plays as the page loads", async () => {
+  const browser = await launch()
+  try {
+    const page = await browser.newPage()
+    await page.addInitScript(`(${MOTION_JS})({ op: "install" }); (${TECH_JS})({ op: "install" })`)
+    // A real navigation: init scripts run on new documents, not on setContent.
+    await page.route("https://fixture.test/", (route) => route.fulfill({ contentType: "text/html", body: `<canvas id="gl" width="200" height="100"></canvas><h1><span>A</span><span>B</span><span>C</span></h1><script>
+      document.querySelectorAll("span").forEach((s, i) => s.animate({ opacity: [0, 1] }, { duration: 400, delay: i * 20, easing: "cubic-bezier(0.22, 1, 0.36, 1)" }))
+      const gl = document.getElementById("gl").getContext("webgl")
+      if (gl) { const sh = gl.createShader(gl.FRAGMENT_SHADER); gl.shaderSource(sh, "void main() { gl_FragColor = vec4(1.0); }") }
+    </script>` }))
+    await page.goto("https://fixture.test/")
+    const load = await page.evaluate(`(${MOTION_JS})({ op: "take", max: 300 })`) as Record<string, unknown>[]
+    assert.deepEqual(load.map((e) => e.delayMs).sort(), [0, 20, 40])
+    const tech = await page.evaluate(`(${TECH_JS})({ op: "take" })`) as { canvases: { context: string }[]; shaders: { count: number; sources: string[] } }
+    if (tech.canvases[0]?.context) {
+      assert.equal(tech.canvases[0].context, "webgl")
+      assert.equal(tech.shaders.count, 1)
+      assert.match(tech.shaders.sources[0]!, /gl_FragColor/)
+    }
   } finally {
     await browser.close()
   }

@@ -516,6 +516,7 @@ function ConnectSection() {
         ["get_reference", "An overview, then pages, animations or tokens in smaller parts"],
         ["get_page", "One page with an inline screenshot"],
         ["get_page_styles", "Computed styles filtered by element, text or section"],
+        ["get_motion_profile", "How a page moves: technologies, motion tokens, easings, staggers and hovers"],
         ["get_animation", "A contact sheet or sampled frame, plus a link to the recording"],
         ["search_pages", "Pages across references, or every page in a collection"],
         ["search_animations", "Scroll and hover recordings across references"],
