@@ -6,12 +6,14 @@ import { loadLibrary, migratedDatabase } from "../../qa/discovery/load"
 import { scoreRetrieval } from "../../qa/discovery/retrieval"
 import * as db from "../worker/db"
 import { mcpApiHandler } from "../worker/mcp"
-import { searchPages, searchReferences, searchTerms } from "../worker/search"
+import { searchPages, searchReferences, searchTerms, variants } from "../worker/search"
 
 test("queries split into stemmed terms without stop words", () => {
   assert.deepEqual(searchTerms("Find the rounded pricing cards!"), ["round", "pric", "card"])
   assert.deepEqual(searchTerms("a an the"), [])
   assert.deepEqual(searchTerms("FAQ faq Faqs"), ["faq"])
+  assert.deepEqual(variants("équipe"), ["équipe", "ÉQUIPE", "Équipe"])
+  assert.deepEqual(variants("card"), ["card"])
   assert.equal(searchTerms("one two three four five six seven eight nine ten").length, 8)
 })
 
@@ -65,6 +67,11 @@ test("hits say what matched, carry the note, and follow recaptures and note edit
     // A note edit is searchable at once: notes are read from the website, not copied.
     await db.setNotes(database, lib.refs.get("https://pebble.test")!, "Purple gradient hero")
     assert.equal((await searchPages(database, { q: "purple gradient" })).items[0]?.reference.domain, "pebble.test")
+
+    // Non-ASCII letters: LIKE folds ASCII case only, so a lowercase query still finds an uppercase title.
+    await db.setNotes(database, lib.refs.get("https://kiln.test")!, "ÉQUIPE éditoriale")
+    assert.equal((await searchReferences(database, { q: "équipe" })).items[0]?.reference.domain, "kiln.test")
+    assert.equal((await searchReferences(database, { q: "ÉQUIPE" })).items[0]?.reference.domain, "kiln.test")
 
     // A recapture removes the old pages' text with them.
     await db.requeueReference(database, plainleaf)

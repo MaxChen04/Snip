@@ -63,7 +63,7 @@ function stem(w: string) {
 /** The terms a query is matched by: words of two or more letters or digits, without stop words, at most eight. */
 export function searchTerms(query: string): string[] {
   const out: string[] = []
-  for (const w of query.toLowerCase().normalize("NFKC").match(/[\p{L}\p{N}]+/gu) ?? []) {
+  for (const w of query.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []) {
     if (w.length < 2 || STOP.has(w)) continue
     const t = stem(w)
     if (!out.includes(t)) out.push(t)
@@ -94,6 +94,18 @@ function binder() {
 }
 
 const like = (t: string) => `%${t}%`
+
+/**
+ * SQLite's LIKE ignores case for ASCII letters only, and stored text keeps its case. A term with other
+ * letters is also tried in upper and title case, which covers how titles, labels and notes are written.
+ */
+export function variants(t: string): string[] {
+  if (!/[^\x00-\x7f]/.test(t)) return [t]
+  return [...new Set([t, t.toUpperCase(), t[0]!.toUpperCase() + t.slice(1)])]
+}
+
+/** A field matched against every variant of one term. */
+const any = (field: string, ps: string[]) => `(${ps.map((p) => `${field} LIKE ${p}`).join(" OR ")})`
 const offsetFrom = (cursor?: string | null) => {
   try {
     const m = cursor ? /^rel:(\d+)$/.exec(atob(cursor)) : null
@@ -115,10 +127,10 @@ const rankSql = (n: number, tie: string) => {
 }
 
 /** A term's bitmask for one page; `t` is the page, `r` its website, `x` its page_text row. */
-const pageMask = (p: string) =>
-  `(CASE WHEN r.notes LIKE ${p} THEN 16 ELSE 0 END + CASE WHEN x.sections LIKE ${p} THEN 8 ELSE 0 END` +
-  ` + CASE WHEN t.title LIKE ${p} OR t.path LIKE ${p} THEN 4 ELSE 0 END` +
-  ` + CASE WHEN r.title LIKE ${p} OR r.url LIKE ${p} OR r.description LIKE ${p} THEN 2 ELSE 0 END + CASE WHEN x.body LIKE ${p} THEN 1 ELSE 0 END)`
+const pageMask = (p: string[]) =>
+  `(CASE WHEN ${any("r.notes", p)} THEN 16 ELSE 0 END + CASE WHEN ${any("x.sections", p)} THEN 8 ELSE 0 END` +
+  ` + CASE WHEN ${any("t.title", p)} OR ${any("t.path", p)} THEN 4 ELSE 0 END` +
+  ` + CASE WHEN ${any("r.title", p)} OR ${any("r.url", p)} OR ${any("r.description", p)} THEN 2 ELSE 0 END + CASE WHEN ${any("x.body", p)} THEN 1 ELSE 0 END)`
 
 export async function searchPages(
   db: D1Database,
@@ -128,7 +140,7 @@ export async function searchPages(
   const limit = Math.min(Math.max(f.limit ?? 20, 1), 100)
   const offset = offsetFrom(f.cursor)
   const { args, bind, adopt } = binder()
-  const params = terms.map((t) => bind(like(t)))
+  const params = terms.map((t) => variants(t).map((v) => bind(like(v))))
   const base = childWhere("pages", { collectionId: f.collectionId, referenceId: f.referenceId })
   const where = adopt(base.where, base.args)
   const rank = rankSql(terms.length, "ref_created DESC, reference_id DESC, ord, id")
@@ -146,9 +158,9 @@ export async function searchPages(
 
   // Details only for the pages returned: the excerpt and the best section.
   const d = binder()
-  const dp = terms.map((t) => d.bind(like(t)))
+  const dp = terms.map((t) => variants(t).map((v) => d.bind(like(v))))
   const lower = terms.map((t) => d.bind(t))
-  const sectionScore = dp.map((p) => `(CASE WHEN json_extract(l.value, '$.label') LIKE ${p} OR json_extract(l.value, '$.kind') LIKE ${p} THEN 2 ELSE 0 END + CASE WHEN st.value LIKE ${p} THEN 1 ELSE 0 END)`).join(" + ")
+  const sectionScore = dp.map((p) => `(CASE WHEN ${any("json_extract(l.value, '$.label')", p)} OR ${any("json_extract(l.value, '$.kind')", p)} THEN 2 ELSE 0 END + CASE WHEN ${any("st.value", p)} THEN 1 ELSE 0 END)`).join(" + ")
   const ids = ranked.map((r) => d.bind(r.id))
   const { results: rows } = await db
     .prepare(
@@ -191,15 +203,15 @@ export async function searchReferences(
   const limit = Math.min(Math.max(f.limit ?? 20, 1), 100)
   const offset = offsetFrom(f.cursor)
   const { args, bind, adopt } = binder()
-  const params = terms.map((t) => bind(like(t)))
+  const params = terms.map((t) => variants(t).map((v) => bind(like(v))))
   const base = referenceWhere({ collectionId: f.collectionId, domain: f.domain, status: f.status })
   const where = adopt(base.where, base.args)
-  const mask = (p: string) =>
-    `(CASE WHEN r.notes LIKE ${p} THEN 16 ELSE 0 END` +
-    ` + CASE WHEN EXISTS (SELECT 1 FROM page_text x WHERE x.reference_id = r.id AND x.sections LIKE ${p}) THEN 8 ELSE 0 END` +
-    ` + CASE WHEN EXISTS (SELECT 1 FROM pages t WHERE t.reference_id = r.id AND (t.title LIKE ${p} OR t.path LIKE ${p})) THEN 4 ELSE 0 END` +
-    ` + CASE WHEN r.title LIKE ${p} OR r.url LIKE ${p} OR r.description LIKE ${p} THEN 2 ELSE 0 END` +
-    ` + CASE WHEN EXISTS (SELECT 1 FROM page_text x WHERE x.reference_id = r.id AND x.body LIKE ${p}) THEN 1 ELSE 0 END)`
+  const mask = (p: string[]) =>
+    `(CASE WHEN ${any("r.notes", p)} THEN 16 ELSE 0 END` +
+    ` + CASE WHEN EXISTS (SELECT 1 FROM page_text x WHERE x.reference_id = r.id AND ${any("x.sections", p)}) THEN 8 ELSE 0 END` +
+    ` + CASE WHEN EXISTS (SELECT 1 FROM pages t WHERE t.reference_id = r.id AND (${any("t.title", p)} OR ${any("t.path", p)})) THEN 4 ELSE 0 END` +
+    ` + CASE WHEN ${any("r.title", p)} OR ${any("r.url", p)} OR ${any("r.description", p)} THEN 2 ELSE 0 END` +
+    ` + CASE WHEN EXISTS (SELECT 1 FROM page_text x WHERE x.reference_id = r.id AND ${any("x.body", p)}) THEN 1 ELSE 0 END)`
   const rank = rankSql(terms.length, "created_at DESC, id DESC")
   const { results } = await db
     .prepare(
@@ -213,8 +225,8 @@ export async function searchReferences(
   if (!ranked.length) return { items: [], nextCursor: null, terms }
 
   const d = binder()
-  const dp = terms.map((t) => d.bind(like(t)))
-  const pageScore = dp.map((p, i) => `(CASE WHEN x.sections LIKE ${p} THEN 8 ELSE 0 END + CASE WHEN t.title LIKE ${p} OR t.path LIKE ${p} THEN 4 ELSE 0 END + CASE WHEN x.body LIKE ${p} THEN 1 ELSE 0 END) AS s${i}`)
+  const dp = terms.map((t) => variants(t).map((v) => d.bind(like(v))))
+  const pageScore = dp.map((p, i) => `(CASE WHEN ${any("x.sections", p)} THEN 8 ELSE 0 END + CASE WHEN ${any("t.title", p)} OR ${any("t.path", p)} THEN 4 ELSE 0 END + CASE WHEN ${any("x.body", p)} THEN 1 ELSE 0 END) AS s${i}`)
   const cols = terms.map((_, i) => `s${i}`)
   const ids = ranked.map((r) => d.bind(r.id))
   const { results: rows } = await db
