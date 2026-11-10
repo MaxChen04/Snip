@@ -14,8 +14,8 @@ export const MAX_TRANSFER_BYTES = 100 * 1024 * 1024
 export const MANIFEST_HEAD_CONCURRENCY = 8
 
 // Capture files and uploaded images: a move carries both. A gzipped capture file (see isGzipKey) is an ordinary
-// object here: listed, sized, read and written as the bytes R2 holds, so manifests and size checks stay exact and
-// no engine version needs to know about it. Only `/files/*` and worker/files.ts unzip it.
+// object here: listed, sized, read and written as the bytes R2 holds, so manifests and size checks stay exact. Only
+// `/files/*` and worker/files.ts unzip it. Before copying one, the engine checks `reads` below (setup.cjs, import).
 const KEY_RE = /^(refs|uploads)\/[a-z0-9]+\/[A-Za-z0-9._\/-]+$/
 const validKey = (key: string) => KEY_RE.test(key) && !key.includes("..")
 const keyFromPath = (path: string) => decodeURIComponent(path.slice("/transfer/file/".length))
@@ -33,6 +33,9 @@ transfer.get("/status", async (c) => {
   const owner = await db.firstOwner(c.env.DB)
   return c.json({
     version: WORKER_VERSION,
+    // Stored formats this Worker serves, so the engine can refuse to copy a library to one that would show garbage.
+    // Never remove an entry (worker/files.ts); Workers before 1.4.0 omit the field.
+    reads: ["gzip"],
     hasOwner: !!owner,
     ownerId: owner?.id ?? null,
     counts: await db.libraryCounts(c.env.DB),

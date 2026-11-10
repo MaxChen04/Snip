@@ -1,6 +1,9 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { gunzipSync, gzipSync } from "node:zlib"
+import { brotliDecompressSync, gunzipSync, gzipSync } from "node:zlib"
+import http from "node:http"
+import { createRequire } from "node:module"
+import { fileURLToPath } from "node:url"
 import { Miniflare, convertV4MiniflareOptions } from "miniflare"
 import { app } from "../worker/app"
 import * as db from "../worker/db"
@@ -10,6 +13,10 @@ import { exportPlan } from "../src/lib/export-reference"
 import { gzipKey, isGzipKey, ungzipKey, type Job, type PageUpload } from "../shared/types"
 import { SnipApi, uploadText } from "../../capture/src/api"
 import { applyMigrations } from "./helpers/d1"
+
+const require = createRequire(import.meta.url)
+// The provisioning engine's copy of the name rule, used to refuse a copy to a Worker that can't read it.
+const provision = require("../../desktop/provision/transfer.cjs") as { isGzipKey: (key: string) => boolean }
 
 // Real local D1 and R2 (Miniflare); the engine's own SnipApi talks to the Worker through app.request.
 
@@ -23,12 +30,15 @@ test("the engine and the Worker agree on the gzip name", async () => {
     const stored: string[] = []
     await uploadText({ upload: async (k) => { stored.push(k); return k } }, key, "x", "text/plain", true)
     assert.equal(stored[0], gzipKey(key))
+    assert.equal(provision.isGzipKey(gzipKey(key)), true)
+    assert.equal(provision.isGzipKey(key), false)
   }
 })
 
 test("only the two text files take the gzip name; everything else is left alone", () => {
   for (const key of ["refs/a/b/p0/desktop.jpg", "refs/a/b/p0/scroll.webm", "refs/a/b/p0/hover-0.gif", "refs/a/b/p0/section-1.jpg", "uploads/u/x.png", "refs/a/b/p0/snapshot.gz.txt", "refs/a/b/p0/snapshot.html.gz"]) {
     assert.equal(isGzipKey(key), false, key)
+    assert.equal(provision.isGzipKey(key), false, key)
     assert.equal(gzipKey(key), key, key)
   }
 })
@@ -150,11 +160,22 @@ async function assertReadsBack(lib: Library, c: Captured, label: string) {
   assert.equal(snapshot.status, 200, label)
   assert.ok(Buffer.from(await snapshot.arrayBuffer()).equals(Buffer.from(HTML)), `${label}: /files serves the captured bytes`)
   assert.equal(snapshot.headers.get("content-type"), HTML_TYPE, label)
-  assert.equal(snapshot.headers.get("content-encoding"), null, `${label}: a plain response, never a content-encoding the runtime might apply twice`)
+  assert.equal(snapshot.headers.get("content-encoding"), null, `${label}: a client that did not ask for gzip gets plain bytes`)
   assert.equal(snapshot.headers.get("cache-control"), "private, max-age=86400, immutable", label)
   assert.equal(snapshot.headers.get("x-content-type-options"), "nosniff", label)
   assert.equal(snapshot.headers.get("content-security-policy"), "sandbox allow-popups; script-src 'none'; object-src 'none'; base-uri *", `${label}: captured HTML stays sandboxed`)
-  assert.equal((await call(`/files/${c.snapshotKey}`, { headers: { "accept-encoding": "gzip, br" } })).headers.get("content-encoding"), null, label)
+  // A client that takes gzip gets a gzipped file's stored bytes, which decode once to the same text; a plain file is
+  // served as it always was.
+  const accepting = await call(`/files/${c.snapshotKey}`, { headers: { "accept-encoding": "gzip, br" } })
+  const wire = Buffer.from(await accepting.arrayBuffer())
+  if (isGzipKey(c.snapshotKey)) {
+    assert.equal(accepting.headers.get("content-encoding"), "gzip", label)
+    assert.ok(gunzipSync(wire).equals(Buffer.from(HTML)), `${label}: one gzip layer over the captured bytes`)
+  } else {
+    assert.equal(accepting.headers.get("content-encoding"), null, label)
+    assert.ok(wire.equals(Buffer.from(HTML)), label)
+  }
+  assert.equal(accepting.headers.get("content-security-policy"), "sandbox allow-popups; script-src 'none'; object-src 'none'; base-uri *", label)
   const styles = await call(`/files/${c.stylesKey}?download=1`)
   assert.equal(await styles.text(), STYLES_JSON, label)
   assert.equal(styles.headers.get("content-type"), "application/json", label)
@@ -244,6 +265,65 @@ test("other files keep their byte ranges, and a gzipped file is always sent whol
     assert.equal((await lib.call(`/files/${gzipKey(plain.snapshotKey).replace("snapshot", "nothing")}`)).status, 404)
   }))
 
+test("a gzipped file is passed through only to a client that accepts gzip, and both answers say they vary", () =>
+  withLibrary(async (lib) => {
+    const gz = await capture(lib, "https://gz.example/", "negotiated")
+    const plain = await capture(lib, "https://plain.example/", "plain")
+    const stored = Buffer.from(await (await lib.files.get(gz.snapshotKey))!.arrayBuffer())
+    const etag = (await lib.files.head(gz.snapshotKey))!.httpEtag
+    /** The request as the route sees it; `cf` is how Cloudflare passes the client's own Accept-Encoding. */
+    const get = (key: string, acceptEncoding?: string, cf?: { clientAcceptEncoding: string }) => {
+      const request = new Request(`http://localhost/files/${key}`, { headers: acceptEncoding === undefined ? {} : { "accept-encoding": acceptEncoding } })
+      if (cf) Object.defineProperty(request, "cf", { value: cf })
+      return app.request(request, undefined, lib.env)
+    }
+    for (const ae of ["gzip", "gzip, deflate, br, zstd", "br;q=1, gzip;q=0.5", "GZIP"]) {
+      const res = await get(gz.snapshotKey, ae)
+      assert.equal(res.headers.get("content-encoding"), "gzip", ae)
+      assert.ok(Buffer.from(await res.arrayBuffer()).equals(stored), `${ae}: the stored bytes, not unzipped and not zipped again`)
+      assert.equal(res.headers.get("vary"), "accept-encoding", ae)
+      assert.equal(res.headers.get("etag"), etag, `${ae}: R2's ETag names exactly these bytes`)
+      assert.equal(res.headers.get("content-length"), null, ae)
+      assert.equal(res.headers.get("accept-ranges"), "none", ae)
+      assert.equal(res.headers.get("content-type"), HTML_TYPE, ae)
+    }
+    for (const ae of [undefined, "", "identity", "br", "gzip;q=0", "gzip; q=0.000", "x-gzip", "*"]) {
+      const res = await get(gz.snapshotKey, ae)
+      assert.equal(res.headers.get("content-encoding"), null, String(ae))
+      assert.equal(await res.text(), HTML, `${ae}: unzipped`)
+      assert.equal(res.headers.get("vary"), "accept-encoding", String(ae))
+      assert.equal(res.headers.get("etag"), `W/${etag}`, `${ae}: the same content in another encoding`)
+    }
+    // On Cloudflare the header the Worker sees is rewritten; the client's own value wins.
+    const fromCf = await get(gz.snapshotKey, "gzip, br", { clientAcceptEncoding: "identity" })
+    assert.equal(fromCf.headers.get("content-encoding"), null)
+    assert.equal(await fromCf.text(), HTML)
+    assert.equal((await get(gz.snapshotKey, undefined, { clientAcceptEncoding: "gzip, deflate" })).headers.get("content-encoding"), "gzip")
+    // A JSON download keeps its ordinary name either way.
+    const json = await get(`${gz.stylesKey}?download=1`, "gzip")
+    assert.equal(json.headers.get("content-disposition"), `attachment; filename="p0-styles.json"`)
+    assert.ok(gunzipSync(Buffer.from(await json.arrayBuffer())).equals(Buffer.from(STYLES_JSON)))
+    // A plain file has one representation, whatever the client accepts.
+    const same = await get(plain.snapshotKey, "gzip")
+    assert.equal(same.headers.get("content-encoding"), null)
+    assert.equal(same.headers.get("vary"), null)
+    assert.equal(await same.text(), HTML)
+  }))
+
+test("reading gzip never depends on the claim: after the writer stops advertising it, stored files still read", () =>
+  withLibrary(async (lib) => {
+    const gz = await capture(lib, "https://gz.example/", "negotiated")
+    assert.equal(isGzipKey(gz.snapshotKey), true)
+    // A later Worker that stops writing gzip only drops "gzip" from the claim; the engine then uploads plain names.
+    const later = await capture(lib, "https://later.example/", "negotiated", ["sections", "live", "schemes"])
+    assert.equal(isGzipKey(later.snapshotKey), false)
+    await assertReadsBack(lib, gz, "stored before the writer stopped")
+    await assertReadsBack(lib, later, "stored after")
+    // And it still tells a copying engine that it reads them.
+    const status = await (await lib.call("/transfer/status", { headers: { authorization: "Bearer transfer-token" } })).json() as { reads?: string[] }
+    assert.deepEqual(status.reads, ["gzip"])
+  }))
+
 test("library transfer carries a gzipped file byte for byte and the copy reads the same", () =>
   withLibrary(async (lib) => {
     const gz = await capture(lib, "https://gz.example/", "negotiated")
@@ -258,7 +338,9 @@ test("library transfer carries a gzipped file byte for byte and the copy reads t
     // What the provisioning engine does for each key: GET from one side, PUT the same bytes to the other.
     for (const c of [gz, plain]) {
       for (const key of [c.snapshotKey, c.stylesKey]) {
-        const res = await lib.call(`/transfer/file/${key}`, { headers: bearer })
+        // The transfer route never content-encodes, whatever the client accepts: it moves the stored bytes.
+        const res = await lib.call(`/transfer/file/${key}`, { headers: { ...bearer, "accept-encoding": "gzip" } })
+        assert.equal(res.headers.get("content-encoding"), null, key)
         const body = Buffer.from(await res.arrayBuffer())
         assert.equal(body.length, entry(key).size, `${key}: the bytes match the manifest size`)
         const put = await lib.call(`/transfer/file/${key}`, { method: "PUT", body, headers: { ...bearer, "content-type": res.headers.get("content-type")!, "content-length": String(body.length) } }, lib.otherEnv)
@@ -308,6 +390,83 @@ test("the Worker's reader: gzip names are unzipped, other names untouched, missi
     await assert.rejects(readText(files, "refs/a/b/p0/broken.gz.html"), "garbage under a gzip name fails loudly instead of being passed on")
     assert.ok(Buffer.from(await new Response((await getFile(files, "refs/a/b/p0/odd.html"))!.body).arrayBuffer()).equals(gzipSync("not unzipped")))
     assert.equal((await getFile(files, "refs/a/b/p0/snapshot.gz.html"))!.object.size, gzipSync("héllo").length, "object describes the stored bytes")
+  } finally {
+    await mf.dispose()
+  }
+})
+
+/** One raw GET over a socket, so nothing on the client side decodes the body. */
+function rawGet(url: string, headers: Record<string, string>) {
+  return new Promise<{ headers: http.IncomingHttpHeaders; body: Buffer }>((resolve, reject) => {
+    http.get(url, { headers }, (res) => {
+      const chunks: Buffer[] = []
+      res.on("data", (chunk: Buffer) => chunks.push(chunk))
+      res.on("end", () => resolve({ headers: res.headers, body: Buffer.concat(chunks) }))
+    }).on("error", reject)
+  })
+}
+
+test("in workerd, over a real socket: a gzip client decodes the file once, any other client gets plain bytes", { timeout: 120_000 }, async () => {
+  // The real entrypoint, bundled the way oauth-cost-guards.test.ts does it, and served by workerd on a port.
+  const { build } = createRequire(import.meta.resolve("wrangler"))("esbuild")
+  const bundle = await build({
+    entryPoints: [fileURLToPath(new URL("../worker/index.ts", import.meta.url))],
+    bundle: true, write: false, format: "esm", platform: "browser",
+    conditions: ["workerd", "worker", "browser"], external: ["cloudflare:*", "node:*"],
+  })
+  const mf = new Miniflare(convertV4MiniflareOptions({
+    modules: true, script: bundle.outputFiles[0].text,
+    compatibilityDate: "2026-10-01", compatibilityFlags: ["nodejs_compat"],
+    kvNamespaces: ["OAUTH_KV"], d1Databases: ["DB"], r2Buckets: ["FILES"],
+    bindings: { PUBLIC_URL: "http://localhost", SESSION_SECRET: "test-secret", DEV_LOGIN: "max" },
+  }))
+  try {
+    const origin = await mf.ready
+    const files = (await mf.getR2Bucket("FILES")) as unknown as R2Bucket
+    const base = "refs/abc/" + "a".repeat(32) + "/p0"
+    await files.put(`${base}/snapshot.gz.html`, gzipSync(HTML, { level: 9 }), { httpMetadata: { contentType: HTML_TYPE } })
+    await files.put(`${base}/styles.gz.json`, gzipSync(STYLES_JSON, { level: 9 }), { httpMetadata: { contentType: "application/json" } })
+    await files.put(`${base}/snapshot.html`, HTML, { httpMetadata: { contentType: HTML_TYPE } })
+    // DEV_LOGIN signs in a request addressed to localhost.
+    const get = (key: string, acceptEncoding?: string) => rawGet(new URL(`/files/${key}`, origin).href, {
+      host: `localhost:${new URL(origin).port}`,
+      ...(acceptEncoding === undefined ? {} : { "accept-encoding": acceptEncoding }),
+    })
+    const layers = (body: Buffer) => {
+      let n = 0
+      while (body[0] === 0x1f && body[1] === 0x8b) { body = gunzipSync(body); n++ }
+      return { n, body }
+    }
+    for (const [key, text] of [[`${base}/snapshot.gz.html`, HTML], [`${base}/styles.gz.json`, STYLES_JSON]]) {
+      const zipped = await get(key, "gzip, deflate, br")
+      assert.equal(zipped.headers["content-encoding"], "gzip", key)
+      assert.equal(zipped.headers.vary, "accept-encoding", key)
+      const decoded = layers(zipped.body)
+      assert.equal(decoded.n, 1, `${key}: exactly one gzip layer, not compressed twice`)
+      assert.equal(decoded.body.toString("utf8"), text, key)
+      for (const ae of [undefined, "identity"]) {
+        const plain = await get(key, ae)
+        assert.equal(plain.headers["content-encoding"], undefined, `${key} ${ae}`)
+        assert.equal(plain.headers.vary, "accept-encoding", `${key} ${ae}`)
+        assert.equal(plain.body.toString("utf8"), text, `${key} ${ae}: plain bytes`)
+      }
+      // A client that takes another coding gets the unzipped text, which the runtime may compress its own way.
+      for (const ae of ["br", "gzip;q=0, br"]) {
+        const other = await get(key, ae)
+        const coding = other.headers["content-encoding"]
+        assert.notEqual(coding, "gzip", `${key} ${ae}`)
+        const body = coding === "br" ? brotliDecompressSync(other.body) : other.body
+        assert.equal(body.toString("utf8"), text, `${key} ${ae}: decodes once to the text`)
+      }
+    }
+    // The sandbox policy rides both representations of captured HTML.
+    for (const ae of ["gzip", undefined]) {
+      assert.equal((await get(`${base}/snapshot.gz.html`, ae)).headers["content-security-policy"], "sandbox allow-popups; script-src 'none'; object-src 'none'; base-uri *")
+    }
+    // A plain file is untouched by any of this.
+    const untouched = await get(`${base}/snapshot.html`, "gzip")
+    assert.equal(layers(untouched.body).body.toString("utf8"), HTML)
+    assert.equal(untouched.headers.vary, undefined)
   } finally {
     await mf.dispose()
   }

@@ -157,9 +157,9 @@ export const isVideoKey = (key: string) => key.toLowerCase().endsWith(".webm")
 /**
  * A page's HTML snapshot and styles file can be stored gzipped. That is written in the name, `.gz` before the extension
  * (snapshot.gz.html, styles.gz.json), so the extension still says what the file is and every copy, listing and size
- * check treats it as an ordinary object. `/files/*` and the Worker's readers unzip it (worker/files.ts); nothing else
- * has to know. The capture agent keeps its own copy of this rule (capture/src/api.ts), because released apps ship it
- * without this directory; web/tests/gzip-files.test.ts keeps the two equal.
+ * check treats it as an ordinary object. `/files/*` and the Worker's readers unzip it (worker/files.ts). The capture
+ * agent (capture/src/api.ts) and the provisioning engine (desktop/provision/transfer.cjs) keep their own copies of this
+ * rule, because released apps ship them without this directory; web/tests/gzip-files.test.ts keeps them equal.
  */
 export const isGzipKey = (key: string) => /\.gz\.(html|json)$/.test(key)
 export const gzipKey = (key: string) => key.replace(/\.(html|json)$/, ".gz.$1")

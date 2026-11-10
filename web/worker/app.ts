@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono"
 import { isGzipKey, ungzipKey, type CaptureMode, type CrawlState, type JobComplete, type PageUpload } from "../shared/types"
-import { getFile } from "./files"
+import { acceptsGzip, getFile } from "./files"
 import {
   type AppEnv,
   finishLogin,
@@ -146,18 +146,26 @@ app.get("/files/*", async (c) => {
   if (!FILE_KEY_RE.test(key) || key.includes("..")) return c.notFound()
   const signedOk = await verifyFileSig(c.env, key, c.req.query("exp"), c.req.query("sig"))
   if (!signedOk && !(await getSession(c))) return c.json({ error: "unauthorized" }, 401)
-  // Byte ranges, which Safari needs before it will play a video. R2 reads the Range header itself. A gzipped file is
-  // sent unzipped, so R2's byte offsets would cut the wrong bytes: it is always sent whole, which HTTP allows.
+  // Byte ranges, which Safari needs before it will play a video. R2 reads the Range header itself. A gzipped file has
+  // two representations, so R2's byte offsets fit neither safely: it is always sent whole, which HTTP allows.
   const gzipped = isGzipKey(key)
   const ranged = !gzipped && c.req.header("range")?.startsWith("bytes=")
+  // A client that takes gzip gets the stored bytes as they are; any other gets them unzipped (worker/files.ts).
+  const passthrough = gzipped && acceptsGzip(c.req.raw)
   // A range R2 can't satisfy is ignored and the whole file sent, which HTTP allows.
-  const file = ranged ? await getFile(c.env.FILES, key, { range: c.req.raw.headers }).catch(() => getFile(c.env.FILES, key)) : await getFile(c.env.FILES, key)
+  const file = ranged
+    ? await getFile(c.env.FILES, key, { range: c.req.raw.headers }).catch(() => getFile(c.env.FILES, key))
+    : await getFile(c.env.FILES, key, undefined, { unzip: !passthrough })
   if (!file) return c.notFound()
   const obj = file.object
   const headers = new Headers()
   obj.writeHttpMetadata(headers)
-  headers.set("etag", obj.httpEtag)
+  // R2's ETag names the stored bytes. The unzipped body is the same content in another encoding: a weak validator.
+  headers.set("etag", gzipped && !passthrough ? `W/${obj.httpEtag}` : obj.httpEtag)
   headers.set("accept-ranges", gzipped ? "none" : "bytes")
+  if (gzipped) headers.set("vary", "accept-encoding")
+  // No content-length on either: the unzipped size isn't stored, and the edge may re-encode a passed-through body.
+  if (passthrough) headers.set("content-encoding", "gzip")
   headers.set("cache-control", "private, max-age=86400, immutable")
   headers.set("x-content-type-options", "nosniff")
   if (key.endsWith(".html")) {
@@ -177,7 +185,8 @@ app.get("/files/*", async (c) => {
     headers.set("content-length", String(length))
     return new Response(obj.body, { status: 206, headers })
   }
-  return new Response(file.body, { headers })
+  // "manual": the body is already gzip, so the runtime must send it as is instead of compressing it again.
+  return new Response(file.body, { headers, encodeBody: passthrough ? "manual" : "automatic" })
 })
 
 // ---------- Web API ----------
