@@ -383,7 +383,7 @@ agent.post("/jobs/claim", async (c) => {
   c.executionCtx.waitUntil(db.cleanupRetiredFiles(c.env.DB, c.env.FILES))
   await db.touchPresence(c.env.DB, job ? "busy" : "idle", job?.id ?? null)
   // Advertise on every claim, including resumed jobs: the destination may have been upgraded since the last one.
-  return job ? c.json({ ...job, recordingFormats: ["gif", "webm"], features: ["sections", "live", "schemes", "icon", "gzip"] }) : c.body(null, 204)
+  return job ? c.json({ ...job, recordingFormats: ["gif", "webm"], features: ["sections", "live", "schemes", "icon", "gzip", "text"] }) : c.body(null, 204)
 })
 
 agent.post("/heartbeat", async (c) => {
@@ -448,6 +448,14 @@ function validSections(sections: unknown): sections is NonNullable<PageUpload["s
     (s.live === undefined || (s.live && typeof s.live.key === "string" && num(s.live.height) && num(s.live.durationMs) && (s.live.y === undefined || num(s.live.y)))))
 }
 
+/** Page text for search, within the caps the capture agent keeps to (capture/src/text.ts). */
+function validText(text: unknown): text is NonNullable<PageUpload["text"]> {
+  if (!text || typeof text !== "object") return false
+  const t = text as Record<string, unknown>
+  return typeof t.body === "string" && t.body.length <= 12_000 &&
+    (t.sections === undefined || (Array.isArray(t.sections) && t.sections.length <= 64 && t.sections.every((s) => typeof s === "string" && s.length <= 1_500)))
+}
+
 agent.post("/jobs/:id/pages", async (c) => {
   const id = c.req.param("id")
   const attempt = attemptFrom(c)
@@ -459,6 +467,7 @@ agent.post("/jobs/:id/pages", async (c) => {
   if (alt !== undefined && !(alt && (alt.scheme === "light" || alt.scheme === "dark") && typeof alt.desktopKey === "string" && typeof alt.desktopThumbKey === "string" &&
     num(alt.desktopWidth) && num(alt.desktopHeight) && Array.isArray(alt.sectionKeys) && alt.sectionKeys.length <= 64 && alt.sectionKeys.every((k) => k === null || typeof k === "string")))
     return c.json({ error: "bad altScheme" }, 400)
+  if (page.text !== undefined && !validText(page.text)) return c.json({ error: "bad text" }, 400)
   const keys = [page.desktopKey, page.desktopThumbKey, page.mobileKey, page.mobileThumbKey, page.snapshotKey, page.stylesKey, ...(page.sections ?? []).flatMap((s) => [s.key, s.live?.key]), alt?.desktopKey, alt?.desktopThumbKey, ...(alt?.sectionKeys ?? []), ...page.animations.flatMap((a) => [a.gifKey, a.sheetKey])]
   if (keys.some((key) => key && !key.startsWith(prefix))) return c.json({ error: "bad file key" }, 400)
   const pageId = await db.addPage(c.env.DB, id, attempt, page)

@@ -6,6 +6,7 @@ import { JobGoneError, uploadText, type SnipApi } from "./api"
 import { imageSize, type Frame } from "./gif"
 import { allowPrivateUrls, assertPublicUrl, createCaptureNetwork, PrivateAddressError } from "./network-guard"
 import { buildStills, closeRenderer, cropBands, sampleIndexes } from "./sheet"
+import { pageText, TEXT_LIMITS, type TextBlock } from "./text"
 import { encodeRecording, recordingWriter, type Recording } from "./video"
 
 // In-page scripts live in plain .js files so the TS toolchain can't inject helpers into them.
@@ -18,6 +19,7 @@ const DISMISS_JS = script("dismiss")
 const TRANSITION_JS = script("transition-ms")
 const SECTIONS_JS = script("sections")
 const MOTION_JS = script("motion")
+const TEXT_JS = script("text")
 const MAX_SECTIONS = 24
 // Live section clips: a section is recorded only if two stills taken LIVE_PROBE_MS apart differ.
 const LIVE_SECTIONS = process.env.SNIP_LIVE_SECTIONS !== "false"
@@ -1347,6 +1349,13 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       await dismissBanners(dPage) // popups that only appear after scrolling
       const desktopShot = await fullPageShot(dPage, 1)
       const sectionCuts = features.has("sections") ? (await findSections(dPage)).filter((s) => s.y < desktopShot.height) : []
+      // Searchable text, read while the page is at the top like the section cuts it is matched to. Losing it loses only search.
+      const text = features.has("text")
+        ? await run<TextBlock[]>(dPage, TEXT_JS, { max: TEXT_LIMITS.blocks }).then((blocks) => pageText(blocks, sectionCuts), (e) => {
+          log("  page text skipped:", (e as Error).message.split("\n")[0])
+          return undefined
+        })
+        : undefined
       // In a crawl, only the first pages get clips: later pages mostly repeat the same chrome, at the same cost.
       const liveOn = features.has("live") && (job.mode !== "crawl" || captured < LIVE_CRAWL_PAGES)
       const inView: InView = { shot: desktopShot.buf, patches: [] }
@@ -1490,6 +1499,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
         tokens: styles.tokens,
         sections: await uploadSections(),
         altScheme: await uploadOtherScheme(),
+        ...(text ? { text } : {}),
         animations,
       }
       await api.addPage(job.id, upload)

@@ -248,9 +248,9 @@ export interface Job {
   recordingFormats?: ("gif" | "webm")[]
   /**
    * What the serving Worker stores beyond the basics: page sections, live clips of them, "icon" (it keeps a site icon saved with the capture), and "gzip" (it reads text files
-   * uploaded under a gzipKey). Older Workers omit this. Not persisted.
+   * uploaded under a gzipKey), and "text" (it keeps page text for search, PageUpload.text). Older Workers omit this. Not persisted.
    */
-  features?: ("sections" | "live" | "schemes" | "icon" | "gzip")[]
+  features?: ("sections" | "live" | "schemes" | "icon" | "gzip" | "text")[]
 }
 
 /** Crawl position saved when a capture pauses. */
@@ -290,6 +290,11 @@ export interface PageUpload {
   /** Older agents send none. */
   sections?: PageSection[]
   altScheme?: AltScheme
+  /**
+   * The page's visible text, for search: the whole page, and each section's share of it (same order as sections).
+   * Sent when the Worker advertises "text"; older agents send none.
+   */
+  text?: { body: string; sections?: string[] }
   animations: {
     kind: AnimationKind
     label: string | null

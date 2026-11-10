@@ -137,6 +137,8 @@ export type SortOrder = "newest" | "oldest" | "name"
 export interface ListFilter {
   q?: string
   collectionId?: string
+  /** Pages and animations of one website. */
+  referenceId?: string
   domain?: string
   status?: string
   sort?: SortOrder
@@ -261,6 +263,10 @@ export function childWhere(table: "pages" | "animations", f: ListFilter): Where 
         : `EXISTS (SELECT 1 FROM pages p JOIN page_collections pc ON pc.reference_id = p.reference_id AND pc.page_path = p.path WHERE p.id = t.page_id AND pc.collection_id = ?)`
     where.push(`(EXISTS (SELECT 1 FROM reference_collections rc WHERE rc.reference_id = t.reference_id AND rc.collection_id = ?) OR ${pinned})`)
     args.push(f.collectionId, f.collectionId)
+  }
+  if (f.referenceId) {
+    where.push(`t.reference_id = ?`)
+    args.push(f.referenceId)
   }
   return { where, args }
 }
@@ -612,6 +618,16 @@ export async function addPage(db: D1Database, referenceId: string, attempt: stri
         p.snapshotKey, p.stylesKey, p.tokens ? JSON.stringify(p.tokens) : null, Array.isArray(p.sections) ? JSON.stringify(p.sections) : null, p.altScheme ? JSON.stringify(p.altScheme) : null, ts, referenceId, attempt,
       ),
   ]
+  // What search reads besides the page row (see search.ts). Section labels come from the sections themselves,
+  // so a page from an older agent, which sends no text, is still found by them.
+  const labels = Array.isArray(p.sections) && p.sections.length ? p.sections.map((s) => `${s.kind}: ${s.label}`).join(" | ") : null
+  const sectionText = p.text?.sections && p.sections && p.text.sections.length === p.sections.length ? JSON.stringify(p.text.sections) : null
+  if (labels || p.text?.body)
+    stmts.push(
+      db
+        .prepare(`INSERT INTO page_text (page_id, reference_id, sections, body, section_text_json) SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM pages WHERE id = ?)`)
+        .bind(pageId, referenceId, labels, p.text?.body || null, sectionText, pageId),
+    )
   for (const a of p.animations) {
     stmts.push(
       db
