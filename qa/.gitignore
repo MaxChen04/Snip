@@ -1,0 +1,9 @@
+build-*/
+profile-*/
+out/
+shots/
+logs/
+fixtures/
+.pid-*
+.stop-*
+*.log
