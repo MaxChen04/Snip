@@ -154,6 +154,18 @@ export type AnimationKind = "scroll" | "hover"
 /** Whether an animation's recording is a video (WebM). Older captures stored GIFs under the same field. */
 export const isVideoKey = (key: string) => key.toLowerCase().endsWith(".webm")
 
+/**
+ * A page's HTML snapshot and styles file can be stored gzipped. That is written in the name, `.gz` before the extension
+ * (snapshot.gz.html, styles.gz.json), so the extension still says what the file is and every copy, listing and size
+ * check treats it as an ordinary object. `/files/*` and the Worker's readers unzip it (worker/files.ts); nothing else
+ * has to know. The capture agent keeps its own copy of this rule (capture/src/api.ts), because released apps ship it
+ * without this directory; web/tests/gzip-files.test.ts keeps the two equal.
+ */
+export const isGzipKey = (key: string) => /\.gz\.(html|json)$/.test(key)
+export const gzipKey = (key: string) => key.replace(/\.(html|json)$/, ".gz.$1")
+/** The name a gzipped file would have had uncompressed, for anything shown or saved under the file's own name. */
+export const ungzipKey = (key: string) => key.replace(/\.gz\.(html|json)$/, ".$1")
+
 export interface Animation {
   id: string
   referenceId: string
@@ -233,8 +245,11 @@ export interface Job {
   options: CaptureOptions | null
   /** Formats the serving Worker can display. Older Workers omit this and require GIF. Not persisted. */
   recordingFormats?: ("gif" | "webm")[]
-  /** What the serving Worker stores beyond the basics: page sections, and live clips of them. Older Workers omit this. Not persisted. */
-  features?: ("sections" | "live" | "schemes")[]
+  /**
+   * What the serving Worker stores beyond the basics: page sections, live clips of them, and "gzip" (it reads text files
+   * uploaded under a gzipKey). Older Workers omit this. Not persisted.
+   */
+  features?: ("sections" | "live" | "schemes" | "gzip")[]
 }
 
 /** Crawl position saved when a capture pauses. */

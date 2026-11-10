@@ -13,7 +13,9 @@ export const MAX_TRANSFER_BYTES = 100 * 1024 * 1024
 /** How many fallback `HEAD`s the manifest runs at once; see the content-type note below. */
 export const MANIFEST_HEAD_CONCURRENCY = 8
 
-// Capture files and uploaded images: a move carries both.
+// Capture files and uploaded images: a move carries both. A gzipped capture file (see isGzipKey) is an ordinary
+// object here: listed, sized, read and written as the bytes R2 holds, so manifests and size checks stay exact and
+// no engine version needs to know about it. Only `/files/*` and worker/files.ts unzip it.
 const KEY_RE = /^(refs|uploads)\/[a-z0-9]+\/[A-Za-z0-9._\/-]+$/
 const validKey = (key: string) => KEY_RE.test(key) && !key.includes("..")
 const keyFromPath = (path: string) => decodeURIComponent(path.slice("/transfer/file/".length))

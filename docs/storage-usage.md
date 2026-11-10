@@ -24,3 +24,19 @@ runtime cache when available, and still work without it.
 The existing `partial` flag is preserved when a scan reaches the listing bound.
 The meter is an informational estimate of stored objects, not a quota or an
 account billing total. It does not prevent uploads, cap storage, or delete files.
+
+## Compressed snapshots
+
+From Worker 1.4.0 the capture agent gzips a page's HTML snapshot and styles file
+before uploading them, but only when the Worker it is talking to lists `gzip` in
+the `features` of the job it hands out. They are stored as `snapshot.gz.html` and
+`styles.gz.json`; the `.gz` before the extension is how the Worker knows to
+unzip them. The meter counts what is stored, so a library captured this way
+reports less. Captures made earlier keep their uncompressed `snapshot.html` and
+`styles.json` and are never rewritten; recapturing a page replaces them.
+
+Everything that reads these files (the page viewer, downloads, the zip export,
+MCP tools and their signed URLs) gets the original text back. The Worker unzips
+on read, in `web/worker/files.ts` and the `/files/*` route, and sends a plain
+response. A gzipped file is always sent whole, without byte ranges. Copying a
+library between this Mac and Cloudflare moves the stored bytes as they are.
