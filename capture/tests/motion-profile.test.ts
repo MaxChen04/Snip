@@ -27,7 +27,7 @@ test("easing curves are compared in one spelling and described in plain words", 
 })
 
 test("a motion profile pulls out tokens, ranks easings and durations, and keeps staggers, entrances and hovers", () => {
-  const stagger = entry({ type: "web-animation", target: "p.word", property: "opacity, filter", durationMs: 403, easing: "cubic-bezier(0.22, 1, 0.36, 1)", count: 40, stagger: { stepMs: 20, spanMs: 780 } })
+  const stagger = entry({ type: "web-animation", target: "p.word", property: "opacity, filter", durationMs: 403, easing: "cubic-bezier(0.22, 1, 0.36, 1)", count: 40, stagger: { stepMs: 20, spanMs: 780, evenGaps: 39, gaps: 39, gapRangeMs: [19, 21], from: "start times" } })
   const profile = buildMotionProfile(tokens, [
     { phase: "load", entries: [stagger] },
     { phase: "scroll", entries: [entry({ durationMs: 600, easing: "cubic-bezier(0.2, 0, 0, 1)" })] },
@@ -36,9 +36,10 @@ test("a motion profile pulls out tokens, ranks easings and durations, and keeps 
   ], { libraries: ["three.js r175"], canvases: [{ context: "webgl2", width: 1120, height: 520, y: 80 }], contexts: { webgl2: 1 }, viewTransitions: false, scrollDriven: false })
 
   assert.deepEqual(profile.tokens.map((t) => [t.name, t.kind]), [["--duration-hover", "duration"], ["--ease-fast", "easing"], ["--ease-spring", "easing"]], "only motion-named custom properties")
-  assert.deepEqual(profile.easings[0], { value: "cubic-bezier(0.2, 0, 0, 1)", shape: "strong ease-out", token: "--ease-fast", elements: 40, ran: 3 })
-  assert.deepEqual(profile.durations[0], { ms: 200, token: "--duration-hover", elements: 40, ran: 2 })
-  assert.deepEqual(profile.staggers, [{ phase: "load", target: "p.word", property: "opacity, filter", count: 40, stepMs: 20, durationMs: 403, easing: "cubic-bezier(0.22, 1, 0.36, 1)" }])
+  assert.deepEqual(profile.easings[0], { value: "cubic-bezier(0.2, 0, 0, 1)", shape: "strong ease-out", tokenCandidate: "--ease-fast", elements: 40, ran: 3 })
+  assert.deepEqual(profile.durations[0], { ms: 200, tokenCandidate: "--duration-hover", elements: 40, ran: 2 })
+  assert.deepEqual(profile.staggers, [{ phase: "load", target: "p.word", property: "opacity, filter", count: 40, durationMs: 403, easing: "cubic-bezier(0.22, 1, 0.36, 1)", stepMs: 20, spanMs: 780, evenGaps: 39, gaps: 39, gapRangeMs: [19, 21], from: "start times" }], "how the stagger was inferred travels with it")
+  assert.equal(profile.totals, undefined, "nothing was capped")
   assert.equal(profile.entrance.length, 1)
   assert.deepEqual(profile.hovers, [{ label: "Pricing", target: "a.link", property: "transform", durationMs: 200, delayMs: 0, easing: "cubic-bezier(0.2, 0, 0, 1)" }])
   assert.match(profile.pixelOnly[0]!, /^WebGL 2 1120×520 at y=80/)
@@ -52,4 +53,14 @@ test("profiles merge across pages: counts add up and repeats are dropped", () =>
   assert.equal(merged.tokens.length, 3)
   assert.equal(merged.hovers.length, 1)
   assert.equal(mergeMotionProfiles([]), undefined)
+})
+
+test("capped lists say how many items they held", () => {
+  const many = Array.from({ length: 45 }, (_, i) => entry({ target: `a.l${i}`, durationMs: 100 + i }))
+  const profile = buildMotionProfile(tokens, [{ phase: "load", entries: many }], null)
+  assert.equal(profile.entrance.length, 30)
+  assert.equal(profile.totals?.entrance, 45)
+  assert.equal(profile.durations.length, 16)
+  assert.ok((profile.totals?.durations ?? 0) > 16)
+  assert.equal(mergeMotionProfiles([profile])!.totals?.entrance, 45, "a merged profile keeps what a page found")
 })

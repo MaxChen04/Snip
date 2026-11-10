@@ -113,10 +113,10 @@
     const list = members.map((x) => x.e)
     // A stagger plays across different elements: one element animated again and again (a pulse) is not one.
     const distinct = new Set(members.map((x) => x.el)).size === members.length
-    const step = list.length >= 3 && distinct && staggerStep(list)
-    if (step) {
+    const stagger = list.length >= 3 && distinct && staggerOf(list)
+    if (stagger) {
       const first = list.reduce((a, b) => (b.startMs + b.delayMs < a.startMs + a.delayMs ? b : a))
-      out.push({ ...first, count: list.length, stagger: { stepMs: step, spanMs: Math.round(step * (list.length - 1)) } })
+      out.push({ ...first, count: list.length, stagger })
       continue
     }
     const byDelay = new Map()
@@ -130,19 +130,32 @@
   m.t0 = performance.now()
   return out.sort((a, b) => a.startMs - b.startMs).slice(0, 100)
 
-  /** The even step between the elements' start times, in ms, or 0 when they don't start in an even sequence. */
-  function staggerStep(list) {
+  /**
+   * Whether the elements started one after another at an even step: an inference, so it says how it was made. The
+   * step is the median gap between start times (start + delay); `evenGaps` of `gaps` fall within max(4 ms, 25%) of
+   * it, and at least 60% must. `from` is "delays" when the elements' own delays set the step (read exactly), or
+   * "start times" when script started them in turn (timers can fire late, so gaps wander).
+   */
+  function staggerOf(list) {
     const delays = new Set(list.map((e) => e.delayMs))
     // Without different delays, starts spread by scrolling (reveals as each card scrolls in) are not a stagger.
-    if (delays.size === 1 && new Set(list.map((e) => e.scrollY)).size > 1) return 0
+    if (delays.size === 1 && new Set(list.map((e) => e.scrollY)).size > 1) return null
     const starts = list.map((e) => e.startMs + e.delayMs).sort((a, b) => a - b)
     const gaps = starts.slice(1).map((t, i) => t - starts[i])
     const sorted = [...gaps].sort((a, b) => a - b)
     const median = sorted[Math.floor(sorted.length / 2)]
-    if (median < 5 || median > 1000) return 0
-    // Timers fire late while a page loads, so a step started from script can wander by a few ms.
-    const even = gaps.filter((g) => Math.abs(g - median) <= Math.max(6, median * 0.4)).length
-    return even >= gaps.length * 0.7 ? Math.round(median) : 0
+    if (median < 5 || median > 1000) return null
+    const even = gaps.filter((g) => Math.abs(g - median) <= Math.max(4, median * 0.25)).length
+    if (even < gaps.length * 0.6) return null
+    const stepMs = Math.round(median)
+    return {
+      stepMs,
+      spanMs: Math.round(starts[starts.length - 1] - starts[0]),
+      evenGaps: even,
+      gaps: gaps.length,
+      gapRangeMs: [Math.round(sorted[0]), Math.round(sorted[sorted.length - 1])],
+      from: delays.size > 1 ? "delays" : "start times",
+    }
   }
 
   function tech(m) {

@@ -110,7 +110,7 @@ export interface PhasedMotion {
 
 export function buildMotionProfile(tokens: DesignTokens, motion: PhasedMotion[], tech: MotionTech | null): MotionProfile {
   const vars = Object.entries(tokens.cssVariables ?? {}).filter(([name, value]) => TOKEN_NAME.test(name) && value)
-  const profileTokens = vars.slice(0, MAX_TOKENS).map(([name, value]) => ({
+  const profileTokens = vars.map(([name, value]) => ({
     name,
     value: value.length > 300 ? value.slice(0, 300) + "…" : value,
     kind: (parseDuration(value) != null ? "duration" : isEasing(value) ? "easing" : "other") as "duration" | "easing" | "other",
@@ -147,18 +147,23 @@ export function buildMotionProfile(tokens: DesignTokens, motion: PhasedMotion[],
   const ranked = <K>(m: Map<K, { elements: number; ran: number }>) =>
     [...m.entries()].sort((a, b) => b[1].elements + b[1].ran - (a[1].elements + a[1].ran))
 
+  // Lists are capped to keep the profile small; totals records what each list held before, where it held more.
+  const totals: NonNullable<MotionProfile["totals"]> = {}
+  const cap = <T>(name: keyof NonNullable<MotionProfile["totals"]>, list: T[], n: number) => {
+    if (list.length > n) totals[name] = list.length
+    return list.slice(0, n)
+  }
+
   const staggers = all
     .filter((e) => e.stagger)
     .sort((a, b) => (b.count ?? 1) - (a.count ?? 1))
-    .slice(0, MAX_STAGGERS)
-    .map((e) => ({ phase: e.phase, target: e.target, property: e.property, count: e.count ?? 1, stepMs: e.stagger!.stepMs, durationMs: e.durationMs, easing: e.easing }))
+    .map((e) => ({ phase: e.phase, target: e.target, property: e.property, count: e.count ?? 1, durationMs: e.durationMs, easing: e.easing, ...e.stagger! }))
 
   const hovers = motion
     .filter((p) => p.phase === "hover")
     .flatMap((p) => p.entries.map((e) => ({ label: p.label ?? "", target: e.target, property: e.property, durationMs: e.durationMs, delayMs: e.delayMs, easing: e.easing })))
     // Entering and leaving usually run the same transition: list it once.
     .filter((h, i, list) => list.findIndex((o) => JSON.stringify(o) === JSON.stringify(h)) === i)
-    .slice(0, MAX_HOVERS)
 
   const pixelOnly: string[] = []
   const names: Record<string, string> = { webgl: "WebGL", webgl2: "WebGL 2", webgpu: "WebGPU", "2d": "2D canvas", bitmap: "bitmap canvas" }
@@ -169,7 +174,7 @@ export function buildMotionProfile(tokens: DesignTokens, motion: PhasedMotion[],
   const scripted = (tech?.libraries ?? []).filter((l) => /^(GSAP|Lenis|Locomotive)/.test(l))
   if (scripted.length) pixelOnly.push(`${scripted.join(", ")}: writes styles frame by frame, so those tweens are not in the motion log`)
 
-  return {
+  const profile: MotionProfile = {
     version: 1,
     tech: {
       libraries: tech?.libraries ?? [],
@@ -177,47 +182,58 @@ export function buildMotionProfile(tokens: DesignTokens, motion: PhasedMotion[],
       viewTransitions: !!tech?.viewTransitions,
       scrollDriven: !!tech?.scrollDriven,
     },
-    tokens: profileTokens,
-    easings: ranked(easings).slice(0, MAX_EASINGS).map(([value, c]) => ({ value, shape: easingShape(value), ...(easingToken.has(value) ? { token: easingToken.get(value) } : {}), ...c })),
-    durations: ranked(durations).slice(0, MAX_DURATIONS).map(([ms, c]) => ({ ms, ...(durationToken.has(ms) ? { token: durationToken.get(ms) } : {}), ...c })),
-    staggers,
-    entrance: motion.filter((p) => p.phase === "load").flatMap((p) => p.entries).slice(0, MAX_ENTRANCE).map((e) => ({ ...e, keyframes: e.keyframes.slice(0, 4) })),
-    hovers,
+    tokens: cap("tokens", profileTokens, MAX_TOKENS),
+    easings: cap("easings", ranked(easings), MAX_EASINGS).map(([value, c]) => ({ value, shape: easingShape(value), ...(easingToken.has(value) ? { tokenCandidate: easingToken.get(value) } : {}), ...c })),
+    durations: cap("durations", ranked(durations), MAX_DURATIONS).map(([ms, c]) => ({ ms, ...(durationToken.has(ms) ? { tokenCandidate: durationToken.get(ms) } : {}), ...c })),
+    staggers: cap("staggers", staggers, MAX_STAGGERS),
+    entrance: cap("entrance", motion.filter((p) => p.phase === "load").flatMap((p) => p.entries), MAX_ENTRANCE).map((e) => ({ ...e, keyframes: e.keyframes.slice(0, 4) })),
+    hovers: cap("hovers", hovers, MAX_HOVERS),
     pixelOnly,
   }
+  if (Object.keys(totals).length) profile.totals = totals
+  return profile
 }
 
 /** One profile for a reference: counts add up, lists are joined without repeats, the first page's entrance leads. */
 export function mergeMotionProfiles(list: MotionProfile[]): MotionProfile | undefined {
   if (!list.length) return undefined
-  const uniq = <T>(items: T[], key: (t: T) => string, n: number) => {
-    const seen = new Set<string>()
-    return items.filter((t) => !seen.has(key(t)) && seen.add(key(t))).slice(0, n)
-  }
-  const sum = <K, T extends { elements: number; ran: number }>(items: T[], key: (t: T) => K, n: number) => {
+  const sum = <K, T extends { elements: number; ran: number }>(items: T[], key: (t: T) => K) => {
     const m = new Map<K, T>()
     for (const t of items) {
       const k = key(t)
       const e = m.get(k)
       m.set(k, e ? { ...e, elements: e.elements + t.elements, ran: e.ran + t.ran } : { ...t })
     }
-    return [...m.values()].sort((a, b) => b.elements + b.ran - (a.elements + a.ran)).slice(0, n)
+    return [...m.values()].sort((a, b) => b.elements + b.ran - (a.elements + a.ran))
   }
   const flat = <T>(pick: (p: MotionProfile) => T[]) => list.flatMap(pick)
-  return {
+  // A merged list's total is at least its distinct items across pages, and at least what any page held before its cap.
+  const totals: NonNullable<MotionProfile["totals"]> = {}
+  const cap = <T>(name: keyof NonNullable<MotionProfile["totals"]>, items: T[], n: number) => {
+    const most = Math.max(items.length, ...list.map((p) => p.totals?.[name] ?? 0))
+    if (most > n) totals[name] = most
+    return items.slice(0, n)
+  }
+  const distinct = <T>(items: T[], key: (t: T) => string) => {
+    const seen = new Set<string>()
+    return items.filter((t) => !seen.has(key(t)) && seen.add(key(t)))
+  }
+  const merged: MotionProfile = {
     version: 1,
     tech: {
       libraries: [...new Set(flat((p) => p.tech.libraries))],
-      canvases: uniq(flat((p) => p.tech.canvases), (c) => `${c.context}|${c.width}|${c.height}`, 12),
+      canvases: cap("canvases", distinct(flat((p) => p.tech.canvases), (c) => `${c.context}|${c.width}|${c.height}`), 12),
       viewTransitions: list.some((p) => p.tech.viewTransitions),
       scrollDriven: list.some((p) => p.tech.scrollDriven),
     },
-    tokens: uniq(flat((p) => p.tokens), (t) => t.name, MAX_TOKENS),
-    easings: sum(flat((p) => p.easings), (e) => e.value, MAX_EASINGS),
-    durations: sum(flat((p) => p.durations), (d) => d.ms, MAX_DURATIONS),
-    staggers: uniq(flat((p) => p.staggers), (s) => `${s.target}|${s.property}|${s.stepMs}`, MAX_STAGGERS),
-    entrance: uniq(flat((p) => p.entrance), (e) => `${e.target}|${e.property}|${e.durationMs}|${e.easing}`, MAX_ENTRANCE),
-    hovers: uniq(flat((p) => p.hovers), (h) => `${h.target}|${h.property}|${h.durationMs}|${h.easing}`, MAX_HOVERS),
-    pixelOnly: uniq(flat((p) => p.pixelOnly), (s) => s, 12),
+    tokens: cap("tokens", distinct(flat((p) => p.tokens), (t) => t.name), MAX_TOKENS),
+    easings: cap("easings", sum(flat((p) => p.easings), (e) => e.value), MAX_EASINGS),
+    durations: cap("durations", sum(flat((p) => p.durations), (d) => d.ms), MAX_DURATIONS),
+    staggers: cap("staggers", distinct(flat((p) => p.staggers), (s) => `${s.target}|${s.property}|${s.stepMs}`), MAX_STAGGERS),
+    entrance: cap("entrance", distinct(flat((p) => p.entrance), (e) => `${e.target}|${e.property}|${e.durationMs}|${e.easing}`), MAX_ENTRANCE),
+    hovers: cap("hovers", distinct(flat((p) => p.hovers), (h) => `${h.target}|${h.property}|${h.durationMs}|${h.easing}`), MAX_HOVERS),
+    pixelOnly: cap("pixelOnly", distinct(flat((p) => p.pixelOnly), (s) => s), 12),
   }
+  if (Object.keys(totals).length) merged.totals = totals
+  return merged
 }

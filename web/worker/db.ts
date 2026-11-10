@@ -2,6 +2,7 @@ import {
   type AgentPresence,
   type Animation,
   type AnimationMeta,
+  type MotionProfile,
   type CaptureControl,
   type CaptureMode,
   type CaptureOptions,
@@ -235,6 +236,41 @@ export async function getReference(db: D1Database, id: string) {
 export async function getAnimation(db: D1Database, id: string) {
   const r = await db.prepare(`SELECT * FROM animations WHERE id = ?`).bind(id).first<Row>()
   return r ? toAnimation(r) : null
+}
+
+/** One page's motion profile and where it sits, without the rest of its row. motion is null for older captures. */
+export async function getPageMotion(db: D1Database, id: string) {
+  const r = await db.prepare(`SELECT id, reference_id, path, json_extract(tokens_json, '$.motion') AS motion FROM pages WHERE id = ?`).bind(id).first<Row>()
+  return r ? { id: r.id as string, referenceId: r.reference_id as string, path: r.path as string, motion: parse<MotionProfile>(r.motion) } : null
+}
+
+/**
+ * A reference's recordings, or one page's, in capture order: only the columns a list shows (no metadata), plus the
+ * total. Reads at most `limit` rows however large the reference is.
+ */
+export async function listRecordings(db: D1Database, referenceId: string, pageId: string | null, offset: number, limit: number) {
+  const where = `a.reference_id = ?${pageId ? " AND a.page_id = ?" : ""}`
+  const args = pageId ? [referenceId, pageId] : [referenceId]
+  const [rows, count] = await db.batch<Row>([
+    db.prepare(
+      `SELECT a.id, a.page_id, a.kind, a.label, a.selector, a.gif_key, a.sheet_key, coalesce(json_array_length(a.meta_json, '$.frames'), 0) AS frame_count
+       FROM animations a WHERE ${where} ORDER BY a.created_at, a.id LIMIT ? OFFSET ?`,
+    ).bind(...args, limit, offset),
+    db.prepare(`SELECT count(*) AS n FROM animations a WHERE ${where}`).bind(...args),
+  ])
+  return {
+    total: (count!.results[0]?.n as number) ?? 0,
+    items: rows!.results.map((r) => ({
+      id: r.id as string,
+      pageId: (r.page_id as string) ?? null,
+      kind: r.kind as Animation["kind"],
+      label: (r.label as string) ?? null,
+      selector: (r.selector as string) ?? null,
+      gifKey: r.gif_key as string,
+      sheetKey: (r.sheet_key as string) ?? null,
+      frameCount: (r.frame_count as number) ?? 0,
+    })),
+  }
 }
 
 export async function getPage(db: D1Database, id: string) {

@@ -1,7 +1,7 @@
 import { createMcpHandler } from "agents/mcp/server"
 import { McpServer, ProtocolError, ProtocolErrorCode, type CallToolResult } from "@modelcontextprotocol/server"
 import { z } from "zod"
-import { isVideoKey, type Animation, type DesignTokens, type Page, type Reference } from "../shared/types"
+import { isVideoKey, type Animation, type DesignTokens, type MotionProfile, type Page, type Reference } from "../shared/types"
 import { isLocalOrigin, signFileUrl } from "./auth"
 import * as db from "./db"
 import { readText } from "./files"
@@ -71,6 +71,25 @@ const fail = (message: string) => ({ content: [{ type: "text" as const, text: me
 
 const TOKEN_GROUPS = ["colors", "fonts", "fontSizes", "spacing", "radii", "shadows", "transitions", "keyframes", "cssVariables"] as const
 type TokenGroup = (typeof TOKEN_GROUPS)[number]
+
+const MOTION_GROUPS = ["tokens", "easings", "durations", "staggers", "entrance", "hovers", "pixel_only", "recordings"] as const
+type MotionGroup = Exclude<(typeof MOTION_GROUPS)[number], "recordings">
+const MOTION_TOTAL_KEY = { tokens: "tokens", easings: "easings", durations: "durations", staggers: "staggers", entrance: "entrance", hovers: "hovers", pixel_only: "pixelOnly" } as const
+
+function motionGroups(p: MotionProfile): Record<MotionGroup, unknown[]> {
+  return { tokens: p.tokens, easings: p.easings, durations: p.durations, staggers: p.staggers, entrance: p.entrance, hovers: p.hovers, pixel_only: p.pixelOnly.map((note) => ({ note })) }
+}
+
+const OBSERVED = "Observed: read from the browser while capturing."
+const MOTION_PROVENANCE: Record<MotionGroup, string> = {
+  tokens: `${OBSERVED} Custom properties on :root whose names mention motion, with their computed values.`,
+  easings: `value and counts: ${OBSERVED.toLowerCase()} shape and tokenCandidate: inferred (a classification of the curve, and a custom property with the same value that the site may not have used there).`,
+  durations: `ms and counts: ${OBSERVED.toLowerCase()} tokenCandidate: inferred (a custom property with the same value).`,
+  staggers: "Inferred: start times that fall at an even step within max(4 ms, 25%). evenGaps of gaps fit; from \"delays\" means the elements' own delays set the step (read exactly), \"start times\" that script started them in turn. Duration and easing are observed.",
+  entrance: `${OBSERVED} Animations that ran while the page loaded; a stagger field on an entry is inferred.`,
+  hovers: `${OBSERVED} What each recorded hover ran.`,
+  pixel_only: "Observed: canvases and libraries found on the page. Their motion is only in the recordings.",
+}
 
 function tokenGroup(t: DesignTokens, g: TokenGroup): unknown[] {
   if (g === "cssVariables") return Object.entries(t.cssVariables ?? {}).map(([name, value]) => ({ name, value }))
@@ -679,44 +698,118 @@ Scroll timing is synthetic playback; hover offsets are measured. Treat easing an
     "get_motion_profile",
     {
       title: "Get a site's motion profile",
-      description: `How a captured site moves, in numbers: the first call for "how does this site animate" or "why does its motion feel good". Read from the browser at capture time, so the values are exact.
+      description: `How a captured site moves, in numbers: the first call for "how does this site animate" or "why does its motion feel good". Without group, a bounded overview: the tech found and the first items of each group, with totals and what was left out. Pass group to page through one group in full with cursor.
+Groups:
 - tokens: :root custom properties that name motion (--duration-*, --ease-*, springs), as the author named them.
-- easings / durations: by use. elements = elements whose CSS transitions use it; ran = animations the browser ran with it. shape describes each curve (ease-out, back overshoot, linear() spring); token names the custom property with that value.
-- staggers: one effect played on a run of elements at an even step (e.g. 40 items, 20 ms apart).
+- easings / durations: by use. elements = elements whose CSS transitions use it; ran = animations the browser ran with it.
+- staggers: one effect that seems to play on a run of elements at an even step (e.g. 40 items, 20 ms apart).
 - entrance: animations that played while the page loaded. hovers: what each recorded hover ran.
-- tech: animation libraries, canvases (2D, WebGL) with their size and position, view transitions, scroll-driven CSS.
-- pixelOnly: motion Snip only has as video (canvas, WebGL, script-written styles); look at get_animation or the page's live section clips for those.
-Without page_id, merged across the reference's pages; with page_id, that page alone.`,
+- pixel_only: motion Snip only has as video (canvas, WebGL, script-written styles); see get_animation or the page's live section clips.
+- recordings: the scroll and hover recordings, for get_animation.
+Observed values (read from the browser) and inferred ones (curve shapes, token candidates, staggers) are labelled in provenance; say which you rely on.
+With page_id, that page alone; without it, merged across the reference's pages. Scope it to the pages the user picked.`,
       inputSchema: z.object({
         reference_id: z.string().describe("Reference id from search_references"),
         page_id: z.string().optional().describe("One page of the reference, from get_reference part \"pages\""),
+        group: z.enum(MOTION_GROUPS).optional().describe("Page through one group in full"),
+        limit: z.number().int().min(1).max(100).optional().describe("Max items per group (overview default 6; a group 40)"),
+        cursor: z.string().optional().describe("nextCursor from a previous call with the same page_id and group"),
       }),
       annotations: { readOnlyHint: true },
     },
-    async ({ reference_id, page_id }) => {
-      const r = await db.getReference(env.DB, reference_id)
-      if (!r) return fail(`No reference with id "${reference_id}". Call search_references to find ids.`)
-      const page = page_id ? await db.getPage(env.DB, page_id) : null
+    async ({ reference_id, page_id, group, limit: limitArg, cursor }) => {
+      const ref = await db.getReferenceRecord(env.DB, reference_id)
+      if (!ref) return fail(`No reference with id "${reference_id}". Call search_references to find ids.`)
+      const page = page_id ? await db.getPageMotion(env.DB, page_id) : null
       if (page_id && (!page || page.referenceId !== reference_id)) return fail(`No page "${page_id}" in this reference. Use get_reference(id, part "pages") to list them.`)
-      const profile = page ? page.tokens?.motion : r.reference.tokens?.motion
-      const recordings = r.animations.filter((a) => !page || a.pageId === page.id).slice(0, 12).map(listedAnimation)
-      if (!profile)
+      const scope = page ? { pageId: page.id, path: page.path } : { scope: "whole reference" }
+      const part = `motion${page ? ":" + page.id : ""}`
+      const cur = decodeCursor(cursor)
+      if (cursor && (!cur || cur.referenceId !== reference_id || cur.part !== part || (cur.group ?? null) !== (group ?? null)))
+        return fail("That cursor belongs to a different reference, page or group. Pass the same page_id and group, or call again without cursor.")
+      if (cur && cur.rev !== ref.updatedAt) return fail("This reference was recaptured or changed since that cursor was issued. Call again without cursor.")
+      const offset = cur?.offset ?? 0
+      const nextCursor = (n: number | null) => (n == null ? null : encodeCursor({ referenceId: reference_id, part, group, offset: n, rev: ref.updatedAt }))
+
+      const recordings = async (from: number, n: number) => {
+        const res = await db.listRecordings(env.DB, reference_id, page?.id ?? null, from, n)
+        const items = res.items.map((a) => ({
+          id: a.id, pageId: a.pageId, kind: a.kind, label: a.label, selector: a.selector,
+          representations: { manifest: true, contact_sheet: !!a.sheetKey, frame: a.frameCount > 0, gif: !isVideoKey(a.gifKey) },
+        }))
+        return { total: res.total, items }
+      }
+
+      if (group === "recordings") {
+        const n = limitArg ?? 40
+        const res = await recordings(offset, n)
+        const next = offset + res.items.length < res.total ? offset + res.items.length : null
+        return ok({ referenceId: reference_id, ...scope, group, items: res.items, total: res.total, offset, nextOffset: next, nextCursor: nextCursor(next), next: "get_animation(animation_id)" })
+      }
+
+      const profile = page ? page.motion : ref.tokens?.motion
+      if (!profile) {
+        const recs = await recordings(0, 12)
         return ok({
           referenceId: reference_id,
-          ...(page ? { pageId: page.id, path: page.path } : {}),
-          unavailable: r.reference.status === "ready" || page
+          ...scope,
+          unavailable: ref.status === "ready" || page
             ? "This capture was made before motion profiles existed. Recapture the reference in Snip to build one; until then get_animation's motion lists what each recording ran."
-            : `Capture is ${r.reference.status}; the profile is saved when it finishes.`,
-          recordings,
+            : `Capture is ${ref.status}; the profile is saved when it finishes.`,
+          recordings: { total: recs.total, items: recs.items, omitted: recs.total - recs.items.length },
+          ...(recs.total > recs.items.length ? { next: "get_motion_profile(..., group \"recordings\") for the rest" } : {}),
         })
+      }
+
+      const groups = motionGroups(profile)
+      const capturedTotals = profile.totals ?? {}
+      if (group) {
+        const all = groups[group]
+        const res = bounded(all, offset, limitArg ?? 40, 16_000, "page with a smaller limit")
+        const captured = capturedTotals[MOTION_TOTAL_KEY[group]]
+        return ok({
+          referenceId: reference_id,
+          ...scope,
+          group,
+          provenance: MOTION_PROVENANCE[group],
+          ...res,
+          nextCursor: nextCursor(res.nextOffset),
+          ...(captured && captured > all.length ? { cappedAtCapture: { stored: all.length, found: captured, note: "The capture kept the first items by use; the rest were not stored." } } : {}),
+        })
+      }
+
+      const per = limitArg ?? 6
+      const overview: Record<string, unknown> = {}
+      const omitted: Record<string, number> = {}
+      for (const g of MOTION_GROUPS) {
+        if (g === "recordings") continue
+        const all = groups[g]
+        if (!all.length) continue
+        const res = bounded(all, 0, per, 3_000, `get_motion_profile(..., group "${g}")`)
+        overview[g] = { total: all.length, items: res.items }
+        if (all.length > res.items.length) omitted[g] = all.length - res.items.length
+      }
+      const recs = await recordings(0, Math.min(per, 12))
+      if (recs.total > recs.items.length) omitted.recordings = recs.total - recs.items.length
+      const capped = Object.fromEntries(Object.entries(capturedTotals).filter(([, n]) => n != null))
       return ok({
         referenceId: reference_id,
         appUrl: `${origin}/r/${reference_id}`,
-        ...(page ? { pageId: page.id, path: page.path } : { pages: r.pages.length }),
-        provenance: "Read from the browser while capturing (CSS custom properties, computed transitions, and the transitions, CSS animations and Web Animations it ran). Exact values, except what pixelOnly lists.",
-        profile,
-        recordings,
-        next: ["get_animation(animation_id) to see a recording and its full motion log", "get_page_styles(page_id, section \"keyframes\") for @keyframes CSS"],
+        ...scope,
+        provenance: {
+          observed: "Read from the browser while capturing: tech, tokens (name and computed value), easing and duration values with their counts, and the entrance and hover entries (duration, delay, easing, keyframes as the browser reported them).",
+          inferred: "Interpretations Snip made: each easing's shape (a classification of the curve), tokenCandidate (a custom property with the same value; the site may not have used it there) and staggers (start times that fall at an even step within a tolerance; evenGaps of gaps fit, and from says whether delays or script start times set it). Present these as likely, not as the author's intent.",
+        },
+        tech: profile.tech,
+        groups: overview,
+        recordings: { total: recs.total, items: recs.items },
+        omitted,
+        ...(Object.keys(capped).length ? { cappedAtCapture: { found: capped, note: "These lists held more items at capture time than were stored; the profile kept the first by use." } } : {}),
+        next: [
+          Object.keys(omitted).length && `get_motion_profile(..., group) with nextCursor for the rest of: ${Object.keys(omitted).join(", ")}`,
+          recs.total && "get_animation(animation_id) to see a recording and its full motion log",
+          "get_page_styles(page_id, section \"keyframes\") for @keyframes CSS",
+        ].filter(Boolean),
       })
     },
   )
