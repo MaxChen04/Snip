@@ -3,7 +3,31 @@ import assert from "node:assert/strict"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { planSteps, classifyChanges, cloudMode } from "../../scripts/update.mjs"
+import { planSteps, classifyChanges, cloudMode, checkoutOf, usesCheckout } from "../../scripts/update.mjs"
+
+test("only a dev server or capture agent in this checkout holds the update up", () => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "snip-update-services-")))
+  try {
+    const root = path.join(dir, "snip")
+    const worktree = path.join(root, ".claude/worktrees/canvas")
+    const other = path.join(dir, "elsewhere/snip")
+    for (const d of [path.join(root, "web"), path.join(root, "capture"), path.join(worktree, "web"), path.join(other, "web"), path.join(dir, "Snip Dev.app/library/capture")]) fs.mkdirSync(d, { recursive: true })
+    fs.mkdirSync(path.join(root, ".git"))
+    fs.writeFileSync(path.join(worktree, ".git"), "gitdir: elsewhere\n") // a worktree's .git is a file
+    fs.mkdirSync(path.join(other, ".git"))
+
+    assert.equal(checkoutOf(path.join(root, "web")), root)
+    assert.equal(usesCheckout(path.join(root, "web"), root), true, "npm run dev")
+    assert.equal(usesCheckout(path.join(root, "capture"), root), true, "npm run capture")
+    assert.equal(usesCheckout(root, root), true)
+    assert.equal(usesCheckout(path.join(worktree, "web"), root), false, "a worktree inside the checkout has its own database")
+    assert.equal(usesCheckout(path.join(other, "web"), root), false, "another checkout")
+    assert.equal(usesCheckout(path.join(dir, "Snip Dev.app/library/capture"), root), false, "Snip Dev's own engine")
+    assert.equal(usesCheckout(undefined, root), true, "a folder that can't be read counts as ours")
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
 
 test("only resets npm lockfile churn; other edits block the update", () => {
   const result = classifyChanges(" M package-lock.json\n M desktop/package-lock.json\n M web/src/App.tsx\nR  a.ts -> capture/b.ts\n")
