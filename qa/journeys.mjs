@@ -107,8 +107,7 @@ if (want("j3")) await S.J("J3 sections: inspector, dock filter, page viewer (Liv
     await shot("j3-inspector-sections")
     const names = await page.getByRole("button").evaluateAll((e) => e.map((x) => x.getAttribute("aria-label") || x.innerText).join("|"))
     const live = /Live/.test(names), scheme = /Light mode|Dark mode/.test(names)
-    note(`inspector has Live toggle: ${live}; Light/Dark toggle: ${scheme} (expected: both absent, known gap)`)
-    if (live || scheme) note("UNEXPECTED: inspector now has Live/Light-Dark controls; known-gap note outdated")
+    note(`inspector has Live toggle: ${live}; Light/Dark toggle: ${scheme} (each shows only when the page has moving sections or a dark theme)`)
   }
   await page.keyboard.press("Escape"); await sleep(500)
   await S.goto("/"); await dock().getByRole("button", { name: /^Sections/ }).click(); await sleep(1500)

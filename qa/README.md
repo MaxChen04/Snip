@@ -60,5 +60,5 @@ Results go to `qa/out/` (JSON per journey with console errors, failed requests a
 
 - Check `uptime` first. CPU figures are inflated when the machine is busy; every sample records the load average next to it. Judge memory separately from CPU.
 - `ps` resident memory double-counts pages shared between Electron helpers. Compare phases with it; do not read it as an absolute footprint.
-- The canvas inspector has no Live or Light/Dark toggle yet. `journeys.mjs` and `live.mjs` note that as expected and will say so if it changes.
+- The page viewer and the canvas inspector share their Live and Light/Dark toggles. `live.mjs` fails if either is missing for the fixture page, which has both clips and a dark theme.
 - A journey that fails on a selector after a UI change is a harness fix, not necessarily a product bug. Look at the screenshot named in the result before filing anything.
