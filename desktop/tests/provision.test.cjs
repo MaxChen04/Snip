@@ -29,8 +29,16 @@ const cli = require('../provision/cli.cjs');
 
 const PROVIDED = 'https://snip.tester.workers.dev';
 
+const madeDirs = [];
+// Every temp directory a test makes here is removed once the file's tests have run.
+test.after(() => {
+  for (const dir of madeDirs) fs.rmSync(dir, { recursive: true, force: true });
+});
+
 function tempDir(prefix = 'snip-provision-') {
-  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  madeDirs.push(dir);
+  return dir;
 }
 
 /** A fake library checkout: runtime files, local dev vars and an empty cloud dir. */
