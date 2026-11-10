@@ -13,8 +13,11 @@ const SCHEME_KEY = "snip.viewer.scheme"
 /**
  * Live plays each moving section's clip over the screenshot; the other color scheme swaps in its own screenshot.
  * Clips are recorded only in the scheme the page was captured in, so they cannot play over the other one:
- * while the other scheme shows, nothing plays and Live reads Static. Choosing Live comes back to the captured
- * scheme; choosing the other scheme leaves the Live choice alone, so coming back plays again.
+ * while the other scheme shows, nothing plays and Live reads Static. Choosing the other scheme saves that
+ * choice and leaves the Live choice alone, so coming back to the captured scheme plays again. Choosing Live
+ * while the other scheme shows brings back the captured scheme for this page only: the saved scheme is not
+ * written, the next page opens in it again, and so does this one if you step away and return. Clicking the
+ * scheme toggle on that page saves the choice and ends the hold.
  * `desktop` is false while a viewer shows the mobile screenshot, which has neither.
  */
 export function usePageLook(page: Page | undefined, desktop: boolean) {
@@ -26,7 +29,10 @@ export function usePageLook(page: Page | undefined, desktop: boolean) {
     setSchemePrefState(v)
     writePref(SCHEME_KEY, v)
   }
-  const showAlt = desktop && !!alt && schemePref === alt.scheme
+  // The page that Live pulled back to its captured scheme. Keyed by page, so another page never inherits it.
+  const [heldFor, setHeldFor] = useState<string | null>(null)
+  useEffect(() => setHeldFor(null), [page?.id])
+  const showAlt = desktop && !!alt && heldFor !== page?.id && schemePref === alt.scheme
 
   // Off by default for people who ask for less motion.
   const [live, setLiveState] = useState(() => readPref(LIVE_KEY, window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "0" : "1") === "1")
@@ -64,7 +70,11 @@ export function usePageLook(page: Page | undefined, desktop: boolean) {
       desktop && alt
         ? {
             value: showAlt ? alt.scheme : captured!,
-            onChange: (v: string) => v !== (showAlt ? alt.scheme : captured) && setSchemePref(v),
+            onChange: (v: string) => {
+              if (v === (showAlt ? alt.scheme : captured)) return
+              setSchemePref(v)
+              setHeldFor(null)
+            },
           }
         : null,
     live:
@@ -74,7 +84,7 @@ export function usePageLook(page: Page | undefined, desktop: boolean) {
             onChange: (v: string) => {
               if (v === (playing ? "live" : "static")) return
               setLive(v === "live")
-              if (v === "live" && showAlt) setSchemePref(captured!)
+              if (v === "live" && showAlt) setHeldFor(page!.id)
             },
           }
         : null,
