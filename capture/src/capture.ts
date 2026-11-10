@@ -5,6 +5,7 @@ import type { CrawlState, DesignTokens, Job, MotionEntry, PageSection, PageUploa
 import { JobGoneError, uploadText, type SnipApi } from "./api"
 import { imageSize, type Frame } from "./gif"
 import { allowPrivateUrls, assertPublicUrl, createCaptureNetwork, PrivateAddressError } from "./network-guard"
+import { buildMotionProfile, mergeMotionProfiles, type MotionTech } from "./motion-profile"
 import { buildStills, closeRenderer, cropBands, sampleIndexes } from "./sheet"
 import { encodeRecording, recordingWriter, type Recording } from "./video"
 
@@ -1153,6 +1154,7 @@ function mergeTokens(list: DesignTokens[]): DesignTokens | null {
     transitions: merge((t) => t.transitions, 24),
     keyframes: [...new Set(list.flatMap((t) => t.keyframes))],
     cssVariables: Object.assign({}, ...list.map((t) => t.cssVariables)),
+    motion: mergeMotionProfiles(list.flatMap((t) => (t.motion ? [t.motion] : []))),
   }
 }
 
@@ -1178,6 +1180,8 @@ export async function captureJob(browser: Browser, api: SnipApi, job: Job) {
     const mobile = await browser.newContext({ ...common, viewport: MOBILE, deviceScaleFactor: MOBILE_DPR, isMobile: true, hasTouch: true, userAgent: MOBILE_UA })
     contexts.push(mobile)
     await Promise.all(contexts.flatMap((context) => [context.addInitScript(HOLD_RESIZE_JS), context.addInitScript(OBSERVED_JS)]))
+    // Motion is logged on desktop only, from before the page's scripts run, so entrance animations are seen.
+    await desktop.addInitScript(`(${MOTION_JS})({ "op": "install" })`)
     await capturePages(browser, api, job, desktop, mobile, network)
   } finally {
     await Promise.allSettled(contexts.map(context => context.close()))
@@ -1341,7 +1345,8 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
         }
       })()
 
-      await run(dPage, MOTION_JS, { op: "install" }).catch(() => {})
+      await run(dPage, MOTION_JS, { op: "install" }).catch(() => {}) // when the init script couldn't run
+      const loadMotion = await takeMotion(dPage) // what played while the page loaded: its entrance
       const scroll = await recordScroll(dPage, true, recordingFormat)
       const scrollMotion = await takeMotion(dPage)
       await dismissBanners(dPage) // popups that only appear after scrolling
@@ -1363,6 +1368,12 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       const styles = await run<{ tokens: DesignTokens }>(dPage, STYLES_JS, { maxElements: 3000 })
       const html = await buildSnapshot(dPage, desktop)
       const hovers = await recordHovers(dPage, hoverSeen, recordingFormat)
+      const tech = await run<MotionTech | []>(dPage, MOTION_JS, { op: "tech" }).catch(() => null)
+      styles.tokens.motion = buildMotionProfile(styles.tokens, [
+        { phase: "load", entries: loadMotion },
+        { phase: "scroll", entries: scrollMotion },
+        ...hovers.map((h) => ({ phase: "hover" as const, entries: h.motion, label: h.label })),
+      ], tech && !Array.isArray(tech) ? tech : null)
       await dPage.close()
       const mobileShots = await mobileTask
       const mobileShot = mobileShots?.shot ?? null

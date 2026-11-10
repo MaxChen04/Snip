@@ -101,6 +101,58 @@ test("motion logging reports transitions, CSS animations and element.animate() w
   }
 })
 
+test("motion installed before load logs entrance staggers, and names the page's animation tech", async () => {
+  const browser = await launch()
+  try {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 800 } })
+    await context.addInitScript(`(${MOTION_JS})({ "op": "install" })`)
+    const page = await context.newPage()
+    await page.route("http://snip.test/", (route) => route.fulfill({ contentType: "text/html", body: `<!doctype html><style>
+        :root { --ease-spring: linear(0, 0.5 20%, 1.04 45%, 0.99 70%, 1) }
+        .glyph { animation: rise 600ms cubic-bezier(0.34, 1.56, 0.64, 1) both; animation-delay: calc(var(--i) * 70ms) }
+        @keyframes rise { from { opacity: 0; transform: translateY(8px) } }
+        .same { animation: rise 300ms ease-out both }
+      </style>
+      <div>${[0, 1, 2, 3, 4].map((i) => `<span class="glyph" style="--i:${i}">g</span>`).join("")}</div>
+      <div>${[0, 1, 2].map(() => `<b class="same">x</b>`).join("")}</div>
+      <p class="word">a</p><p class="word">b</p><p class="word">c</p><p class="word">d</p>
+      <canvas id="gl" width="400" height="300" style="width:400px;height:300px"></canvas><canvas id="flat" width="200" height="100" style="width:200px;height:100px"></canvas>
+      <script>
+        window.gsap = { version: "3.12.5" }
+        document.querySelector("#gl").getContext("webgl2")
+        document.querySelector("#flat").getContext("2d")
+        document.querySelectorAll(".word").forEach((el, i) => setTimeout(() => el.animate([{ opacity: 0, filter: "blur(2px)" }, { opacity: 1, filter: "blur(0px)" }], { duration: 403, easing: "cubic-bezier(.22,1,.36,1)" }), i * 20))
+      </script>` }))
+    await page.goto("http://snip.test/")
+    await page.waitForTimeout(250)
+    const motion = (arg: object) => page.evaluate(`(${MOTION_JS})(${JSON.stringify(arg)})`) as Promise<Record<string, any>[]>
+    await motion({ op: "install" }) // the capture calls it again after load: a no-op
+    const entries = await motion({ op: "take" })
+
+    const glyphs = entries.find((e) => e.property === "rise" && e.target.includes("glyph"))!
+    assert.equal(glyphs.count, 5)
+    assert.deepEqual(glyphs.stagger, { stepMs: 70, spanMs: 280 }, "a delay-driven stagger is one entry with its step")
+    assert.equal(glyphs.delayMs, 0, "the first element's delay")
+    assert.equal(glyphs.easing, "cubic-bezier(0.34, 1.56, 0.64, 1)", "a CSS animation's easing is its animation-timing-function, not the effect's linear")
+    const words = entries.find((e) => e.type === "web-animation")!
+    assert.equal(words.count, 4)
+    assert.ok(words.stagger && Math.abs(words.stagger.stepMs - 20) <= 6, `elements started in turn are a stagger too (${JSON.stringify(words.stagger)})`)
+    assert.equal(words.durationMs, 403)
+    const same = entries.find((e) => e.target.includes("same"))!
+    assert.equal(same.count, 3)
+    assert.equal(same.stagger, undefined, "effects that start together are not a stagger")
+
+    const tech = await page.evaluate(`(${MOTION_JS})({ "op": "tech" })`) as Record<string, any>
+    assert.ok(tech.libraries.includes("GSAP 3.12.5"))
+    assert.deepEqual(tech.canvases.map((c: { context: string; width: number }) => [c.context, c.width]), [["webgl2", 400], ["2d", 200]])
+    assert.equal(tech.scrollDriven, false, "the animation shorthand's default animation-timeline drives nothing")
+    await page.addStyleTag({ content: ".reveal { animation: rise linear both; animation-timeline: view() }" })
+    assert.equal((await page.evaluate(`(${MOTION_JS})({ "op": "tech" })`) as Record<string, any>).scrollDriven, true)
+  } finally {
+    await browser.close()
+  }
+})
+
 test("live clips are recorded only for sections that move, cropped to the section, with fixed bars put back", async () => {
   const { recordLiveSections } = await import("../src/capture")
   const { closeRenderer } = await import("../src/sheet")

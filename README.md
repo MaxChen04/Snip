@@ -189,6 +189,7 @@ The **Connect MCP** button in the app's top bar shows these steps with your own 
 | `get_reference` | One reference in bounded parts: `overview`, `pages`, `animations`, `tokens` (optionally one `token_group`, paginated). `full` is the legacy everything-at-once read |
 | `get_page` | One page: signed screenshot URLs with coverage, a token summary, an inline viewport screenshot and optional HTML in chunks |
 | `get_page_styles` | Valid, bounded computed styles: summary, filtered elements, keyframes, hover rules, font faces, CSS variables |
+| `get_motion_profile` | How a site moves: named motion tokens, easing curves and durations by use (each curve's shape described), staggers, entrance animations, hover timings, the animation tech found, and which motion is only pixels (canvas, WebGL) |
 | `get_animation` | One animation: a manifest (timing provenance, sampled frames, the element's observed styles) plus a contact sheet or a single frame, and a link to the recording |
 | `search_pages` | Pages across all references; with a collection, its saved pages and the pages of its websites |
 | `search_animations` | Scroll and hover animations across all references |

@@ -27,6 +27,46 @@ export interface DesignTokens {
   transitions: { value: string; count: number }[]
   keyframes: string[]
   cssVariables: Record<string, string>
+  /** How the page moves, summarised for an agent. Absent for captures made before motion profiles existed. */
+  motion?: MotionProfile
+}
+
+/** Where an animation was logged: while the page loaded (entrances), while it was scrolled, or on hover. */
+export type MotionPhase = "load" | "scroll" | "hover"
+
+/**
+ * A page's motion in one place, built by the capture from the motion log, the page's CSS and what draws it.
+ * Everything listed here is exact (read from the browser), except `pixelOnly`, which names motion Snip could only
+ * record as video. For a reference it is merged across pages.
+ */
+export interface MotionProfile {
+  version: 1
+  /** Animation libraries and page features found (e.g. "three.js r175", "Lottie", "Astro view transitions"). */
+  tech: {
+    libraries: string[]
+    /** Canvases on the page, with the context their script asked for (null when it was never seen). */
+    canvases: { context: string | null; width: number; height: number; y: number }[]
+    viewTransitions: boolean
+    /** CSS scroll-driven animations (animation-timeline, view-timeline). */
+    scrollDriven: boolean
+  }
+  /** :root custom properties that name motion (durations, easings, springs, staggers), as the author named them. */
+  tokens: { name: string; value: string; kind: "duration" | "easing" | "other" }[]
+  /**
+   * Easing curves by use. `elements` counts elements whose CSS transitions use the curve; `ran` counts animations the
+   * browser ran with it. `shape` describes the curve; `token` is the custom property with this value, if any.
+   */
+  easings: { value: string; shape: string; token?: string; elements: number; ran: number }[]
+  /** Durations by use, counted the same way. */
+  durations: { ms: number; token?: string; elements: number; ran: number }[]
+  /** Effects played on a run of elements one after another at an even step. */
+  staggers: { phase: MotionPhase; target: string; property: string | null; count: number; stepMs: number; durationMs: number; easing: string }[]
+  /** Animations that ran while the page loaded: the entrance choreography. */
+  entrance: MotionEntry[]
+  /** What each recorded hover ran. */
+  hovers: { label: string; target: string; property: string | null; durationMs: number; delayMs: number; easing: string }[]
+  /** Motion that is only pixels to Snip (canvas, WebGL, script-written styles), so its timing is not in this profile. */
+  pixelOnly: string[]
 }
 
 export interface Reference {
@@ -148,6 +188,8 @@ export interface MotionEntry {
   scrollY: number
   /** How many elements ran this same effect (e.g. each letter of a heading); startMs and scrollY are the first one's. */
   count?: number
+  /** Set when those elements started one after another at an even step: delayMs is the first one's. */
+  stagger?: { stepMs: number; spanMs: number }
 }
 
 export type AnimationKind = "scroll" | "hover"

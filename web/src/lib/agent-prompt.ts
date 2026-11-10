@@ -54,6 +54,9 @@ export function buildAgentPrompt({ reference: r, pages, animations, tokens, mcpU
       ...pages.map((p) => `   - ${p.title || p.path} (${p.path}): page_id "${p.id}"`),
     )
   }
+  if (animations.length || r.tokens?.motion) {
+    out.push(`${step++}. To learn how the site moves, call get_motion_profile with reference_id "${r.id}" first: its motion tokens, easing curves, durations, staggers and entrance animations, read from the browser as exact numbers.`)
+  }
   if (animations.length) {
     out.push(
       `${step++}. For each animation, call get_animation with its animation_id. It returns a contact sheet of sampled frames plus timing and the element's observed styles. Request representation "frame" with a frame index for a closer look at one moment.`,
