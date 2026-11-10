@@ -31,7 +31,8 @@ function styles(n = 700): CapturedStyles {
       sel: i % 4 ? `main > div.Card-${i}` : `header > nav > a:nth-of-type(${i})`,
       ...(i % 3 ? { text: i % 5 ? `Item ${i}` : `See PRICING ${i}` } : {}),
       rect: { x: 0, y: i * 10, w: 100, h: 10 },
-      styles: { color: "#111" },
+      // One element too large for a response, so results carry an omission marker with its position.
+      styles: i === 262 ? { color: "#111", "background-image": "x".repeat(30_000) } : { color: "#111" },
     })),
     keyframes: [{ name: "fade", css: "@keyframes fade {}" }, { name: "fade", css: "@keyframes fade {}" }, { name: "spin", css: "@keyframes spin {}" }],
     hoverRules: Array.from({ length: 30 }, (_, i) => `.a${i}:hover { color: red }`),
@@ -78,7 +79,16 @@ async function setup() {
     const sql = await readFile(new URL(migration, dir), "utf8")
     await DB.batch(sql.replace(/^--.*$/gm, "").split(";").map((s) => s.trim()).filter(Boolean).map((s) => DB.prepare(s)))
   }
-  const env = { DB, FILES, SESSION_SECRET: "test" } as unknown as Env
+  // put can be held open, to stand a background write still in flight while something else happens.
+  let hold: Promise<void> | null = null
+  const files = new Proxy(FILES, {
+    get(t, k) {
+      if (k === "put") return async (...a: Parameters<R2Bucket["put"]>) => { if (hold) await hold; return t.put(...a) }
+      const v = Reflect.get(t, k)
+      return typeof v === "function" ? v.bind(t) : v
+    },
+  })
+  const env = { DB, FILES: files, SESSION_SECRET: "test" } as unknown as Env
   const pending: Promise<unknown>[] = []
   async function call(name: string, args: Record<string, unknown>) {
     const request = new Request("http://localhost/mcp", {
@@ -124,13 +134,19 @@ async function setup() {
     await db.completeJob(DB, ref.id, job.attempt, { title: "Example", description: null, favicon: null, coverKey: null, tokens: null })
     return { refId: ref.id, pageIds: ids }
   }
-  return { mf, DB, FILES, call, settle, crawl }
+  const holdPuts = () => {
+    let release!: () => void
+    hold = new Promise((r) => (release = r))
+    return () => { hold = null; release() }
+  }
+  return { mf, DB, FILES, call, settle, crawl, holdPuts }
 }
 
 const STYLE_CALLS: Record<string, unknown>[] = [
   {},
   { section: "elements" },
   { section: "elements", offset: 240, limit: 30 },
+  { section: "elements", selector_contains: "card", offset: 190, limit: 20 },
   { section: "elements", offset: 690, limit: 40 },
   { section: "elements", selector_contains: "NAV" },
   { section: "elements", selector_contains: "nav", offset: 100, limit: 50 },
@@ -222,6 +238,35 @@ test("get_reference pages and animations page through every row once, in order",
     const refused = await call("get_reference", { id: refId, part: "pages", cursor: old })
     assert.equal(refused.isError, true)
     assert.match(refused.content[0]!.text, /older version/)
+  } finally {
+    await mf.dispose()
+  }
+})
+
+test("deleting a capture while its styles are being split leaves no file behind", async () => {
+  const { mf, DB, FILES, call, settle, crawl, holdPuts } = await setup()
+  try {
+    const { refId, pageIds } = await crawl(1, () => false)
+    const page = (await db.getPage(DB, pageIds[0]!))!
+    const partsKey = stylePartsKey(page.stylesKey!)!
+    const release = holdPuts()
+    await call("get_page_styles", { page_id: page.id })
+    while (!(await DB.prepare("SELECT 1 FROM capture_uploads").first())) await new Promise((r) => setTimeout(r, 5))
+    // The split is waiting to write. Delete the capture and sweep its storage meanwhile.
+    await db.deleteReference(DB, refId)
+    await db.cleanupRetiredFiles(DB, FILES)
+    assert.ok(await DB.prepare("SELECT 1 FROM capture_cleanup").first(), "the tombstone outlives the sweep while the write is pending")
+    release()
+    await settle()
+    assert.equal(await FILES.head(partsKey), null, "the late write removed itself")
+    // The next retry of the sweep, without waiting out its backoff.
+    await DB.prepare("UPDATE capture_cleanup SET next_attempt = NULL").run()
+    await db.cleanupRetiredFiles(DB, FILES)
+    assert.equal(await DB.prepare("SELECT 1 FROM capture_cleanup").first(), null)
+    assert.equal(await DB.prepare("SELECT 1 FROM capture_uploads").first(), null)
+    // After deletion, a split never starts.
+    const again = await db.beginStylePartsUpload(DB, page.id, page.stylesKey!, partsKey)
+    assert.equal(again, null)
   } finally {
     await mf.dispose()
   }

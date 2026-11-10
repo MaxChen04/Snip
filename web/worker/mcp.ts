@@ -370,7 +370,7 @@ Signed file URLs expire after 24 hours.`,
 
       /** A byte-bounded page of rows read with one row to spare, and where the next page starts. */
       const page = <R extends { key: (string | number)[] }, T>(rows: R[], map: (row: R) => T, total: number) => {
-        const res = bounded(rows.slice(0, limit).map(map), 0, limit)
+        const res = bounded(rows.slice(0, limit).map(map), 0, limit, undefined, undefined, offset)
         const taken = res.items.length
         const more = taken < rows.length
         const nextOffset = more ? offset + taken : null
@@ -594,7 +594,8 @@ Signed file URLs expire after 24 hours.`,
           const byId = new Map(chunkIds.map((c, k) => [c, chunks[k]]))
           const items = want.map((i) => byId.get(Math.floor(i / sum.chunkSize))?.[i % sum.chunkSize])
           if (readable && items.every(Boolean)) {
-            const res = bounded(items, 0, limit)
+            // Positions count matches, as the full-file path below does, so an omitted entry names where it sits.
+            const res = bounded(items, 0, limit, undefined, undefined, offset)
             const next = offset + res.items.length
             return listResult({ items: res.items, total, offset, nextOffset: next < total ? next : null }, sum.captureTruncated)
           }
@@ -628,10 +629,19 @@ Signed file URLs expire after 24 hours.`,
   )
 
   /** Splits an older page's styles file once, so its later get_page_styles calls read only the parts they need. */
+  // The write follows the capture upload protocol (worker/app.ts PUT /agent/files): the intent is recorded only while the
+  // page exists, deleting the reference keeps its cleanup tombstone until the intent is gone, and a write that lands
+  // after the page was deleted removes itself. So deleting a capture can't leave this file behind.
   async function saveStyleParts(pageId: string, stylesKey: string, partsKey: string, styles: CapturedStyles) {
     const { bytes, summary } = await packStyles(styles, partsKey)
-    await env.FILES.put(partsKey, bytes, { httpMetadata: { contentType: "application/octet-stream" } })
-    await db.setStylesSummary(env.DB, pageId, stylesKey, summary)
+    const upload = await db.beginStylePartsUpload(env.DB, pageId, stylesKey, partsKey)
+    if (!upload) return
+    try {
+      await env.FILES.put(partsKey, bytes, { httpMetadata: { contentType: "application/octet-stream" } })
+      if (!(await db.setStylesSummary(env.DB, pageId, stylesKey, summary)) && !(await db.pageHasStyles(env.DB, pageId, stylesKey))) await env.FILES.delete(partsKey)
+    } finally {
+      await db.finishUpload(env.DB, upload)
+    }
   }
 
   server.registerTool(

@@ -246,7 +246,21 @@ export async function getPage(db: D1Database, id: string): Promise<(Page & { sty
 
 /** Saves a styles summary for a page captured before summaries existed, unless its styles file has changed since. */
 export async function setStylesSummary(db: D1Database, pageId: string, stylesKey: string, summary: StylesSummary) {
-  await db.prepare(`UPDATE pages SET styles_summary_json = ? WHERE id = ? AND styles_key = ? AND styles_summary_json IS NULL`).bind(JSON.stringify(summary), pageId, stylesKey).run()
+  const result = await db.prepare(`UPDATE pages SET styles_summary_json = ? WHERE id = ? AND styles_key = ? AND styles_summary_json IS NULL`).bind(JSON.stringify(summary), pageId, stylesKey).run()
+  return result.meta.changes > 0
+}
+
+/** Records the intent to write a page's split styles file, only while the page still exists without one (see beginUpload). */
+export async function beginStylePartsUpload(db: D1Database, pageId: string, stylesKey: string, key: string) {
+  const upload = crypto.randomUUID()
+  const result = await db.prepare(`INSERT INTO capture_uploads (id, object_key)
+    SELECT ?, ? WHERE EXISTS (SELECT 1 FROM pages WHERE id = ? AND styles_key = ? AND styles_summary_json IS NULL)`)
+    .bind(upload, key, pageId, stylesKey).run()
+  return result.meta.changes ? upload : null
+}
+
+export async function pageHasStyles(db: D1Database, pageId: string, stylesKey: string) {
+  return !!(await db.prepare(`SELECT 1 FROM pages WHERE id = ? AND styles_key = ?`).bind(pageId, stylesKey).first())
 }
 
 // Ordered reads of one reference's pages and animations, a page at a time. The key is the last row's sort key, so a
