@@ -2,7 +2,7 @@
 // desktop/main.cjs over snip://, with the bridge from preload-settings.cjs.
 import { StrictMode } from "react"
 import { createRoot } from "react-dom/client"
-import { ThemeProvider } from "next-themes"
+import { ThemeProvider } from "@/components/theme-provider"
 import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { SettingsApp } from "./settings-app"
@@ -24,7 +24,7 @@ if (import.meta.env.DEV && !window.snipCloud) {
 function render() {
   createRoot(document.getElementById("root")!).render(
     <StrictMode>
-      <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+      <ThemeProvider>
         <TooltipProvider>
           <SettingsApp />
           <Toaster position="bottom-center" />

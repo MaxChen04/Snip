@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { mkdtempSync, writeFileSync } from "node:fs"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { crc32, zip } from "../src/lib/zip"
@@ -18,10 +18,15 @@ test("the zip writer produces an archive standard tools can read", () => {
     { name: "reference.json", data: enc.encode('{"ok":true}') },
     { name: "pages/01-home/desktop.jpg", data: new Uint8Array([0xff, 0xd8, 0xff, 0xd9]) },
   ])
-  const file = join(mkdtempSync(join(tmpdir(), "snip-zip-")), "x.zip")
-  writeFileSync(file, bytes)
-  const out = execFileSync("python3", ["-I", "-c", "import sys,zipfile;z=zipfile.ZipFile(sys.argv[1]);assert z.testzip() is None;print(','.join(z.namelist()));print(z.read('reference.json').decode())", file], { encoding: "utf8" })
-  assert.equal(out, 'reference.json,pages/01-home/desktop.jpg\n{"ok":true}\n')
+  const dir = mkdtempSync(join(tmpdir(), "snip-zip-"))
+  try {
+    const file = join(dir, "x.zip")
+    writeFileSync(file, bytes)
+    const out = execFileSync("python3", ["-I", "-c", "import sys,zipfile;z=zipfile.ZipFile(sys.argv[1]);assert z.testzip() is None;print(','.join(z.namelist()));print(z.read('reference.json').decode())", file], { encoding: "utf8" })
+    assert.equal(out, 'reference.json,pages/01-home/desktop.jpg\n{"ok":true}\n')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test("export puts each page's files in its own folder", () => {

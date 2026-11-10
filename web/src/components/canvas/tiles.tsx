@@ -5,21 +5,21 @@ import { captureLabel } from "@/components/capture-controls"
 import { SiteIcon } from "@/components/site-icon"
 import { fileUrl } from "@/lib/api"
 import { cn } from "@/lib/utils"
-import { isVideoKey } from "../../../shared/types"
+import { isVideoKey, type RefSummary } from "../../../shared/types"
 import type { CanvasItem } from "@/components/canvas/types"
 
 /** Where an item came from, for the hover chip. Uploaded images have none. */
-function source(item: CanvasItem): { domain: string; path?: string; href: string } | null {
-  const named = (domain: string, path: string, href: string) => ({ domain, path: path === "/" ? undefined : path.replace(/^\//, ""), href })
+function source(item: CanvasItem): { domain: string; icon: string | null; path?: string; href: string } | null {
+  const named = (ref: RefSummary, path: string, href: string) => ({ domain: ref.domain, icon: ref.favicon, path: path === "/" ? undefined : path.replace(/^\//, ""), href })
   switch (item.kind) {
     case "page":
-      return named(item.page.reference.domain, item.page.path, item.page.url)
+      return named(item.page.reference, item.page.path, item.page.url)
     case "section":
-      return named(item.section.reference.domain, item.section.path, item.section.url)
+      return named(item.section.reference, item.section.path, item.section.url)
     case "animation":
-      return { domain: item.animation.reference.domain, path: item.animation.label ?? undefined, href: `https://${item.animation.reference.domain}` }
+      return { domain: item.animation.reference.domain, icon: item.animation.reference.favicon, path: item.animation.label ?? undefined, href: `https://${item.animation.reference.domain}` }
     case "website":
-      return { domain: item.reference.domain, href: item.reference.url }
+      return { domain: item.reference.domain, icon: item.reference.favicon, href: item.reference.url }
     case "image":
       return null
   }
@@ -83,7 +83,7 @@ function Media({ item, live }: { item: CanvasItem; live: boolean }) {
             <Img src={cover} className="object-top" />
           ) : (
             <span className="grid size-full place-items-center bg-ink-2">
-              <SiteIcon domain={r.domain} className="size-6 rounded-md" />
+              <SiteIcon domain={r.domain} icon={r.favicon} className="size-6 rounded-md" />
             </span>
           )}
           {status && <span className="absolute top-2 left-2 rounded-full bg-control px-2 py-0.5 text-2xs text-ink-11 shadow-button">{status}</span>}
@@ -167,7 +167,7 @@ export const CanvasTile = memo(function CanvasTile({
             title={`Open ${src.domain}`}
             className="tactile press pointer-events-auto flex h-7 max-w-full items-center gap-1.5 rounded-full pr-2.5 pl-1.5 text-2xs font-medium"
           >
-            <SiteIcon domain={src.domain} />
+            <SiteIcon domain={src.domain} icon={src.icon} />
             <span className="truncate">
               {src.domain}
               {src.path && <span className="text-ink-10"> / {src.path}</span>}

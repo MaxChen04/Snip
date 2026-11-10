@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react"
-import { useTheme } from "next-themes"
+import { useTheme } from "@/components/theme-provider"
 import { toast } from "sonner"
 import { cn } from "cn"
 import logo from "../../public/logo.png"
