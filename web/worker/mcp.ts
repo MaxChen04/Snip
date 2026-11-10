@@ -5,6 +5,7 @@ import { isVideoKey, type Animation, type DesignTokens, type Page, type Referenc
 import { isLocalOrigin, signFileUrl } from "./auth"
 import * as db from "./db"
 import { readText } from "./files"
+import { capturedScheme, resolveSelection, type CopiedSelection } from "../shared/selection"
 import { bounded, decodeCursor, encodeCursor } from "./mcp-bounds"
 import {
   TASKS_EXTENSION, WAIT_DEFAULT_SECONDS, WAIT_MAX_SECONDS, WAIT_STEP_MS,
@@ -40,7 +41,7 @@ const INSTRUCTIONS = `Snip stores website design references captured by the user
 
 Collections group work by project or theme. A collection holds whole websites and individually saved pages (e.g. "Pricing pages" gathering pricing pages from many sites). A saved page still belongs to its website and can sit in many collections. To read a collection: list_collections -> search_pages(collection_id) for its pages, search_references(collection_id) for the websites saved whole.
 
-Typical flow: search_references -> get_reference(id, part "overview") -> get_page(page_id) for a screenshot, get_animation(animation_id) for motion, get_reference(id, part "tokens") or get_page_styles(page_id) for CSS. When the user hands you specific page or animation ids, call those tools directly instead of reading the whole reference.
+Typical flow: search_references -> get_reference(id, part "overview") -> get_page(page_id) for a screenshot, get_animation(animation_id) for motion, get_reference(id, part "tokens") or get_page_styles(page_id) for CSS. When the user hands you specific page or animation ids, call those tools directly instead of reading the whole reference. Ids belong to one capture (captureRun): a recapture replaces them. If a copied prompt's ids are not found or its capture run is behind, call resolve_selection with the prompt's Selection.
 
 The recommended parts and detail tools are bounded; the legacy full reference read may be large. When something is cut or unavailable the result says so under "omitted" or "unavailable" and gives the next call. Recordings are WebM videos (older captures: GIFs), which most models can't watch; use get_animation's contact sheet or individual frames. Report what you observed versus inferred: captured styles are a sampled rendering, and scroll recording timing is synthetic.
 
@@ -89,6 +90,9 @@ function tokenSummary(t: DesignTokens | null, perGroup = 6) {
   return out
 }
 
+/** Ids come from one capture: a recapture replaces them. A copied prompt carries what resolve_selection needs to find them again. */
+const GONE_HINT = "If it came from a copied Snip prompt, the website was probably recaptured since: call resolve_selection with the prompt's Selection."
+
 const PAGE_CLIP_PX = 15_990 // capture clips full-page screenshots near 16,000 physical px
 
 function buildServer(env: Env, origin: string) {
@@ -114,6 +118,7 @@ function buildServer(env: Env, origin: string) {
     progress: r.progress,
     error: r.error,
     mode: r.mode,
+    captureRun: r.captureRun,
     pageCount: r.pageCount,
     animationCount: r.animationCount,
     collectionIds: r.collectionIds,
@@ -450,9 +455,14 @@ Signed file URLs expire after 24 hours.`,
       annotations: { readOnlyHint: true },
     },
     async ({ page_id, image: imageArg, section, include_section_urls, scheme, include_styles, include_html, html_offset = 0 }) => {
-      const p = await db.getPage(env.DB, page_id)
-      if (!p) return fail(`No page with id "${page_id}". Use get_reference(id, part "pages") to list page ids.`)
-      const data: Record<string, unknown> = { ...(await describePage(p, !!include_section_urls)), tokens: tokenSummary(p.tokens) }
+      const p = await db.getPageInCapture(env.DB, page_id)
+      if (!p) return fail(`No page with id "${page_id}". ${GONE_HINT} Otherwise use get_reference(id, part "pages") to list page ids.`)
+      const data: Record<string, unknown> = {
+        ...(await describePage(p, !!include_section_urls)),
+        captureRun: p.captureRun,
+        capturedScheme: capturedScheme(p.altScheme, p.captureOptions),
+        tokens: tokenSummary(p.tokens),
+      }
       if (!p.sections.length)
         data.sectionsUnavailable = p.sectionsCaptured
           ? "This page doesn't break into separate sections. Use the full-page screenshot."
@@ -526,7 +536,7 @@ Signed file URLs expire after 24 hours.`,
     },
     async ({ page_id, section = "summary", selector_contains, text_contains, limit = 40, offset = 0 }) => {
       const p = await db.getPage(env.DB, page_id)
-      if (!p) return fail(`No page with id "${page_id}". Use get_reference(id, part "pages") to list page ids.`)
+      if (!p) return fail(`No page with id "${page_id}". ${GONE_HINT} Otherwise use get_reference(id, part "pages") to list page ids.`)
       const raw = p.stylesKey ? await readText(env.FILES, p.stylesKey) : null
       if (raw === null) return ok({ pageId: page_id, unavailable: p.stylesKey ? "styles file missing from storage" : "styles were not captured for this page" })
       type Styles = {
@@ -597,12 +607,13 @@ Scroll timing is synthetic playback; hover offsets are measured. Treat easing an
     },
     async ({ animation_id, representation = "contact_sheet", frame, motion_offset = 0 }) => {
       const a = await db.getAnimation(env.DB, animation_id)
-      if (!a) return fail(`No animation with id "${animation_id}". Use get_reference(id, part "animations") or search_animations to list ids.`)
+      if (!a) return fail(`No animation with id "${animation_id}". ${GONE_HINT} Otherwise use get_reference(id, part "animations") or search_animations to list ids.`)
       const page = a.pageId ? await db.getPage(env.DB, a.pageId) : null
       const m = a.meta
       const data: Record<string, unknown> = {
         id: a.id,
         referenceId: a.referenceId,
+        captureRun: a.captureRun,
         kind: a.kind,
         label: a.label,
         selector: a.selector,
@@ -669,6 +680,53 @@ Scroll timing is synthetic playback; hover offsets are measured. Treat easing an
         } else data.returned = { representation, included: false, reason: res.reason, alternatives: ["representation \"contact_sheet\"", "recording.url"] }
       } else data.returned = { representation }
       return ok(data, images)
+    },
+  )
+
+  const viewportArg = z.enum(["desktop", "mobile"])
+  const schemeArg = z.enum(["light", "dark"])
+  server.registerTool(
+    "resolve_selection",
+    {
+      title: "Find a copied selection in the current capture",
+      description:
+        "Check items from a copied Snip prompt against the reference's current capture. Pass the prompt's Selection object as is. A recapture gives every page and animation a new id and new token values: this finds each item again (pages by path, sections by kind and label, animations by page, kind, viewport, selector and label), says whether each is unchanged, recaptured or missing, whether the picked viewport and color scheme still exist, whether copied token values are stale, and the exact next call for each item. Call it when a result's captureRun differs from the prompt's capture run, or when an id from the prompt is not found.",
+      inputSchema: z.object({
+        reference_id: z.string(),
+        capture_run: z.number().int().min(1).describe("The prompt's capture run"),
+        pages: z
+          .array(
+            z.object({
+              page_id: z.string(),
+              path: z.string(),
+              viewport: viewportArg.optional(),
+              scheme: schemeArg.optional(),
+              sections: z.array(z.object({ index: z.number().int().min(0), kind: z.enum(["header", "hero", "section", "footer"]), label: z.string() })).max(50).optional(),
+            }),
+          )
+          .max(100)
+          .optional(),
+        animations: z
+          .array(
+            z.object({
+              animation_id: z.string(),
+              kind: z.enum(["scroll", "hover"]),
+              viewport: viewportArg,
+              label: z.string().nullable(),
+              selector: z.string().nullable(),
+              page_path: z.string().nullable(),
+            }),
+          )
+          .max(100)
+          .optional(),
+        tokens: z.boolean().optional(),
+      }),
+      annotations: { readOnlyHint: true },
+    },
+    async (sel) => {
+      const r = await db.getReference(env.DB, sel.reference_id)
+      if (!r) return fail(`No reference with id "${sel.reference_id}". It may have been deleted; tell the user.`)
+      return ok({ ...resolveSelection(sel as CopiedSelection, r), appUrl: `${origin}/r/${r.reference.id}` })
     },
   )
 

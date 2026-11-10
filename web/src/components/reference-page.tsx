@@ -17,7 +17,7 @@ import { notify } from "@/components/notify"
 import { CollectionPicker } from "@/components/collection-picker"
 import { diagnoseCaptureError, RetryCaptureButton } from "@/components/capture-retry"
 import { CaptureControls, captureLabel } from "@/components/capture-controls"
-import { EMPTY_SELECTION, SelectCheck, SelectionBar, toggleIn, type Selection } from "@/components/prompt-selection"
+import { EMPTY_SELECTION, SelectCheck, SelectionBar, pruneSelection, toggleIn, togglePage, withPageView, type Selection } from "@/components/prompt-selection"
 import { SavePagesButton } from "@/components/save-pages"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { TokensPanel } from "@/components/tokens-panel"
@@ -135,6 +135,10 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
   }, [id])
 
   useEffect(() => { void load() }, [load])
+  // A recapture gives every page and animation a new id: forget picks the current capture doesn't have.
+  useEffect(() => {
+    if (data) setSel((x) => pruneSelection(x, data.pages, data.animations))
+  }, [data, setSel])
 
   const busy = data && (data.reference.status === "queued" || data.reference.status === "capturing")
   // Each captured page appears as soon as it is saved: poll at a steady pace while capturing, back off while queued.
@@ -345,10 +349,10 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
             <Masonry>
               {pages.map((p) => (
                 <div key={p.id} className="group relative">
-                <SelectCheck on={sel.pages.includes(p.id)} active={selecting} label={`Select ${p.path}`} onToggle={() => setSel((x) => ({ ...x, pages: toggleIn(x.pages, p.id) }))} />
+                <SelectCheck on={sel.pages.includes(p.id)} active={selecting} label={`Select ${p.path}`} onToggle={() => setSel((x) => togglePage(x, p.id))} />
                 <button
                   className={cn("group relative block w-full overflow-hidden rounded-lg bg-surface-top text-left shadow-card transition-[scale,box-shadow] duration-150 ease-out active:scale-[0.99]", sel.pages.includes(p.id) && "ring-2 ring-ink-12 ring-offset-2 ring-offset-background")}
-                  onClick={() => (selecting ? setSel((x) => ({ ...x, pages: toggleIn(x.pages, p.id) })) : setOpenPage(p.id))}
+                  onClick={() => (selecting ? setSel((x) => togglePage(x, p.id)) : setOpenPage(p.id))}
                 >                  <img src={fileUrl(p.desktopThumbKey)} alt={p.title ?? p.path} loading="lazy" className="aspect-[16/10] w-full object-cover object-top" />
                   {p.mobileThumbKey && (
                     <img
@@ -397,7 +401,18 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
         )}
       </div>
 
-      {current && <PageViewer page={current} onClose={() => setOpenPage(null)} onCollectionsChange={setPageCollections} />}
+      {current && (
+        <PageViewer
+          page={current}
+          onClose={() => setOpenPage(null)}
+          onCollectionsChange={setPageCollections}
+          promptView={sel.pages.includes(current.id) ? (sel.views?.[current.id] ?? { viewport: "desktop" }) : null}
+          onPromptView={(view) => {
+            setSel((x) => withPageView(x, current.id, view))
+            if (view) setSelecting(true)
+          }}
+        />
+      )}
     </div>
   )
 }

@@ -125,7 +125,7 @@ The app is an infinite gallery (Websites / Pages / Animations) with search and s
 
 ![Design tokens for a captured website](docs/media/tokens.png)
 
-**Select and Copy prompt.** Pick pages, animations and tokens, then copy a prompt that points your agent at exactly those references over MCP.
+**Select and Copy prompt.** Pick pages, animations and tokens, then copy a prompt that points your agent at exactly those references over MCP. In the page viewer, **Add to prompt** keeps the viewport and theme you're looking at, and the checks in the Sections sidebar narrow it to those sections. The prompt names the capture run its ids came from; if you recapture the site later, the agent calls `resolve_selection` to find the same items again.
 
 ![Selecting pages and copying an agent prompt](docs/media/select.gif)
 
@@ -190,6 +190,7 @@ The **Connect MCP** button in the app's top bar shows these steps with your own 
 | `get_page` | One page: signed screenshot URLs with coverage, a token summary, an inline viewport screenshot and optional HTML in chunks |
 | `get_page_styles` | Valid, bounded computed styles: summary, filtered elements, keyframes, hover rules, font faces, CSS variables |
 | `get_animation` | One animation: a manifest (timing provenance, sampled frames, the element's observed styles) plus a contact sheet or a single frame, and a link to the recording |
+| `resolve_selection` | Finds a copied prompt's items in the current capture after a recapture: new page and animation ids, sections by label, whether the picked viewport and theme still exist, and whether copied token values are stale |
 | `search_pages` | Pages across all references; with a collection, its saved pages and the pages of its websites |
 | `search_animations` | Scroll and hover animations across all references |
 | `get_capture_status` | Job state, last progress and when the capture worker last checked in, with a suggested poll delay |

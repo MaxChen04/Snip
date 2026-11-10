@@ -233,13 +233,22 @@ export async function getReference(db: D1Database, id: string) {
 }
 
 export async function getAnimation(db: D1Database, id: string) {
-  const r = await db.prepare(`SELECT * FROM animations WHERE id = ?`).bind(id).first<Row>()
-  return r ? toAnimation(r) : null
+  const r = await db.prepare(`SELECT t.*, (SELECT capture_run FROM refs WHERE id = t.reference_id) AS ref_capture_run FROM animations t WHERE t.id = ?`).bind(id).first<Row>()
+  return r ? { ...toAnimation(r), captureRun: (r.ref_capture_run as number) ?? 1 } : null
 }
 
 export async function getPage(db: D1Database, id: string) {
   const r = await db.prepare(`SELECT t.*, ${PAGE_COLLECTIONS} FROM pages t WHERE t.id = ?`).bind(id).first<Row>()
   return r ? toPage(r) : null
+}
+
+/** A page plus its reference's capture run and options, so a single page read over MCP can say which capture it came from. */
+export async function getPageInCapture(db: D1Database, id: string) {
+  const r = await db
+    .prepare(`SELECT t.*, ${PAGE_COLLECTIONS}, r.capture_run AS ref_capture_run, r.capture_options AS ref_capture_options FROM pages t JOIN refs r ON r.id = t.reference_id WHERE t.id = ?`)
+    .bind(id)
+    .first<Row>()
+  return r ? { ...toPage(r), captureRun: (r.ref_capture_run as number) ?? 1, captureOptions: parse<CaptureOptions>(r.ref_capture_options) } : null
 }
 
 /** The pages or animations feed's q and collection filters. Alias the table as `t` and its refs row as `r`. */

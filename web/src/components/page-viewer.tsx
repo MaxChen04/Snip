@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
+  CheckIcon,
   CopyIcon,
   DownloadIcon,
   ExternalLinkIcon,
@@ -7,12 +8,14 @@ import {
   PanelRightCloseIcon,
   PanelRightOpenIcon,
   SmartphoneIcon,
+  SparklesIcon,
   XIcon,
 } from "@/components/icons"
 import { notify } from "@/components/notify"
 import { TokensPanel } from "@/components/tokens-panel"
 import { SavePagesButton } from "@/components/save-pages"
 import { LiveClips, LiveTag, LookToggles, usePageLook, type PageLook } from "@/components/page-look"
+import { SelectCheck } from "@/components/prompt-selection"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
@@ -22,6 +25,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { cn } from "@/lib/utils"
 import { fileUrl, type Page } from "@/lib/api"
 import { readPref, writePref } from "@/lib/prefs"
+import type { PageView } from "../../shared/selection"
 
 // ---------- Resizable sidebar ----------
 
@@ -125,13 +129,33 @@ function ResizeHandle({ width, onDrag, onCommit }: { width: number; onDrag: (w: 
 
 type SideTab = "sections" | "tokens" | "html" | "css"
 
-export function PageViewer({ page, onClose, onCollectionsChange }: {
+export function PageViewer({ page, onClose, onCollectionsChange, promptView, onPromptView }: {
   page: Page
   onClose: () => void
   onCollectionsChange: (pageIds: string[], collectionId: string, member: boolean) => void
+  /** This page's view in the copied prompt, null while it isn't in the prompt. Leave both out to hide "Add to prompt". */
+  promptView?: PageView | null
+  onPromptView?: (view: PageView | null) => void
 }) {
-  const [device, setDevice] = useState<"desktop" | "mobile">("desktop")
+  const [device, setDevice] = useState<"desktop" | "mobile">(() => promptView?.viewport ?? "desktop")
   const look = usePageLook(page, device === "desktop")
+  // The prompt carries the view as it is on screen: viewport and theme follow the toggles while the page is in it.
+  const scheme = look.scheme?.value as PageView["scheme"] | undefined
+  const viewNow = (sections = promptView?.sections): PageView => ({ viewport: device, ...(scheme ? { scheme } : {}), ...(sections?.length ? { sections } : {}) })
+  const inPrompt = !!promptView
+  useEffect(() => {
+    if (!promptView || !onPromptView) return
+    if (promptView.viewport !== device || (device === "desktop" && scheme && promptView.scheme !== scheme)) onPromptView(viewNow())
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [device, scheme, inPrompt])
+  const toggleSection = onPromptView
+    ? (i: number) => {
+        const current = promptView?.sections ?? []
+        const next = current.includes(i) ? current.filter((x) => x !== i) : [...current, i].sort((a, b) => a - b)
+        onPromptView({ ...viewNow(next), viewport: "desktop" })
+        if (device !== "desktop") setDevice("desktop")
+      }
+    : undefined
   const key = device === "desktop" ? (look.alt?.desktopKey ?? page.desktopKey) : page.mobileKey
   const [width, setWidth, commitWidth] = useSidebarWidth()
   const [open, setOpenState] = useState(() => readPref(OPEN_KEY, window.innerWidth >= 1024 ? "1" : "0") === "1")
@@ -209,6 +233,18 @@ export function PageViewer({ page, onClose, onCollectionsChange }: {
         </ToggleGroup>
         <LookToggles look={look} />
         <div className="flex flex-1 basis-0 justify-end gap-2">
+          {onPromptView && (
+            <Button
+              variant={inPrompt ? "default" : "outline"}
+              size="sm"
+              aria-pressed={inPrompt}
+              title={inPrompt ? "Remove from the copied prompt" : "Add this page to the copied prompt, in this viewport and theme. Pick sections in the sidebar."}
+              onClick={() => onPromptView(inPrompt ? null : viewNow())}
+              className="h-8 px-3"
+            >
+              {inPrompt ? <CheckIcon /> : <SparklesIcon />} {inPrompt ? "In prompt" : "Add to prompt"}
+            </Button>
+          )}
           <SavePagesButton pages={[page]} onChange={onCollectionsChange} label={page.collectionIds.length ? "Saved" : "Save"} className="h-8 px-3" />
           {tabs.length > 0 && (
             <Button
@@ -266,7 +302,7 @@ export function PageViewer({ page, onClose, onCollectionsChange }: {
                 </div>
                 {page.sections.length > 0 && (
                   <TabsContent value="sections" className="min-h-0 overflow-y-auto px-4 pt-2 pb-6">
-                    <SectionsPanel page={page} look={look} active={device === "desktop" ? active : -1} onSelect={goToSection} />
+                    <SectionsPanel page={page} look={look} active={device === "desktop" ? active : -1} onSelect={goToSection} picked={promptView?.sections ?? []} onPick={toggleSection} />
                   </TabsContent>
                 )}
                 {page.tokens && (
@@ -297,13 +333,22 @@ export function PageViewer({ page, onClose, onCollectionsChange }: {
 
 const SECTION_KIND = { header: "Header", hero: "Hero", section: null, footer: "Footer" } as const
 
-function SectionsPanel({ page, look, active, onSelect }: { page: Page; look: PageLook; active: number; onSelect: (i: number) => void }) {
+function SectionsPanel({ page, look, active, onSelect, picked, onPick }: {
+  page: Page
+  look: PageLook
+  active: number
+  onSelect: (i: number) => void
+  /** Sections in the copied prompt, and how to add or remove one. */
+  picked: number[]
+  onPick?: (i: number) => void
+}) {
   return (
     <ol className="flex flex-col gap-3">
       {page.sections.map((s, i) => {
         const kind = SECTION_KIND[s.kind]
         return (
-          <li key={s.key}>
+          <li key={s.key} className="group relative">
+            {onPick && <SelectCheck on={picked.includes(i)} active={picked.length > 0} label={`Add section ${s.label} to the prompt`} onToggle={() => onPick(i)} />}
             <button
               type="button"
               onClick={() => onSelect(i)}
