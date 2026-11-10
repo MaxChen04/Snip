@@ -24,6 +24,8 @@ const LIVE_SECTIONS = process.env.SNIP_LIVE_SECTIONS !== "false"
 const MAX_LIVE = Math.max(0, Number(process.env.SNIP_LIVE_MAX ?? 8))
 const LIVE_MS = Math.min(8000, Math.max(1000, Number(process.env.SNIP_LIVE_MS ?? 3000)))
 const LIVE_PROBE_MS = 400
+const LIVE_RECHECK_MS = 900 // further watching of a section that kept repainting but had not changed yet (see recordLiveSections)
+const LIVE_BUSY_FRAMES = 4 // frames in the probe window that count as repainting: a one-off repaint (a transition ending) sends two or three
 const LIVE_FRAME_MS = 33 // ~30 fps; the screencast is asked for every second frame of up to ~60
 const LIVE_SETTLE_MS = Math.max(0, Number(process.env.SNIP_LIVE_SETTLE_MS ?? 400)) // longest wait for one-shot animations (scroll reveals) to finish before probing
 const LIVE_MIN_CHANGED = 0.002 // share of a section's pixels that must change between probe frames (a caret is far less)
@@ -485,11 +487,13 @@ const likelyInView = (page: PwPage, cuts: Omit<PageSection, "key">[]) =>
  *
  * Each section is probed first: once one-shot animations (scroll reveals) have finished, the screencast is
  * watched briefly. A still page sends a frame or two; otherwise the section's own pixels are compared across
- * the window, so motion elsewhere on screen or a blinking caret doesn't count. Touching sections that both move,
- * such as a transparent header over a hero gradient, are recorded as one clip when they fit in the viewport:
- * clips made at different moments would show the same animation out of step at their shared edge. A clip whose
- * motion stops before the window ends is dropped, since it wouldn't loop. Oversized clips are re-encoded
- * smaller from the frames already held, then dropped if still over the per-clip or per-page byte budget.
+ * the window, so motion elsewhere on screen or a blinking caret doesn't count. If frames kept coming (the
+ * section is repainting) but it hasn't changed, the watch is extended once: a loop can hold still for a
+ * second, or start after a beat. Touching sections that both move, such as a transparent header over a hero
+ * gradient, are recorded as one clip when they fit in the viewport: clips made at different moments would show
+ * the same animation out of step at their shared edge. A clip whose motion stops before the window ends is
+ * dropped, since it wouldn't loop. Oversized clips are re-encoded smaller from the frames already held, then
+ * dropped if still over the per-clip or per-page byte budget.
  *
  * Fixed and sticky bars are hidden below the top of the page, since the full-page screenshot shows them only
  * there. Frames come from the screencast at viewport size and are cropped by the encoder. `seen` holds clips
@@ -649,10 +653,16 @@ export async function recordLiveSections(
         if (inView) await collectInView(s, top, height, k, last)
         // A still page sends one frame. Two or more are compared, since a busy machine can slow the screencast to a trickle.
         if (frames.length < 2) continue
-        // The middle frame too: a back-and-forth animation can be at the same point at both ends of the window.
-        const first = Buffer.from(frames[0]!.data, "base64")
-        moving[i] = (await changedShare(first, last, band)) >= LIVE_MIN_CHANGED
-          || (frames.length > 2 && (await changedShare(first, Buffer.from(frames[frames.length >> 1]!.data, "base64"), band)) >= LIVE_MIN_CHANGED)
+        // The first frame against the last, and against the middle one: a back-and-forth animation can be at the same point at both ends.
+        const changes = async (fs: { data: string }[]) => {
+          const at = (n: number) => Buffer.from(fs[n]!.data, "base64")
+          return (await changedShare(at(0), at(fs.length - 1), band)) >= LIVE_MIN_CHANGED
+            || (fs.length > 2 && (await changedShare(at(0), at(fs.length >> 1), band)) >= LIVE_MIN_CHANGED)
+        }
+        moving[i] = await changes(frames)
+        // Frames kept coming but the section hasn't changed: its motion may hold still (a video on its last frame) or start a beat
+        // after it scrolls in (a demo that loads on view). Watch on before calling it still.
+        if (!moving[i] && frames.length >= LIVE_BUSY_FRAMES) moving[i] = await changes([...frames, ...(await screencast(LIVE_RECHECK_MS, 1)).frames])
       } catch (e) {
         log(`  live probe of "${s.label}" skipped:`, (e as Error).message.split("\n")[0])
       }

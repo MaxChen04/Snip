@@ -143,6 +143,36 @@ test("live clips are recorded only for sections that move, cropped to the sectio
   }
 })
 
+test("a section whose motion only starts a beat after it scrolls in is recorded, as long as the page keeps repainting", async () => {
+  const { recordLiveSections } = await import("../src/capture")
+  const { closeRenderer } = await import("../src/sheet")
+  const browser = await launch()
+  try {
+    const page = await browser.newPage({ viewport: { width: 800, height: 600 } })
+    // Like a product video that holds on its last frame before looping, or a demo that loads on view: nothing moves for
+    // the first second after the demo scrolls in. A 4px speck keeps the compositor busy, far below the change threshold.
+    await page.setContent(`<style>
+      body { margin: 0 } section { height: 800px; position: relative }
+      #speck { position: absolute; top: 4px; left: 4px; width: 4px; height: 4px }
+      #box { position: absolute; top: 300px; left: 0; width: 120px; height: 120px; background: tomato }
+      #box.go { animation: slide 1s linear infinite alternate } @keyframes slide { to { transform: translateX(600px) } }
+    </style><section>hero</section><section id="demo"><div id="speck"></div><div id="box"></div></section><section>end</section>
+    <script>
+      let n = 0
+      ;(function tick() { document.getElementById("speck").style.background = ++n % 2 ? "black" : "white"; requestAnimationFrame(tick) })()
+      new IntersectionObserver((es, io) => { if (es[0].isIntersecting) { io.disconnect(); setTimeout(() => document.getElementById("box").classList.add("go"), 1000) } }).observe(document.getElementById("demo"))
+    </script>`)
+    const cuts = [0, 800, 1600].map((y, i) => ({ kind: "section" as const, label: `Part ${i}`, y, height: 800 }))
+    const clips = await recordLiveSections(page, cuts, "webm")
+    assert.equal(clips[0], null)
+    assert.ok(clips[1], "the demo is recorded although it was still for the first probe window")
+    assert.equal(clips[2], null)
+  } finally {
+    await closeRenderer()
+    await browser.close()
+  }
+})
+
 test("one-shot reveals and a focused caret don't make clips, and a section seen on an earlier page reuses its clip", async () => {
   const { recordLiveSections, liveSignature } = await import("../src/capture")
   const { closeRenderer } = await import("../src/sheet")
