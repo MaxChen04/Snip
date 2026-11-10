@@ -34,6 +34,10 @@ test("hover timing reads the longest transition or animation on the target, its 
     assert.equal(await ms("#g"), 100, "at rest")
     await page.hover("#g")
     assert.equal(await ms("#g"), 700, "a :hover rule's own timing, read while hovered")
+    // Script-driven: an animation started with the Web Animations API counts for the time it has left.
+    await page.evaluate(() => document.querySelector("#e")!.animate([{ opacity: 1 }, { opacity: 0.5 }], { duration: 800, delay: 200 }))
+    const js = (await ms("#e")) as number
+    assert.ok(js > 800 && js <= 1000, `a running script animation's remaining time (${js})`)
   } finally {
     await browser.close()
   }
