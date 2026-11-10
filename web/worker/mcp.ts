@@ -324,6 +324,7 @@ function buildServer(env: Env, origin: string) {
         sort: args.sort === "relevance" ? undefined : args.sort,
         limit: args.limit ?? 20,
         cursor: args.cursor,
+        summary: true,
       })
       return ok({
         items: await Promise.all(res.items.map(summarizeRef)),

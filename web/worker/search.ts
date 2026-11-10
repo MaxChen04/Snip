@@ -1,5 +1,5 @@
 import type { Page, Reference, RefSummary } from "../shared/types"
-import { childWhere, PAGE_COLLECTIONS, REF_SELECT, referenceWhere, refSummary, toPage, toReference, type ListFilter, type Row } from "./db"
+import { childWhere, PAGE_COLLECTIONS, PAGE_LIST_COLUMNS, REF_SUMMARY_SELECT, referenceWhere, refSummary, toPage, toReference, type ListFilter, type Row } from "./db"
 
 // Relevance search for agents (search_references and search_pages with a query). The gallery's own
 // filter stays a plain substring match in db.ts.
@@ -164,7 +164,7 @@ export async function searchPages(
   const ids = ranked.map((r) => d.bind(r.id))
   const { results: rows } = await db
     .prepare(
-      `SELECT t.*, r.title AS ref_title, r.domain AS ref_domain, r.favicon AS ref_favicon, r.notes AS ref_notes, ${PAGE_COLLECTIONS},
+      `SELECT ${PAGE_LIST_COLUMNS}, r.title AS ref_title, r.domain AS ref_domain, r.favicon AS ref_favicon, r.notes AS ref_notes, ${PAGE_COLLECTIONS},
         CASE WHEN x.body IS NULL THEN NULL ELSE substr(x.body, max(1, coalesce(${lower.map((p) => `nullif(instr(lower(x.body), ${p}), 0)`).join(", ")}, 1) - 80), 240) END AS excerpt,
         (SELECT k FROM (SELECT l.key AS k, ${sectionScore} AS sc FROM json_each(coalesce(t.sections_json, '[]')) l
           LEFT JOIN json_each(coalesce(x.section_text_json, '[]')) st ON st.key = l.key) WHERE sc > 0 ORDER BY sc DESC, k LIMIT 1) AS best_section
@@ -177,7 +177,7 @@ export async function searchPages(
   for (const hit of ranked) {
     const r = byId.get(hit.id as string)
     if (!r) continue // deleted between the two reads
-    const page = toPage({ ...r, tokens_json: null })
+    const page = toPage(r)
     const best = r.best_section == null ? null : Number(r.best_section)
     const section = best != null && page.sections[best] ? { index: best, label: page.sections[best]!.label } : null
     const match = decodeMatch(terms, terms.map((_, i) => Number(hit[`m${i}`])))
@@ -231,7 +231,7 @@ export async function searchReferences(
   const ids = ranked.map((r) => d.bind(r.id))
   const { results: rows } = await db
     .prepare(
-      `SELECT * FROM (${REF_SELECT} WHERE r.id IN (${ids.join(", ")})) refs_hit LEFT JOIN (
+      `SELECT * FROM (${REF_SUMMARY_SELECT} WHERE r.id IN (${ids.join(", ")})) refs_hit LEFT JOIN (
         SELECT reference_id AS best_ref, id AS best_page_id, path AS best_page_path FROM (
           SELECT t.reference_id, t.id, t.path, row_number() OVER (PARTITION BY t.reference_id ORDER BY ${cols.map((c) => `(${c} > 0)`).join(" + ")} DESC, ${cols.join(" + ")} DESC, t.ord) AS n
           FROM (SELECT t.reference_id, t.id, t.path, t.ord, ${pageScore.join(", ")} FROM pages t LEFT JOIN page_text x ON x.page_id = t.id

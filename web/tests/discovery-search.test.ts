@@ -145,3 +145,55 @@ test("search_pages over MCP returns ranked hits with match details", async () =>
     await mf.dispose()
   }
 })
+
+/** A D1 that records every column name and the bytes of every row it returns. */
+function recording(database: D1Database) {
+  const seen = { columns: new Set<string>(), bytes: 0 }
+  const note = (rows: unknown[]) => {
+    for (const row of rows) {
+      if (!row || typeof row !== "object") continue
+      for (const k of Object.keys(row)) seen.columns.add(k)
+      seen.bytes += JSON.stringify(row).length
+    }
+  }
+  const wrap = (stmt: D1PreparedStatement): D1PreparedStatement =>
+    new Proxy(stmt, {
+      get(target, prop) {
+        if (prop === "bind") return (...a: unknown[]) => wrap(target.bind(...a))
+        if (prop === "all") return async () => { const r = await target.all(); note(r.results); return r }
+        if (prop === "first") return async (col?: string) => { const r = await (col ? target.first(col) : target.first()); if (!col) note([r]); return r }
+        return Reflect.get(target, prop)
+      },
+    })
+  const db = new Proxy(database, {
+    get(target, prop) {
+      if (prop === "prepare") return (sql: string) => wrap(target.prepare(sql))
+      return Reflect.get(target, prop)
+    },
+  })
+  return { db, seen }
+}
+
+test("search reads no tokens, capture options or crawl state, which it never returns", async () => {
+  const { mf, database, files } = await migratedDatabase()
+  try {
+    await loadLibrary(database, files)
+    const read = async () => {
+      const { db: watched, seen } = recording(database)
+      await searchPages(watched, { q: "pricing plans" })
+      await searchReferences(watched, { q: "pricing plans" })
+      await db.listPages(watched, { limit: 20 })
+      await db.listReferences(watched, { limit: 20, summary: true })
+      return seen
+    }
+    const before = await read()
+    // Real captures carry tens of KB of tokens per page and per website: adding them must not change what is read.
+    const tokens = JSON.stringify({ colors: Array.from({ length: 400 }, (_, i) => ({ value: `#${String(i).padStart(6, "0")}`, count: i })) })
+    await database.batch([database.prepare(`UPDATE pages SET tokens_json = ?`).bind(tokens), database.prepare(`UPDATE refs SET tokens_json = ?, crawl_state = ?`).bind(tokens, tokens)])
+    const after = await read()
+    for (const column of ["tokens_json", "capture_options", "crawl_state", "preview_keys"]) assert.ok(!after.columns.has(column), `${column} was read`)
+    assert.equal(after.bytes, before.bytes)
+  } finally {
+    await mf.dispose()
+  }
+})

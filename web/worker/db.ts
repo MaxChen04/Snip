@@ -98,6 +98,13 @@ export function toPage(r: Row): Page {
   }
 }
 
+/**
+ * A page row without its tokens, for lists and search: tokens are the largest column and lists never return
+ * them (toPage gives null). Alias the pages table as `t`.
+ */
+export const PAGE_LIST_COLUMNS = `t.id, t.reference_id, t.url, t.path, t.title, t.ord, t.desktop_key, t.desktop_thumb_key, t.desktop_width, t.desktop_height,
+  t.mobile_key, t.mobile_thumb_key, t.mobile_width, t.mobile_height, t.snapshot_key, t.styles_key, t.sections_json, t.alt_scheme_json, t.created_at`
+
 /** Selects a page row plus the collections it was saved to individually. Alias the pages table as `t`. */
 export const PAGE_COLLECTIONS = `(SELECT group_concat(pc.collection_id) FROM page_collections pc WHERE pc.reference_id = t.reference_id AND pc.page_path = t.path) AS collection_ids`
 
@@ -151,6 +158,15 @@ export const REF_SELECT = `SELECT r.*, (SELECT group_concat(collection_id) FROM 
     WHERE p.reference_id = r.id AND coalesce(p.desktop_thumb_key, p.mobile_thumb_key) IS NOT NULL ORDER BY p.ord LIMIT 3)) AS preview_keys
   FROM refs r`
 
+/**
+ * A websites row for MCP summaries and search: no merged tokens, capture options, crawl state or preview
+ * thumbnails, which summaries never return (toReference gives null or empty for them).
+ */
+export const REF_SUMMARY_SELECT = `SELECT r.id, r.url, r.domain, r.title, r.description, r.favicon, r.mode, r.max_pages, r.status, r.capture_control,
+  r.progress, r.error, r.cover_key, r.page_count, r.animation_count, r.notes, r.created_at, r.updated_at, r.claimed_at, r.capture_run,
+  (SELECT group_concat(collection_id) FROM reference_collections rc WHERE rc.reference_id = r.id) AS collection_ids
+  FROM refs r`
+
 export type Where = { where: string[]; args: unknown[] }
 export const whereSql = (where: string[]) => (where.length ? "WHERE " + where.join(" AND ") : "")
 
@@ -179,7 +195,8 @@ export function referenceWhere(f: ListFilter): Where {
   return { where, args }
 }
 
-export async function listReferences(db: D1Database, f: ListFilter): Promise<Paged<Reference>> {
+/** `summary` reads only what an MCP summary returns (REF_SUMMARY_SELECT); the gallery reads whole rows. */
+export async function listReferences(db: D1Database, f: ListFilter & { summary?: boolean }): Promise<Paged<Reference>> {
   const limit = Math.min(Math.max(f.limit ?? 24, 1), 100)
   const { where, args } = referenceWhere(f)
   const sort = f.sort ?? "newest"
@@ -204,7 +221,7 @@ export async function listReferences(db: D1Database, f: ListFilter): Promise<Pag
       args.push(cur[0], cur[0], cur[1])
     }
   }
-  const sql = `${REF_SELECT} ${whereSql(where)} ${order} LIMIT ?`
+  const sql = `${f.summary ? REF_SUMMARY_SELECT : REF_SELECT} ${whereSql(where)} ${order} LIMIT ?`
   const { results } = await db.prepare(sql).bind(...args, limit + 1).all<Row>()
   const rows = results.slice(0, limit).map(toReference)
   const last = rows[rows.length - 1]
@@ -290,7 +307,7 @@ async function listChildren<T>(
     args.push(cur[0], cur[0], cur[1])
   }
   const dir = asc ? "ASC" : "DESC"
-  const sql = `SELECT t.*, r.title AS ref_title, r.domain AS ref_domain, r.favicon AS ref_favicon${table === "pages" ? `, ${PAGE_COLLECTIONS}` : ""} FROM ${table} t JOIN refs r ON r.id = t.reference_id ${whereSql(where)} ORDER BY t.created_at ${dir}, t.id ${dir} LIMIT ?`
+  const sql = `SELECT ${table === "pages" ? `${PAGE_LIST_COLUMNS}, ${PAGE_COLLECTIONS}` : "t.*"}, r.title AS ref_title, r.domain AS ref_domain, r.favicon AS ref_favicon FROM ${table} t JOIN refs r ON r.id = t.reference_id ${whereSql(where)} ORDER BY t.created_at ${dir}, t.id ${dir} LIMIT ?`
   const { results } = await db.prepare(sql).bind(...args, limit + 1).all<Row>()
   const page = results.slice(0, limit)
   const items = page.map((r) => ({
@@ -306,7 +323,7 @@ async function listChildren<T>(
 
 // Lists leave out each page's design tokens (about 26 KB a page, most of the response); getPage and getReference carry them.
 // ponytail: the row is still read with tokens_json; select columns explicitly if the D1 read ever shows up.
-export const listPages = (db: D1Database, f: ListFilter) => listChildren(db, "pages", (r) => toPage({ ...r, tokens_json: null }), f)
+export const listPages = (db: D1Database, f: ListFilter) => listChildren(db, "pages", toPage, f)
 export const listAnimations = (db: D1Database, f: ListFilter) => listChildren(db, "animations", toAnimation, f)
 
 export function normalizeUrl(input: string): URL {
