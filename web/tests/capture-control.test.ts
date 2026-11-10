@@ -98,7 +98,7 @@ test("stop winds down a running crawl, a paused one and a queued one", async () 
     // Paused: finishes on the server from the saved metadata and tokens.
     const paused = await db.createReference(database, { url: "https://paused.example", mode: "crawl" })
     const pjob = (await db.claimJob(database))!
-    assert.ok(await db.addPage(database, paused.id, pjob.attempt, page(paused.id, pjob.attempt, 0)))
+    assert.ok(await db.addPage(database, paused.id, pjob.attempt, { ...page(paused.id, pjob.attempt, 0), tokens: state(1).tokens }))
     await db.requestPause(database, paused.id)
     assert.equal(await db.pauseJob(database, paused.id, pjob.attempt, state(1)), "paused")
     assert.equal(await db.requestStop(database, paused.id), true)
@@ -108,6 +108,10 @@ test("stop winds down a running crawl, a paused one and a queued one", async () 
     assert.equal(finished.reference.tokens?.colors[0]?.value, "#000")
     assert.equal(finished.reference.coverKey, `refs/${paused.id}/${pjob.attempt}/p0/desktop.jpg`)
     assert.equal(finished.pages.length, 1)
+    // A page carries its tokens with its website, not in the pages feed.
+    assert.equal(finished.pages[0]!.tokens?.colors[0]?.value, "#000")
+    const listed = (await db.listPages(database, {})).items.find((p) => p.id === finished.pages[0]!.id)!
+    assert.equal(listed.tokens, null)
 
     // Resumed but not picked up yet: still finishes with its pages.
     const waiting = await db.createReference(database, { url: "https://waiting.example", mode: "crawl" })
