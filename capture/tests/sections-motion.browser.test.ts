@@ -341,6 +341,37 @@ test("without clips, in-view patches come from one still per section, on desktop
 
 const imageSizeOf = (m: { width?: number; height?: number }) => [m.width, m.height]
 
+test("a section that ends at the bottom of a fractional-DPR viewport is patched, not skipped for a band one pixel past the image", async () => {
+  const { recordLiveSections, patchInView, fullPageShotAtForTest, OBSERVED_FOR_TEST, HOLD_RESIZE_FOR_TEST } = await import("../src/capture")
+  const sharp = (await import("sharp")).default
+  const browser = await launch()
+  try {
+    // example.com on a phone: 898px tall in an 844px viewport, so the last section (y 589, 309 tall) scrolls to viewport
+    // top 535. At 1.5 image px per CSS px, rounding that top and that height separately (803 + 464) ends at row 1267 of
+    // a 1266 row frame. The section's reveal sits below the first screen, so the shot from the top shows it hidden.
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1.5, isMobile: true, hasTouch: true })
+    await context.addInitScript(HOLD_RESIZE_FOR_TEST)
+    await context.addInitScript(OBSERVED_FOR_TEST)
+    await context.route("http://snip.test/", (route) => route.fulfill({ contentType: "text/html", body: `<!doctype html><meta name="viewport" content="width=device-width">
+      <style>body { margin: 0 } section { display: block; position: relative } .box { position: absolute; top: 260px; width: 100%; height: 40px; background: rgb(0, 128, 128); opacity: 0 } .box.in { opacity: 1 }</style>
+      <section style="height: 345px">one</section><section style="height: 244px">two</section><section style="height: 309px"><div class="box"></div></section>
+      <script>const io = new IntersectionObserver((es) => es.forEach((e) => e.target.classList.toggle("in", e.isIntersecting))); io.observe(document.querySelector(".box"))</script>` }))
+    const page = await context.newPage()
+    await page.goto("http://snip.test/")
+    const shot = await fullPageShotAtForTest(page, 1.5)
+    const cuts = [{ y: 0, height: 345 }, { y: 345, height: 244 }, { y: 589, height: 309 }].map((c, i) => ({ kind: "section" as const, label: `Part ${i}`, ...c }))
+    const inView = { shot: shot.buf, patches: [] as { y: number; height: number; jpeg: Buffer }[], dpr: 1.5 }
+    await recordLiveSections(page, cuts, "gif", new Map(), inView)
+    assert.deepEqual(inView.patches.map((p) => [p.y, p.height]), [[589, 309]], "the last section's reveal is patched in")
+    const patched = await patchInView(shot.buf, inView.patches, 1.5)
+    const [r, g, b] = [...(await sharp(patched).extract({ left: 100, top: Math.round(870 * 1.5), width: 1, height: 1 }).raw().toBuffer())]
+    assert.ok(r! < 60 && g! > 90 && b! > 90, `the reveal is in the shot, got ${[r, g, b]}`)
+    await context.close()
+  } finally {
+    await browser.close()
+  }
+})
+
 test("a crawl page past the clip limit and the mobile shot still get in-view patches", { timeout: 180_000 }, async () => {
   const http = await import("node:http")
   const sharp = (await import("sharp")).default

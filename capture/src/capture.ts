@@ -411,6 +411,15 @@ async function changedShare(a: Buffer, b: Buffer, band: { top: number; height: n
   return pixelShare(...(await Promise.all([bandPixels(a, band, out), bandPixels(b, band, out)])))
 }
 
+/**
+ * `height` CSS px from `top` as rows of an image `rows` tall, at `k` image px per CSS px. Both edges are rounded, not
+ * the top and the height apart: at a fractional scale those can add up to a row past the image (example.com on a phone).
+ */
+const bandRows = (top: number, height: number, k: number, rows: number) => {
+  const first = Math.min(rows - 1, Math.max(0, Math.round(top * k)))
+  return { top: first, height: Math.max(1, Math.min(rows, Math.round((top + height) * k)) - first) }
+}
+
 /** A full-width horizontal band of an image, scaled to `out` (RGB, 8 bit), for comparing bands of images of different sizes. */
 const bandPixels = (img: Buffer, band: { top: number; height: number }, out: { width: number; height: number }) =>
   sharp(img).extract({ left: 0, top: band.top, width: imageSize(img).width, height: band.height }).resize({ ...out, fit: "fill" }).removeAlpha().raw().toBuffer()
@@ -587,11 +596,11 @@ export async function recordLiveSections(
     const shotH = Math.floor(imageSize(shot).height / d) // in CSS px
     if (s.y + height > shotH) return
     const out = { width: 360, height: Math.max(1, Math.round((height * 360) / vw)) }
-    const seen = await bandPixels(frame, { top: Math.round(top * k), height: Math.max(1, Math.round(height * k)) }, out)
-    const shown = await bandPixels(shot, { top: Math.round(s.y * d), height: Math.max(1, Math.round(height * d)) }, out)
+    const seen = await bandPixels(frame, bandRows(top, height, k, imageSize(frame).height), out)
+    const shown = await bandPixels(shot, bandRows(s.y, height, d, imageSize(shot).height), out)
     if (pixelShare(seen, shown) < IN_VIEW_CHANGED) return
     const piece = async (img: Buffer, at: number, viewTop: number, h: number) =>
-      inView!.patches.push({ y: at, height: h, jpeg: await sharp(img).extract({ left: 0, top: Math.round(viewTop * k), width: Math.round(vw * k), height: Math.max(1, Math.round(h * k)) }).jpeg({ quality: 90 }).toBuffer() })
+      inView!.patches.push({ y: at, height: h, jpeg: await sharp(img).extract({ left: 0, width: Math.round(vw * k), ...bandRows(viewTop, h, k, imageSize(img).height) }).jpeg({ quality: 90 }).toBuffer() })
     await piece(frame, s.y, top, height)
     // The rest of a tall section, a viewport at a time, up to the shot's bottom.
     for (let off = height, extra = 0; off < s.height && extra < IN_VIEW_EXTRA; extra++) {
