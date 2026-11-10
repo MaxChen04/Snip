@@ -26,7 +26,12 @@ await S.J("J3b fixture with motion + dark theme: capture, Live clips, Light/Dark
     const v = await page.locator("video").evaluateAll((vs) => vs.map((v) => ({ playing: !v.paused, t: +v.currentTime.toFixed(2), loop: v.loop, muted: v.muted, w: v.videoWidth })))
     note("videos with Live on: " + JSON.stringify(v)); await shot("j3b-viewer-live")
     if (!v.length || !v.some((x) => x.playing)) fail("no playing <video> with Live on")
-    const st = page.getByLabel(/Static|static/).first(); await st.click(); await sleep(800); const after = await page.locator("video").count(); note("videos after Static: " + after); if (after) fail("videos remain after switching Live off")
+    // Static pauses the clips where they are; they stay mounted so Live can resume from the same frame.
+    const st = page.getByLabel(/Static|static/).first(); await st.click(); await sleep(300)
+    const times = () => page.locator("video").evaluateAll((vs) => vs.map((v) => ({ paused: v.paused, t: v.currentTime })))
+    const p1 = await times(); await sleep(800); const p2 = await times()
+    note("videos after Static: " + JSON.stringify(p2))
+    if (p2.some((x) => !x.paused) || p2.some((x, i) => x.t !== p1[i]?.t)) fail("a clip kept playing after switching Live off")
   } else fail("no Live toggle for a page with moving sections")
   const dark = page.getByLabel("Dark mode"), light = page.getByLabel("Light mode"); note("Light/Dark toggle: " + ((await dark.count()) + (await light.count())))
   if ((await dark.count()) + (await light.count())) { await (await dark.count() ? dark : light).first().click(); await sleep(2500); await shot("j3b-viewer-alt"); note("alt-scheme view shows; Live toggle still shown, reads Static: " + (await liveBtn.count() > 0)); if (!(await liveBtn.count())) fail("Live toggle disappeared in the alt scheme") } else fail("no Light/Dark toggle on fixture with a prefers-color-scheme dark theme")

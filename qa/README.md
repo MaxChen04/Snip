@@ -60,5 +60,6 @@ Results go to `qa/out/` (JSON per journey with console errors, failed requests a
 
 - Check `uptime` first. CPU figures are inflated when the machine is busy; every sample records the load average next to it. Judge memory separately from CPU.
 - `ps` resident memory double-counts pages shared between Electron helpers. Compare phases with it; do not read it as an absolute footprint.
-- The page viewer and the canvas inspector share their Live and Light/Dark toggles. `live.mjs` fails if either is missing for the fixture page, which has both clips and a dark theme.
+- The page viewer and the canvas inspector share their Live and Light/Dark toggles and one clip player. `live.mjs` fails if either toggle is missing for the fixture page, which has both clips and a dark theme, or if a clip keeps playing after Static.
+- Static pauses the clips where they are and keeps them mounted, so in the viewer soak's `end-live-off` row `videos` stays at the clip count and only `playing` drops to 0. A clip gets its source when the page is scrolled near it, so on a tall page `videos` can exceed the number of clips fetched.
 - A journey that fails on a selector after a UI change is a harness fix, not necessarily a product bug. Look at the screenshot named in the result before filing anything.

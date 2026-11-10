@@ -123,7 +123,7 @@ if (want("j3")) await S.J("J3 sections: inspector, dock filter, page viewer (Liv
     const v = await page.locator("video").evaluateAll((vs) => vs.map((v) => ({ playing: !v.paused, t: v.currentTime, src: v.currentSrc.slice(-40) })))
     note(`videos with Live on: ${v.length}, playing ${v.filter((x) => x.playing).length}`); await shot("j3-viewer-live")
     if (!v.length) fail("Live on but no <video>")
-    const st = page.getByLabel(/Static|static/).first(); if (await st.count()) { await st.click(); await sleep(800); note("videos after Static: " + (await page.locator("video").count())) }
+    const st = page.getByLabel(/Static|static/).first(); if (await st.count()) { await st.click(); await sleep(800); note("videos after Static (kept, paused): " + (await page.locator("video").evaluateAll((vs) => vs.map((v) => v.paused)).then((p) => JSON.stringify(p)))) }
   } else note("no Live toggle: page had no moving sections or toggle missing")
   const dark = page.getByLabel("Dark mode"), light = page.getByLabel("Light mode")
   const has = (await dark.count()) + (await light.count()); note("Light/Dark toggle present: " + !!has)
