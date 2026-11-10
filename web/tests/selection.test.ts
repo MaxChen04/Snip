@@ -101,6 +101,12 @@ test("a copied prompt names the view and capture run, and its Selection finds ev
     assert.equal(lost.pages[0].match, "missing")
     assert.match(lost.summary, /could not be found/)
 
+    // A picked section the recapture no longer has is reported, and the whole page is not fetched in its place.
+    const noSection = (await rpc("resolve_selection", { ...copied, pages: [{ ...copied.pages[0], sections: [{ index: 1, kind: "section", label: "Testimonials" }] }] })).structuredContent
+    assert.equal(noSection.pages[0].sections[0].match, "missing")
+    assert.deepEqual(noSection.pages[0].next, [])
+    assert.match(noSection.summary, /1 item \(1 of them page sections\) could not be found/)
+
     // The app forgets picks the recapture replaced.
     const pruned = pruneSelection(sel, second.pages, second.animations)
     assert.deepEqual([pruned.pages, pruned.animations, pruned.views], [[], [], {}])

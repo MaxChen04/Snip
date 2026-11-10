@@ -111,10 +111,11 @@ export function resolveSelection(sel: CopiedSelection, current: { reference: Ref
         : { copied: s, index: null, match: "missing" as const }
     })
     const schemeArg = scheme !== captured && schemeAvailable ? `, scheme "${scheme}"` : ""
+    // Only the sections that were found: when none were, nothing stands in for them.
     const next =
       viewport === "mobile"
         ? [`get_page(page_id "${p.id}", image "mobile")`]
-        : sections.some((s) => s.index != null)
+        : sections.length
           ? sections.flatMap((s) => (s.index == null ? [] : [`get_page(page_id "${p.id}", section ${s.index}${schemeArg})`]))
           : [`get_page(page_id "${p.id}"${schemeArg})`]
     return {
@@ -161,7 +162,8 @@ export function resolveSelection(sel: CopiedSelection, current: { reference: Ref
       : { stale: recaptured, unavailable: r.status === "ready" ? "The current capture has no tokens." : `Capture is ${r.status}; tokens are saved when it finishes.` }
     : undefined
 
-  const missing = [...resolvedPages, ...resolvedAnimations].filter((x) => x.match === "missing").length
+  const missingSections = resolvedPages.reduce((n, p) => n + ((p as { sections?: { match: string }[] }).sections ?? []).filter((s) => s.match === "missing").length, 0)
+  const missing = [...resolvedPages, ...resolvedAnimations].filter((x) => x.match === "missing").length + missingSections
   return {
     referenceId: r.id,
     copiedRun: sel.capture_run,
@@ -173,7 +175,7 @@ export function resolveSelection(sel: CopiedSelection, current: { reference: Ref
     animations: resolvedAnimations,
     ...(tokens ? { tokens } : {}),
     summary: missing
-      ? `${missing} item${missing === 1 ? "" : "s"} could not be found in the current capture. Tell the user rather than substituting something else.`
+      ? `${missing} item${missing === 1 ? "" : "s"}${missingSections ? ` (${missingSections} of them page sections)` : ""} could not be found in the current capture. Tell the user rather than substituting something else.`
       : recaptured
         ? "Every item was found in the current capture. Use the new ids."
         : "Nothing changed since the prompt was copied.",
