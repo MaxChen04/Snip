@@ -100,35 +100,24 @@ function Media({ item, live }: { item: CanvasItem; live: boolean }) {
 export const CanvasTile = memo(function CanvasTile({
   item,
   onOpen,
-  selected,
   dimmed,
-  draggable,
   tabIndex,
-  className,
   faceStyle,
 }: {
   item: CanvasItem
   onOpen?: (item: CanvasItem) => void
-  /** Board selection: a dark ring. */
-  selected?: boolean
   /** Doesn't match the board's filter: faded, still usable. */
   dimmed?: boolean
-  /** Native drag carrying `application/x-snip-item` ({ kind, id }). Off, images and links don't drag, so the canvas pans. */
-  draggable?: boolean
   /** -1 when a wrapper takes focus instead (the board canvas's selectable items). */
   tabIndex?: number
-  className?: string
   /** Inline style for the tile face (the board's per-item look: radius, clip, blur, flip). */
   faceStyle?: CSSProperties
 }) {
   const [live, setLive] = useState(false)
   const src = source(item)
   const name = tileLabel(item)
-  const face = cn(
-    // ink-3, not surface-top: a quiet placeholder until the image loads, and letterboxing that stays dark in dark mode.
-    "relative block size-full cursor-pointer overflow-hidden rounded-md bg-ink-3 shadow-card transition-[scale,opacity,box-shadow] duration-150 ease-out active:scale-[0.99] motion-reduce:active:scale-100",
-    selected && "ring-2 ring-ink-12 ring-offset-2 ring-offset-background",
-  )
+  // ink-3, not surface-top: a quiet placeholder until the image loads, and letterboxing that stays dark in dark mode.
+  const face = "relative block size-full cursor-pointer overflow-hidden rounded-md bg-ink-3 shadow-card transition-[scale,opacity,box-shadow] duration-150 ease-out active:scale-[0.99] motion-reduce:active:scale-100"
   const inner = (
     <>
       <Media item={item} live={live} />
@@ -137,9 +126,7 @@ export const CanvasTile = memo(function CanvasTile({
   )
   return (
     <div
-      className={cn("group relative size-full select-none", dimmed && "opacity-35", className)}
-      draggable={draggable || undefined}
-      onDragStart={draggable ? (e) => e.dataTransfer.setData("application/x-snip-item", JSON.stringify({ kind: item.kind, id: item.id })) : undefined}
+      className={cn("group relative size-full select-none", dimmed && "opacity-35")}
       onPointerEnter={(e) => e.pointerType === "mouse" && setLive(true)}
       onPointerLeave={() => setLive(false)}
       onFocus={() => setLive(true)}

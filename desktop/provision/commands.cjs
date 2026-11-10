@@ -5,7 +5,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { CancelledError, NeedsInputError, StepError, runSteps } = require('./engine.cjs');
+const { NeedsInputError, StepError, runSteps } = require('./engine.cjs');
 const state = require('./state.cjs');
 const cloud = require('./cloud.cjs');
 const deploy = require('./deploy.cjs');
@@ -40,7 +40,7 @@ async function commandSetup(ctx, { steps = setupSteps.setupSteps() } = {}) {
       const data = (await preflight.run(ctx)) || {};
       ctx.emit.step(preflight.id, 'ok', data.message || 'Ready', { progress: { done: 1, total: steps.length }, data });
     } catch (error) {
-      ctx.journal(preflight.id, 'failed', error.message);
+      // --check is read-only: report the failure, never journal it.
       ctx.emit.step(preflight.id, 'failed', error.message, { data: error.data || {} });
       throw error;
     }
@@ -129,13 +129,11 @@ async function commandPull(ctx) {
 }
 
 function pullSteps({ stagedRoot, stagedState }) {
-  const ctxHolder = {};
   const manifest = { value: null, dump: null, keys: null };
   const preflight = {
     id: 'pull-preflight',
     title: 'Checking this Mac',
     async run(ctx) {
-      ctxHolder.ctx = ctx;
       const record = requireCloud(ctx);
       if (ctx.state().mode !== 'cloud') {
         throw new StepError('NOT_CLOUD', 'This Mac is not using its cloud library.', {
@@ -163,7 +161,7 @@ function pullSteps({ stagedRoot, stagedState }) {
     id: 'pull-manifest',
     title: 'Reading the cloud library',
     async run(ctx) {
-      const record = requireCloud(ctx);
+      requireCloud(ctx);
       const transfer = ctx.transfer();
       const remote = await transfer.manifest();
       manifest.value = remote;
@@ -171,7 +169,6 @@ function pullSteps({ stagedRoot, stagedState }) {
       fs.mkdirSync(stagedRoot, { recursive: true, mode: 0o700 });
       fs.writeFileSync(path.join(stagedRoot, 'manifest.json'), `${JSON.stringify(remote, null, 2)}\n`, { mode: 0o600 });
       ctx.setWork({ pullManifest: remote });
-      void record;
       return { message: `${manifest.keys.length} file${manifest.keys.length === 1 ? '' : 's'}, ${(remote.tables && remote.tables.refs) || 0} reference${((remote.tables && remote.tables.refs) || 0) === 1 ? '' : 's'}` };
     },
     async verify(ctx) {
@@ -211,11 +208,6 @@ function pullSteps({ stagedRoot, stagedState }) {
       const dump = manifest.dump || path.join(stagedRoot, 'dump.sql');
       const statements = splitSqlStatements(fs.readFileSync(dump, 'utf8'));
       const tables = Object.keys((manifest.value && manifest.value.tables) || {});
-      const columns = {};
-      for (const statement of statements) {
-        void statement;
-      }
-      void columns;
       // The staged copy must land under the identity the local app itself opens:
       // the cloud deploy config names a different database id, so importing with
       // it would leave the swapped-in data in a file the app never reads.
@@ -229,7 +221,6 @@ function pullSteps({ stagedRoot, stagedState }) {
     async verify(ctx) { return Boolean(ctx.work.pullStagedState); },
   };
 
-  void ctxHolder;
   return [
     preflight,
     manifestStep,
@@ -467,7 +458,6 @@ async function commandDeploy(ctx) {
         }
         return { message: 'Ready' };
       },
-      async verify() { return true; },
     },
     {
       id: 'deploy-schema',
@@ -476,15 +466,13 @@ async function commandDeploy(ctx) {
         await ctx2.deps.deploy.applyMigrations(ctx2.wrangler, { dataRoot: ctx2.dataRoot, accountId: record.accountId, remote: true, retry: retryOf(ctx2) });
         return { message: 'Database is up to date' };
       },
-      async verify() { return true; },
     },
     {
       id: 'deploy-worker',
       title: 'Deploying the Worker',
       async run(ctx2) {
         // Refresh the copy first, so a new bundle is never shadowed by a stale one.
-        const stored = ctx2.secrets() || {};
-        const layout = ctx2.deps.deploy.prepareDeployLayout({
+        ctx2.deps.deploy.prepareDeployLayout({
           root: ctx2.root,
           dataRoot: ctx2.dataRoot,
           d1Id: record.d1 && record.d1.id,
@@ -492,13 +480,10 @@ async function commandDeploy(ctx) {
           login: record.login || undefined,
           url: record.url,
         });
-        void stored;
-        void layout;
         await ctx2.deps.deploy.deployWorker(ctx2.wrangler, { dataRoot: ctx2.dataRoot, accountId: record.accountId, retry: retryOf(ctx2) });
         ctx2.setCloud({ lastDeployedAt: NOW(), bundleHash: setupSteps.bundleHash(ctx2.dataRoot) });
         return { message: `Live at ${record.url}` };
       },
-      async verify() { return true; },
     },
     {
       id: 'deploy-verify',
@@ -529,7 +514,6 @@ async function commandDeploy(ctx) {
         ctx2.setCloud({ workerVersion: status.version, lastDeployedAt: NOW() });
         return { message: `Version ${status.version} answered` };
       },
-      async verify() { return true; },
     },
   ];
   // Never journaled: deploying is the action, so a second `deploy` must upload
@@ -551,7 +535,6 @@ async function commandMigrate(ctx) {
         if (!ctx2.deps.deploy.configExists(ctx2.dataRoot)) throw new StepError('NOT_PROVISIONED', 'This Mac has no cloud deploy configuration yet.', { hint: 'Run `setup` first.' });
         return { message: 'Ready' };
       },
-      async verify() { return true; },
     },
     {
       id: 'migrate-apply',
@@ -560,7 +543,6 @@ async function commandMigrate(ctx) {
         await ctx2.deps.deploy.applyMigrations(ctx2.wrangler, { dataRoot: ctx2.dataRoot, accountId: record.accountId, remote: true, retry: retryOf(ctx2) });
         return { message: 'Database is up to date' };
       },
-      async verify() { return true; },
     },
   ];
   // Same reason as deploy: migrating is the action, so it always runs.
@@ -648,7 +630,6 @@ async function commandDeleteResources(ctx) {
         }
         return { message: 'Worker, database and key-value store removed' };
       },
-      async verify() { return true; },
     },
     {
       id: 'delete-verify',
@@ -906,7 +887,6 @@ async function commandSnapshot(ctx) {
       ctx2.save((next) => { next.error = null; return next; });
       return { message: ctx2.state().mode === 'local' ? 'Done' : 'Done' };
     },
-    async verify() { return true; },
   };
   const steps = [preflight, step, finish];
   await require('./engine.cjs').runSteps(steps, ctx, { journal: false });
@@ -1000,7 +980,6 @@ async function commandOwner(ctx) {
         }
         return { message: 'New owner secret saved' };
       },
-      async verify() { return true; },
     });
   }
   steps.push({
@@ -1042,7 +1021,6 @@ async function commandOwner(ctx) {
       // rather than actions finds the link at `data.url`, not `data.data.url`.
       return { message: 'Link ready', url: minted.link, data: { url: minted.link } };
     },
-    async verify() { return true; },
   });
   steps.push({
     id: 'owner-open',
@@ -1061,39 +1039,18 @@ async function commandOwner(ctx) {
         return { message: 'Link ready; open it in the browser on the other device to sign it in' };
       }
       if (!ctx2.flags.noOpen && ctx2.openUrl) await ctx2.openUrl(link).catch(() => {});
-      try {
-        if (loopback) {
-          const token = await Promise.race([
-            loopback.token,
-            new Promise((_, reject) => { ctx2.onCancel(() => reject(new CancelledError())); }),
-          ]);
-          ctx2.emit.session(token, record.url);
-          return { message: 'Signed in' };
-        }
-        const transfer = ctx2.deps.transferOf(ctx2);
-        const before = await transfer.status().catch(() => null);
-        if (before && before.hasOwner) {
-          // A new device cannot be observed from the Worker, so this reports
-          // exactly what happened: the link is ready and the browser holds it.
-          return { message: 'Link ready; open it in the browser to sign this device in' };
-        }
-        // No owner yet: this link is the thing that creates one, so wait.
-        const deadline = ctx2.deps.now() + 10 * 60_000;
-        for (;;) {
-          ctx2.checkCancel();
-          const status = await transfer.status().catch(() => null);
-          if (status && status.hasOwner) return { message: 'Signed in' };
-          if (ctx2.deps.now() > deadline) {
-            throw new StepError('OWNER_LINK_TIMEOUT', 'The sign-in link was not completed in time.', { hint: 'Run `owner link` to mint a fresh one.' });
-          }
-          ctx2.emit.step('owner-open', 'waiting', 'Waiting for the browser sign-in');
-          await ctx2.deps.sleep(3000);
-        }
-      } finally {
-        if (loopback) loopback.close();
+      // Only a bare CLI (no loopback) polls the Worker.
+      const transfer = loopback ? null : ctx2.deps.transferOf(ctx2);
+      const before = transfer && await transfer.status().catch(() => null);
+      if (before && before.hasOwner) {
+        // A new device cannot be observed from the Worker, so this reports
+        // exactly what happened: the link is ready and the browser holds it.
+        return { message: 'Link ready; open it in the browser to sign this device in' };
       }
+      // No owner yet: this link is the thing that creates one, so wait.
+      await setupSteps.awaitOwnerSignIn(ctx2, { id: 'owner-open', url: record.url, loopback, transfer });
+      return { message: 'Signed in' };
     },
-    async verify() { return true; },
   });
   await require('./engine.cjs').runSteps(steps, ctx, { journal: false });
   return {

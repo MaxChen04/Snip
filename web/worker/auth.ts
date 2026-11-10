@@ -176,11 +176,6 @@ export async function getSession(c: Context<AppEnv>): Promise<Session | null> {
   return state.label ? { ...parsed.session, label: state.label } : parsed.session
 }
 
-/** The signed-in owner's identity, or null. Prefer getSession when the method or label matters. */
-export async function getSessionLogin(c: Context<AppEnv>): Promise<string | null> {
-  return (await getSession(c))?.ownerId ?? null
-}
-
 export const requireSession: MiddlewareHandler<AppEnv> = async (c, next) => {
   const session = await getSession(c)
   if (!session) return c.json({ error: "unauthorized" }, 401)

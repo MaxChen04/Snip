@@ -7,7 +7,7 @@ const { EventEmitter } = require("node:events")
 const fs = require("node:fs")
 const os = require("node:os")
 const path = require("node:path")
-const { enginePath, engineAvailable, engineArgs, engineEnv, runEngine, safeEvent } = require("../cloud-engine.cjs")
+const { cloudFlags, enginePath, engineAvailable, engineArgs, engineEnv, runEngine, safeEvent } = require("../cloud-engine.cjs")
 
 const APP = "/Applications/Snip.app/Contents/Resources/app"
 const FIXTURE = path.join(__dirname, "fixtures", "fake-cloud-cli.cjs")
@@ -167,4 +167,12 @@ test("a real setup run speaks the contract and writes a usable cloud.json", asyn
   assert.equal(file.cloud.url, "https://snip.max.workers.dev")
   assert.ok(file.snapshot?.bytes > 0)
   assert.equal(fs.statSync(path.join(dataRoot, ".snip", "cloud.json")).mode & 0o777, 0o600)
+})
+
+test("an answered account becomes the --account flag", () => {
+  // main stores needs_input answers under the engine's own key (`account`) and passes
+  // them straight to cloudFlags, so the flag must read that key.
+  const flags = cloudFlags(Object.fromEntries(new Map([["account", " 0123456789abcdef "]])))
+  assert.equal(flags.account, "0123456789abcdef")
+  assert.ok(engineArgs({ appDir: APP, root: "/r", dataRoot: "/d", command: "setup", flags }).includes("0123456789abcdef"))
 })

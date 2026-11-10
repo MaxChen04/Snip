@@ -300,7 +300,8 @@ async function main(argv, io = {}) {
     const code = exitCodeFor(error);
     if (code !== 2) {
       try {
-        if (ctx) {
+        // setup --check is read-only, so its failure is reported but not recorded.
+        if (ctx && !(command === 'setup' && flags.check)) {
           ctx.recordError({
             step: error.step || null,
             code: error.code || 'FAILED',

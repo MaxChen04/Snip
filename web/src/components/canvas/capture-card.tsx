@@ -13,7 +13,6 @@ import { LIVE_POLL, usePoll } from "@/hooks/use-poll"
 import { api, DuplicateError, fileUrl, type CaptureMode, type Page, type Reference } from "@/lib/api"
 import { IMAGE_TYPES, uploadImages } from "@/lib/images"
 import { extractUrls } from "@/lib/site-url"
-import { useCollections } from "@/lib/collections"
 import { cn } from "@/lib/utils"
 
 // ---------- Captures the card follows (the newest shows; a dropped link joins them) ----------
@@ -112,21 +111,15 @@ const iconButton = "press grid size-8 shrink-0 place-items-center rounded-full t
  * polls, and fires reloadCanvas() as pages land.
  */
 export function CaptureCard({
-  boardId,
   firstRun,
-  className,
   caption,
 }: {
-  /** Captures and uploads also go on this board. */
-  boardId?: string
   /** Empty library: show the "Start your library" heading and example sites. */
   firstRun?: boolean
-  className?: string
   /** Muted line under the card, such as "218 saved". */
   caption?: string
 }) {
   const { addReference } = useAddFlow()
-  const { collections } = useCollections()
   const input = useRef<HTMLInputElement>(null)
   const filePicker = useRef<HTMLInputElement>(null)
   const [text, setText] = useState("")
@@ -213,7 +206,7 @@ export function CaptureCard({
     const failed: { url: URL; message: string }[] = []
     for (const url of urls) {
       try {
-        await captureLink(url, { mode, maxPages, boardId })
+        await captureLink(url, { mode, maxPages })
       } catch (err) {
         failed.push({ url, message: (err as Error).message })
       }
@@ -227,7 +220,7 @@ export function CaptureCard({
   const upload = async (files: File[]) => {
     if (!files.length) return
     setUploading({ done: 0, total: files.length })
-    const { uploaded, failed } = await uploadImages(files, { collectionId: boardId, onProgress: (done, total) => setUploading({ done, total }) })
+    const { uploaded, failed } = await uploadImages(files, { onProgress: (done, total) => setUploading({ done, total }) })
     setUploading(null)
     if (uploaded.length) {
       reloadCanvas()
@@ -245,10 +238,9 @@ export function CaptureCard({
   // While a capture runs the field shows its link until you type another.
   const showRunning = running && !text
   const showOptions = !running || !!text
-  const board = boardId ? collections.find((c) => c.id === boardId)?.name : undefined
 
   return (
-    <div data-no-pan className={cn("flex flex-col items-center gap-3", className)}>
+    <div data-no-pan className="flex flex-col items-center gap-3">
       <Logo className="size-[72px]" />
 
       {firstRun && (
@@ -357,7 +349,7 @@ export function CaptureCard({
               </button>
             </Tip>
             <Tip label="More options">
-              <button type="button" aria-label="More options" onClick={() => addReference(boardId, text.trim() || undefined)} className={iconButton}>
+              <button type="button" aria-label="More options" onClick={() => addReference(undefined, text.trim() || undefined)} className={iconButton}>
                 <MoreHorizontalIcon className="size-4" />
               </button>
             </Tip>
@@ -367,8 +359,6 @@ export function CaptureCard({
                   <Loader2Icon className="size-3 shrink-0 animate-spin motion-reduce:animate-none" />
                   Uploading {Math.min(uploading.done + 1, uploading.total)} of {uploading.total}…
                 </>
-              ) : board ? (
-                <span className="truncate">Saves to {board}</span>
               ) : null}
             </span>
             <input

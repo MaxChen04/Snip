@@ -945,11 +945,6 @@ export async function listPasskeys(db: D1Database, ownerId?: string): Promise<Pa
   return rows.results.map(toPasskey)
 }
 
-export async function getPasskey(db: D1Database, id: string): Promise<PasskeyRecord | null> {
-  const row = await db.prepare(`SELECT * FROM passkeys WHERE id = ?`).bind(id).first<PasskeyRow>()
-  return row ? toPasskey(row) : null
-}
-
 /**
  * Everything passkey sign-in needs before it verifies a signature: the credential, its owner, and
  * the install's current revocation epoch. One round trip instead of three, because this runs on
