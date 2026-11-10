@@ -135,13 +135,22 @@ export function LiveClips({ page, look }: { page: Page; look: PageLook }) {
   ))
 }
 
+/** The element that scrolls this one. An observer only honors its margin when this is its root. */
+const scrollParent = (el: HTMLElement) => {
+  for (let p = el.parentElement; p; p = p.parentElement) if (/auto|scroll/.test(getComputedStyle(p).overflowY)) return p
+  return null
+}
+
 /**
- * One section's recorded clip, laid over its place in the screenshot. Plays only while on screen and `playing`;
- * otherwise it holds its frame. Hidden until its first frame is decoded, then faded in, and only then played:
- * captures paste that frame into the screenshot, so the swap shows nothing and the motion starts from the still.
+ * One section's recorded clip, laid over its place in the screenshot. Its source is attached once it is within a
+ * screen of the visible area, and kept: a long page fetches only the clips you get near, and scrolling away and
+ * back loads nothing again. Plays only while on screen and `playing`; otherwise it holds its frame. Hidden until
+ * its first frame is decoded, then faded in, and only then played: captures paste that frame into the screenshot,
+ * so the swap shows nothing and the motion starts from the still.
  */
 function LiveClip({ src, style, playing, feather }: { src: string; style: React.CSSProperties; playing: boolean; feather: boolean }) {
   const ref = useRef<HTMLVideoElement>(null)
+  const [near, setNear] = useState(false)
   const [ready, setReady] = useState(false)
   const shown = useRef(false)
   const visible = useRef(false)
@@ -154,12 +163,33 @@ function LiveClip({ src, style, playing, feather }: { src: string; style: React.
     else video.pause()
   }
   useEffect(() => {
-    const io = new IntersectionObserver(([entry]) => {
-      visible.current = !!entry?.isIntersecting
-      sync()
-    }, { rootMargin: "200px" })
-    io.observe(ref.current!)
-    return () => io.disconnect()
+    const video = ref.current!
+    const root = scrollParent(video)
+    let load: IntersectionObserver | undefined
+    let io: IntersectionObserver | undefined
+    // Until the screenshot has loaded the clips sit squeezed into a box with no height, all at its top, and would all
+    // count as near. Start watching once they have a real size.
+    const size = new ResizeObserver(([entry]) => {
+      if (!entry || entry.contentRect.height <= 0) return
+      size.disconnect()
+      load = new IntersectionObserver(([e]) => {
+        if (!e?.isIntersecting) return
+        setNear(true)
+        load!.disconnect()
+      }, { root, rootMargin: "100% 0px" })
+      io = new IntersectionObserver(([e]) => {
+        visible.current = !!e?.isIntersecting
+        sync()
+      }, { root, rootMargin: "200px" })
+      load.observe(video)
+      io.observe(video)
+    })
+    size.observe(video)
+    return () => {
+      size.disconnect()
+      load?.disconnect()
+      io?.disconnect()
+    }
   }, [])
   useEffect(sync, [playing])
   useEffect(() => {
@@ -173,7 +203,7 @@ function LiveClip({ src, style, playing, feather }: { src: string; style: React.
   return (
     <video
       ref={ref}
-      src={src}
+      src={near ? src : undefined}
       muted
       loop
       playsInline
