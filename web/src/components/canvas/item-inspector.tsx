@@ -207,11 +207,11 @@ function Body({
 
   // ---- What this item is ----
   const info =
-    item.kind === "page" ? { domain: item.page.reference.domain, title: item.page.title || item.page.path, path: item.page.path, url: item.page.url, at: item.page.createdAt }
-    : item.kind === "section" ? { domain: item.section.reference.domain, title: item.section.label, path: item.section.path, url: item.section.url, at: item.section.createdAt }
-    : item.kind === "animation" ? { domain: item.animation.reference.domain, title: motionLabel(item.animation), path: page?.path, url: page?.url ?? detail?.reference.url, at: item.animation.createdAt }
-    : item.kind === "website" ? { domain: item.reference.domain, title: item.reference.title || item.reference.domain, path: undefined, url: item.reference.url, at: item.reference.createdAt }
-    : { domain: undefined, title: item.image.title || "Untitled image", path: undefined, url: fileUrl(item.image.key), at: item.image.createdAt }
+    item.kind === "page" ? { domain: item.page.reference.domain, icon: item.page.reference.favicon, title: item.page.title || item.page.path, path: item.page.path, url: item.page.url, at: item.page.createdAt }
+    : item.kind === "section" ? { domain: item.section.reference.domain, icon: item.section.reference.favicon, title: item.section.label, path: item.section.path, url: item.section.url, at: item.section.createdAt }
+    : item.kind === "animation" ? { domain: item.animation.reference.domain, icon: item.animation.reference.favicon, title: motionLabel(item.animation), path: page?.path, url: page?.url ?? detail?.reference.url, at: item.animation.createdAt }
+    : item.kind === "website" ? { domain: item.reference.domain, icon: item.reference.favicon, title: item.reference.title || item.reference.domain, path: undefined, url: item.reference.url, at: item.reference.createdAt }
+    : { domain: undefined, icon: null, title: item.image.title || "Untitled image", path: undefined, url: fileUrl(item.image.key), at: item.image.createdAt }
   const meta =
     item.kind === "image" ? `${item.image.width} × ${item.image.height} · ${savedOn(info.at)}`
     : item.kind === "website" ? `${info.domain} · ${plural(item.reference.pageCount, "page")} · ${savedOn(info.at)}`
@@ -339,7 +339,7 @@ function Body({
       <aside className="flex flex-col border-t border-line lg:w-[392px] lg:shrink-0 lg:overflow-hidden lg:border-t-0 lg:border-l">
         <div className="flex shrink-0 flex-col gap-3 px-5 pt-5 pb-4">
           <div className="flex min-h-8 items-center gap-2">
-            {info.domain ? <SiteIcon domain={info.domain} className="size-5 rounded-md" /> : <ImageIcon className="size-4 text-ink-10" />}
+            {info.domain ? <SiteIcon domain={info.domain} icon={info.icon} className="size-5 rounded-md" /> : <ImageIcon className="size-4 text-ink-10" />}
             <span className="truncate text-xs text-ink-11">{info.domain ?? "Uploaded image"}</span>
             <CloseButton className="ml-auto hidden bg-ink-3 hover:bg-ink-4 hover:text-ink-12 lg:grid" />
           </div>

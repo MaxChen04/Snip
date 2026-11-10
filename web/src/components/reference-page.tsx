@@ -188,7 +188,7 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
       <TopBar login={login} solid />
 
       <div className="flex flex-col items-center gap-3 px-4 pt-8 pb-2 text-center">
-        {r.favicon && <img src={r.favicon} alt="" className="size-8 rounded-md shadow-button" onError={(e) => (e.currentTarget.style.display = "none")} />}
+        {r.favicon && <img src={fileUrl(r.favicon)} alt="" className="size-8 rounded-md shadow-button" onError={(e) => (e.currentTarget.style.display = "none")} />}
         <div className="max-w-2xl">
           <p className="text-xs text-ink-10">
             <Link href="/" className="hover:text-foreground">

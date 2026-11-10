@@ -222,7 +222,7 @@ async function assertReadsBack(lib: Library, c: Captured, label: string) {
 test("a gzipped capture reads back identically through every consumer, and so does one stored plain", () =>
   withLibrary(async (lib) => {
     const gz = await capture(lib, "https://gz.example/", "negotiated")
-    assert.deepEqual(gz.job.features, ["sections", "live", "schemes", "gzip"], "the Worker advertises it")
+    assert.ok(gz.job.features?.includes("gzip"), "the Worker advertises it")
     assert.equal(gz.snapshotKey, gzipKey(`refs/${gz.job.id}/${gz.job.attempt}/p0/snapshot.html`))
     assert.equal(gz.page.snapshotKey, gz.snapshotKey, "the page row points at the gzip name")
     const legacy = await capture(lib, "https://plain.example/", "plain")

@@ -2,7 +2,7 @@
 // pages, with no API calls. The app entry is main.tsx.
 import { lazy, StrictMode, Suspense } from "react"
 import { createRoot } from "react-dom/client"
-import { ThemeProvider } from "next-themes"
+import { ThemeProvider } from "@/components/theme-provider"
 import { Route, Switch } from "wouter"
 import { Spinner } from "@/components/ui/spinner"
 import { LandingPage } from "@/components/landing-page"
@@ -32,7 +32,7 @@ const Loading = () => (
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+    <ThemeProvider>
       <Suspense fallback={<Loading />}>
         <Switch>
           <Route path="/">

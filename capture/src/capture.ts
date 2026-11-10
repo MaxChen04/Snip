@@ -24,9 +24,14 @@ const LIVE_SECTIONS = process.env.SNIP_LIVE_SECTIONS !== "false"
 const MAX_LIVE = Math.max(0, Number(process.env.SNIP_LIVE_MAX ?? 8))
 const LIVE_MS = Math.min(8000, Math.max(1000, Number(process.env.SNIP_LIVE_MS ?? 3000)))
 const LIVE_PROBE_MS = 400
+const LIVE_RECHECK_MS = 900 // further watching of a section that kept repainting but had not changed yet (see recordLiveSections)
+const LIVE_BUSY_FRAMES = 4 // frames in the probe window that count as repainting: a one-off repaint (a transition ending) sends two or three
 const LIVE_FRAME_MS = 33 // ~30 fps; the screencast is asked for every second frame of up to ~60
 const LIVE_SETTLE_MS = Math.max(0, Number(process.env.SNIP_LIVE_SETTLE_MS ?? 400)) // longest wait for one-shot animations (scroll reveals) to finish before probing
 const LIVE_MIN_CHANGED = 0.002 // share of a section's pixels that must change between probe frames (a caret is far less)
+// A moving section up to this many viewports tall is recorded whole, in a viewport grown to fit it.
+// ponytail: fixed cap; taller sections keep a viewport-high clip over a still remainder. Raise it if clips stay in budget.
+const LIVE_TALL = Math.max(1, Number(process.env.SNIP_LIVE_TALL ?? 1.5))
 const LIVE_QUIET_MS = 1000 // no frame for this long before the window ends: the motion stopped, so it doesn't loop
 const LIVE_QUANTIZER = Math.min(63, Math.max(0, Number(process.env.SNIP_LIVE_QUANTIZER ?? 40)))
 const LIVE_CLIP_BYTES = Math.max(100_000, Number(process.env.SNIP_LIVE_CLIP_BYTES ?? 2_500_000))
@@ -361,6 +366,38 @@ async function retryOnce<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
+const ICON_MAX_BYTES = 256 * 1024
+
+/** What a site's icon is, judged by its bytes (the site's Content-Type is not trusted). Null for anything that is not an image. */
+export function iconType(b: Buffer): { ext: string; type: string } | null {
+  const at = (...bytes: number[]) => bytes.every((x, i) => b[i] === x)
+  if (at(0x89, 0x50, 0x4e, 0x47)) return { ext: "png", type: "image/png" }
+  if (at(0, 0, 1, 0)) return { ext: "ico", type: "image/x-icon" }
+  if (at(0x47, 0x49, 0x46, 0x38)) return { ext: "gif", type: "image/gif" }
+  if (at(0xff, 0xd8, 0xff)) return { ext: "jpg", type: "image/jpeg" }
+  if (b.toString("latin1", 0, 4) === "RIFF" && b.toString("latin1", 8, 12) === "WEBP") return { ext: "webp", type: "image/webp" }
+  if (/^[\s\uFEFF]*(<\?xml[^>]*>\s*)?(<!--[\s\S]*?-->\s*)?<svg[\s>]/.test(b.toString("utf8", 0, 2048))) return { ext: "svg", type: "image/svg+xml" }
+  return null
+}
+
+/**
+ * Save the site's icon with the capture so Snip shows it from its own files, never by asking the site (or anyone else) again.
+ * Null when the icon can't be fetched, is too big or isn't an image: the website then shows its first letter.
+ * Never throws: it runs beside the first page and must not fail the capture. A job that went away fails the
+ * capture's own next call.
+ */
+async function storeIcon(context: BrowserContext, api: SnipApi, url: string, prefix: string): Promise<string | null> {
+  try {
+    const res = await context.request.get(url, { timeout: 10_000 })
+    if (!res.ok() || Number(res.headers()["content-length"]) > ICON_MAX_BYTES) return null
+    const body = await res.body()
+    const icon = body.length <= ICON_MAX_BYTES ? iconType(body) : null
+    return icon ? await api.upload(`${prefix}/icon.${icon.ext}`, body, icon.type) : null
+  } catch {
+    return null
+  }
+}
+
 /** Map `items` with at most `n` calls running at once, keeping order. */
 async function pool<T, R>(items: T[], n: number, fn: (item: T, i: number) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length)
@@ -385,14 +422,15 @@ const findSections = (page: PwPage) =>
   })
 
 /** A clip uploaded for an earlier page of the same capture, reused for the same section on later pages. */
-export type LiveReuse = { key: string; height: number; durationMs: number }
+export type LiveReuse = { key: string; height: number; durationMs: number; still?: Buffer }
 
 /**
  * One clip. Touching sections that move are recorded together, so several sections can share one clip.
  * `reuse` points at a clip already uploaded for this section on an earlier page; `recording` is then null.
- * `sig` names a single-section clip so later pages can reuse it.
+ * `sig` names a single-section clip so later pages can reuse it. `still` is the clip's first frame (JPEG, the
+ * clip's own band): it is pasted into the full-page shot, so the screenshot is the frame the clip starts on.
  */
-type LiveClip = { recording: Recording | null; reuse?: LiveReuse; y: number; height: number; durationMs: number; sig: string | null }
+type LiveClip = { recording: Recording | null; reuse?: LiveReuse; y: number; height: number; durationMs: number; sig: string | null; still?: Buffer }
 
 /** A section as sections.js finds it: `fp` fingerprints its text and media, and is not stored. */
 type SectionCut = Omit<PageSection, "key"> & { fp?: string }
@@ -409,6 +447,15 @@ async function changedShare(a: Buffer, b: Buffer, band: { top: number; height: n
   const { width } = imageSize(a)
   const out = { width: Math.max(1, Math.round(width / 4)), height: Math.max(1, Math.round(band.height / 4)) }
   return pixelShare(...(await Promise.all([bandPixels(a, band, out), bandPixels(b, band, out)])))
+}
+
+/**
+ * `height` CSS px from `top` as rows of an image `rows` tall, at `k` image px per CSS px. Both edges are rounded, not
+ * the top and the height apart: at a fractional scale those can add up to a row past the image (example.com on a phone).
+ */
+const bandRows = (top: number, height: number, k: number, rows: number) => {
+  const first = Math.min(rows - 1, Math.max(0, Math.round(top * k)))
+  return { top: first, height: Math.max(1, Math.min(rows, Math.round((top + height) * k)) - first) }
 }
 
 /** A full-width horizontal band of an image, scaled to `out` (RGB, 8 bit), for comparing bands of images of different sizes. */
@@ -476,11 +523,13 @@ const likelyInView = (page: PwPage, cuts: Omit<PageSection, "key">[]) =>
  *
  * Each section is probed first: once one-shot animations (scroll reveals) have finished, the screencast is
  * watched briefly. A still page sends a frame or two; otherwise the section's own pixels are compared across
- * the window, so motion elsewhere on screen or a blinking caret doesn't count. Touching sections that both move,
- * such as a transparent header over a hero gradient, are recorded as one clip when they fit in the viewport:
- * clips made at different moments would show the same animation out of step at their shared edge. A clip whose
- * motion stops before the window ends is dropped, since it wouldn't loop. Oversized clips are re-encoded
- * smaller from the frames already held, then dropped if still over the per-clip or per-page byte budget.
+ * the window, so motion elsewhere on screen or a blinking caret doesn't count. If frames kept coming (the
+ * section is repainting) but it hasn't changed, the watch is extended once: a loop can hold still for a
+ * second, or start after a beat. Touching sections that both move, such as a transparent header over a hero
+ * gradient, are recorded as one clip when they fit in the viewport: clips made at different moments would show
+ * the same animation out of step at their shared edge. A clip whose motion stops before the window ends is
+ * dropped, since it wouldn't loop. Oversized clips are re-encoded smaller from the frames already held, then
+ * dropped if still over the per-clip or per-page byte budget.
  *
  * Fixed and sticky bars are hidden below the top of the page, since the full-page screenshot shows them only
  * there. Frames come from the screencast at viewport size and are cropped by the encoder. `seen` holds clips
@@ -556,7 +605,7 @@ export async function recordLiveSections(
     return y - (await page.evaluate(() => Math.round(window.scrollY)))
   }
   /** Screencast frames (JPEG, viewport size) for `ms`, with when each arrived. */
-  const screencast = async (ms: number, everyNthFrame: number) => {
+  const screencast = async (ms: number, everyNthFrame: number, maxHeight = vh) => {
     const frames: { data: string; t: number }[] = []
     const onFrame = ({ data, sessionId }: { data: string; sessionId: number }) => {
       cdp.send("Page.screencastFrameAck", { sessionId }).catch(() => {})
@@ -565,11 +614,72 @@ export async function recordLiveSections(
     }
     cdp.on("Page.screencastFrame", onFrame)
     const from = Date.now()
-    await cdp.send("Page.startScreencast", { format: "jpeg", quality: FRAME_JPEG_QUALITY, maxWidth: vw, maxHeight: vh, everyNthFrame })
+    await cdp.send("Page.startScreencast", { format: "jpeg", quality: FRAME_JPEG_QUALITY, maxWidth: vw, maxHeight, everyNthFrame })
     await sleep(ms)
     await cdp.send("Page.stopScreencast").catch(() => {})
     cdp.off("Page.screencastFrame", onFrame)
     return { frames, from, to: Date.now() }
+  }
+  const holdResize = (on: boolean) => page.evaluate((on) => new Promise<void>((done) => {
+    if (on) (window as unknown as { __snipHoldResize: boolean }).__snipHoldResize = true
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (!on) (window as unknown as { __snipHoldResize: boolean }).__snipHoldResize = false
+      done()
+    }))
+  }), on).catch(() => {})
+  /**
+   * The vertical extent [top, bottom], in document px, of each element that takes room in the page's flow, by its
+   * place in `body *`. Taken from offsets, which ignore transforms: the section being recorded is always moving.
+   * Fixed and sticky elements and what they hold follow the viewport, not the layout, so they are left out.
+   */
+  type Layout = { count: number; at: Record<number, [number, number]> }
+  const layout = () => page.evaluate((): Layout => {
+    const all = Array.from(document.body.querySelectorAll("*"))
+    const at: Layout["at"] = {}
+    let pinned: Element | null = null
+    for (const [i, el] of all.entries()) {
+      if (pinned?.contains(el)) continue
+      const { position } = getComputedStyle(el)
+      pinned = position === "fixed" || position === "sticky" ? el : null
+      if (pinned || !(el instanceof HTMLElement) || !el.offsetParent || !el.offsetWidth || !el.offsetHeight) continue
+      let top = 0 // offsetTop is from the offset parent: add up the few positioned ancestors
+      for (let up: Element | null = el; up instanceof HTMLElement; up = up.offsetParent) top += up.offsetTop
+      at[i] = [top, top + el.offsetHeight]
+    }
+    return { count: all.length, at }
+  })
+  const measure = () => Promise.all([docHeight(page), layout()]).catch((e) => {
+    log("  page layout not measured:", (e as Error).message.split("\n")[0])
+    return null
+  })
+  const slack = 2 // px the layout may move when the viewport grows (rounding) and still count as where it was
+  /** Whether everything touching document rows `keep` in `after` sits where it did in `before`, give or take `slack`. */
+  const placed = (before: Layout, after: Layout, keep: { y: number; height: number }) => {
+    const touches = (r?: [number, number]) => !!r && r[0] < keep.y + keep.height && r[1] > keep.y
+    return before.count === after.count && Object.keys({ ...before.at, ...after.at }).every((i) => {
+      const [then, now] = [before.at[+i], after.at[+i]]
+      return (!touches(then) && !touches(now)) || (!!then && !!now && Math.abs(then[0] - now[0]) <= slack && Math.abs(then[1] - now[1]) <= slack)
+    })
+  }
+  /**
+   * Make the viewport `height` tall (the page's own events for it are held, as in fullPageShot). Pages size things by
+   * the viewport, so a taller one can move or resize sections while the total height stays put. It is only kept if
+   * the page is as it was: the same total height, and nothing touching the rows `keep` (the whole page unless the
+   * caller says which rows its coordinates and patches rely on) moved or resized. Otherwise, or if that can't be
+   * measured, the viewport is put back and this returns false.
+   */
+  const viewport = async (height: number, keep = { y: 0, height: Infinity }) => {
+    const grow = height !== vh
+    const before = grow ? await measure() : null
+    if (grow && !before) return false
+    await holdResize(true)
+    await page.setViewportSize({ width: vw, height })
+    await holdResize(grow)
+    if (!grow) return true
+    const after = await measure()
+    if (before && after && Math.abs(after[0] - before[0]) <= slack && placed(before[1], after[1], keep)) return true
+    await viewport(vh)
+    return false
   }
   const scale = async (frame: string) => imageSize(Buffer.from(frame, "base64")).width / vw // screencast pixels per CSS px
   // A viewport still at the page's DPR: CDP's own captureScreenshot is at DPR 1 under mobile emulation.
@@ -587,11 +697,11 @@ export async function recordLiveSections(
     const shotH = Math.floor(imageSize(shot).height / d) // in CSS px
     if (s.y + height > shotH) return
     const out = { width: 360, height: Math.max(1, Math.round((height * 360) / vw)) }
-    const seen = await bandPixels(frame, { top: Math.round(top * k), height: Math.max(1, Math.round(height * k)) }, out)
-    const shown = await bandPixels(shot, { top: Math.round(s.y * d), height: Math.max(1, Math.round(height * d)) }, out)
+    const seen = await bandPixels(frame, bandRows(top, height, k, imageSize(frame).height), out)
+    const shown = await bandPixels(shot, bandRows(s.y, height, d, imageSize(shot).height), out)
     if (pixelShare(seen, shown) < IN_VIEW_CHANGED) return
     const piece = async (img: Buffer, at: number, viewTop: number, h: number) =>
-      inView!.patches.push({ y: at, height: h, jpeg: await sharp(img).extract({ left: 0, top: Math.round(viewTop * k), width: Math.round(vw * k), height: Math.max(1, Math.round(h * k)) }).jpeg({ quality: 90 }).toBuffer() })
+      inView!.patches.push({ y: at, height: h, jpeg: await sharp(img).extract({ left: 0, width: Math.round(vw * k), ...bandRows(viewTop, h, k, imageSize(img).height) }).jpeg({ quality: 90 }).toBuffer() })
     await piece(frame, s.y, top, height)
     // The rest of a tall section, a viewport at a time, up to the shot's bottom.
     for (let off = height, extra = 0; off < s.height && extra < IN_VIEW_EXTRA; extra++) {
@@ -640,10 +750,16 @@ export async function recordLiveSections(
         if (inView) await collectInView(s, top, height, k, last)
         // A still page sends one frame. Two or more are compared, since a busy machine can slow the screencast to a trickle.
         if (frames.length < 2) continue
-        // The middle frame too: a back-and-forth animation can be at the same point at both ends of the window.
-        const first = Buffer.from(frames[0]!.data, "base64")
-        moving[i] = (await changedShare(first, last, band)) >= LIVE_MIN_CHANGED
-          || (frames.length > 2 && (await changedShare(first, Buffer.from(frames[frames.length >> 1]!.data, "base64"), band)) >= LIVE_MIN_CHANGED)
+        // The first frame against the last, and against the middle one: a back-and-forth animation can be at the same point at both ends.
+        const changes = async (fs: { data: string }[]) => {
+          const at = (n: number) => Buffer.from(fs[n]!.data, "base64")
+          return (await changedShare(at(0), at(fs.length - 1), band)) >= LIVE_MIN_CHANGED
+            || (fs.length > 2 && (await changedShare(at(0), at(fs.length >> 1), band)) >= LIVE_MIN_CHANGED)
+        }
+        moving[i] = await changes(frames)
+        // Frames kept coming but the section hasn't changed: its motion may hold still (a video on its last frame) or start a beat
+        // after it scrolls in (a demo that loads on view). Watch on before calling it still.
+        if (!moving[i] && frames.length >= LIVE_BUSY_FRAMES) moving[i] = await changes([...frames, ...(await screencast(LIVE_RECHECK_MS, 1)).frames])
       } catch (e) {
         log(`  live probe of "${s.label}" skipped:`, (e as Error).message.split("\n")[0])
       }
@@ -652,6 +768,7 @@ export async function recordLiveSections(
     // ---- Record each run of touching, moving sections that fits in one viewport ----
     let made = 0
     let pageBytes = 0
+    let tall = false // the viewport is grown to fit the section being recorded
     for (let i = 0; live && i < cuts.length && made < MAX_LIVE; i++) {
       if (!moving[i]) continue
       let j = i
@@ -661,18 +778,39 @@ export async function recordLiveSections(
       try {
         const reuse = sig ? seen.get(sig) : undefined
         if (reuse) {
-          out[i] = { recording: null, reuse, y, height: Math.min(reuse.height, cuts[i]!.height), durationMs: reuse.durationMs, sig }
+          const height = Math.min(reuse.height, cuts[i]!.height)
+          out[i] = { recording: null, reuse, y, height, durationMs: reuse.durationMs, sig, still: reuse.still }
+          if (inView && reuse.still) {
+            // The viewer shows a reused clip from its top, cut to this section's height: cut the still the same way.
+            const size = imageSize(reuse.still)
+            const jpeg = height < reuse.height
+              ? await sharp(reuse.still).extract({ left: 0, top: 0, width: size.width, height: Math.max(1, Math.round((size.height * height) / reuse.height)) }).jpeg({ quality: 90 }).toBuffer()
+              : reuse.still
+            inView.patches.push({ y, height, jpeg })
+          }
           continue
         }
+        const band = cuts[j]!.y + cuts[j]!.height - y
+        if (band > vh && band <= vh * LIVE_TALL) tall = await viewport(Math.ceil(band), { y, height: band })
+        const view = tall ? Math.ceil(band) : vh
         const top = await showAt(y)
-        const height = Math.floor(Math.min(cuts[j]!.y + cuts[j]!.height - y, vh - top) / 2) * 2
+        const height = Math.floor(Math.min(band, view - top) / 2) * 2
         if (top < 0 || height < 40) continue
-        const { frames, to } = await screencast(LIVE_MS, 2)
+        const { frames, to } = await screencast(LIVE_MS, 2, view)
         if (frames.length < 2 || to - frames.at(-1)!.t > LIVE_QUIET_MS) continue // still, or the motion stopped: it wouldn't loop
 
         const k = await scale(frames[0]!.data)
         const crop = { x: 0, y: Math.round(top * k), width: Math.round(vw * k), height: Math.round(height * k) }
+        let clipHeight = height
         const durationMs = Math.round(Math.min(LIVE_MS, frames.at(-1)!.t - frames[0]!.t + LIVE_FRAME_MS))
+        // The clip loops, so it can start anywhere: start it on its fullest frame, which becomes the screenshot.
+        // A frame's JPEG size stands for how much is on screen; one the page rested on (no new frame for a while)
+        // counts for more than one passed through. Even indexes only, so the half-rate encode keeps it first.
+        // ponytail: size-and-rest heuristic, can land mid-transition; compare frames to neighbours if it picks badly.
+        const score = (n: number) => frames[n]!.data.length * Math.min(500, Math.max(100, (frames[n + 1]?.t ?? frames[0]!.t + durationMs) - frames[n]!.t))
+        let start = 0
+        for (let n = 2; n < frames.length; n += 2) if (score(n) > score(start)) start = n
+        frames.push(...frames.splice(0, start).map((f) => ({ ...f, t: f.t + durationMs })))
         const encode = async (quantizer: number, step: number) => {
           const writer = await recordingWriter(browser, { format: "webm", quantizer })
           if (writer.format !== "webm") return null // no VP9 here: a GIF of a whole section would be far too big
@@ -686,17 +824,30 @@ export async function recordLiveSections(
         let recording = await encode(LIVE_QUANTIZER, 1)
         if (!recording) break
         if (recording.bytes.length > LIVE_CLIP_BYTES) recording = (await encode(52, 2)) ?? recording // half the frames, coarser
+        if (recording.bytes.length > LIVE_CLIP_BYTES && height > vh) {
+          // A whole tall section is over budget: keep its first viewport rather than nothing.
+          clipHeight = Math.floor(vh / 2) * 2
+          crop.height = Math.round(clipHeight * k)
+          recording = (await encode(LIVE_QUANTIZER, 1)) ?? recording
+          if (recording.bytes.length > LIVE_CLIP_BYTES) recording = (await encode(52, 2)) ?? recording
+        }
         if (recording.bytes.length > LIVE_CLIP_BYTES || pageBytes + recording.bytes.length > LIVE_PAGE_BYTES) {
           log(`  live clip of "${cuts[i]!.label}" dropped: ${recording.bytes.length} bytes is over budget`)
           continue
         }
         pageBytes += recording.bytes.length
-        const clip: LiveClip = { recording, y, height, durationMs, sig }
+        // The clip's first frame becomes this band of the full-page shot (after any in-view patch of it, so it
+        // wins): the viewer can then swap screenshot and clip with nothing moving.
+        const still = await sharp(Buffer.from(frames[0]!.data, "base64")).extract({ left: crop.x, top: crop.y, width: crop.width, height: crop.height }).jpeg({ quality: 90 }).toBuffer()
+        inView?.patches.push({ y, height: clipHeight, jpeg: still })
+        const clip: LiveClip = { recording, y, height: clipHeight, durationMs, sig, still }
         for (let n = i; n <= j; n++) out[n] = clip
         made++
       } catch (e) {
         log(`  live clip of "${cuts[i]!.label}" skipped:`, (e as Error).message.split("\n")[0])
       } finally {
+        if (tall) await viewport(vh).catch(() => {})
+        tall = false
         i = j
       }
     }
@@ -1060,6 +1211,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
   const allTokens: DesignTokens[] = resume?.tokens ? [resume.tokens] : []
   let meta: CrawlState["meta"] = resume?.meta ?? null
   let coverKey: string | null = null
+  let iconTask: Promise<void> | undefined
   let captured = resume?.captured ?? 0
   let failures = resume?.failures ?? 0
   let navLinksQueued = resume?.navLinksQueued ?? false
@@ -1144,6 +1296,12 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
         continue
       }
       if (!meta) meta = pageMeta
+      // The icon is saved beside the first page's own work, never ahead of it, and nothing waits for it. Its key replaces
+      // the URL in `meta` when it lands, so the next pause checkpoint, or completion, carries whichever it has by then.
+      // A resumed crawl whose checkpoint already holds the key (not a URL) keeps it; one that only has the URL tries once.
+      if (features.has("icon") && !iconTask && meta.favicon && !meta.favicon.startsWith("refs/")) {
+        iconTask = storeIcon(desktop, api, meta.favicon, prefix).then((key) => { if (key && meta) meta = { ...meta, favicon: key } })
+      }
 
       if (job.mode === "crawl") {
         const links = rankLinks(pageMeta.links).flatMap((l) => normalize(l.href, root) ?? [])
@@ -1264,7 +1422,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
               const rec = clip.recording!
               clipKeys.set(clip, retryOnce(() => api.upload(`${p}/section-${i}-live.webm`, rec.bytes, rec.contentType)).then(
                 (key) => {
-                  if (clip.sig) liveSeen.set(clip.sig, { key, height: clip.height, durationMs: clip.durationMs })
+                  if (clip.sig) liveSeen.set(clip.sig, { key, height: clip.height, durationMs: clip.durationMs, still: clip.still })
                   return key
                 },
                 (e) => {
@@ -1359,6 +1517,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
   await api.complete(job.id, {
     title: meta?.title ?? null,
     description: meta?.description ?? null,
+    // The saved icon's key, or the site's icon URL when it isn't saved (the Worker keeps only a key; an older one keeps the URL).
     favicon: meta?.favicon ?? null,
     // A resumed crawl already has its cover from its first page; null keeps it.
     coverKey: resume?.captured ? null : coverKey,

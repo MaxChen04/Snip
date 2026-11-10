@@ -229,7 +229,7 @@ test("sections flatten every page in order and page without gaps or repeats", as
     assert.deepEqual(first, {
       id: `${pricing.id}:1`, pageId: pricing.id, referenceId: stripe.reference.id, index: 1, kind: "section", label: "Section 1",
       key: pricing.sections[1]!.key, width: 1280, height: 101, path: "/pricing", url: "https://stripe.com/pricing",
-      reference: { id: stripe.reference.id, title: "https://stripe.com", domain: "stripe.com" }, createdAt: pricing.createdAt,
+      reference: { id: stripe.reference.id, title: "https://stripe.com", domain: "stripe.com", favicon: null }, createdAt: pricing.createdAt,
     })
 
     // Same q and collection semantics as the pages feed.
@@ -298,7 +298,7 @@ test("a board lists every member kind with positions, notes and groups", async (
     const [ref, page, img, sticky] = canvas.items
     assert.deepEqual(ref!.reference, (await db.listReferences(database, { collectionId: moodboard })).items[0])
     assert.deepEqual(ref!.reference!.previewKeys, [stripe.pages[0]!.desktopThumbKey])
-    assert.deepEqual(page!.page, { ...(await db.getPage(database, linear.pages[1]!.id))!, reference: { id: linear.reference.id, title: "https://linear.app", domain: "linear.app" } })
+    assert.deepEqual(page!.page, { ...(await db.getPage(database, linear.pages[1]!.id))!, reference: { id: linear.reference.id, title: "https://linear.app", domain: "linear.app", favicon: null } })
     assert.deepEqual(page!.page!.collectionIds, [moodboard])
     assert.deepEqual(img!.image, image)
     assert.equal(sticky!.text, "Warm, quiet")
