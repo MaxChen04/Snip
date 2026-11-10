@@ -31,7 +31,7 @@ const cloud = require('./cloud.cjs');
 const snapshotModule = require('./snapshot.cjs');
 const deploy = require('./deploy.cjs');
 const local = require('./local.cjs');
-const { mintOwnerLink, ownerSecretHash, startLoopback } = require('./transfer.cjs');
+const { isGzipKey, mintOwnerLink, ownerSecretHash, startLoopback } = require('./transfer.cjs');
 // context.cjs loads this module lazily, so this is never a cycle at load time.
 const { retryOf } = require('./context.cjs');
 
@@ -832,6 +832,19 @@ function importStep() {
       const files = JSON.parse(fs.readFileSync(path.join(directory, 'files.json'), 'utf8')).keys || [];
       const statements = splitSqlStatements(fs.readFileSync(dump, 'utf8'));
       const tables = Object.keys(snapshotTables(exported, directory));
+
+      // A Worker older than 1.4.0 accepts gzipped pages but serves their raw bytes, so its HTML and CSS views would be
+      // garbage. Ask before writing anything. This guards copies made by this engine; an older app cannot be changed.
+      const compressed = files.filter((entry) => isGzipKey(entry.key)).length;
+      if (compressed) {
+        const remote = await ctx.transfer().status();
+        if (remote && !(Array.isArray(remote.reads) && remote.reads.includes('gzip'))) {
+          throw new StepError('DESTINATION_TOO_OLD', `The cloud Snip runs Worker ${remote.version || 'of an unknown version'}, which can’t read the ${compressed} compressed page file${compressed === 1 ? '' : 's'} in this library.`, {
+            hint: 'Deploy this version of Snip to it (`npm run setup:cloudflare -- deploy`), then run setup again. Nothing was copied.',
+            data: { version: remote.version || null, compressed },
+          });
+        }
+      }
 
       // The remote is fresh (guard proved it). A resumed import truncates and
       // re-runs, so a half-applied dump is never left behind.

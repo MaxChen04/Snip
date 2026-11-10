@@ -1,3 +1,5 @@
+import { gzip as zlibGzip } from "node:zlib"
+import { promisify } from "node:util"
 import type { CaptureControl, CrawlState, Job, JobComplete, PageUpload } from "../../web/shared/types"
 
 export class CaptureAuthenticationError extends Error {
@@ -95,6 +97,19 @@ export class SnipApi {
   async fail(jobId: string, error: string) {
     await this.call(`/agent/jobs/${jobId}/fail`, json({ error })).catch(() => {})
   }
+}
+
+const gzipAsync = promisify(zlibGzip)
+
+/**
+ * Uploads a text file, gzipped under a `.gz.` key when `gzip` is true. Pass `features.has("gzip")` from the claimed job:
+ * a Worker that doesn't advertise it would serve the compressed bytes as they are. Returns the key it stored.
+ * The key rule is gzipKey in web/shared/types.ts, copied because released apps ship capture/src without web/shared;
+ * web/tests/gzip-files.test.ts keeps the two equal.
+ */
+export async function uploadText(api: Pick<SnipApi, "upload">, key: string, text: string, contentType: string, gzip: boolean) {
+  if (!gzip) return api.upload(key, text, contentType)
+  return api.upload(key.replace(/\.(html|json)$/, ".gz.$1"), await gzipAsync(text, { level: 9 }), contentType)
 }
 
 const json = (body: unknown): RequestInit => ({

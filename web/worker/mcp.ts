@@ -4,6 +4,7 @@ import { z } from "zod"
 import { isVideoKey, type Animation, type DesignTokens, type Page, type Reference } from "../shared/types"
 import { isLocalOrigin, signFileUrl } from "./auth"
 import * as db from "./db"
+import { readText } from "./files"
 import { bounded, decodeCursor, encodeCursor } from "./mcp-bounds"
 import {
   TASKS_EXTENSION, WAIT_DEFAULT_SECONDS, WAIT_MAX_SECONDS, WAIT_STEP_MS,
@@ -488,10 +489,9 @@ Signed file URLs expire after 24 hours.`,
       }
       if (include_styles) data.styles = "Use get_page_styles(page_id) for valid, filterable computed styles."
       if (include_html) {
-        const obj = p.snapshotKey ? await env.FILES.get(p.snapshotKey) : null
-        if (!obj) data.html = { included: false, reason: p.snapshotKey ? "file missing from storage" : "not captured" }
+        const body = p.snapshotKey ? await readText(env.FILES, p.snapshotKey) : null
+        if (body === null) data.html = { included: false, reason: p.snapshotKey ? "file missing from storage" : "not captured" }
         else {
-          const body = await obj.text()
           const end = Math.min(body.length, html_offset + LIMITS.htmlChars)
           data.html = {
             included: true,
@@ -527,8 +527,8 @@ Signed file URLs expire after 24 hours.`,
     async ({ page_id, section = "summary", selector_contains, text_contains, limit = 40, offset = 0 }) => {
       const p = await db.getPage(env.DB, page_id)
       if (!p) return fail(`No page with id "${page_id}". Use get_reference(id, part "pages") to list page ids.`)
-      const obj = p.stylesKey ? await env.FILES.get(p.stylesKey) : null
-      if (!obj) return ok({ pageId: page_id, unavailable: p.stylesKey ? "styles file missing from storage" : "styles were not captured for this page" })
+      const raw = p.stylesKey ? await readText(env.FILES, p.stylesKey) : null
+      if (raw === null) return ok({ pageId: page_id, unavailable: p.stylesKey ? "styles file missing from storage" : "styles were not captured for this page" })
       type Styles = {
         elementCount?: number
         truncated?: boolean
@@ -542,7 +542,7 @@ Signed file URLs expire after 24 hours.`,
       }
       let s: Styles
       try {
-        s = JSON.parse(await obj.text()) as Styles
+        s = JSON.parse(raw) as Styles
       } catch {
         return fail("The styles file for this page could not be parsed. Use computedStylesUrl from get_page instead.")
       }

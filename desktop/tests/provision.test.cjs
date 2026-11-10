@@ -242,7 +242,8 @@ function fakeCloud(model) {
     }
     if (route === 'GET /transfer/status') {
       return jsonResponse(200, {
-        version: '1.1.0',
+        version: model.workerVersion || '1.1.0',
+        ...(model.reads ? { reads: model.reads } : {}),
         hasOwner: owner,
         ownerId: owner ? 'tester' : null,
         counts: counts(),
@@ -370,7 +371,7 @@ function buildModel(overrides = {}) {
 async function runSetup(model, flags = {}, options = {}) {
   const emitter = collectedEmitter();
   const cloudFake = options.cloud || fakeCloud(model);
-  const wrangler = fakeWrangler(model);
+  const wrangler = options.wrangler || fakeWrangler(model);
   const deps = {
     fetch: cloudFake.fetch,
     library: fakeLibraryModule(model),
@@ -680,6 +681,38 @@ test('a full setup runs every step against fakes and never succeeds on an empty 
   assert.equal(state.cloud.detachedAt, null);
   assert.ok(state.transfer.digest.startsWith('snip-digest-v1:'));
   assert.equal(state.snapshot.refs, LIBRARY.refs);
+});
+
+test('a library with gzipped pages is copied only to a Worker that says it reads them', async () => {
+  const gz = SYNTHETIC.fileKey(2, 'snapshot.gz.html');
+  const manifest = {
+    version: 1,
+    tables: { ...LIBRARY },
+    keys: [
+      { key: SYNTHETIC.fileKey(1, 'desktop.png'), size: 11, contentType: 'image/png' },
+      { key: gz, size: 4, contentType: 'text/html' },
+    ],
+    totalBytes: 15,
+  };
+  // A Worker from before 1.4.0 reports no `reads`: it would accept the file, then serve its raw gzip bytes.
+  const older = buildModel({ manifest, workerVersion: '1.3.0' });
+  const cloud = fakeCloud(older);
+  const wrangler = fakeWrangler(older);
+  await assert.rejects(() => runSetup(older, {}, { cloud, wrangler }), (error) => error.code === 'DESTINATION_TOO_OLD' && /1\.3\.0/.test(error.message) && /Nothing was copied/.test(error.hint));
+  assert.equal(cloud.calls.some((call) => call.route.startsWith('PUT /transfer/file/')), false, 'no file was sent');
+  assert.equal(wrangler.calls.some((call) => call.args.includes('--remote') && call.args.includes('--file')), false, 'no database row was sent');
+  const state = stateModule.readState(older.root);
+  assert.notEqual(state.mode, 'cloud', 'this Mac did not switch');
+  assert.equal(state.steps.find((step) => step.id === 'import').status, 'failed');
+
+  // A Worker that lists "gzip" in `reads` gets the copy, the gzipped file included.
+  const current = buildModel({ manifest, workerVersion: '1.4.0', reads: ['gzip'] });
+  const done = await runSetup(current);
+  assert.equal(done.result.ok, true);
+  assert.ok(done.cloud.calls.some((call) => call.route === `PUT /transfer/file/${gz}`));
+
+  // Without a gzipped file an older Worker is still a valid destination: it can read everything it is sent.
+  assert.equal((await runSetup(buildModel({ workerVersion: '1.3.0' }))).result.ok, true);
 });
 
 test('the guard refuses a foreign Snip before creating anything', async () => {

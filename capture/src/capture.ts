@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs"
 import sharp from "sharp"
 import type { Browser, BrowserContext, BrowserContextOptions, CDPSession, Page as PwPage } from "playwright"
 import type { CrawlState, DesignTokens, Job, MotionEntry, PageSection, PageUpload } from "../../web/shared/types"
-import { JobGoneError, type SnipApi } from "./api"
+import { JobGoneError, uploadText, type SnipApi } from "./api"
 import { imageSize, type Frame } from "./gif"
 import { allowPrivateUrls, assertPublicUrl, createCaptureNetwork, PrivateAddressError } from "./network-guard"
 import { buildStills, closeRenderer, cropBands, sampleIndexes } from "./sheet"
@@ -1485,8 +1485,8 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
         mobileThumbKey: mobileThumb ? await api.upload(`${p}/mobile-thumb.jpg`, mobileThumb, "image/jpeg") : null,
         mobileWidth: mobileShot?.width ?? null,
         mobileHeight: mobileShot?.height ?? null,
-        snapshotKey: await api.upload(`${p}/snapshot.html`, html, "text/html; charset=utf-8"),
-        stylesKey: await api.upload(`${p}/styles.json`, JSON.stringify(styles), "application/json"),
+        snapshotKey: await uploadText(api, `${p}/snapshot.html`, html, "text/html; charset=utf-8", features.has("gzip")),
+        stylesKey: await uploadText(api, `${p}/styles.json`, JSON.stringify(styles), "application/json", features.has("gzip")),
         tokens: styles.tokens,
         sections: await uploadSections(),
         altScheme: await uploadOtherScheme(),

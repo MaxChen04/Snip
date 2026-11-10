@@ -14,6 +14,11 @@ function validKey(key) {
   return typeof key === 'string' && KEY_RE.test(key) && !key.includes('..');
 }
 
+/** A capture file stored gzipped; the engine's copy of isGzipKey in web/shared/types.ts (gzip-files.test.ts keeps them equal). */
+function isGzipKey(key) {
+  return /\.gz\.(html|json)$/.test(String(key));
+}
+
 function encodeKey(key) {
   return String(key).split('/').map(encodeURIComponent).join('/');
 }
@@ -232,6 +237,7 @@ module.exports = {
   DONE_HTML,
   createTransfer,
   encodeKey,
+  isGzipKey,
   mintOwnerLink,
   ownerSecretHash,
   startLoopback,

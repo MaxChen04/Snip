@@ -24,3 +24,66 @@ runtime cache when available, and still work without it.
 The existing `partial` flag is preserved when a scan reaches the listing bound.
 The meter is an informational estimate of stored objects, not a quota or an
 account billing total. It does not prevent uploads, cap storage, or delete files.
+
+## Compressed snapshots
+
+From Worker 1.4.0 the capture agent gzips a page's HTML snapshot and styles file
+before uploading them, but only when the Worker it is talking to lists `gzip` in
+the `features` of the job it hands out. They are stored as `snapshot.gz.html` and
+`styles.gz.json`; the `.gz` before the extension is how the Worker knows to
+unzip them. The meter counts what is stored, so a library captured this way
+reports less. Captures made earlier keep their uncompressed `snapshot.html` and
+`styles.json` and are never rewritten; recapturing a page replaces them.
+
+Everything that reads these files (the page viewer, downloads, the zip export,
+MCP tools and their signed URLs) gets the original text back. `/files/*` sends a
+client that accepts gzip the stored bytes with `Content-Encoding: gzip` and
+`encodeBody: "manual"` (without it the runtime compresses them a second time),
+and unzips them for any other client. On Cloudflare the client's own value is
+`request.cf.clientAcceptEncoding`, because the Worker sees a rewritten
+`Accept-Encoding`. Both answers carry `Vary: Accept-Encoding`; the unzipped one has
+a weak ETag. A gzipped file is always sent whole, without byte ranges. The MCP
+tools unzip inside the Worker (`web/worker/files.ts`). The tests prove this in
+local workerd; on Cloudflare it rests on one manual measurement. Copying a
+library between this Mac and Cloudflare moves the stored bytes as they are.
+
+### Keeping the reader
+
+Reading depends on the file name only, never on whether the Worker advertises
+`gzip` to the capture agent. Every later Worker must keep the reader and the
+`reads: ["gzip"]` entry in `/transfer/status`, including after the writer side is
+rolled back: to stop writing gzip, remove `gzip` from the claim's `features` and
+nothing else. `web/tests/gzip-files.test.ts` checks this.
+
+### Older versions cannot read them
+
+Rollback is not preserved. Measured with Snip 0.1.7 (Worker 1.2.0) and Worker
+1.3.0 opening a library that holds gzipped pages:
+
+- The page viewer's HTML tab shows the gzip bytes as text, labelled with the
+  compressed size. The CSS tab says "The styles file could not be parsed." The
+  Open link shows the same bytes as a page.
+- The JSON download saves gzip bytes as `p0-styles.gz.json`. "Export as .zip"
+  reports success but its `snapshot.html` and `styles.json` hold gzip bytes.
+- MCP `get_page` with `include_html` returns the bytes as the snapshot's text.
+  `get_page_styles` says the file can't be parsed and points to
+  `computedStylesUrl`, which serves the same bytes.
+- Screenshots, recordings, sections, tokens and pages captured before 1.4.0
+  are unaffected. Nothing crashes, and nothing stored is changed: a library
+  transfer copies the exact bytes, re-capturing replaces the files with plain
+  ones, and deleting removes them. Opening the library with 1.4.0 or later again
+  restores every view.
+
+No released build checks a library or Worker format, so this can't be prevented
+for them. Snip never downgrades itself (updates only move to a newer version),
+so this needs a deliberate step: installing an older app, running an older
+checkout, a release app following the library pointer of a newer source
+checkout, or rolling back a hosted Worker in Cloudflare.
+
+### Moving a library
+
+Before setup copies a library that holds gzipped files to Cloudflare, it asks
+the destination's `/transfer/status` and stops with `DESTINATION_TOO_OLD` unless
+`reads` lists `gzip`. Nothing is copied. This covers copies made by Snip 1.4.0
+or later. A pull to this Mac needs no check, because the destination is the app's
+own Worker. Copies made by an older app, and hosted rollbacks, are not covered.
