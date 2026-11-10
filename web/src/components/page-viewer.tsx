@@ -175,13 +175,21 @@ export function PageViewer({ page, onClose, onCollectionsChange }: {
   // Live plays each moving section's clip over the screenshot. Off by default for people who ask for less motion.
   // Neighbouring sections recorded together share one clip: draw each clip once, at its own top edge.
   const liveClips = useMemo(
-    () => [...new Map(page.sections.flatMap((s) => (s.live ? [[s.live.key, { key: s.live.key, y: s.live.y ?? s.y, height: s.live.height }] as const] : []))).values()],
+    () =>
+      [...new Map(page.sections.flatMap((s) => (s.live ? [[s.live.key, { key: s.live.key, y: s.live.y ?? s.y, height: s.live.height }] as const] : []))).values()].map((c) => ({
+        ...c,
+        // A clip is at most a viewport tall. Where its sections run on below it, its bottom edge fades into the screenshot.
+        feather: Math.max(...page.sections.filter((s) => s.live?.key === c.key).map((s) => s.y + s.height)) - (c.y + c.height) > 8,
+      })),
     [page.sections],
   )
   const hasLive = liveClips.length > 0
   const [live, setLiveState] = useState(() => readPref(LIVE_KEY, window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "0" : "1") === "1")
+  // Clips load the first time Live is on, then stay: Static pauses them where they are, so the motion stops in place.
+  const [clipsLoaded, setClipsLoaded] = useState(live)
   const setLive = (v: boolean) => {
     setLiveState(v)
+    if (v) setClipsLoaded(true)
     writePref(LIVE_KEY, v ? "1" : "0")
   }
 
@@ -273,11 +281,13 @@ export function PageViewer({ page, onClose, onCollectionsChange }: {
               className={cn("relative mx-auto overflow-hidden shadow-card", device === "desktop" ? "w-full max-w-6xl rounded-lg" : "w-[390px] max-w-full rounded-3xl")}
             >
               <img src={fileUrl(key)} alt="" className="block w-full" />
-              {device === "desktop" && live && !showAlt && page.desktopHeight
+              {device === "desktop" && clipsLoaded && !showAlt && page.desktopHeight
                 ? liveClips.map((c) => (
                     <LiveClip
                       key={c.key}
                       src={fileUrl(c.key)!}
+                      playing={live}
+                      feather={c.feather}
                       style={{ top: `${(c.y / page.desktopHeight!) * 100}%`, height: `${(c.height / page.desktopHeight!) * 100}%` }}
                     />
                   ))
@@ -343,17 +353,59 @@ export function PageViewer({ page, onClose, onCollectionsChange }: {
 
 // ---------- Sections ----------
 
-/** One section's recorded clip, laid over its place in the screenshot. Plays only while on screen. */
-function LiveClip({ src, style }: { src: string; style: React.CSSProperties }) {
+/**
+ * One section's recorded clip, laid over its place in the screenshot. Plays only while on screen and `playing`;
+ * otherwise it holds its frame. Hidden until its first frame is decoded, then faded in, and only then played:
+ * captures paste that frame into the screenshot, so the swap shows nothing and the motion starts from the still.
+ */
+function LiveClip({ src, style, playing, feather }: { src: string; style: React.CSSProperties; playing: boolean; feather: boolean }) {
   const ref = useRef<HTMLVideoElement>(null)
-  useEffect(() => {
+  const [ready, setReady] = useState(false)
+  const shown = useRef(false)
+  const visible = useRef(false)
+  const want = useRef(playing)
+  want.current = playing
+  const sync = () => {
     const video = ref.current
     if (!video) return
-    const io = new IntersectionObserver(([entry]) => (entry?.isIntersecting ? video.play().catch(() => {}) : video.pause()), { rootMargin: "200px" })
-    io.observe(video)
+    if (shown.current && visible.current && want.current) video.play().catch(() => {})
+    else video.pause()
+  }
+  useEffect(() => {
+    const io = new IntersectionObserver(([entry]) => {
+      visible.current = !!entry?.isIntersecting
+      sync()
+    }, { rootMargin: "200px" })
+    io.observe(ref.current!)
     return () => io.disconnect()
   }, [])
-  return <video ref={ref} src={src} muted loop playsInline preload="metadata" aria-hidden className="pointer-events-none absolute inset-x-0 w-full object-cover object-top" style={style} />
+  useEffect(sync, [playing])
+  useEffect(() => {
+    if (!ready) return
+    const t = setTimeout(() => {
+      shown.current = true
+      sync()
+    }, 200) // the fade below
+    return () => clearTimeout(t)
+  }, [ready])
+  return (
+    <video
+      ref={ref}
+      src={src}
+      muted
+      loop
+      playsInline
+      preload="auto"
+      aria-hidden
+      onLoadedData={() => setReady(true)}
+      className={cn(
+        "pointer-events-none absolute inset-x-0 w-full object-cover object-top transition-opacity duration-200",
+        ready ? "opacity-100" : "opacity-0",
+        feather && "[mask-image:linear-gradient(to_bottom,black_calc(100%-48px),transparent)]",
+      )}
+      style={style}
+    />
+  )
 }
 
 const SECTION_KIND = { header: "Header", hero: "Hero", section: null, footer: "Footer" } as const
