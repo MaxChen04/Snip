@@ -115,16 +115,18 @@ test("motion installed before load logs entrance staggers, and names the page's 
       </style>
       <div>${[0, 1, 2, 3, 4].map((i) => `<span class="glyph" style="--i:${i}">g</span>`).join("")}</div>
       <div>${[0, 1, 2].map(() => `<b class="same">x</b>`).join("")}</div>
-      <p class="word">a</p><p class="word">b</p><p class="word">c</p><p class="word">d</p>
+      <p id="pulse">p</p><p class="word">a</p><p class="word">b</p><p class="word">c</p><p class="word">d</p>
       <canvas id="gl" width="400" height="300" style="width:400px;height:300px"></canvas><canvas id="flat" width="200" height="100" style="width:200px;height:100px"></canvas>
       <script>
         window.gsap = { version: "3.12.5" }
         document.querySelector("#gl").getContext("webgl2")
         document.querySelector("#flat").getContext("2d")
-        document.querySelectorAll(".word").forEach((el, i) => setTimeout(() => el.animate([{ opacity: 0, filter: "blur(2px)" }, { opacity: 1, filter: "blur(0px)" }], { duration: 403, easing: "cubic-bezier(.22,1,.36,1)" }), i * 20))
+        ;[0, 1, 2].forEach((i) => setTimeout(() => document.querySelector("#pulse").animate([{ scale: 1 }, { scale: 1.1 }], { duration: 90 }), i * 100))
+        // Started in turn from script once the page has loaded (timers fired during the load itself wander more).
+        addEventListener("load", () => document.querySelectorAll(".word").forEach((el, i) => setTimeout(() => el.animate([{ opacity: 0, filter: "blur(2px)" }, { opacity: 1, filter: "blur(0px)" }], { duration: 403, easing: "cubic-bezier(.22,1,.36,1)" }), i * 40)))
       </script>` }))
     await page.goto("http://snip.test/")
-    await page.waitForTimeout(250)
+    await page.waitForTimeout(400)
     const motion = (arg: object) => page.evaluate(`(${MOTION_JS})(${JSON.stringify(arg)})`) as Promise<Record<string, any>[]>
     await motion({ op: "install" }) // the capture calls it again after load: a no-op
     const entries = await motion({ op: "take" })
@@ -134,10 +136,13 @@ test("motion installed before load logs entrance staggers, and names the page's 
     assert.deepEqual(glyphs.stagger, { stepMs: 70, spanMs: 280 }, "a delay-driven stagger is one entry with its step")
     assert.equal(glyphs.delayMs, 0, "the first element's delay")
     assert.equal(glyphs.easing, "cubic-bezier(0.34, 1.56, 0.64, 1)", "a CSS animation's easing is its animation-timing-function, not the effect's linear")
-    const words = entries.find((e) => e.type === "web-animation")!
+    const words = entries.find((e) => e.target === "body > p.word" || e.target === "p.word")!
     assert.equal(words.count, 4)
-    assert.ok(words.stagger && Math.abs(words.stagger.stepMs - 20) <= 6, `elements started in turn are a stagger too (${JSON.stringify(words.stagger)})`)
+    assert.ok(words.stagger && Math.abs(words.stagger.stepMs - 40) <= 10, `elements started in turn are a stagger too (${JSON.stringify(words.stagger)})`)
     assert.equal(words.durationMs, 403)
+    const pulse = entries.find((e) => e.target === "p#pulse")!
+    assert.equal(pulse.count, 3)
+    assert.equal(pulse.stagger, undefined, "one element animated again and again is not a stagger")
     const same = entries.find((e) => e.target.includes("same"))!
     assert.equal(same.count, 3)
     assert.equal(same.stagger, undefined, "effects that start together are not a stagger")

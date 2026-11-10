@@ -103,13 +103,17 @@
     if (!e) continue
     const { startMs, scrollY, delayMs, ...rest } = e
     const key = JSON.stringify(rest)
+    const el = raw.a.effect && raw.a.effect.target
     const g = groups.get(key)
-    if (g) g.push(e)
-    else groups.set(key, [e])
+    if (g) g.push({ e, el })
+    else groups.set(key, [{ e, el }])
   }
   const out = []
-  for (const list of groups.values()) {
-    const step = list.length >= 3 && staggerStep(list)
+  for (const members of groups.values()) {
+    const list = members.map((x) => x.e)
+    // A stagger plays across different elements: one element animated again and again (a pulse) is not one.
+    const distinct = new Set(members.map((x) => x.el)).size === members.length
+    const step = list.length >= 3 && distinct && staggerStep(list)
     if (step) {
       const first = list.reduce((a, b) => (b.startMs + b.delayMs < a.startMs + a.delayMs ? b : a))
       out.push({ ...first, count: list.length, stagger: { stepMs: step, spanMs: Math.round(step * (list.length - 1)) } })
@@ -136,7 +140,8 @@
     const sorted = [...gaps].sort((a, b) => a - b)
     const median = sorted[Math.floor(sorted.length / 2)]
     if (median < 5 || median > 1000) return 0
-    const even = gaps.filter((g) => Math.abs(g - median) <= Math.max(4, median * 0.25)).length
+    // Timers fire late while a page loads, so a step started from script can wander by a few ms.
+    const even = gaps.filter((g) => Math.abs(g - median) <= Math.max(6, median * 0.4)).length
     return even >= gaps.length * 0.7 ? Math.round(median) : 0
   }
 
