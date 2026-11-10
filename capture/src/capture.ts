@@ -712,6 +712,14 @@ export async function recordLiveSections(
         const crop = { x: 0, y: Math.round(top * k), width: Math.round(vw * k), height: Math.round(height * k) }
         let clipHeight = height
         const durationMs = Math.round(Math.min(LIVE_MS, frames.at(-1)!.t - frames[0]!.t + LIVE_FRAME_MS))
+        // The clip loops, so it can start anywhere: start it on its fullest frame, which becomes the screenshot.
+        // A frame's JPEG size stands for how much is on screen; one the page rested on (no new frame for a while)
+        // counts for more than one passed through. Even indexes only, so the half-rate encode keeps it first.
+        // ponytail: size-and-rest heuristic, can land mid-transition; compare frames to neighbours if it picks badly.
+        const score = (n: number) => frames[n]!.data.length * Math.min(500, Math.max(100, (frames[n + 1]?.t ?? frames[0]!.t + durationMs) - frames[n]!.t))
+        let start = 0
+        for (let n = 2; n < frames.length; n += 2) if (score(n) > score(start)) start = n
+        frames.push(...frames.splice(0, start).map((f) => ({ ...f, t: f.t + durationMs })))
         const encode = async (quantizer: number, step: number) => {
           const writer = await recordingWriter(browser, { format: "webm", quantizer })
           if (writer.format !== "webm") return null // no VP9 here: a GIF of a whole section would be far too big

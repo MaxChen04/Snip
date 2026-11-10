@@ -355,19 +355,20 @@ export function PageViewer({ page, onClose, onCollectionsChange }: {
 
 /**
  * One section's recorded clip, laid over its place in the screenshot. Plays only while on screen and `playing`;
- * otherwise it holds its frame. Hidden until its first frame is decoded, then faded in: captures paste that frame
- * into the screenshot, so the swap shows nothing.
+ * otherwise it holds its frame. Hidden until its first frame is decoded, then faded in, and only then played:
+ * captures paste that frame into the screenshot, so the swap shows nothing and the motion starts from the still.
  */
 function LiveClip({ src, style, playing, feather }: { src: string; style: React.CSSProperties; playing: boolean; feather: boolean }) {
   const ref = useRef<HTMLVideoElement>(null)
   const [ready, setReady] = useState(false)
+  const shown = useRef(false)
   const visible = useRef(false)
   const want = useRef(playing)
   want.current = playing
   const sync = () => {
     const video = ref.current
     if (!video) return
-    if (visible.current && want.current) video.play().catch(() => {})
+    if (shown.current && visible.current && want.current) video.play().catch(() => {})
     else video.pause()
   }
   useEffect(() => {
@@ -379,6 +380,14 @@ function LiveClip({ src, style, playing, feather }: { src: string; style: React.
     return () => io.disconnect()
   }, [])
   useEffect(sync, [playing])
+  useEffect(() => {
+    if (!ready) return
+    const t = setTimeout(() => {
+      shown.current = true
+      sync()
+    }, 200) // the fade below
+    return () => clearTimeout(t)
+  }, [ready])
   return (
     <video
       ref={ref}
