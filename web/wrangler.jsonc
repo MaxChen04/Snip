@@ -16,6 +16,8 @@
     { "name": "OAUTH_LOGIN_LIMITER", "namespace_id": "17431003", "simple": { "limit": 30, "period": 60 } },
     { "name": "OAUTH_AUTHORIZE_LIMITER", "namespace_id": "17431004", "simple": { "limit": 30, "period": 60 } }
   ],
+  // Hourly sweep of retired capture files (worker/index.ts scheduled).
+  "triggers": { "crons": ["0 * * * *"] },
   "assets": {
     "not_found_handling": "single-page-application",
     "run_worker_first": [

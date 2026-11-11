@@ -1,5 +1,6 @@
 import OAuthProvider from "@cloudflare/workers-oauth-provider"
 import { app } from "./app"
+import { cleanupRetiredFiles } from "./db"
 import { mcpApiHandler } from "./mcp"
 import { guardOAuthRequest, type OAuthCostGuardBindings } from "./oauth-cost-guards"
 
@@ -31,5 +32,9 @@ export default {
     const blocked = await guardOAuthRequest(request, env)
     if (blocked) return blocked
     return getProvider(env).fetch(request, env, ctx)
+  },
+  // Otherwise retired capture files are only swept when a job is claimed, recaptured or deleted.
+  async scheduled(_controller, env) {
+    await cleanupRetiredFiles(env.DB, env.FILES)
   },
 } satisfies ExportedHandler<Env & OAuthCostGuardBindings>
