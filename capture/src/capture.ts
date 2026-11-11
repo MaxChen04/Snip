@@ -1219,7 +1219,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
   let failures = resume?.failures ?? 0
   let navLinksQueued = resume?.navLinksQueued ?? false
   const hoverSeen = new Set<string>(resume?.hoverSeen)
-  // Live clips already uploaded in this run, by liveSignature. Not kept across a pause: a resumed crawl is a new
+  // Live clips of pages stored in this run, by liveSignature. Not kept across a pause: a resumed crawl is a new
   // capture attempt, and its pages may only point at files under their own attempt's prefix.
   const liveSeen = new Map<string, LiveReuse>()
   // Sections and clips are only sent to a Worker that stores them; an older one would accept the files and drop them.
@@ -1417,6 +1417,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
 
       // Cut from the full-page screenshot, which is clipped at MAX_SHOT_PX like the sections. A failed crop or section
       // upload loses the sections; a failed clip upload loses only that clip. Each upload is retried once.
+      const newClips = new Map<string, LiveReuse>() // offered to later pages only once this page is stored
       const uploadSections = async (): Promise<PageSection[] | undefined> => {
         if (!features.has("sections")) return undefined
         try {
@@ -1429,7 +1430,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
               const rec = clip.recording!
               clipKeys.set(clip, retryOnce(() => api.upload(`${p}/section-${i}-live.webm`, rec.bytes, rec.contentType)).then(
                 (key) => {
-                  if (clip.sig) liveSeen.set(clip.sig, { key, height: clip.height, durationMs: clip.durationMs, still: clip.still })
+                  if (clip.sig) newClips.set(clip.sig, { key, height: clip.height, durationMs: clip.durationMs, still: clip.still })
                   return key
                 },
                 (e) => {
@@ -1500,6 +1501,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
         animations,
       }
       await api.addPage(job.id, upload)
+      for (const [sig, clip] of newClips) liveSeen.set(sig, clip)
       coverKey ??= upload.desktopThumbKey
       allTokens.push(styles.tokens)
       captured++
