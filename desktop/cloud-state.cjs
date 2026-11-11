@@ -48,7 +48,6 @@ function normalizeCloud(raw) {
     lastDeployedAt: text(raw.lastDeployedAt, 40),
     lastVerifiedAt: text(raw.lastVerifiedAt, 40),
     workerVersion: text(raw.workerVersion, 40),
-    expectedWorkerVersion: text(raw.expectedWorkerVersion, 40),
   }
 }
 
