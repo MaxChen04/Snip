@@ -807,3 +807,48 @@ test('a pull that died after both swap renames, before the record, still keeps t
   assert.equal(fs.readFileSync(path.join(library.root, record.snapshot.path, 'v3/d1/marker'), 'utf8'), 'pre-pull-library');
   assert.equal(record.pullBackup, undefined, 'the intent is cleared once the swap is recorded');
 });
+
+test('a cancel that lands during a step ends the run as cancelled, whether the step then throws or finishes', async () => {
+  const library = fakeLibrary();
+  const run = async (first) => {
+    const { emit, events } = collectedEmitter();
+    const ctx = createContext({ root: library.root, dataRoot: library.root, flags: {}, emit, api: {}, wrangler: { bin: '/x' } });
+    const ran = [];
+    const steps = [
+      { id: 'first', async run(context) { ran.push('first'); context.cancel(); return first(); } },
+      { id: 'second', async run() { ran.push('second'); } },
+    ];
+    await assert.rejects(() => runSteps(steps, ctx), (error) => error.code === 'CANCELLED');
+    assert.deepEqual(ran, ['first'], 'nothing starts after the cancel');
+    return { ctx, events };
+  };
+
+  // The step's child process was interrupted too, so the step throws.
+  const thrown = await run(() => { throw new StepError('DEPLOY_FAILED', 'wrangler was interrupted'); });
+  assert.equal(thrown.ctx.stepStatus('first'), null, 'the interrupted step is not journaled as a failure');
+  assert.equal(thrown.events.some((event) => event.event === 'step' && event.status === 'failed'), false);
+
+  // The step finishes its work: that is kept, and the run still stops as cancelled.
+  const finished = await run(() => ({}));
+  assert.equal(finished.ctx.stepStatus('first'), 'done');
+});
+
+test('the CLI reports a cancelled run with one terminal CANCELLED result', async () => {
+  const library = fakeLibrary();
+  stateModule.updateState(library.root, (state) => { state.mode = 'enabling'; return state; });
+  const lines = [];
+  const io = { stdout: { write: (line) => { lines.push(JSON.parse(line)); return true; } }, stderr: { write: () => true } };
+  // abort's cleanup step throws once its wrangler call is interrupted by the cancel.
+  const realAbort = commands.commandAbort;
+  commands.commandAbort = async (ctx) => runSteps([{ id: 'abort-cleanup', async run() { ctx.cancel(); throw new Error('interrupted'); } }], ctx);
+  try {
+    const result = await cli.main(['abort', '--root', library.root, '--data-root', library.root, '--json'], io);
+    assert.equal(result.code, 1);
+  } finally {
+    commands.commandAbort = realAbort;
+  }
+  const results = lines.filter((line) => line.event === 'result');
+  assert.equal(results.length, 1);
+  assert.equal(results[0].code, 'CANCELLED');
+  assert.equal(stateModule.readState(library.root).error, null, 'a cancel is not recorded as an error');
+});
