@@ -623,6 +623,23 @@ test('the loopback accepts exactly one token and drops the fragment', async () =
   loopback.close();
 });
 
+test('the loopback refuses a token posted by another web page', async () => {
+  const loopback = transfer.startLoopback({ timeoutMs: 5000 });
+  const port = await loopback.listening;
+  let received = null;
+  loopback.token.then((value) => { received = value; }, () => {});
+  const post = (origin) => fetch(`http://127.0.0.1:${port}/store`, { method: 'POST', headers: { 'content-type': 'text/plain', origin }, body: JSON.stringify({ token: `from ${origin}` }) });
+  for (const origin of ['https://evil.example', `http://localhost:${port}`, `http://127.0.0.1:${port + 1}`, 'null']) {
+    assert.equal((await post(origin)).status, 403, `${origin} is refused`);
+  }
+  assert.equal(received, null, 'no token was accepted');
+  // Its own /done page is the one sender a browser will name with this origin.
+  const own = `http://127.0.0.1:${port}`;
+  assert.equal((await post(own)).status, 200);
+  assert.equal(await loopback.token, `from ${own}`);
+  loopback.close();
+});
+
 test('the transfer client streams uploads, respects 409 and lists the manifest', async () => {
   const model = buildModel();
   const cloud = fakeCloud(model);

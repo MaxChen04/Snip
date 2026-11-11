@@ -152,7 +152,7 @@ fetch('/store',{method:'POST',headers:{'content-type':'application/json'},body:J
 
 /**
  * The loopback the owner link redirects to. Binds 127.0.0.1 only, accepts one
- * token, closes after it is read or after the timeout.
+ * token from its own page, closes after it is read or after the timeout.
  */
 function startLoopback({ host = '127.0.0.1', port = 0, timeoutMs = 10 * 60_000, serverFactory = http.createServer } = {}) {
   let token = null;
@@ -173,6 +173,13 @@ function startLoopback({ host = '127.0.0.1', port = 0, timeoutMs = 10 * 60_000, 
       return;
     }
     if (req.method === 'POST' && url.pathname === '/store') {
+      // A browser names the page that posts; only this loopback's own /done may.
+      const origin = req.headers.origin;
+      if (origin && origin !== `http://${host}:${server.address().port}`) {
+        res.writeHead(403, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+        res.end(JSON.stringify({ ok: false }));
+        return;
+      }
       let body = '';
       req.on('data', (chunk) => { if (body.length < 8192) body += chunk; });
       req.on('end', () => {
