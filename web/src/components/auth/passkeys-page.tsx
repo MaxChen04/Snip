@@ -20,10 +20,10 @@ import { ALREADY_ADDED, registerPasskey } from "@/lib/passkeys"
 /**
  * The owner's devices. A passkey is per-device and owner-only: it is not an invite. Removing one
  * here is the recovery path for a lost device; "Sign out everywhere" is the recovery path for a
- * leaked session.
+ * leaked session. App has already checked the session (and shown its own retry state when Snip
+ * could not be reached), so `me` is null only after a real 401.
  */
-export function PasskeysPage() {
-  const [me, setMe] = useState<"checking" | "anon" | Me>("checking")
+export function PasskeysPage({ me }: { me: Me | null }) {
   const [devices, setDevices] = useState<PasskeyDevice[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [label, setLabel] = useState("")
@@ -41,19 +41,8 @@ export function PasskeysPage() {
   }, [])
 
   useEffect(() => {
-    let live = true
-    api
-      .me()
-      .then((session) => {
-        if (!live) return
-        setMe(session)
-        void load()
-      })
-      .catch(() => live && setMe("anon"))
-    return () => {
-      live = false
-    }
-  }, [load])
+    if (me) void load()
+  }, [me, load])
 
   const add = async () => {
     setAdding(true)
@@ -93,18 +82,7 @@ export function PasskeysPage() {
     }
   }
 
-  if (me === "checking") {
-    return (
-      <AuthShell wide title="Your devices">
-        <div className="space-y-2">
-          <div className="h-14 animate-pulse rounded-xl bg-fill-2" />
-          <div className="h-14 animate-pulse rounded-xl bg-fill-2" />
-        </div>
-      </AuthShell>
-    )
-  }
-
-  if (me === "anon") {
+  if (!me) {
     return (
       <AuthShell title="Sign in to manage passkeys" description="This page belongs to the owner of this Snip library." footer={<Link href="/">Back to the library</Link>}>
         <Button size="xl" className="w-full" render={<Link href="/sign-in" />} nativeButton={false}>

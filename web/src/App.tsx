@@ -76,7 +76,7 @@ export function App() {
     return (
       <Suspense fallback={<Loading />}>
       <Switch>
-        {/* Reachable signed out: the passkey form decides for itself whether a session exists. */}
+        {/* Reachable signed out: /sign-in decides for itself whether a session exists, /passkeys asks to sign in. */}
         <Route path="/sign-in">
           <Suspense fallback={<Loading />}>
             <SignInPage />
@@ -84,7 +84,7 @@ export function App() {
         </Route>
         <Route path="/passkeys">
           <Suspense fallback={<Loading />}>
-            <PasskeysPage />
+            <PasskeysPage me={null} />
           </Suspense>
         </Route>
         <Route path="/guide">
@@ -118,7 +118,7 @@ export function App() {
         </Route>
         <Route path="/passkeys">
           <Suspense fallback={<Loading />}>
-            <PasskeysPage />
+            <PasskeysPage me={state} />
           </Suspense>
         </Route>
         <Route path="/r/:id">{(p) => <ReferencePage key={p.id} id={p.id} login={state.login} />}</Route>
