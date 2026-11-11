@@ -459,7 +459,7 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
     // On top means a z above everything else; it is saved with the move.
     const raised = front ? r.movedItems.map((x, i) => ({ ...x, z: above(rest) + i })) : r.movedItems
     apply({ ...b, nodes: front ? [...rest, ...raised] : r.items, groups: r.frames })
-    queue(raised, r.movedFrames)
+    queue([...raised, ...r.leftBehind], r.movedFrames)
   }
 
   /** Follow a pointer that went down on items or a frame title; past a small threshold it drags them (or, with nothing it may move, calls `blocked`). */
