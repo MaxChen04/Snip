@@ -323,20 +323,24 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
 
   // ---- Saving: positions and frames queue up and go out together ~400 ms after the last change ----
   const pending = useRef({ items: new Map<string, BoardItemPlacement>(), groups: new Map<string, Partial<BoardGroup>>(), timer: 0 })
-  const flush = useCallback(async () => {
-    const p = pending.current
-    clearTimeout(p.timer)
-    const items = [...p.items.values()]
-    const groups = [...p.groups]
-    p.items.clear()
-    p.groups.clear()
-    if (!items.length && !groups.length) return
-    try {
-      await Promise.all([...chunks(items).map((c) => api.placeBoardItems(id, c)), ...groups.map(([g, patch]) => api.updateBoardGroup(id, g, patch))])
-    } catch (e) {
-      toast.error(`Couldn't save the layout. ${message(e)}`)
-      window.dispatchEvent(new Event(RELOAD_EVENT)) // back to what's stored
-    }
+  // Saves go out one at a time, each after the one before it has been answered.
+  const saving = useRef<Promise<unknown>>(Promise.resolve())
+  const flush = useCallback(() => {
+    clearTimeout(pending.current.timer)
+    return (saving.current = saving.current.then(async () => {
+      const p = pending.current
+      const items = [...p.items.values()]
+      const groups = [...p.groups]
+      p.items.clear()
+      p.groups.clear()
+      if (!items.length && !groups.length) return
+      try {
+        await Promise.all([...chunks(items).map((c) => api.placeBoardItems(id, c)), ...groups.map(([g, patch]) => api.updateBoardGroup(id, g, patch))])
+      } catch (e) {
+        toast.error(`Couldn't save the layout. ${message(e)}`)
+        window.dispatchEvent(new Event(RELOAD_EVENT)) // back to what's stored
+      }
+    }))
   }, [id])
   const queue = (nodes: Node[], frames: BoardGroup[] = []) => {
     const p = pending.current
