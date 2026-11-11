@@ -321,31 +321,43 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
     setTimeout(() => (swallow.current = false))
   }
 
-  // ---- Saving: positions and frames queue up and go out together ~400 ms after the last change ----
-  const pending = useRef({ items: new Map<string, BoardItemPlacement>(), groups: new Map<string, Partial<BoardGroup>>(), timer: 0 })
-  // Saves go out one at a time, each after the one before it has been answered.
+  // ---- Saving: changed items and frames queue up and go out together ~400 ms after the last change ----
+  // The queue only names what changed; what is saved is the board as it is when the save goes out.
+  const pending = useRef({ items: new Set<string>(), groups: new Set<string>(), timer: 0 })
+  // Settles when everything sent so far has been answered: a save waits for it, so changes reach the server in order.
   const saving = useRef<Promise<unknown>>(Promise.resolve())
+  const sent = <T,>(request: Promise<T>) => {
+    saving.current = Promise.allSettled([saving.current, request])
+    return request
+  }
   const flush = useCallback(() => {
     clearTimeout(pending.current.timer)
-    return (saving.current = saving.current.then(async () => {
-      const p = pending.current
-      const items = [...p.items.values()]
-      const groups = [...p.groups]
-      p.items.clear()
-      p.groups.clear()
-      if (!items.length && !groups.length) return
-      try {
-        await Promise.all([...chunks(items).map((c) => api.placeBoardItems(id, c)), ...groups.map(([g, patch]) => api.updateBoardGroup(id, g, patch))])
-      } catch (e) {
-        toast.error(`Couldn't save the layout. ${message(e)}`)
-        window.dispatchEvent(new Event(RELOAD_EVENT)) // back to what's stored
-      }
-    }))
+    const before = saving.current
+    return sent(
+      (async () => {
+        await before
+        const p = pending.current
+        const items = live.current?.nodes.filter((n) => p.items.has(n.key)).map(placement) ?? []
+        const groups = live.current?.groups.filter((g) => p.groups.has(g.id)) ?? []
+        p.items.clear()
+        p.groups.clear()
+        if (!items.length && !groups.length) return
+        try {
+          await Promise.all([
+            ...chunks(items).map((c) => api.placeBoardItems(id, c)),
+            ...groups.map((g) => api.updateBoardGroup(id, g.id, { x: Math.round(g.x), y: Math.round(g.y), w: Math.round(g.w), h: Math.round(g.h) })),
+          ])
+        } catch (e) {
+          toast.error(`Couldn't save the layout. ${message(e)}`)
+          window.dispatchEvent(new Event(RELOAD_EVENT)) // back to what's stored
+        }
+      })(),
+    )
   }, [id])
   const queue = (nodes: Node[], frames: BoardGroup[] = []) => {
     const p = pending.current
-    for (const n of nodes) p.items.set(n.key, placement(n))
-    for (const f of frames) p.groups.set(f.id, { x: Math.round(f.x), y: Math.round(f.y), w: Math.round(f.w), h: Math.round(f.h) })
+    for (const n of nodes) p.items.add(n.key)
+    for (const f of frames) p.groups.add(f.id)
     clearTimeout(p.timer)
     p.timer = window.setTimeout(() => void flush(), 400)
   }
@@ -548,7 +560,6 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
     const notes = gone.filter((n) => n.kind === "note")
     if (gone.length > 1 && !confirm(`Remove ${gone.length} items from this board?${notes.length ? " Notes are deleted." : ""} Everything else stays in All saves.`)) return
     const goneKeys = new Set(gone.map((n) => n.key))
-    for (const n of gone) pending.current.items.delete(n.key)
     apply({ ...b, nodes: b.nodes.filter((n) => !goneKeys.has(n.key)) })
     setSelected(new Set([...sel.current].filter((k) => !goneKeys.has(k))))
     try {
@@ -564,14 +575,16 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
   const makeGroup = async (items: Node[], name: string, box: Box) => {
     const grouped = new Set(items.map((n) => n.key))
     await flush() // the server keeps stored positions; queued ones must land first
-    const g = await api.createBoardGroup(id, {
-      name,
-      x: Math.round(box.x),
-      y: Math.round(box.y),
-      w: Math.round(box.w),
-      h: Math.round(box.h),
-      items: items.map((n) => ({ kind: n.kind, id: n.id })),
-    })
+    const g = await sent(
+      api.createBoardGroup(id, {
+        name,
+        x: Math.round(box.x),
+        y: Math.round(box.y),
+        w: Math.round(box.w),
+        h: Math.round(box.h),
+        items: items.map((n) => ({ kind: n.kind, id: n.id })),
+      }),
+    )
     const now = live.current!
     apply({ ...now, groups: [...now.groups, g], nodes: now.nodes.map((n) => (grouped.has(n.key) ? { ...n, groupId: g.id } : n)) })
     return g
@@ -719,7 +732,6 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
         setSelected(new Set(made.map((n) => n.key)))
         remember(async () => {
           const gone = new Set(made.map((n) => n.key))
-          for (const k of gone) pending.current.items.delete(k)
           const b2 = live.current!
           apply({ ...b2, nodes: b2.nodes.filter((n) => !gone.has(n.key)) })
           setSelected(new Set([...sel.current].filter((k) => !gone.has(k))))
@@ -957,8 +969,6 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
       const b = live.current
       if (!b) return
       apply({ ...b, groups: b.groups.filter((g) => g.id !== gid), nodes: b.nodes.map((n) => (n.groupId === gid ? { ...n, groupId: null } : n)) })
-      for (const p of pending.current.items.values()) if (p.groupId === gid) p.groupId = null
-      pending.current.groups.delete(gid)
       api.deleteBoardGroup(id, gid).catch((e: unknown) => {
         toast.error(message(e))
         void load()

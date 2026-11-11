@@ -49,3 +49,32 @@ test("moving an item while its group is being created keeps it in the new group"
   const put = t.list("PUT", "/api/boards/board1/items").flatMap((r) => r.body.items as { id: string; groupId: string | null; x: number; y: number }[]).filter((i) => i.id === "a").at(-1)!
   assert.equal(put.groupId, "newgroup", `the saved placement of A has groupId ${JSON.stringify(put.groupId)}, so the server would take A out of the group that was just created`)
 })
+
+test("a move is not saved while the group is still being created, so it cannot land with the old group", async () => {
+  const board = boardOf([noteItem("a", "first", 0, 0), noteItem("b", "second", 260, 0)])
+  const t = await app.session({ state: { boards: { board1: board } } })
+  const { page } = t
+  const created = gate()
+  t.on("POST", "/api/boards/board1/groups", async (req) => {
+    await created.opened
+    return { json: { id: "newgroup", name: req.body.name, x: req.body.x, y: req.body.y, w: req.body.w, h: req.body.h } }
+  })
+  await t.goto("/b/board1")
+  const a = page.locator('[data-key="note:a"]')
+  await a.waitFor()
+  await sleep(300)
+  await page.mouse.click(5, 400)
+  await page.keyboard.press("Control+a")
+  await page.keyboard.press("g")
+  await until("group POST in flight", () => t.count("POST", "/api/boards/board1/groups") === 1)
+
+  await a.focus()
+  await page.keyboard.press("ArrowRight")
+  await sleep(900) // well past the 400 ms debounce, the POST still unanswered
+  const puts = () => t.list("PUT", "/api/boards/board1/items").flatMap((r) => r.body.items as { id: string; groupId: string | null }[]).filter((i) => i.id === "a")
+  assert.deepEqual(puts(), [], "A was saved before the server answered the group POST")
+
+  created.open()
+  await until("A saved", () => puts().length > 0, 4000)
+  assert.deepEqual(puts().map((i) => i.groupId), ["newgroup"])
+})
