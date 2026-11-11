@@ -180,6 +180,8 @@ function fakeWrangler(model) {
       return text('Deleted');
     }
     if (args[0] === 'r2' && args[1] === 'bucket' && args[2] === 'delete') {
+      // wrangler 4 has no --force here and rejects it.
+      if (args.includes('--force')) return text('Unknown argument: force', false);
       model.r2 = model.r2.filter((bucket) => bucket.name !== args[3]);
       return text('Deleted');
     }
@@ -706,4 +708,37 @@ test('a new setup run does not inherit an earlier run\'s abort scope', () => {
   const next = stateModule.beginEnabling(library.root);
   assert.equal(next.cloud.created, undefined, 'abort of the new run must not delete the live library an earlier run created');
   assert.equal(next.cloud.d1.id, 'live-d1', 'the ids guard recognises are kept');
+});
+
+test('abort keeps recording a created resource it could not delete, and passes the bucket delete no unknown flag', async () => {
+  const model = buildModel();
+  const wrangler = fakeWrangler(model);
+  model.intercept = async (args) => (args[0] === 'deploy' ? failed('deploy exploded: bad bundle') : null);
+  const first = await attemptSetup(model, {}, { wrangler });
+  assert.ok(first.error, 'harness check: setup must fail at deploy');
+
+  // The database delete fails; the bucket and namespace deletes go through.
+  model.intercept = async (args) => (args[0] === 'd1' && args[1] === 'delete' ? failed('d1 delete exploded') : null);
+  const { ctx } = laterContext(model, wrangler);
+  await commands.commandAbort(ctx);
+  assert.deepEqual(model.r2, [], 'the bucket delete was accepted');
+  const record = stateModule.readState(model.root);
+  assert.equal(record.mode, 'local');
+  assert.deepEqual(Object.keys(record.cloud.created), ['d1'], 'only what was actually removed is forgotten');
+});
+
+test('delete-resources passes the bucket delete no flag wrangler rejects', async () => {
+  const model = buildModel();
+  const wrangler = fakeWrangler(model);
+  await attemptSetup(model, {}, { wrangler });
+  stateModule.updateState(model.root, (state) => { state.mode = 'local'; state.cloud.detachedAt = new Date().toISOString(); return state; });
+  // The Worker delete, and the namespace delete by its binding in the deploy config, succeed.
+  model.intercept = async (args) => {
+    if (args[0] === 'delete') { model.deployed = false; return { ok: true, code: 0, stdout: 'Deleted', stderr: '', output: '' }; }
+    if (args[0] === 'kv' && args.includes('--binding')) { model.kv = []; return { ok: true, code: 0, stdout: 'Deleted', stderr: '', output: '' }; }
+    return null;
+  };
+  const { ctx } = laterContext(model, wrangler, { flags: { confirm: 'snip.tester.workers.dev' } });
+  await commands.commandDeleteResources(ctx);
+  assert.deepEqual(model.r2, [], 'the bucket is gone');
 });

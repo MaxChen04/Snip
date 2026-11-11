@@ -642,7 +642,7 @@ async function commandDeleteResources(ctx) {
           }
         }
         // The bucket is emptied first by the Worker's own lifecycle; delete it last.
-        const bucket = await ctx2.wrangler.run(['r2', 'bucket', 'delete', record.bucket || 'snip-files', '--force'], { env: { CLOUDFLARE_ACCOUNT_ID: accountId } });
+        const bucket = await ctx2.wrangler.run(['r2', 'bucket', 'delete', record.bucket || 'snip-files'], { env: { CLOUDFLARE_ACCOUNT_ID: accountId } });
         if (!bucket.ok && !/not found|does not exist/i.test(`${bucket.stdout}${bucket.stderr}`)) {
           ctx2.emit.log('warn', 'The storage bucket could not be deleted; remove it in the Cloudflare dashboard.');
         }
@@ -939,31 +939,27 @@ async function commandAbort(ctx) {
         // Only what this run recorded as created. A pre-existing or adopted D1,
         // KV or bucket is never deleted by abort.
         const record = ctx2.state().cloud || {};
-        const created = record.created || {};
+        const created = { ...(record.created || {}) };
+        const env = { CLOUDFLARE_ACCOUNT_ID: record.accountId };
         const removed = [];
-        if (created.bucket) {
-          const result = await ctx2.wrangler.run(['r2', 'bucket', 'delete', created.bucket], { env: { CLOUDFLARE_ACCOUNT_ID: record.accountId } });
-          if (result.ok) removed.push(`bucket ${created.bucket}`);
-          else ctx2.emit.log('warn', `Could not remove the bucket ${created.bucket}; remove it in the Cloudflare dashboard.`);
-        }
-        if (created.kv && created.kv.id) {
-          const result = await ctx2.wrangler.run(['kv', 'namespace', 'delete', '--binding', 'OAUTH_KV'], { env: { CLOUDFLARE_ACCOUNT_ID: record.accountId } });
-          if (result.ok) removed.push(`KV ${created.kv.name}`);
-          else ctx2.emit.log('warn', `Could not remove the KV namespace ${created.kv.name}; remove it in the Cloudflare dashboard.`);
-        }
-        if (created.d1 && created.d1.name) {
-          const result = await ctx2.wrangler.run(['d1', 'delete', created.d1.name, '--skip-confirmation'], { env: { CLOUDFLARE_ACCOUNT_ID: record.accountId } });
-          if (result.ok) removed.push(`database ${created.d1.name}`);
-          else ctx2.emit.log('warn', `Could not remove the database ${created.d1.name}; remove it in the Cloudflare dashboard.`);
-        }
+        const remove = async (key, label, args) => {
+          const result = await ctx2.wrangler.run(args, { env });
+          if (result.ok) { removed.push(label); delete created[key]; }
+          else ctx2.emit.log('warn', `Could not remove the ${label}; remove it in the Cloudflare dashboard.`);
+        };
+        if (created.bucket) await remove('bucket', `bucket ${created.bucket}`, ['r2', 'bucket', 'delete', created.bucket]);
+        if (created.kv && created.kv.id) await remove('kv', `KV namespace ${created.kv.name}`, ['kv', 'namespace', 'delete', '--namespace-id', created.kv.id, '--skip-confirmation']);
+        if (created.d1 && created.d1.name) await remove('d1', `database ${created.d1.name}`, ['d1', 'delete', created.d1.name, '--skip-confirmation']);
         ctx2.save((next) => {
           next.mode = 'local';
           next.pausedForMove = [];
           next.error = null;
-          if (next.cloud) next.cloud = { ...next.cloud, created: {} };
+          // What could not be removed stays recorded, so the record never claims a cleanup that did not happen.
+          if (next.cloud) next.cloud = { ...next.cloud, created };
           return next;
         });
-        return { message: removed.length ? `Removed ${removed.join(', ')}` : 'This Mac is local again. Nothing this run created was left behind.' };
+        const left = Object.keys(created).length;
+        return { message: removed.length ? `Removed ${removed.join(', ')}` : left ? 'This Mac is local again. Some of what this run created is still in the Cloudflare account.' : 'This Mac is local again. Nothing this run created was left behind.' };
       },
       async verify(ctx2) { return ctx2.state().mode === 'local'; },
     },
