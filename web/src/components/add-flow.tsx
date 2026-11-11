@@ -105,7 +105,8 @@ function NewCollectionDialog({ open, onOpenChange }: { open: boolean; onOpenChan
     setBusy(true)
     try {
       const { id } = await api.createCollection(name.trim())
-      await refresh()
+      // The board exists now; a list that fails to reload is not a failed create.
+      await refresh().catch(() => {})
       onOpenChange(false)
       notify(`Created board “${name.trim()}”`)
       setName("")
