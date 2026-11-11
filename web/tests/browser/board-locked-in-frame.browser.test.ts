@@ -4,7 +4,7 @@
 // unlocked(). Correct behaviour: dragging the frame by its title leaves a locked item where it is.
 import assert from "node:assert/strict"
 import { after, before, test } from "node:test"
-import { boardOf, frame, noteItem, sleep, startApp, until, type App } from "./harness.ts"
+import { boardOf, frame, gate, noteItem, sleep, startApp, until, type App } from "./harness.ts"
 
 let app: App
 before(async () => void (app = await startApp()))
@@ -48,4 +48,40 @@ test("dragging a frame by its title does not move a locked item inside it", asyn
     { moved: [0, 0], saved: [260, 52] },
     "the locked note moved with the frame (on screen by `moved` px, and it was saved at `saved` instead of its stored 260,52)",
   )
+})
+
+test("a selection with a locked item is not grouped, and pressing G twice makes one frame", async () => {
+  const board = boardOf([noteItem("a", "first", 0, 0), noteItem("b", "second", 260, 0), noteItem("pinned", "locked note", 520, 0, { style: { locked: true } })])
+  const t = await app.session({ state: { boards: { board1: board } } })
+  const { page } = t
+  const groups = "/api/boards/board1/groups"
+  const created = gate()
+  t.on("POST", groups, async (req) => {
+    await created.opened
+    return { json: { id: "newgroup", name: req.body.name, x: req.body.x, y: req.body.y, w: req.body.w, h: req.body.h } }
+  })
+  await t.goto("/b/board1")
+  await page.locator('[data-key="note:a"]').waitFor()
+  await sleep(300)
+
+  // Everything, the locked note included: G does nothing.
+  await page.mouse.click(5, 400)
+  await page.keyboard.press("Control+a")
+  await page.keyboard.press("g")
+  await sleep(300)
+  assert.equal(t.count("POST", groups), 0, "a locked item was grouped")
+
+  // The two free notes: G twice while the first request is unanswered.
+  await page.keyboard.press("Escape")
+  await page.locator('[data-key="note:a"]').click()
+  await page.locator('[data-key="note:b"]').click({ modifiers: ["Shift"] })
+  await page.keyboard.press("g")
+  await until("group POST in flight", () => t.count("POST", groups) === 1)
+  await page.keyboard.press("g")
+  await sleep(300)
+  created.open()
+  await page.locator('[data-frame="newgroup"]').waitFor()
+  await sleep(300)
+  assert.equal(t.count("POST", groups), 1, "pressing G twice made two frames")
+  assert.deepEqual(t.list("POST", groups)[0]!.body.items.map((i: { id: string }) => i.id).sort(), ["a", "b"])
 })

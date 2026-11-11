@@ -456,7 +456,8 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
   }
 
   /** Follow a pointer that went down on items or a frame title; past a small threshold it drags them (or, with nothing it may move, calls `blocked`). */
-  const beginDrag = (e: React.PointerEvent, keys: string[], frameIds: string[], blocked?: () => void) => {
+  const beginDrag = (e: React.PointerEvent, all: string[], frameIds: string[], blocked?: () => void) => {
+    const keys = unlocked(all) // locked items stay put
     const start = { x: e.clientX, y: e.clientY }
     const pointer = e.pointerId
     const zoom = canvas.current?.getView().zoom ?? 1
@@ -511,8 +512,7 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
     const modified = e.shiftKey || e.metaKey || e.ctrlKey
     // Pressing an unselected item selects it alone (modified clicks toggle on click instead).
     if (!sel.current.has(key) && !modified) setSelected(new Set([key]))
-    // Locked items stay put.
-    beginDrag(e, unlocked(sel.current.has(key) ? [...sel.current] : [key]), [], () => say(LOCKED, false))
+    beginDrag(e, sel.current.has(key) ? [...sel.current] : [key], [], () => say(LOCKED, false))
   }
   const unlocked = (keys: string[]) => {
     const locked = new Set(live.current?.nodes.filter((n) => n.style.locked).map((n) => n.key))
@@ -600,16 +600,21 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
     apply({ ...now, groups: [...now.groups, g], nodes: now.nodes.map((n) => (grouped.has(n.key) ? { ...n, groupId: g.id } : n)) })
     return g
   }
+  const grouping = useRef(false) // one frame per press, however often G is hit while it is made
   const group = async () => {
     const b = live.current
     const items = b?.nodes.filter((n) => sel.current.has(n.key)) ?? []
-    if (!b || !items.length) return
+    if (!b || !items.length || grouping.current) return
+    if (items.some((n) => n.style.locked)) return say(LOCKED, false)
+    grouping.current = true
     try {
       const g = await makeGroup(items, `Group ${b.groups.length + 1}`, fitFrame(items))
       setRenaming(g.id)
       return g
     } catch (e) {
       toast.error(message(e))
+    } finally {
+      grouping.current = false
     }
   }
 
@@ -650,6 +655,7 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
     if (!b) return
     const ks = new Set(keys)
     apply({ ...b, nodes: b.nodes.map((n) => (ks.has(n.key) ? { ...n, ...patch(n) } : n)) })
+    queue(nodesOf(keys)) // commit leaves out an item that was just locked
     commit(keys, [], 0, 0, false)
   }
   const setAmount = (keys: string[], aid: AdjustId, v: number) =>
@@ -1016,7 +1022,7 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
       const moving = sel.current.has(node.key) ? [...sel.current] : [node.key]
       if (!sel.current.has(node.key)) setSelected(new Set(moving))
       // Stacking stays put: re-ordering would move the focused node and lose focus. Locked items stay put.
-      if (unlocked(moving).length) commit(unlocked(moving), [], ...arrows[e.key]!, false)
+      if (unlocked(moving).length) commit(moving, [], ...arrows[e.key]!, false)
       else say(LOCKED, false)
     } else if (e.key === "Enter" || e.key === " ") {
       if (node.item) handlers.open(node.item)

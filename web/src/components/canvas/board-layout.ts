@@ -3,7 +3,7 @@
 
 export type Box = { x: number; y: number; w: number; h: number }
 /** Something on the board: `key` is unique, `groupId` the frame it belongs to. */
-export type Placed = Box & { key: string; groupId: string | null }
+export type Placed = Box & { key: string; groupId: string | null; style?: { locked?: boolean } }
 export type Frame = Box & { id: string }
 
 export const GAP = 24
@@ -79,13 +79,14 @@ export function centred(boxes: Box[]): { x: number; y: number }[] {
 /**
  * Move items (`keys`) and frames (`frameIds`, with every item in them) by dx, dy. A moved item that isn't riding
  * along with its frame joins the frame under its centre, or leaves its frame for open canvas. Frames that end up
- * with a moved item grow to fit all their items. Returns everything, plus which items and frames changed.
+ * with a moved item grow to fit all their items. Locked items stay where they are, whoever asks.
+ * Returns everything, plus which items and frames changed.
  */
 export function moveOnBoard<T extends Placed, F extends Frame>(items: T[], frames: F[], keys: Set<string>, frameIds: Set<string>, dx: number, dy: number) {
   const changed = new Set<string>()
   const nextItems = items.map((it) => {
     const riding = it.groupId !== null && frameIds.has(it.groupId)
-    if (!riding && !keys.has(it.key)) return it
+    if (it.style?.locked || (!riding && !keys.has(it.key))) return it
     changed.add(it.key)
     const moved = { ...it, x: it.x + dx, y: it.y + dy }
     if (riding) return moved
