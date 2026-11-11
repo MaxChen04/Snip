@@ -137,7 +137,8 @@ export const api = {
   /** Save positions (and optionally width and group) for up to 200 items at once. */
   placeBoardItems: (id: string, items: BoardItemPlacement[]) =>
     request<{ ok: true }>(`/api/boards/${id}/items`, { method: "PUT", body: JSON.stringify({ items }) }),
-  addBoardNote: (id: string, note: { text: string; x: number; y: number; w?: number | null; groupId?: string | null }) =>
+  /** `z` is the stacking order (a whole number); omitted, the note goes on top. */
+  addBoardNote: (id: string, note: { text: string; x: number; y: number; z?: number; w?: number | null; groupId?: string | null }) =>
     request<BoardItem>(`/api/boards/${id}/notes`, { method: "POST", body: JSON.stringify(note) }),
   updateBoardNote: (id: string, noteId: string, text: string) =>
     request<{ ok: true }>(`/api/boards/${id}/notes/${noteId}`, { method: "PATCH", body: JSON.stringify({ text }) }),

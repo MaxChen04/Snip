@@ -886,7 +886,7 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
       await setMembers(cid, shared, true)
       await Promise.all([
         ...chunks(items.flatMap((n, i) => (n.item ? [{ ...placement(n), ...at[i]!, groupId: null }] : []))).map((c) => api.placeBoardItems(cid, c)),
-        ...items.flatMap((n, i) => (n.kind === "note" ? [api.addBoardNote(cid, { text: n.text ?? "", ...at[i]!, w: n.w })] : [])),
+        ...items.flatMap((n, i) => (n.kind === "note" ? [api.addBoardNote(cid, { text: n.text ?? "", ...at[i]!, z: n.z, w: n.w })] : [])),
       ])
       void refresh().catch(() => {})
       toast.dismiss(busy)

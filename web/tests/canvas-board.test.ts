@@ -422,11 +422,33 @@ test("stacking order is stored: z round-trips, ties break the same way every tim
   }
 })
 
+test("a note can bring its own z, is checked like a placement, and goes on top without one", async () => {
+  const { mf, call, get, board } = await setup()
+  try {
+    const moodboard = await board("Moodboard")
+    const post = (z?: unknown) => call(`/api/boards/${moodboard}/notes`, "POST", { text: "n", x: 0, y: 0, ...(z === undefined ? {} : { z }) })
+    const made = async (z?: unknown) => {
+      const res = await post(z)
+      assert.equal(res.status, 201)
+      return ((await res.json()) as BoardItem).z
+    }
+    assert.equal(await made(5), 5)
+    assert.equal(await made(), 6, "omitted z goes on top")
+    assert.equal(await made(-2), -2)
+    assert.equal(await made(0), 0)
+    assert.equal(await made(), 7)
+    for (const z of [1.5, "1", null, 2 ** 60]) assert.equal((await post(z)).status, 400, `z ${z}`)
+    assert.deepEqual((await get<BoardCanvas>(`/api/boards/${moodboard}`)).items.map((i) => i.z), [-2, 0, 5, 6, 7], "stored in order, and a refused note left nothing")
+  } finally {
+    await mf.dispose()
+  }
+})
+
 test("the z migration keeps the order boards loaded in before it", async () => {
   const mf = new Miniflare(convertV4MiniflareOptions({ modules: true, script: 'export default {fetch(){return new Response("ok")}}', d1Databases: ["DB"] }))
   try {
     const database = (await mf.getD1Database("DB")) as unknown as D1Database
-    await applyMigrations(database, (f) => f < "0017")
+    await applyMigrations(database, (f) => !f.startsWith("0017"))
     const run = (sql: string) => database.prepare(sql).run()
     await run(`INSERT INTO collections (id, name, created_at) VALUES ('b1', 'One', '2026-01-01'), ('b2', 'Two', '2026-01-01')`)
     const stripe = await capture(database, "https://stripe.com", [{ path: "/" }, { path: "/pricing" }])

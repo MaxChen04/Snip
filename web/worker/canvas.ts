@@ -261,6 +261,7 @@ const MAX_GROUP_NAME = 120
 const KINDS: readonly BoardItemKind[] = ["reference", "page", "image", "note"]
 const coord = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && Math.abs(v) <= 1e6
 const extent = (v: unknown): v is number => coord(v) && v >= 1
+const stacking = (v: unknown): v is number => Number.isSafeInteger(v)
 const itemWidth = (v: unknown): v is number | null => v === null || (typeof v === "number" && v >= 40 && v <= 4000)
 const groupId = (v: unknown): v is string | null => v === null || (typeof v === "string" && v.length > 0)
 const itemRef = (v: unknown): v is { kind: BoardItemKind; id: string } =>
@@ -387,7 +388,7 @@ canvas.put("/boards/:id/items", async (c) => {
     if (!itemRef(p)) return bad(c, "Each item needs a kind and an id")
     const { x, y, z, w, groupId: g, style } = p as Record<string, unknown>
     if (!coord(x) || !coord(y)) return bad(c, "x and y must be numbers within 1,000,000 of the origin")
-    if (z !== undefined && !Number.isSafeInteger(z)) return bad(c, "z must be a whole number")
+    if (z !== undefined && !stacking(z)) return bad(c, "z must be a whole number")
     if (w !== undefined && !itemWidth(w)) return bad(c, "w must be null or from 40 to 4000")
     if (g !== undefined && !groupId(g)) return bad(c, "groupId must be a group id or null")
     if (style !== undefined && cleanStyle(style) === undefined) {
@@ -423,9 +424,10 @@ canvas.put("/boards/:id/items", async (c) => {
 const noteText = (v: unknown): v is string => typeof v === "string" && v.length <= db.MAX_NOTES
 
 canvas.post("/boards/:id/notes", async (c) => {
-  const { text, x, y, w = null, groupId: g = null } = await jsonBody(c)
+  const { text, x, y, z, w = null, groupId: g = null } = await jsonBody(c)
   if (!noteText(text)) return bad(c, `text is required, at most ${db.MAX_NOTES} characters`)
   if (!coord(x) || !coord(y)) return bad(c, "x and y must be numbers within 1,000,000 of the origin")
+  if (z !== undefined && !stacking(z)) return bad(c, "z must be a whole number")
   if (!itemWidth(w)) return bad(c, "w must be null or from 40 to 4000")
   if (!groupId(g)) return bad(c, "groupId must be a group id or null")
   const boardId = c.req.param("id")
@@ -435,10 +437,10 @@ canvas.post("/boards/:id/notes", async (c) => {
   if (!found?.board) return missing(c)
   if (g && !found.grp) return bad(c, "groupId is not a group on this board")
   const id = db.newId()
-  // A new note goes on top of everything placed.
+  // A new note goes on top of everything placed, unless it brings its own z (a copy keeps its place in the stack).
   const made = await c.env.DB.prepare(`INSERT INTO board_items (collection_id, kind, item_id, x, y, w, group_id, text, updated_at, z)
-      SELECT ?1, 'note', ?2, ?3, ?4, ?5, ?6, ?7, ?8, coalesce(max(z), -1) + 1 FROM board_items WHERE collection_id = ?1 RETURNING z`)
-    .bind(boardId, id, x, y, w, g, text, db.now())
+      SELECT ?1, 'note', ?2, ?3, ?4, ?5, ?6, ?7, ?8, coalesce(?9, coalesce(max(z), -1) + 1) FROM board_items WHERE collection_id = ?1 RETURNING z`)
+    .bind(boardId, id, x, y, w, g, text, db.now(), z ?? null)
     .first<{ z: number }>()
   return c.json({ kind: "note", id, x, y, z: made!.z, w, groupId: g, text } satisfies BoardItem, 201)
 })
