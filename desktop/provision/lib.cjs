@@ -281,6 +281,19 @@ function digestOf(perTable) {
   return `snip-digest-v1:${hash.digest('hex')}`;
 }
 
+/** Check the `{ key, size }` entries a copy should hold against a bucket listing of what it does hold. */
+function compareFiles(expected, listed) {
+  const sizes = new Map((listed || []).map((entry) => [entry.key, Number(entry.size) || 0]));
+  const missing = [];
+  let mismatch = null;
+  for (const entry of expected) {
+    const size = Number(entry.size) || 0;
+    if (!sizes.has(entry.key)) missing.push(entry.key);
+    else if (!mismatch && sizes.get(entry.key) !== size) mismatch = { key: entry.key, expected: size, actual: sizes.get(entry.key) };
+  }
+  return { missing, mismatch, present: expected.length - missing.length };
+}
+
 module.exports = {
   BUCKET_NAME,
   D1_NAME,
@@ -295,6 +308,7 @@ module.exports = {
   captureEnvText,
   columnsFromDump,
   comparableTables,
+  compareFiles,
   countsFromDump,
   digestOf,
   digestSql,

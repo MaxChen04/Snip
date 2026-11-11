@@ -1018,17 +1018,9 @@ function verifyStep() {
         sql: 'SELECT COUNT(*) AS rows FROM refs',
       }))[0] : null) || null;
 
-      const transfer = ctx.transfer();
-      const manifest = await transfer.manifest();
-      const remoteSizes = new Map((manifest.keys || []).map((entry) => [entry.key, Number(entry.size) || 0]));
-      let present = 0;
-      const missing = [];
-      for (const entry of files) {
-        const size = remoteSizes.has(entry.key) ? remoteSizes.get(entry.key) : null;
-        if (size === null) missing.push(entry.key);
-        else if (size !== entry.size) {
-          throw new StepError('VERIFY_SIZE_MISMATCH', 'A file in the cloud copy has a different size.', { data: { key: entry.key, local: entry.size, remote: size } });
-        } else present++;
+      const { missing, mismatch, present } = lib.compareFiles(files, (await ctx.transfer().manifest()).keys);
+      if (mismatch) {
+        throw new StepError('VERIFY_SIZE_MISMATCH', 'A file in the cloud copy has a different size.', { data: { key: mismatch.key, local: mismatch.expected, remote: mismatch.actual } });
       }
       if (missing.length) {
         throw new StepError('VERIFY_FILES_MISSING', `${missing.length} file${missing.length === 1 ? '' : 's'} did not arrive in the cloud copy.`, {

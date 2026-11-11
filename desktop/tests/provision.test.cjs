@@ -2394,7 +2394,7 @@ test('delete-resources verifies every artifact and clears the install record', a
 });
 
 /** A pull-verify context that records which tables verify actually compares. */
-function pullVerifyContext({ library, stagedState, manifestValue, dump, counts, localCounts = counts }) {
+function pullVerifyContext({ library, stagedState, manifestValue, dump, counts, localCounts = counts, stagedKeys = manifestValue.keys }) {
   const queried = [];
   const tableOf = (sql) => (sql.match(/FROM "([A-Za-z0-9_]+)"/) || [])[1];
   const emitter = collectedEmitter();
@@ -2425,7 +2425,7 @@ function pullVerifyContext({ library, stagedState, manifestValue, dump, counts, 
       library: {
         async withLocalWorker(_options, fn) {
           return fn({
-            transfer: { async head() { return 10; } },
+            transfer: { async manifest() { return { keys: stagedKeys }; } },
             async dispose() {},
           });
         },
@@ -2512,6 +2512,15 @@ test('a newer Worker that excludes a table the engine has never heard of still v
   });
   await verify.run(ctx);
   assert.deepEqual(queried, ['remote:refs', 'local:refs']);
+});
+
+test('pull-verify fails a downloaded file that is missing or the wrong size', async () => {
+  const key = SYNTHETIC.fileKey(5, 'shot.png');
+  const base = { manifestValue: { tables: { refs: 1 }, keys: [{ key, size: 10 }] }, dump: DUMP_WITH_LEDGER, counts: { refs: 1 } };
+  const truncated = pullVerifyContext({ ...base, library: fakeLibrary(), stagedState: path.join(tempDir(), 'pull/state'), stagedKeys: [{ key, size: 4 }] });
+  await assert.rejects(() => truncated.verify.run(truncated.ctx), (error) => error.code === 'VERIFY_SIZE_MISMATCH' && error.data.cloud === 10 && error.data.local === 4);
+  const absent = pullVerifyContext({ ...base, library: fakeLibrary(), stagedState: path.join(tempDir(), 'pull/state'), stagedKeys: [] });
+  await assert.rejects(() => absent.verify.run(absent.ctx), (error) => error.code === 'VERIFY_FILES_MISSING' && error.data.key === key);
 });
 
 test('pull-verify fails when two zeros would otherwise pass for a copy', async () => {

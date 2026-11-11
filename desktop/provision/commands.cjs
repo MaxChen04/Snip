@@ -321,19 +321,15 @@ function pullVerifyStep({ stagedState, manifest }) {
       if (Number(reported.refs || 0) > 0 && keys.length === 0) {
         throw new StepError('EXPORT_EMPTY', 'The cloud library reports references but no files.', { hint: 'Check the cloud library in a browser, then run `pull` again.' });
       }
-      // One worker for the whole check: starting one per key would take minutes.
-      const present = await ctx.deps.library.withLocalWorker({ root: ctx.root, dataRoot: ctx.dataRoot, token: randomSecret(), persist: stagedState, log: () => {} }, async (handle) => {
-        let seen = 0;
-        for (const entry of keys) {
-          ctx.checkCancel();
-          const response = await handle.transfer.head(entry.key);
-          if (response === null) {
-            throw new StepError('VERIFY_FILES_MISSING', 'A file did not arrive in the downloaded copy.', { data: { key: entry.key } });
-          }
-          seen++;
-        }
-        return seen;
-      });
+      // Sizes come from one listing of the staged bucket, the same check setup makes of the cloud copy.
+      const staged = await ctx.deps.library.withLocalWorker({ root: ctx.root, dataRoot: ctx.dataRoot, token: randomSecret(), persist: stagedState, log: () => {} }, (handle) => handle.transfer.manifest());
+      const { missing, mismatch, present } = require('./lib.cjs').compareFiles(keys, staged.keys);
+      if (missing.length) {
+        throw new StepError('VERIFY_FILES_MISSING', 'A file did not arrive in the downloaded copy.', { hint: 'Run `pull` again.', data: { key: missing[0] } });
+      }
+      if (mismatch) {
+        throw new StepError('VERIFY_SIZE_MISMATCH', 'A file in the downloaded copy has a different size.', { hint: 'Run `pull` again.', data: { key: mismatch.key, cloud: mismatch.expected, local: mismatch.actual } });
+      }
       ctx.setWork({ pullVerified: { digest: remoteDigest, keys: present, tables: reported } });
       return { message: `${present} file${present === 1 ? '' : 's'}, all verified`, detail: remoteDigest };
     },
