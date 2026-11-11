@@ -427,6 +427,8 @@ export interface BoardItem {
   /** Top-left corner in canvas px. */
   x: number | null
   y: number | null
+  /** Stacking order on the board: higher is on top, and items arrive bottom to top. null until the item is placed (those arrive last). */
+  z: number | null
   /** Display width in canvas px; null means the kind's default. Height follows the item's aspect ratio. */
   w: number | null
   groupId: string | null
@@ -478,6 +480,8 @@ export interface BoardItemPlacement {
   id: string
   x: number
   y: number
+  /** Stacking order, a whole number; higher is on top. Omitted: keep the stored one (on top for a first placement). */
+  z?: number
   /** Omitted: keep the stored width. null: back to the default. */
   w?: number | null
   /** Omitted: keep the stored group. null: out of any group. */

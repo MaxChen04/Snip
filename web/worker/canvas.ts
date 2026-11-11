@@ -305,7 +305,7 @@ const ROW_ON_BOARD = onBoard(`json_extract(value, '$[0]')`, `json_extract(value,
 async function getBoard(database: D1Database, id: string): Promise<BoardCanvas | null> {
   const [board, placed, refs, pages, images, groups] = await database.batch<db.Row>([
     database.prepare(`${db.COLLECTION_SELECT} WHERE c.id = ?`).bind(id),
-    database.prepare(`SELECT * FROM board_items WHERE collection_id = ?`).bind(id),
+    database.prepare(`SELECT * FROM board_items WHERE collection_id = ? ORDER BY z, kind, item_id, page_path`).bind(id),
     database.prepare(`${db.REF_SELECT} WHERE r.id IN (SELECT reference_id FROM reference_collections WHERE collection_id = ?) ORDER BY r.created_at DESC, r.id DESC`).bind(id),
     // Saved pages point at (website, path); resolve them to the current page rows.
     database.prepare(`SELECT t.*, r.title AS ref_title, r.domain AS ref_domain, r.favicon AS ref_favicon, ${db.PAGE_COLLECTIONS} FROM page_collections pc
@@ -320,31 +320,33 @@ async function getBoard(database: D1Database, id: string): Promise<BoardCanvas |
   const item = (kind: BoardItemKind, id: string, key: string): BoardItem => {
     const p = at.get(key)
     const style = db.parse<BoardItemStyle>(p?.style_json)
-    return { kind, id, x: (p?.x as number) ?? null, y: (p?.y as number) ?? null, w: (p?.w as number) ?? null, groupId: (p?.group_id as string) ?? null, ...(style && { style }) }
+    return { kind, id, x: (p?.x as number) ?? null, y: (p?.y as number) ?? null, z: (p?.z as number) ?? null, w: (p?.w as number) ?? null, groupId: (p?.group_id as string) ?? null, ...(style && { style }) }
   }
+  // Bottom to top: placed items in their stored order, then the ones not placed yet.
+  const rank = new Map(placed!.results.map((p, i) => [itemKey(p.kind as string, p.item_id as string, p.page_path as string), i]))
+  const member = (kind: BoardItemKind, id: string, key: string, rest: Partial<BoardItem>): [number, BoardItem] => [rank.get(key) ?? rank.size, { ...item(kind, id, key), ...rest }]
   return {
     collection: db.toCollection(row),
     items: [
-      ...refs!.results.map((r) => ({ ...item("reference", r.id as string, itemKey("reference", r.id as string, "")), reference: db.toReference(r) })),
-      ...pages!.results.map((r) => ({
-        ...item("page", r.id as string, itemKey("page", r.reference_id as string, r.path as string)),
-        page: { ...db.toPage(r), reference: db.refSummary(r) },
-      })),
-      ...images!.results.map((r) => ({ ...item("image", r.id as string, itemKey("image", r.id as string, "")), image: toImage(r) })),
-      ...placed!.results.filter((p) => p.kind === "note").map((p) => ({ ...item("note", p.item_id as string, itemKey("note", p.item_id as string, "")), text: p.text as string })),
-    ],
+      ...refs!.results.map((r) => member("reference", r.id as string, itemKey("reference", r.id as string, ""), { reference: db.toReference(r) })),
+      ...pages!.results.map((r) => member("page", r.id as string, itemKey("page", r.reference_id as string, r.path as string), { page: { ...db.toPage(r), reference: db.refSummary(r) } })),
+      ...images!.results.map((r) => member("image", r.id as string, itemKey("image", r.id as string, ""), { image: toImage(r) })),
+      ...placed!.results.filter((p) => p.kind === "note").map((p) => member("note", p.item_id as string, itemKey("note", p.item_id as string, ""), { text: p.text as string })),
+    ]
+      .sort((a, b) => a[0] - b[0])
+      .map(([, it]) => it),
     groups: groups!.results as unknown as BoardGroup[],
   }
 }
 
 /**
  * Which of these items are on the board now, keyed `${kind}:${id}`, with the row each one's
- * position uses (pages: their website and path) and its stored width and group. Also whether
- * the board exists and its group ids.
+ * position uses (pages: their website and path) and its stored width, group, style and z. Also whether
+ * the board exists, its group ids and its highest z (-1 with nothing placed).
  */
 async function resolveItems(database: D1Database, boardId: string, items: { kind: BoardItemKind; id: string }[]) {
   const [board, members, groups] = await database.batch<db.Row>([
-    database.prepare(`SELECT 1 FROM collections WHERE id = ?`).bind(boardId),
+    database.prepare(`SELECT (SELECT coalesce(max(z), -1) FROM board_items WHERE collection_id = ?1) AS top FROM collections WHERE id = ?1`).bind(boardId),
     database
       .prepare(`WITH input AS (
           SELECT DISTINCT json_extract(value, '$.kind') AS kind, json_extract(value, '$.id') AS id FROM json_each(?2)
@@ -353,13 +355,14 @@ async function resolveItems(database: D1Database, boardId: string, items: { kind
           FROM input LEFT JOIN pages p ON input.kind = 'page' AND p.id = input.id
           WHERE ${onBoard("input.kind", "coalesce(p.reference_id, input.id)", "p.path")}
         )
-        SELECT resolved.*, b.w, b.group_id, b.style_json FROM resolved LEFT JOIN board_items b
+        SELECT resolved.*, b.w, b.group_id, b.style_json, b.z FROM resolved LEFT JOIN board_items b
           ON b.collection_id = ?1 AND b.kind = resolved.kind AND b.item_id = resolved.item_id AND b.page_path = resolved.page_path`)
       .bind(boardId, JSON.stringify(items.map(({ kind, id }) => ({ kind, id })))),
     database.prepare(`SELECT id FROM board_groups WHERE collection_id = ?`).bind(boardId),
   ])
   return {
     exists: board!.results.length > 0,
+    top: (board!.results[0]?.top as number) ?? -1,
     members: new Map(members!.results.map((m) => [`${m.kind}:${m.id}`, m])),
     groups: new Set(groups!.results.map((g) => g.id as string)),
   }
@@ -382,33 +385,34 @@ canvas.put("/boards/:id/items", async (c) => {
   if (items.length > MAX_BOARD_ITEMS) return bad(c, `At most ${MAX_BOARD_ITEMS} items at a time`)
   for (const p of items) {
     if (!itemRef(p)) return bad(c, "Each item needs a kind and an id")
-    const { x, y, w, groupId: g, style } = p as Record<string, unknown>
+    const { x, y, z, w, groupId: g, style } = p as Record<string, unknown>
     if (!coord(x) || !coord(y)) return bad(c, "x and y must be numbers within 1,000,000 of the origin")
+    if (z !== undefined && !Number.isSafeInteger(z)) return bad(c, "z must be a whole number")
     if (w !== undefined && !itemWidth(w)) return bad(c, "w must be null or from 40 to 4000")
     if (g !== undefined && !groupId(g)) return bad(c, "groupId must be a group id or null")
     if (style !== undefined && cleanStyle(style) === undefined) {
       return bad(c, "style must be null or an object of rot (-180..180), op (0..1), round (0..40), blur (0..20) and flip, crop, mask, outline, hidden, locked (true/false)")
     }
   }
-  const placements = items as { kind: BoardItemKind; id: string; x: number; y: number; w?: number | null; groupId?: string | null; style?: unknown }[]
+  const placements = items as { kind: BoardItemKind; id: string; x: number; y: number; z?: number; w?: number | null; groupId?: string | null; style?: unknown }[]
   const boardId = c.req.param("id")
-  const { exists, members, groups } = await resolveItems(c.env.DB, boardId, placements)
+  const { exists, top, members, groups } = await resolveItems(c.env.DB, boardId, placements)
   if (!exists) return missing(c)
   const unknown = unknownItems(members, placements)
   if (unknown) return bad(c, unknown)
   if (placements.some((p) => p.groupId && !groups.has(p.groupId))) return bad(c, "groupId is not a group on this board")
   if (!placements.length) return c.json({ ok: true })
-  // Omitted width, group and style keep what is stored.
-  const rows = placements.map((p) => {
+  // Omitted width, group, style and z keep what is stored; an item placed for the first time without a z goes on top.
+  const rows = placements.map((p, i) => {
     const m = members.get(`${p.kind}:${p.id}`)!
     const style = p.style === undefined ? m.style_json : styleJson(cleanStyle(p.style)!)
-    return [p.kind, m.item_id, m.page_path, p.x, p.y, p.w === undefined ? m.w : p.w, p.groupId === undefined ? m.group_id : p.groupId, style]
+    return [p.kind, m.item_id, m.page_path, p.x, p.y, p.w === undefined ? m.w : p.w, p.groupId === undefined ? m.group_id : p.groupId, style, p.z ?? m.z ?? top + 1 + i]
   })
-  await c.env.DB.prepare(`INSERT INTO board_items (collection_id, kind, item_id, page_path, x, y, w, group_id, style_json, text, updated_at)
+  await c.env.DB.prepare(`INSERT INTO board_items (collection_id, kind, item_id, page_path, x, y, w, group_id, style_json, z, text, updated_at)
       SELECT ?1, json_extract(value, '$[0]'), json_extract(value, '$[1]'), json_extract(value, '$[2]'), json_extract(value, '$[3]'),
-        json_extract(value, '$[4]'), json_extract(value, '$[5]'), json_extract(value, '$[6]'), json_extract(value, '$[7]'), ${NOTE_TEXT}, ?2 FROM json_each(?3) WHERE ${ROW_ON_BOARD}
+        json_extract(value, '$[4]'), json_extract(value, '$[5]'), json_extract(value, '$[6]'), json_extract(value, '$[7]'), json_extract(value, '$[8]'), ${NOTE_TEXT}, ?2 FROM json_each(?3) WHERE ${ROW_ON_BOARD}
       ON CONFLICT (collection_id, kind, item_id, page_path) DO UPDATE SET x = excluded.x, y = excluded.y, w = excluded.w,
-        group_id = excluded.group_id, style_json = excluded.style_json, updated_at = excluded.updated_at`)
+        group_id = excluded.group_id, style_json = excluded.style_json, z = excluded.z, updated_at = excluded.updated_at`)
     .bind(boardId, db.now(), JSON.stringify(rows))
     .run()
   return c.json({ ok: true })
@@ -431,10 +435,12 @@ canvas.post("/boards/:id/notes", async (c) => {
   if (!found?.board) return missing(c)
   if (g && !found.grp) return bad(c, "groupId is not a group on this board")
   const id = db.newId()
-  await c.env.DB.prepare(`INSERT INTO board_items (collection_id, kind, item_id, x, y, w, group_id, text, updated_at) VALUES (?, 'note', ?, ?, ?, ?, ?, ?, ?)`)
+  // A new note goes on top of everything placed.
+  const made = await c.env.DB.prepare(`INSERT INTO board_items (collection_id, kind, item_id, x, y, w, group_id, text, updated_at, z)
+      SELECT ?1, 'note', ?2, ?3, ?4, ?5, ?6, ?7, ?8, coalesce(max(z), -1) + 1 FROM board_items WHERE collection_id = ?1 RETURNING z`)
     .bind(boardId, id, x, y, w, g, text, db.now())
-    .run()
-  return c.json({ kind: "note", id, x, y, w, groupId: g, text } satisfies BoardItem, 201)
+    .first<{ z: number }>()
+  return c.json({ kind: "note", id, x, y, z: made!.z, w, groupId: g, text } satisfies BoardItem, 201)
 })
 
 canvas.patch("/boards/:id/notes/:noteId", async (c) => {
@@ -462,21 +468,21 @@ canvas.post("/boards/:id/groups", async (c) => {
   if (!extent(w) || !extent(h)) return bad(c, "w and h must be positive numbers")
   if (!Array.isArray(items) || items.length > MAX_BOARD_ITEMS || !items.every(itemRef)) return bad(c, `items must be at most ${MAX_BOARD_ITEMS} { kind, id }`)
   const boardId = c.req.param("id")
-  const { exists, members } = await resolveItems(c.env.DB, boardId, items)
+  const { exists, top, members } = await resolveItems(c.env.DB, boardId, items)
   if (!exists) return missing(c)
   const unknown = unknownItems(members, items)
   if (unknown) return bad(c, unknown)
   const group: BoardGroup = { id: db.newId(), name: name.trim(), x, y, w, h }
   const ts = db.now()
-  const rows = items.map((i) => {
+  const rows = items.map((i, n) => {
     const m = members.get(`${i.kind}:${i.id}`)!
-    return [i.kind, m.item_id, m.page_path]
+    return [i.kind, m.item_id, m.page_path, top + 1 + n]
   })
   await c.env.DB.batch([
     c.env.DB.prepare(`INSERT INTO board_groups (id, collection_id, name, x, y, w, h, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(group.id, boardId, group.name, x, y, w, h, ts),
-    // Members not placed yet start at the group's corner.
-    c.env.DB.prepare(`INSERT INTO board_items (collection_id, kind, item_id, page_path, x, y, group_id, text, updated_at)
-        SELECT ?1, json_extract(value, '$[0]'), json_extract(value, '$[1]'), json_extract(value, '$[2]'), ?2, ?3, ?4, ${NOTE_TEXT}, ?5 FROM json_each(?6) WHERE ${ROW_ON_BOARD}
+    // Members not placed yet start at the group's corner, on top.
+    c.env.DB.prepare(`INSERT INTO board_items (collection_id, kind, item_id, page_path, x, y, group_id, z, text, updated_at)
+        SELECT ?1, json_extract(value, '$[0]'), json_extract(value, '$[1]'), json_extract(value, '$[2]'), ?2, ?3, ?4, json_extract(value, '$[3]'), ${NOTE_TEXT}, ?5 FROM json_each(?6) WHERE ${ROW_ON_BOARD}
         ON CONFLICT (collection_id, kind, item_id, page_path) DO UPDATE SET group_id = excluded.group_id, updated_at = excluded.updated_at`)
       .bind(boardId, x, y, group.id, ts, JSON.stringify(rows)),
   ])

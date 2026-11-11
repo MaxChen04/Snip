@@ -75,9 +75,9 @@ export const image = (o: Partial<SavedImage> = {}): SavedImage => ({
 })
 
 /** A website on a board. */
-export const websiteItem = (r: Reference, x: number | null, y: number | null, o: Partial<BoardItem> = {}): BoardItem => ({ kind: "reference", id: r.id, x, y, w: null, groupId: null, reference: r, ...o })
-export const imageItem = (i: SavedImage, x: number | null, y: number | null, o: Partial<BoardItem> = {}): BoardItem => ({ kind: "image", id: i.id, x, y, w: null, groupId: null, image: i, ...o })
-export const noteItem = (id: string, text: string, x: number, y: number, o: Partial<BoardItem> = {}): BoardItem => ({ kind: "note", id, x, y, w: null, groupId: null, text, ...o })
+export const websiteItem = (r: Reference, x: number | null, y: number | null, o: Partial<BoardItem> = {}): BoardItem => ({ kind: "reference", id: r.id, x, y, z: x === null ? null : 0, w: null, groupId: null, reference: r, ...o })
+export const imageItem = (i: SavedImage, x: number | null, y: number | null, o: Partial<BoardItem> = {}): BoardItem => ({ kind: "image", id: i.id, x, y, z: x === null ? null : 0, w: null, groupId: null, image: i, ...o })
+export const noteItem = (id: string, text: string, x: number, y: number, o: Partial<BoardItem> = {}): BoardItem => ({ kind: "note", id, x, y, z: 0, w: null, groupId: null, text, ...o })
 export const frame = (id: string, x: number, y: number, w: number, h: number, name = "Frame"): BoardGroup => ({ id, name, x, y, w, h })
 
 export const boardOf = (items: BoardItem[] = [], groups: BoardGroup[] = [], c: Collection = collection()): BoardCanvas => ({ collection: c, items, groups })

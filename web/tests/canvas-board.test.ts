@@ -289,13 +289,14 @@ test("a board lists every member kind with positions, notes and groups", async (
 
     const canvas = await get<BoardCanvas>(`/api/boards/${moodboard}`)
     assert.deepEqual([canvas.collection.id, canvas.collection.name, canvas.collection.referenceCount, canvas.collection.pageCount, canvas.collection.imageCount], [moodboard, "Moodboard", 1, 1, 1])
-    assert.deepEqual(canvas.items.map((i) => [i.kind, i.id, i.x, i.y, i.w, i.groupId]), [
-      ["reference", stripe.reference.id, null, null, null, null],
-      ["page", linear.pages[1]!.id, null, null, null, null],
-      ["image", image.id, null, null, null, null],
-      ["note", note.id, 5, -5, null, null],
+    // Bottom to top: what is placed, then the rest.
+    assert.deepEqual(canvas.items.map((i) => [i.kind, i.id, i.x, i.y, i.z, i.w, i.groupId]), [
+      ["note", note.id, 5, -5, 0, null, null],
+      ["reference", stripe.reference.id, null, null, null, null, null],
+      ["page", linear.pages[1]!.id, null, null, null, null, null],
+      ["image", image.id, null, null, null, null, null],
     ])
-    const [ref, page, img, sticky] = canvas.items
+    const [sticky, ref, page, img] = canvas.items
     assert.deepEqual(ref!.reference, (await db.listReferences(database, { collectionId: moodboard })).items[0])
     assert.deepEqual(ref!.reference!.previewKeys, [stripe.pages[0]!.desktopThumbKey])
     assert.deepEqual(page!.page, { ...(await db.getPage(database, linear.pages[1]!.id))!, reference: { id: linear.reference.id, title: "https://linear.app", domain: "linear.app", favicon: null } })
@@ -374,6 +375,98 @@ test("placements upsert, keep omitted fields, survive a recapture and reject any
     assert.equal((await call(`/api/boards/${moodboard}/items`, "PUT", { items: [{ kind: "page", id: oldPageId, x: 0, y: 0 }] })).status, 400)
     assert.deepEqual(await get(`/api/boards/${moodboard}/items`, "PUT", { items: [{ kind: "page", id: pageItem.id, x: 7, y: 8 }] }), { ok: true })
     assert.deepEqual((await placed()).page, [7, 8, null, null])
+  } finally {
+    await mf.dispose()
+  }
+})
+
+test("stacking order is stored: z round-trips, ties break the same way every time, and new items land on top", async () => {
+  const { mf, database, call, get, uploaded, board } = await setup()
+  try {
+    const moodboard = await board("Moodboard")
+    const stripe = await capture(database, "https://stripe.com", [{ path: "/" }])
+    await db.setReferenceCollection(database, stripe.reference.id, moodboard, true)
+    const a = await uploaded({ name: "a.png", collectionId: moodboard })
+    const b = await uploaded({ name: "b.png", collectionId: moodboard })
+    const put = (items: unknown[]) => get(`/api/boards/${moodboard}/items`, "PUT", { items })
+    const stack = async () => (await get<BoardCanvas>(`/api/boards/${moodboard}`)).items.map((i) => [i.id, i.z])
+    const ref = stripe.reference.id
+
+    // The order sent is the order loaded, whatever order the members are listed in.
+    await put([{ kind: "image", id: a.id, x: 0, y: 0, z: 2 }, { kind: "reference", id: ref, x: 0, y: 0, z: 0 }, { kind: "image", id: b.id, x: 0, y: 0, z: 1 }])
+    assert.deepEqual(await stack(), [[ref, 0], [b.id, 1], [a.id, 2]])
+    // A save of one item re-stacks it and leaves the rest; omitted z keeps what is stored.
+    await put([{ kind: "reference", id: ref, x: 5, y: 5, z: 3 }])
+    await put([{ kind: "image", id: a.id, x: 9, y: 9 }])
+    assert.deepEqual(await stack(), [[b.id, 1], [a.id, 2], [ref, 3]])
+    // Equal z: by kind, then id.
+    await put([{ kind: "image", id: a.id, x: 0, y: 0, z: 7 }, { kind: "image", id: b.id, x: 0, y: 0, z: 7 }, { kind: "reference", id: ref, x: 0, y: 0, z: 7 }])
+    assert.deepEqual(await stack(), [...[a.id, b.id].sort().map((id) => [id, 7]), [ref, 7]])
+
+    // New rows go on top: a note, a first placement without a z, and members a new group places.
+    const note = await get<BoardItem>(`/api/boards/${moodboard}/notes`, "POST", { text: "top", x: 0, y: 0 })
+    assert.equal(note.z, 8)
+    const c = await uploaded({ name: "c.png", collectionId: moodboard })
+    const d = await uploaded({ name: "d.png", collectionId: moodboard })
+    const e = await uploaded({ name: "e.png", collectionId: moodboard })
+    assert.deepEqual((await stack()).slice(3).map(([, z]) => z), [8, null, null, null], "unplaced items come last")
+    await put([{ kind: "image", id: c.id, x: 0, y: 0 }])
+    await get(`/api/boards/${moodboard}/groups`, "POST", { name: "G", x: 0, y: 0, w: 10, h: 10, items: [{ kind: "image", id: d.id }, { kind: "image", id: e.id }, { kind: "image", id: a.id }] })
+    assert.deepEqual((await stack()).slice(2), [[ref, 7], [note.id, 8], [c.id, 9], [d.id, 10], [e.id, 11]], "grouping leaves a placed item's z alone")
+
+    for (const z of [1.5, "1", null, 2 ** 60]) {
+      assert.equal((await call(`/api/boards/${moodboard}/items`, "PUT", { items: [{ kind: "image", id: a.id, x: 0, y: 0, z }] })).status, 400, `z ${z}`)
+    }
+  } finally {
+    await mf.dispose()
+  }
+})
+
+test("the z migration keeps the order boards loaded in before it", async () => {
+  const mf = new Miniflare(convertV4MiniflareOptions({ modules: true, script: 'export default {fetch(){return new Response("ok")}}', d1Databases: ["DB"] }))
+  try {
+    const database = (await mf.getD1Database("DB")) as unknown as D1Database
+    await applyMigrations(database, (f) => f < "0017")
+    const run = (sql: string) => database.prepare(sql).run()
+    await run(`INSERT INTO collections (id, name, created_at) VALUES ('b1', 'One', '2026-01-01'), ('b2', 'Two', '2026-01-01')`)
+    const stripe = await capture(database, "https://stripe.com", [{ path: "/" }, { path: "/pricing" }])
+    const linear = await capture(database, "https://linear.app", [{ path: "/" }])
+    await run(`UPDATE refs SET created_at = '2026-01-02' WHERE id = '${stripe.reference.id}'`)
+    await run(`UPDATE refs SET created_at = '2026-01-03' WHERE id = '${linear.reference.id}'`)
+    for (const [id, at] of [["i1", "2026-01-01"], ["i2", "2026-01-02"]]) {
+      await run(`INSERT INTO images (id, file_key, thumb_key, width, height, mime, created_at) VALUES ('${id}', 'f', 't', 1, 1, 'image/png', '${at}')`)
+      await run(`INSERT INTO image_collections (collection_id, image_id, added_at) VALUES ('b1', '${id}', '2026-01-01')`)
+    }
+    await run(`INSERT INTO reference_collections (collection_id, reference_id, added_at) VALUES ('b1', '${stripe.reference.id}', '2026-01-01'), ('b1', '${linear.reference.id}', '2026-01-01'), ('b2', '${stripe.reference.id}', '2026-01-01')`)
+    await run(`INSERT INTO page_collections (collection_id, reference_id, page_path, added_at) VALUES ('b1', '${stripe.reference.id}', '/', '2026-01-01'), ('b1', '${stripe.reference.id}', '/pricing', '2026-01-02')`)
+    // Rows written in no particular order; before z, a board loaded websites, pages, images (each newest first), then notes by id.
+    const row = (board: string, kind: string, id: string, path = "") =>
+      run(`INSERT INTO board_items (collection_id, kind, item_id, page_path, x, y, text, updated_at) VALUES ('${board}', '${kind}', '${id}', '${path}', 0, 0, ${kind === "note" ? "'n'" : "NULL"}, '2026-01-01')`)
+    await row("b1", "note", "n2")
+    await row("b1", "image", "i1")
+    await row("b2", "note", "n9")
+    await row("b1", "page", stripe.reference.id, "/")
+    await row("b1", "reference", stripe.reference.id)
+    await row("b1", "note", "n1")
+    await row("b1", "image", "i2")
+    await row("b2", "reference", stripe.reference.id)
+    await row("b1", "page", stripe.reference.id, "/pricing")
+    await row("b1", "reference", linear.reference.id)
+
+    await applyMigrations(database, (f) => f >= "0017")
+    const env = { DB: database, SESSION_SECRET: "test-secret", DEV_LOGIN: "max" } as unknown as Env
+    const load = async (id: string) => ((await (await app.request(`http://localhost/api/boards/${id}`, {}, env)).json()) as BoardCanvas).items.map((i) => [i.kind, i.id, i.z])
+    assert.deepEqual(await load("b1"), [
+      ["reference", linear.reference.id, 1],
+      ["reference", stripe.reference.id, 2],
+      ["page", stripe.pages[1]!.id, 3],
+      ["page", stripe.pages[0]!.id, 4],
+      ["image", "i2", 5],
+      ["image", "i1", 6],
+      ["note", "n1", 7],
+      ["note", "n2", 8],
+    ])
+    assert.deepEqual(await load("b2"), [["reference", stripe.reference.id, 1], ["note", "n9", 2]])
   } finally {
     await mf.dispose()
   }
@@ -460,7 +553,7 @@ test("notes are created, edited and deleted on their board only", async () => {
     const res = await call(`/api/boards/${moodboard}/notes`, "POST", { text: "", x: 1, y: 2, w: 240, groupId: group.id })
     assert.equal(res.status, 201)
     const note = (await res.json()) as BoardItem
-    assert.deepEqual(note, { kind: "note", id: note.id, x: 1, y: 2, w: 240, groupId: group.id, text: "" })
+    assert.deepEqual(note, { kind: "note", id: note.id, x: 1, y: 2, z: 0, w: 240, groupId: group.id, text: "" })
 
     assert.equal((await call(`/api/boards/${moodboard}/notes`, "POST", { text: "x".repeat(2001), x: 0, y: 0 })).status, 400)
     assert.equal((await call(`/api/boards/${moodboard}/notes`, "POST", { x: 0, y: 0 })).status, 400)

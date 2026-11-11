@@ -33,7 +33,8 @@ import type { BoardItemStyle } from "../../../shared/types"
 // Everything else saves straight away; removing an item only takes it off the board.
 
 /** A member (website, page, image) or note, where it sits and how it looks. `key` is `${kind}:${id}`. */
-type Node = Placed & { kind: BoardItemKind; id: string; item?: CanvasItem; text?: string; style: BoardItemStyle }
+/** `z` is the stored stacking order; a board's nodes are kept sorted by it, bottom to top. */
+type Node = Placed & { kind: BoardItemKind; id: string; z: number; item?: CanvasItem; text?: string; style: BoardItemStyle }
 type Board = { collection: Collection; nodes: Node[]; groups: BoardGroup[] }
 
 const FILTERS: CanvasFilter[] = ["all", "websites", "pages", "sections", "animations", "images"]
@@ -46,6 +47,8 @@ const openKey = (it: CanvasItem) => `${it.kind}:${it.id}`
 const chunks = <T,>(xs: T[]) => Array.from({ length: Math.ceil(xs.length / BATCH) }, (_, i) => xs.slice(i * BATCH, (i + 1) * BATCH))
 const typing = (t: EventTarget | null) => t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))
 const dialogOpen = () => !!document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"]')
+/** The z above every one of these. */
+const above = (nodes: Node[]) => nodes.reduce((top, n) => Math.max(top, n.z), -1) + 1
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
 function toItem(b: BoardItem): CanvasItem | undefined {
@@ -58,7 +61,7 @@ function toNode(b: BoardItem, x: number, y: number): Node | undefined {
   const item = toItem(b)
   if (!item && b.kind !== "note") return
   const w = b.w ?? DEFAULT_W[b.kind]
-  return { key: `${b.kind}:${b.id}`, kind: b.kind, id: b.id, item, text: b.text, x, y, w, h: item ? w / itemAspect(item) : w * NOTE_H, groupId: b.groupId, style: b.style ?? {} }
+  return { key: `${b.kind}:${b.id}`, kind: b.kind, id: b.id, item, text: b.text, x, y, z: b.z ?? 0, w, h: item ? w / itemAspect(item) : w * NOTE_H, groupId: b.groupId, style: b.style ?? {} }
 }
 
 const placement = (n: Node): BoardItemPlacement => ({
@@ -66,6 +69,7 @@ const placement = (n: Node): BoardItemPlacement => ({
   id: n.id,
   x: Math.round(n.x),
   y: Math.round(n.y),
+  z: n.z,
   w: n.w,
   groupId: n.groupId,
   style: Object.keys(n.style).length ? n.style : null,
@@ -383,7 +387,6 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
       }
       if (n !== latest.current) return
     } while (asked !== saving.current)
-    const order = new Map(live.current?.nodes.map((x, i) => [x.key, i]))
     // What is queued to save has not reached the server yet: there the board's own placement stands.
     const unsaved = new Map(live.current?.nodes.filter((x) => pending.current.items.has(x.key)).map((x) => [x.key, x]))
     const unsavedFrames = new Map(live.current?.groups.filter((g) => pending.current.groups.has(g.id)).map((g) => [g.id, g]))
@@ -392,7 +395,7 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
     for (const it of data.items) {
       const node = toNode(it, it.x ?? 0, it.y ?? 0)
       const own = node && unsaved.get(node.key)
-      if (own) placed.push({ ...node, x: own.x, y: own.y, w: own.w, h: own.h, groupId: own.groupId, style: own.style })
+      if (own) placed.push({ ...node, x: own.x, y: own.y, z: own.z, w: own.w, h: own.h, groupId: own.groupId, style: own.style })
       else if (node) (it.x === null || it.y === null ? fresh : placed).push(node)
     }
     const auto = fresh.filter((x) => !drops.current.has(x.key))
@@ -402,9 +405,10 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
       if (at) Object.assign(x, at)
       drops.current.delete(x.key)
     }
-    // Keep the stacking order the user made; newcomers go on top.
-    const rank = (x: Node, i: number) => order.get(x.key) ?? order.size + i
-    const nodes = [...placed, ...fresh].map((x, i) => [x, rank(x, i)] as const).sort((a, b) => a[1] - b[1]).map(([x]) => x)
+    // The server sends items bottom to top; newcomers go on top. Sorting only moves what is queued to save.
+    const top = above(placed)
+    fresh.forEach((x, i) => (x.z = top + i))
+    const nodes = [...placed, ...fresh].sort((a, b) => a.z - b.z)
     apply({ collection: data.collection, nodes, groups: data.groups.map((g) => unsavedFrames.get(g.id) ?? g) })
     const keys = new Set(nodes.map((x) => x.key))
     if ([...sel.current].some((k) => !keys.has(k))) setSelected(new Set([...sel.current].filter((k) => keys.has(k))))
@@ -451,8 +455,11 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
     if (!b) return
     const r = moveOnBoard(b.nodes, b.groups, new Set(keys), new Set(frameIds), dx, dy)
     const moved = new Set(r.movedItems.map((x) => x.key))
-    apply({ ...b, nodes: front ? [...r.items.filter((x) => !moved.has(x.key)), ...r.items.filter((x) => moved.has(x.key))] : r.items, groups: r.frames })
-    queue(r.movedItems, r.movedFrames)
+    const rest = r.items.filter((x) => !moved.has(x.key))
+    // On top means a z above everything else; it is saved with the move.
+    const raised = front ? r.movedItems.map((x, i) => ({ ...x, z: above(rest) + i })) : r.movedItems
+    apply({ ...b, nodes: front ? [...rest, ...raised] : r.items, groups: r.frames })
+    queue(raised, r.movedFrames)
   }
 
   /** Follow a pointer that went down on items or a frame title; past a small threshold it drags them (or, with nothing it may move, calls `blocked`). */
@@ -739,6 +746,7 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
       try {
         const made = await Promise.all(
           notes.map(async (n) => {
+            await flush() // the server puts a note above what it has stored; a queued order must land first
             const c = await sent(api.addBoardNote(id, { text: n.text ?? "", x: Math.round(n.x + 24), y: Math.round(n.y + 24), w: n.w, groupId: n.groupId }))
             return { ...toNode(c, c.x!, c.y!)!, style: n.style, h: n.h }
           }),
@@ -902,6 +910,7 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
     const y = Math.round(p.y - (w * NOTE_H) / 2)
     const frame = frameAt(live.current?.groups ?? [], p.x, p.y)
     try {
+      await flush() // the server puts the note above what it has stored; a queued order must land first
       const it = await sent(api.addBoardNote(id, { text: "", x, y, groupId: frame?.id ?? null }))
       const node = toNode(it, x, y)!
       const b = live.current!
