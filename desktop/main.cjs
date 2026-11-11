@@ -554,7 +554,7 @@ async function finishCloudRun(run, { code }) {
     await applyMode()
     sendToSettings("snip:cloud-log", { level: "info", message: mode() === "cloud" ? "Snip is now using your cloud library." : "Snip is back on this Mac." })
   } else if (result.code === "CANCELLED") {
-    sendToSettings("snip:cloud-log", { level: "info", message: "Stopped. Nothing on Cloudflare was changed." })
+    sendToSettings("snip:cloud-log", { level: "info", message: "Stopped." })
   } else {
     // A run that died without its own result still needs a sentence a person can act on.
     const fallback = code === 2 ? "Snip needs one more choice before it can continue." : code === 3 ? "Another Snip setup is already running." : code === 4 ? "This build can’t run that part of cloud Snip." : "Setup stopped before it finished. Retry the step that failed."
