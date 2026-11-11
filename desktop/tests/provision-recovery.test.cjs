@@ -668,6 +668,8 @@ test('BUG 9: after a crash between the two swap renames, a rerun still records t
   let renames = 0;
   let dead = false;
   fs.renameSync = (from, to) => {
+    // cloud.json's own atomic write is not one of the swap's two renames.
+    if (!dead && path.dirname(to) === stateModule.profileDir(library.root)) return realRename(from, to);
     renames++;
     if (dead || renames === 2) { dead = true; throw new Error('process died mid-swap'); }
     return realRename(from, to);
@@ -772,4 +774,36 @@ test('rerunning an interrupted setup with a different --domain refuses; the same
   const same = await attemptSetup(model, {}, { wrangler });
   assert.equal(same.error, null, 'the same address resumes');
   assert.equal(same.result.ok, true);
+});
+
+test('a pull that died after both swap renames, before the record, still keeps the pre-pull library as the backup', async () => {
+  const library = fakeLibrary();
+  stateModule.setMode(library.root, 'cloud');
+  const live = path.join(library.root, 'web/.wrangler/state');
+  // The crash state: the pre-pull library is in the recorded backup and attempt 1's download is live.
+  stateDir(path.join(library.root, 'backups/cloud-pull-1'), 'pre-pull-library');
+  stateDir(live, 'first-download');
+  stateModule.updateState(library.root, (state) => { state.pullBackup = 'backups/cloud-pull-1'; return state; });
+  const stagedState = path.join(library.root, 'backups/pull-2/state');
+  stateDir(stagedState, 'second-download');
+  const ctx = createContext({
+    root: library.root, dataRoot: library.root, flags: {}, emit: collectedEmitter().emit, api: {},
+    wrangler: { bin: '/x', run: async () => ({ ok: true }) },
+    deps: {
+      fetch: async () => { throw new Error('no network'); },
+      library: {
+        async withLocalWorker(options, fn) {
+          return fn({ transfer: { async status() { return { counts: { refs: 9 } }; }, async manifest() { return { keys: [] }; } }, async dispose() {} });
+        },
+        libraryConfig: ({ dataRoot }) => path.join(dataRoot, 'web/wrangler.jsonc'),
+      },
+    },
+  });
+  const swap = commands.pullSteps({ stagedRoot: path.dirname(stagedState), stagedState }).find((step) => step.id === 'pull-swap');
+  await swap.run(ctx);
+  const record = stateModule.readState(library.root);
+  assert.equal(fs.readFileSync(path.join(live, 'v3/d1/marker'), 'utf8'), 'second-download');
+  assert.equal(record.snapshot.path, 'backups/cloud-pull-1');
+  assert.equal(fs.readFileSync(path.join(library.root, record.snapshot.path, 'v3/d1/marker'), 'utf8'), 'pre-pull-library');
+  assert.equal(record.pullBackup, undefined, 'the intent is cleared once the swap is recorded');
 });

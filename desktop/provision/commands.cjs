@@ -347,10 +347,17 @@ function pullSwapStep({ stagedRoot, stagedState }) {
     title: 'Switching to the downloaded library',
     async run(ctx) {
       const live = local.localStatePath(ctx.dataRoot);
-      const previous = path.join(ctx.dataRoot, 'backups', `cloud-pull-${NOW().replace(/[:.]/g, '-')}`);
-      const hadLocal = fs.existsSync(live);
-      if (hadLocal) {
+      // `pullBackup` is written before the library is moved aside and cleared when the
+      // swap is recorded, so a pull that died in between still knows where it put it.
+      const recorded = ctx.state().pullBackup;
+      const resumed = Boolean(recorded) && fs.existsSync(path.join(ctx.dataRoot, recorded));
+      const previous = resumed ? path.join(ctx.dataRoot, recorded) : path.join(ctx.dataRoot, 'backups', `cloud-pull-${NOW().replace(/[:.]/g, '-')}`);
+      const hadLocal = resumed || fs.existsSync(live);
+      // Anything live next to that backup is the interrupted pull's own download.
+      if (resumed) fs.rmSync(live, { recursive: true, force: true });
+      else if (hadLocal) {
         fs.mkdirSync(path.dirname(previous), { recursive: true, mode: 0o700 });
+        ctx.save((next) => { next.pullBackup = path.relative(ctx.dataRoot, previous); return next; });
         try {
           fs.renameSync(live, previous);
         } catch (error) {
@@ -402,6 +409,7 @@ function pullSwapStep({ stagedRoot, stagedState }) {
           : null;
         next.cloud = { ...(next.cloud || {}), detachedAt: NOW(), lastVerifiedAt: NOW() };
         next.mode = 'local';
+        delete next.pullBackup;
         return next;
       });
       return { message: hadLocal ? `Previous library kept at ${path.relative(ctx.dataRoot, previous)}` : 'Library switched' };
