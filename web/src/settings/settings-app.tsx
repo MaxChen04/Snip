@@ -157,7 +157,7 @@ export function SettingsApp() {
     <div className="flex min-h-svh flex-col bg-ground text-foreground">
       <Header />
       <main className="mx-auto flex w-full max-w-[620px] flex-1 flex-col gap-7 px-6 pt-7 pb-16">
-        {working || cloud.choice || cloud.needed ? (
+        {!cloud.loaded ? null : working || cloud.choice || cloud.needed ? (
           <ProgressView
             cloud={cloud}
             errorCard={errorCard}

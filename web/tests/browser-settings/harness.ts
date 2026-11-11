@@ -84,18 +84,20 @@ export interface Opened {
 /**
  * Opens /settings.html with the fake main process installed before any app script runs.
  * `mode` is what cloud.json says at start.
+ * `search` is the page's query string; `awaitFirstPaint: false` returns before the first
+ * state() reply has rendered anything.
  */
-export async function openSettings(browser: Browser, server: Server, config: { mode?: "local" | "enabling" | "cloud" | "disabling"; stateDelayMs?: number; cancelKillMs?: number } = {}): Promise<Opened> {
+export async function openSettings(browser: Browser, server: Server, config: { mode?: "local" | "enabling" | "cloud"; stateDelayMs?: number; cancelKillMs?: number; search?: string; awaitFirstPaint?: boolean } = {}): Promise<Opened> {
   const context = await browser.newContext({ viewport: { width: 900, height: 900 } })
   const page = await context.newPage()
   const pageErrors: string[] = []
   page.on("pageerror", error => pageErrors.push(String(error)))
   await page.addInitScript({ content: `window.__SIM_CONFIG__ = ${JSON.stringify(config)};\n${fakeMain}` })
-  await page.goto(`${server.url}/settings.html`)
+  await page.goto(`${server.url}/settings.html${config.search ?? ""}`)
   // The dev entry must have kept our bridge (not the fixture) and rendered the app.
   const installed = await page.evaluate(() => typeof (window as any).__sim === "object")
   if (!installed) throw new Error("fake bridge was not installed")
-  await page.getByRole("heading", { level: 1 }).first().waitFor()
+  if (config.awaitFirstPaint !== false) await page.getByRole("heading", { level: 1 }).first().waitFor()
   return { page, pageErrors, close: () => context.close() }
 }
 
