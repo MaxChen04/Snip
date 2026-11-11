@@ -169,6 +169,8 @@ export async function getSession(c: Context<AppEnv>): Promise<Session | null> {
   if (!payload) return null
   const parsed = parseSessionPayload(payload)
   if (!parsed || parsed.exp < Date.now()) return null
+  // The allowlist that let a GitHub login in also decides whether its session still stands.
+  if (parsed.session.method === "github" && !allowedLogins(c.env).includes(parsed.session.ownerId.toLowerCase())) return null
   if (parsed.session.epoch === -1) return parsed.session
   const state = await ownerState(c.env.DB, parsed.session.ownerId)
   // A session minted before "sign out all devices" carries an older epoch and stops here.

@@ -81,11 +81,22 @@ async function cookie(env: Env, session: { ownerId: string; method?: string; epo
 test("a legacy login cookie still signs in and reports itself as GitHub", () =>
   withWorker(async ({ database, env, call }) => {
     const legacy = `${SESSION_COOKIE}=${await sign(env.SESSION_SECRET, `fixture-login|${Date.now() + 86_400_000}`)}`
-    const me = await call("/api/me", { headers: { cookie: legacy } })
+    const me = await call("/api/me", { headers: { cookie: legacy } }, { ALLOWED_GITHUB_LOGINS: "Fixture-Login" })
     assert.equal(me.status, 200, "a deploy must not sign existing sessions out")
     assert.deepEqual(await me.json(), { login: "fixture-login", ownerId: "fixture-login", method: "github" })
     // No owners row yet: epoch 0 is the implicit value, so the legacy cookie is valid.
     assert.equal((await database.prepare("SELECT count(*) AS n FROM owners").first<{ n: number }>())!.n, 0)
+  }))
+
+test("a GitHub session ends when its login leaves ALLOWED_GITHUB_LOGINS", () =>
+  withWorker(async ({ env, call }) => {
+    const github = await cookie(env, { ownerId: "second-person", method: "github" })
+    assert.equal((await call("/api/me", { headers: { cookie: github } }, { ALLOWED_GITHUB_LOGINS: "max, second-person" })).status, 200)
+    assert.equal((await call("/api/me", { headers: { cookie: github } }, { ALLOWED_GITHUB_LOGINS: "max" })).status, 401)
+    assert.equal((await call("/api/me", { headers: { cookie: github } })).status, 401)
+    // Other sign-in methods never consult the list.
+    const passkey = await cookie(env, { ownerId: "second-person", method: "passkey" })
+    assert.equal((await call("/api/me", { headers: { cookie: passkey } }, { ALLOWED_GITHUB_LOGINS: "max" })).status, 200)
   }))
 
 test("the new cookie carries owner and method, and tampering or expiry is refused", () =>

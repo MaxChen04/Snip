@@ -321,7 +321,7 @@ test("a GitHub-configured install still signs in, and still offers the fallback"
     // A GitHub session reaches consent exactly as before: the detour change does not affect it,
     // because a signed-in request never takes the detour.
     const cookie = `${SESSION_COOKIE}=${await sign(ctx.env.SESSION_SECRET, `owner:max|${Date.now() + 86_400_000}|github|0`)}`
-    const consent = await ctx.call(AUTHORIZE, { headers: { cookie } })
+    const consent = await ctx.call(AUTHORIZE, { headers: { cookie } }, github)
     assert.equal(consent.status, 200)
     assert.match(await consent.text(), /Allow Claude to use Snip\?/)
 
