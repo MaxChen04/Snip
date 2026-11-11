@@ -534,11 +534,17 @@ const settleStopped = (db: D1Database, where: string, arg: unknown, ts: string) 
   db.prepare(`UPDATE refs SET status = 'failed', progress = NULL, error = ?, capture_control = NULL, crawl_state = NULL, updated_at = ? WHERE ${where}`).bind(STOPPED_EMPTY, ts, arg),
 ]
 
-/** The last checkpoint brought up to the pages saved since: they count as captured and are not visited again. */
-function resumeState(checkpoint: CrawlState | null, pageUrls: string[]): CrawlState {
+/**
+ * The last checkpoint brought up to the pages saved since: they count as captured and are not visited again.
+ * The agent numbers a page, and names its files, by its place in `visited`, so `visited` is filled up to each
+ * saved page's ord: the next page takes a number, and a file prefix, no saved page has.
+ */
+function resumeState(checkpoint: CrawlState | null, pages: [url: string, ord: number][]): CrawlState {
   const base = checkpoint ?? { version: 1, queue: [], visited: [], captured: 0, failures: 0, navLinksQueued: false, hoverSeen: [], meta: null, tokens: null }
-  const since = pageUrls.slice(base.captured)
-  return { ...base, queue: base.queue.filter((url) => !since.includes(url)), visited: [...base.visited, ...since], captured: pageUrls.length }
+  const since = pages.slice(base.captured)
+  const visited = [...base.visited]
+  for (const [url, ord] of since) do visited.push(url); while (visited.length <= ord)
+  return { ...base, queue: base.queue.filter((url) => !since.some(([saved]) => saved === url)), visited, captured: pages.length }
 }
 
 export async function claimJob(db: D1Database): Promise<Job | null> {
@@ -557,18 +563,18 @@ export async function claimJob(db: D1Database): Promise<Job | null> {
     db.prepare(`UPDATE refs SET stale_reclaims = stale_reclaims + (status = 'capturing'), status = 'capturing', claimed_at = ?2, updated_at = ?2,
       capture_attempt = CASE WHEN ${HAS_PAGES} THEN capture_attempt ELSE ?1 END, progress = CASE WHEN ${HAS_PAGES} THEN 'Resuming capture' ELSE 'Starting capture' END
       WHERE id = (${candidate.replace("?", "?3")}) RETURNING id, url, mode, max_pages, capture_attempt, capture_options, crawl_state,
-      (SELECT json_group_array(url) FROM (SELECT url FROM pages WHERE reference_id = refs.id ORDER BY ord)) AS page_urls`).bind(attempt, ts, stale),
+      (SELECT json_group_array(json_array(url, ord)) FROM (SELECT url, ord FROM pages WHERE reference_id = refs.id ORDER BY ord)) AS pages`).bind(attempt, ts, stale),
   ])
   const r = results[results.length - 1]?.results[0] as Row | undefined
   if (!r) return null
-  const pageUrls = parse<string[]>(r.page_urls) ?? []
+  const pages = parse<[string, number][]>(r.pages) ?? []
   return {
     id: r.id as string,
     url: r.url as string,
     mode: r.mode as CaptureMode,
     maxPages: r.max_pages as number,
     attempt: r.capture_attempt as string,
-    resume: pageUrls.length ? resumeState(parse<CrawlState>(r.crawl_state), pageUrls) : null,
+    resume: pages.length ? resumeState(parse<CrawlState>(r.crawl_state), pages) : null,
     options: parse<CaptureOptions>(r.capture_options),
   }
 }

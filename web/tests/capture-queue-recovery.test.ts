@@ -282,3 +282,26 @@ test("a capture whose agent keeps dying is failed after a few stale reclaims ins
     await mf.dispose()
   }
 })
+
+test("a stale reclaim never hands the agent an ord, or a file prefix, that a saved page already has", async () => {
+  const { mf, database, makeStale } = await setup()
+  try {
+    const ref = await db.createReference(database, { url: "https://example.com", mode: "crawl", maxPages: 9 })
+    const first = (await db.claimJob(database))!
+    assert.ok(await db.addPage(database, ref.id, first.attempt, page(ref.id, first.attempt, 0)))
+    await db.requestPause(database, ref.id)
+    assert.equal(await db.pauseJob(database, ref.id, first.attempt, state(1)), "paused")
+    await db.resumeReference(database, ref.id)
+    const resumed = (await db.claimJob(database))!
+    // After the pause the agent visits three more URLs: two are skipped (ords 1 and 2), the third is saved as ord 3.
+    assert.ok(await db.addPage(database, ref.id, resumed.attempt, page(ref.id, resumed.attempt, 3)))
+    await makeStale(ref.id)
+    const again = (await db.claimJob(database))!
+    assert.equal(again.resume!.captured, 2)
+    // The agent gives its next page the ord `visited.length`.
+    assert.ok(again.resume!.visited.length > 3, `next ord ${again.resume!.visited.length} would overwrite the page saved as 3`)
+    assert.ok(again.resume!.visited.includes("https://example.com/3"))
+  } finally {
+    await mf.dispose()
+  }
+})
