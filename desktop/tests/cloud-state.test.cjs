@@ -194,3 +194,8 @@ test("an unreadable or unsupported record starts nothing and is never a local li
   fs.writeFileSync(path.join(root, ".snip", "cloud.json"), JSON.stringify({ version: 1, mode: "enabling" }))
   assert.equal(cloudModeFor(root), "enabling")
 })
+
+test("only the modes the engine writes are modes", () => {
+  // Nothing ever wrote "disabling"; a record that claims it is read like any unknown mode.
+  assert.equal(normalizeCloudState({ mode: "disabling" }).mode, "local")
+})

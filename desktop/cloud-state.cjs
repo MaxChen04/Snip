@@ -3,7 +3,7 @@
 const fs = require("node:fs")
 const path = require("node:path")
 
-const MODES = new Set(["local", "enabling", "cloud", "disabling"])
+const MODES = new Set(["local", "enabling", "cloud"])
 const STEP_STATES = new Set(["done", "failed", "skipped", "running", "waiting", "pending"])
 const MAX_BYTES = 512 * 1024
 

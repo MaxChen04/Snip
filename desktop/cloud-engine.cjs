@@ -49,6 +49,16 @@ function setupFlags(options = {}) {
   }
 }
 
+/**
+ * What Retry runs, as `[command, flags, subcommand]`. An unfinished setup resumes with
+ * whatever was answered since; anything else is the command that last failed. With
+ * neither there is nothing to retry: a healthy library is never set up again.
+ */
+function retryArgs({ mode, failed, answers }) {
+  if (mode === "enabling" || failed?.[0] === "setup") return ["setup", setupFlags(answers)]
+  return failed ?? null
+}
+
 function engineEnv(base, { dataRoot }) {
   // The engine runs wrangler; keep every cache inside the library, never the bundle.
   // BROWSER=none is removed because wrangler login must be able to report its URL,
@@ -170,4 +180,4 @@ function runEngine({ executable = process.execPath, appDir, root, dataRoot, comm
   }
 }
 
-module.exports = { enginePath, engineAvailable, engineArgs, setupFlags, engineEnv, runEngine, safeEvent, CANCELLATION_GRACE_MS, EXIT_DRAIN_MS }
+module.exports = { enginePath, engineAvailable, engineArgs, setupFlags, retryArgs, engineEnv, runEngine, safeEvent, CANCELLATION_GRACE_MS, EXIT_DRAIN_MS }

@@ -13,7 +13,7 @@ const { SourceUpdates } = require("./source-updates.cjs")
 const { prepareRuntimeLayout, selectExistingLibrary } = require("./runtime-layout.cjs")
 const windowOrigin = require("./window-origin.cjs")
 const { cloudPaths, readCloud, modeServices, modePlan, selectCaptureEnvFile, keepLocalCaptureEnv } = require("./cloud-state.cjs")
-const { engineAvailable, runEngine, setupFlags } = require("./cloud-engine.cjs")
+const { engineAvailable, runEngine, setupFlags, retryArgs } = require("./cloud-engine.cjs")
 const { sessionCookie, externalUrl } = require("./cloud-session.cjs")
 const { snapshotFlags } = require("./cloud-confirm.cjs")
 const { ownerLinkFrom, LINK_NOTE, LINK_TTL_MS } = require("./cloud-link.cjs")
@@ -62,6 +62,8 @@ let startupError = "", lastUrl = null, position = null
 let resolvingNode = false
 let settingsWin = null, cloudState = null, cloudMode = "local"
 let cloudRun = null, cloudResult = null
+// The last library run that did not succeed: what Retry runs again.
+let failedRun = null
 // The owner link is minted for a person to open in another browser, so it is the one
 // URL that belongs in the renderer. It lives in memory only, and never in a log.
 let ownerLink = null
@@ -547,6 +549,7 @@ async function finishCloudRun(run, { code }) {
   }
   // Answers belong to the run they were given for; this is the one place they are dropped.
   cloudInput.clear()
+  failedRun = result.ok ? null : run
   if (result.ok) {
     await applyMode()
     sendToSettings("snip:cloud-log", { level: "info", message: mode() === "cloud" ? "Snip is now using your cloud library." : "Snip is back on this Mac." })
@@ -572,7 +575,7 @@ function startCloudRun(command, flags = {}, subcommand, purpose) {
   if (command === "setup") {
     try { keepLocalCaptureEnv({ dataRoot: layout.dataRoot }) } catch {}
   }
-  const run = { command: subcommand ? `${command} ${subcommand}` : command, step: null, cancel: null, resultSeen: false, purpose, link: null }
+  const run = { command: subcommand ? `${command} ${subcommand}` : command, args: [command, flags, subcommand], step: null, cancel: null, resultSeen: false, purpose, link: null }
   cloudRun = run
   cloudResult = null
   // "Create a new link" must never hand back the one it replaces.
@@ -624,11 +627,9 @@ function registerCloudIpc() {
     if (payload.action === "detach") return startCloudRun("detach")
     return { error: "Unknown action." }
   }))
-  ipcMain.handle("snip:cloud-retry-step", guard(payload => {
-    if (mode() === "enabling") return startCloudRun("setup", setupFlags(Object.fromEntries(cloudInput)))
-    if (mode() === "disabling") return startCloudRun("pull")
-    if (mode() === "cloud" && typeof payload.step === "string") return startCloudRun("setup", setupFlags({}))
-    return { error: "Nothing to retry." }
+  ipcMain.handle("snip:cloud-retry-step", guard(() => {
+    const args = retryArgs({ mode: mode(), failed: failedRun?.args, answers: Object.fromEntries(cloudInput) })
+    return args ? startCloudRun(...args) : { error: "Nothing to retry." }
   }))
   ipcMain.handle("snip:cloud-cancel", guard(() => ({ cancelled: !!cloudRun?.cancel?.() })))
   // Undo is not Cancel: it abandons an interrupted `enabling` and is only offered there.

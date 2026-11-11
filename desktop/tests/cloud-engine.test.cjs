@@ -7,7 +7,7 @@ const { EventEmitter } = require("node:events")
 const fs = require("node:fs")
 const os = require("node:os")
 const path = require("node:path")
-const { enginePath, engineAvailable, engineArgs, setupFlags, engineEnv, runEngine, safeEvent } = require("../cloud-engine.cjs")
+const { enginePath, engineAvailable, engineArgs, setupFlags, retryArgs, engineEnv, runEngine, safeEvent } = require("../cloud-engine.cjs")
 
 const APP = "/Applications/Snip.app/Contents/Resources/app"
 const FIXTURE = path.join(__dirname, "fixtures", "fake-cloud-cli.cjs")
@@ -39,6 +39,18 @@ test("an answer stored under the engine's key becomes that flag", () => {
   const args = engineArgs({ appDir: APP, root: "/repo", dataRoot: "/library", command: "setup", flags, env: {} })
   assert.equal(args[args.indexOf("--account") + 1], "acct-2")
   assert.equal(setupFlags({ accountId: "acct-2" }).account, undefined, "there is one name for the account, the engine's")
+})
+
+test("Retry resumes an unfinished setup, re-runs what failed, and never sets up a healthy library", () => {
+  assert.equal(retryArgs({ mode: "cloud", failed: undefined, answers: {} }), null)
+  assert.equal(retryArgs({ mode: "local", failed: undefined, answers: {} }), null)
+  const pull = ["pull", {}, undefined]
+  assert.equal(retryArgs({ mode: "cloud", failed: pull, answers: {} }), pull)
+  const restore = ["snapshot", { confirm: "replaced-2026" }, "restore"]
+  assert.equal(retryArgs({ mode: "local", failed: restore, answers: {} }), restore)
+  // Setup resumes from its journal with the answers given since, in whatever mode it stopped.
+  assert.deepEqual(retryArgs({ mode: "enabling", failed: undefined, answers: { account: "acct-2" } }), ["setup", setupFlags({ account: "acct-2" })])
+  assert.equal(retryArgs({ mode: "cloud", failed: ["setup", { account: "old" }, undefined], answers: { account: "acct-2" } })[1].account, "acct-2")
 })
 
 test("snapshot actions are positional subcommands", () => {
