@@ -7,7 +7,7 @@ const { EventEmitter } = require("node:events")
 const fs = require("node:fs")
 const os = require("node:os")
 const path = require("node:path")
-const { enginePath, engineAvailable, engineArgs, engineEnv, runEngine, safeEvent } = require("../cloud-engine.cjs")
+const { enginePath, engineAvailable, engineArgs, setupFlags, engineEnv, runEngine, safeEvent } = require("../cloud-engine.cjs")
 
 const APP = "/Applications/Snip.app/Contents/Resources/app"
 const FIXTURE = path.join(__dirname, "fixtures", "fake-cloud-cli.cjs")
@@ -30,6 +30,15 @@ test("engine arguments carry the contract's flags", () => {
   const args = engineArgs({ appDir: APP, root: "/repo", dataRoot: "/library", command: "setup", flags: { account: "abc", domain: "", login: undefined }, env: {} })
   assert.deepEqual(args.slice(1), ["setup", "--json", "--root", "/repo", "--data-root", "/library", "--yes", "--no-open", "--managed", "--account", "abc"])
   assert.equal(args[0], path.join(APP, "provision", "cli.cjs"))
+})
+
+test("an answer stored under the engine's key becomes that flag", () => {
+  // `needs_input` asks for "account"; the answer is kept under that name and sent back as --account.
+  const flags = setupFlags({ account: " acct-2 ", domain: "snip.example.com", adoptExisting: true })
+  assert.deepEqual(flags, { account: "acct-2", domain: "snip.example.com", login: undefined, "adopt-existing": true, "capture-env": "replace" })
+  const args = engineArgs({ appDir: APP, root: "/repo", dataRoot: "/library", command: "setup", flags, env: {} })
+  assert.equal(args[args.indexOf("--account") + 1], "acct-2")
+  assert.equal(setupFlags({ accountId: "acct-2" }).account, undefined, "there is one name for the account, the engine's")
 })
 
 test("snapshot actions are positional subcommands", () => {

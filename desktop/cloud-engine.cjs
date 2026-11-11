@@ -31,6 +31,24 @@ function engineArgs({ appDir, root, dataRoot, command, subcommand, flags = [], e
   return args
 }
 
+/**
+ * `setup` flags from what Settings sent and answered. The names are the engine's own
+ * (`needs_input` keys), so an answer reaches the flag it was asked for.
+ */
+function setupFlags(options = {}) {
+  const text = (value, limit) => (typeof value === "string" && value.trim() ? value.trim().slice(0, limit) : undefined)
+  return {
+    account: text(options.account, 64),
+    domain: text(options.domain, 253),
+    login: text(options.login, 64),
+    // Set only when the person picked "Use that library" in the choice screen.
+    "adopt-existing": options.adoptExisting === true ? true : undefined,
+    // The app always keeps the local capture settings as .env.local and points the
+    // agent at the cloud queue; that is the "replace" behaviour from the contracts.
+    "capture-env": "replace",
+  }
+}
+
 function engineEnv(base, { dataRoot }) {
   // The engine runs wrangler; keep every cache inside the library, never the bundle.
   // BROWSER=none is removed because wrangler login must be able to report its URL,
@@ -152,4 +170,4 @@ function runEngine({ executable = process.execPath, appDir, root, dataRoot, comm
   }
 }
 
-module.exports = { enginePath, engineAvailable, engineArgs, engineEnv, runEngine, safeEvent, CANCELLATION_GRACE_MS, EXIT_DRAIN_MS }
+module.exports = { enginePath, engineAvailable, engineArgs, setupFlags, engineEnv, runEngine, safeEvent, CANCELLATION_GRACE_MS, EXIT_DRAIN_MS }
