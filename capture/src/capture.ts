@@ -1055,7 +1055,7 @@ async function recordHovers(page: PwPage, seen: Set<string>, recordingFormat: Re
 }
 
 /** Fetch linked CSS, absolutize url()s and inline small web fonts. */
-async function buildSnapshot(page: PwPage, context: BrowserContext) {
+async function buildSnapshot(page: PwPage, context: BrowserContext, sidecar: BrowserContext) {
   const snap = await run<{ html: string; sheets: { href: string; inline: string | null }[]; token: string }>(page, SNAPSHOT_JS)
   let fontBytes = 0
   const fontCache = new Map<string, string>()
@@ -1082,7 +1082,7 @@ async function buildSnapshot(page: PwPage, context: BrowserContext) {
         let data = fontCache.get(u)
         if (!data && fontBytes < FONT_BUDGET) {
           try {
-            const res = await context.request.get(u, { timeout: 10_000 })
+            const res = await sidecar.request.get(u, { timeout: 10_000 })
             if (res.ok()) {
               const body = await res.body()
               fontBytes += body.length
@@ -1172,6 +1172,7 @@ export async function captureJob(browser: Browser, api: SnipApi, job: Job, signa
   const storageState = options.signedIn ? signedInState() : undefined
   const network = allowPrivateUrls() ? null : await createCaptureNetwork()
   const contexts: BrowserContext[] = []
+  let sidecarNetwork: CaptureNetwork = null
   try {
     const common: BrowserContextOptions = { colorScheme, storageState, locale: "en-US", proxy: network?.proxy, serviceWorkers: "block" as const }
     const desktop = await browser.newContext({ ...common, viewport: { ...DESKTOP, width: options.desktopWidth ?? DESKTOP.width }, deviceScaleFactor: 1 })
@@ -1179,16 +1180,24 @@ export async function captureJob(browser: Browser, api: SnipApi, job: Job, signa
     const mobile = await browser.newContext({ ...common, viewport: MOBILE, deviceScaleFactor: MOBILE_DPR, isMobile: true, hasTouch: true, userAgent: MOBILE_UA })
     contexts.push(mobile)
     await Promise.all(contexts.flatMap((context) => [context.addInitScript(HOLD_RESIZE_JS), context.addInitScript(OBSERVED_JS)]))
+    // The sitemap, icon and fonts are fetched through a proxy of their own: a private address there loses that file,
+    // while one the pages themselves ask for still fails the job.
+    let sidecar = desktop
+    if (network) {
+      sidecarNetwork = await createCaptureNetwork()
+      sidecar = await browser.newContext({ ...common, proxy: sidecarNetwork.proxy })
+      contexts.push(sidecar)
+    }
     // Every upload counts as progress, so a slow connection is not taken for a hung step.
     const reporting: SnipApi = Object.create(api, { upload: { value: (...file: Parameters<SnipApi["upload"]>) => { progress(); return api.upload(...file) } } })
-    await capturePages(browser, reporting, job, desktop, mobile, network, signal, progress)
+    await capturePages(browser, reporting, job, desktop, mobile, sidecar, network, signal, progress)
   } finally {
     await Promise.allSettled(contexts.map(context => context.close()))
-    await network?.close()
+    await Promise.all([network?.close(), sidecarNetwork?.close()])
   }
 }
 
-async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: BrowserContext, mobile: BrowserContext, network: CaptureNetwork, signal: AbortSignal, progress: () => void) {
+async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: BrowserContext, mobile: BrowserContext, sidecar: BrowserContext, network: CaptureNetwork, signal: AbortSignal, progress: () => void) {
   const root = new URL(job.url)
   const prefix = `refs/${job.id}/${job.attempt}`
   // Protocol 3 predates video. Missing capabilities mean the Worker still renders recordings as GIF images.
@@ -1201,7 +1210,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
   const seen = new Set([...visited, ...queue])
   const titles = new Map<string, string | null>() // every page captured in this run, for duplicateOf; empty after a resume
   if (job.mode === "crawl" && !resume) {
-    const urls = (await sitemapUrls(desktop, root)).flatMap((u) => normalize(u, root) ?? [])
+    const urls = (await sitemapUrls(sidecar, root)).flatMap((u) => normalize(u, root) ?? [])
     for (const { href } of rankLinks(urls.map((href) => ({ href, nav: false })))) {
       if (!seen.has(href)) {
         seen.add(href)
@@ -1307,7 +1316,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       // lands: a pause checkpoint carries whichever it has by then, and completion waits for it (its fetch gives up after 10 s).
       // A resumed crawl whose checkpoint already holds the key (not a URL) keeps it; one that only has the URL tries once.
       if (features.has("icon") && !iconTask && meta.favicon && !meta.favicon.startsWith("refs/")) {
-        iconTask = storeIcon(desktop, api, meta.favicon, prefix).then((key) => { if (key && meta) meta = { ...meta, favicon: key } })
+        iconTask = storeIcon(sidecar, api, meta.favicon, prefix).then((key) => { if (key && meta) meta = { ...meta, favicon: key } })
       }
 
       if (job.mode === "crawl") {
@@ -1368,7 +1377,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       const desktopThumb = await thumbnail(await dPage.screenshot({ type: "jpeg", quality: 75 }), THUMB_WIDTH.desktop)
       const other = features.has("schemes") ? await captureOtherScheme(dPage, job.options?.colorScheme === "dark" ? "dark" : "light") : null
       const styles = await run<{ tokens: DesignTokens }>(dPage, STYLES_JS, { maxElements: 3000 })
-      const html = await buildSnapshot(dPage, desktop)
+      const html = await buildSnapshot(dPage, desktop, sidecar)
       const hovers = await recordHovers(dPage, hoverSeen, recordingFormat)
       await dPage.close()
       const mobileShots = await mobileTask
