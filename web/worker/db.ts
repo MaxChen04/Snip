@@ -21,7 +21,7 @@ import {
   type Reference,
   type StorageUsage,
 } from "../shared/types"
-import { STOPPED_EMPTY } from "../shared/capture-errors"
+import { ABANDONED, STOPPED_EMPTY } from "../shared/capture-errors"
 
 // Data access shared by the HTTP API and the MCP server.
 
@@ -369,7 +369,7 @@ export async function requeueReference(db: D1Database, id: string) {
     db.prepare(`DELETE FROM pages WHERE reference_id = ?`).bind(id), // animations cascade
     db
       .prepare(
-        `UPDATE refs SET status = 'queued', progress = 'Waiting for your Mac', error = NULL, page_count = 0, animation_count = 0, cover_key = NULL, favicon = NULL, tokens_json = NULL, claimed_at = NULL, capture_control = NULL, crawl_state = NULL, capture_run = capture_run + 1, updated_at = ? WHERE id = ?`,
+        `UPDATE refs SET status = 'queued', progress = 'Waiting for your Mac', error = NULL, page_count = 0, animation_count = 0, cover_key = NULL, favicon = NULL, tokens_json = NULL, claimed_at = NULL, capture_control = NULL, crawl_state = NULL, stale_reclaims = 0, capture_run = capture_run + 1, updated_at = ? WHERE id = ?`,
       )
       .bind(now(), id),
   ])
@@ -538,6 +538,7 @@ export async function cleanupRetiredFiles(db: D1Database, files: R2Bucket) {
 
 /** Whether a refs row has saved pages. A capture with pages is resumed in its attempt; one without starts fresh. */
 const HAS_PAGES = `EXISTS (SELECT 1 FROM pages WHERE reference_id = refs.id)`
+const MAX_STALE_RECLAIMS = 3
 
 /** Ends the captures matching `where` (one bound value) with what they have: ready with their pages, stopped-empty without. */
 const settleStopped = (db: D1Database, where: string, arg: unknown, ts: string) => [
@@ -567,8 +568,9 @@ export async function claimJob(db: D1Database): Promise<Job | null> {
   const results = await db.batch([
     ...settleStopped(db, `${abandoned} AND capture_control = 'stop'`, stale, ts),
     db.prepare(`UPDATE refs SET status = 'queued', capture_control = 'paused', progress = 'Paused', claimed_at = NULL, updated_at = ? WHERE ${abandoned} AND capture_control = 'pause'`).bind(ts, stale),
+    db.prepare(`UPDATE refs SET status = 'failed', progress = NULL, error = ?, crawl_state = NULL, updated_at = ? WHERE ${abandoned} AND stale_reclaims >= ${MAX_STALE_RECLAIMS}`).bind(ABANDONED, ts, stale),
     db.prepare(`INSERT OR IGNORE INTO capture_cleanup (prefix) SELECT 'refs/' || id || '/' || coalesce(capture_attempt || '/', 'p') FROM refs WHERE id = (${candidate}) AND NOT ${HAS_PAGES}`).bind(stale),
-    db.prepare(`UPDATE refs SET status = 'capturing', claimed_at = ?2, updated_at = ?2,
+    db.prepare(`UPDATE refs SET stale_reclaims = stale_reclaims + (status = 'capturing'), status = 'capturing', claimed_at = ?2, updated_at = ?2,
       capture_attempt = CASE WHEN ${HAS_PAGES} THEN capture_attempt ELSE ?1 END, progress = CASE WHEN ${HAS_PAGES} THEN 'Resuming capture' ELSE 'Starting capture' END
       WHERE id = (${candidate.replace("?", "?3")}) RETURNING id, url, mode, max_pages, capture_attempt, capture_options, crawl_state,
       (SELECT json_group_array(url) FROM (SELECT url FROM pages WHERE reference_id = refs.id ORDER BY ord)) AS page_urls`).bind(attempt, ts, stale),

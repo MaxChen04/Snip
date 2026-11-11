@@ -4,10 +4,17 @@ export type CaptureDiagnosis = { summary: string; fix: string }
 /** Error recorded when a capture is stopped before its first page finished. */
 export const STOPPED_EMPTY = "Stopped before any pages were captured"
 
+/** Error recorded when the capture agent has died on a capture too often to hand it out again. */
+export const ABANDONED = "The capture agent stopped responding too many times while capturing this"
+
 const KNOWN: { match: RegExp; diagnosis: CaptureDiagnosis }[] = [
   {
     match: /^Stopped before any pages were captured$/,
     diagnosis: { summary: "You stopped this capture before any pages were saved.", fix: "Retry starts it again from the first page." },
+  },
+  {
+    match: /^The capture agent stopped responding too many times while capturing this$/,
+    diagnosis: { summary: "Capturing this site kept stopping the capture agent.", fix: "Retry starts it again from the first page." },
   },
   {
     match: /Browser install failed/i,

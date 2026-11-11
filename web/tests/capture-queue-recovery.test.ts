@@ -5,7 +5,7 @@ import { app } from "../worker/app"
 import * as db from "../worker/db"
 import { applyMigrations } from "./helpers/d1"
 import type { CrawlState, PageUpload } from "../shared/types"
-import { STOPPED_EMPTY } from "../shared/capture-errors"
+import { STOPPED_EMPTY, diagnoseCaptureError } from "../shared/capture-errors"
 
 // Regression tests for capture-queue recovery bugs found by a code audit. Each asserts the CORRECT behaviour,
 // so each fails until the matching bug is fixed.
@@ -269,6 +269,13 @@ test("a capture whose agent keeps dying is failed after a few stale reclaims ins
     assert.ok(after.error, "the failure carries an error message")
     const again = await db.claimJob(database)
     assert.equal(again, null)
+    assert.ok(diagnoseCaptureError(after.error), "the error is one the app explains")
+
+    // A Recapture starts the budget over.
+    await db.requeueReference(database, ref.id)
+    assert.ok(await db.claimJob(database))
+    await makeStale(ref.id)
+    assert.ok(await db.claimJob(database))
   } finally {
     await mf.dispose()
   }

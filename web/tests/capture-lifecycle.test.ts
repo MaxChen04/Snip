@@ -11,7 +11,7 @@ test("capture leases fence stale workers and isolate cleanup", async () => {
   try {
     const database = await mf.getD1Database("DB") as unknown as D1Database
     const files = await mf.getR2Bucket("FILES") as unknown as R2Bucket
-    for (const migration of ["0001_init.sql", "0002_mcp_media_status.sql", "0003_capture_attempts.sql", "0004_page_collections.sql", "0005_capture_control.sql", "0006_notes_and_options.sql", "0011_capture_runs.sql", "0012_page_sections.sql", "0013_alt_scheme.sql", "0014_canvas.sql", "0015_board_item_style.sql"]) {
+    for (const migration of ["0001_init.sql", "0002_mcp_media_status.sql", "0003_capture_attempts.sql", "0004_page_collections.sql", "0005_capture_control.sql", "0006_notes_and_options.sql", "0011_capture_runs.sql", "0012_page_sections.sql", "0013_alt_scheme.sql", "0014_canvas.sql", "0015_board_item_style.sql", "0016_stale_reclaims.sql"]) {
       const sql = await readFile(new URL(`../migrations/${migration}`, import.meta.url), "utf8")
       // D1 exec accepts one statement per line; migration comments and multiline SQL need prepare/batch.
       const statements = sql.replace(/^--.*$/gm, "").split(";").map((s) => s.trim()).filter(Boolean)
