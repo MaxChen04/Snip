@@ -366,7 +366,7 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
   const latest = useRef(0)
   const load = useCallback(async () => {
     const n = ++latest.current
-    await flush()
+    await saving.current
     let data
     try {
       data = await api.board(id)
@@ -378,11 +378,16 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
     }
     if (n !== latest.current) return
     const order = new Map(live.current?.nodes.map((x, i) => [x.key, i]))
+    // What is queued to save has not reached the server yet: there the board's own placement stands.
+    const unsaved = new Map(live.current?.nodes.filter((x) => pending.current.items.has(x.key)).map((x) => [x.key, x]))
+    const unsavedFrames = new Map(live.current?.groups.filter((g) => pending.current.groups.has(g.id)).map((g) => [g.id, g]))
     const placed: Node[] = []
     const fresh: Node[] = []
     for (const it of data.items) {
       const node = toNode(it, it.x ?? 0, it.y ?? 0)
-      if (node) (it.x === null || it.y === null ? fresh : placed).push(node)
+      const own = node && unsaved.get(node.key)
+      if (own) placed.push({ ...node, x: own.x, y: own.y, w: own.w, h: own.h, groupId: own.groupId, style: own.style })
+      else if (node) (it.x === null || it.y === null ? fresh : placed).push(node)
     }
     const auto = fresh.filter((x) => !drops.current.has(x.key))
     autoPlace(placed, auto).forEach((p, i) => Object.assign(auto[i]!, p))
@@ -394,12 +399,12 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
     // Keep the stacking order the user made; newcomers go on top.
     const rank = (x: Node, i: number) => order.get(x.key) ?? order.size + i
     const nodes = [...placed, ...fresh].map((x, i) => [x, rank(x, i)] as const).sort((a, b) => a[1] - b[1]).map(([x]) => x)
-    apply({ collection: data.collection, nodes, groups: data.groups })
+    apply({ collection: data.collection, nodes, groups: data.groups.map((g) => unsavedFrames.get(g.id) ?? g) })
     const keys = new Set(nodes.map((x) => x.key))
     if ([...sel.current].some((k) => !keys.has(k))) setSelected(new Set([...sel.current].filter((k) => keys.has(k))))
     setStatus("ready")
     if (fresh.length) queue(fresh)
-  }, [id, flush])
+  }, [id])
 
   useEffect(() => {
     void load()
