@@ -218,7 +218,7 @@ export function PasskeysPage() {
           <DialogHeader>
             <DialogTitle>Remove this passkey?</DialogTitle>
             <DialogDescription>
-              {removing?.label || "This device"} will no longer open Snip. If it's your only passkey you'll need a fresh owner link to sign in again.
+              {removing?.label || "This device"} will no longer open Snip, and every other browser and the Snip app are signed out. If it's your only passkey you'll need a fresh owner link to sign in again.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
