@@ -7,11 +7,16 @@
 //
 //  - state() is a snapshot: busy = a run exists, has not produced a result and is not an
 //    owner-link run; running = { command, step } while a run exists; link = the last
-//    owner link, never cleared when a new owner-link run starts (main.cjs:430-443).
+//    owner link.
 //  - main never pushes state. It pushes only progress (engine events), log and link.
-//  - a run that ends without a `result` event produces only a log line (finishCloudRun).
-//  - cloudInput: answers are stored by key and enable/retry merge them into flags;
-//    cloudFlags only reads `accountId`, `domain`, `login`, `adoptExisting`.
+//  - cloudInput: answers are stored by key and enable/retry merge them into flags
+//    (`account`, `domain`, `login`, `adoptExisting`).
+//  - Retry re-runs the last library run that did not succeed, or resumes an unfinished
+//    setup; Delete cloud resources is refused while the cloud library is in use.
+//
+// Two things are deliberately harsher than main, so the window is proven not to lean on
+// them: a killed run ends with a log line only (main also sends a CANCELLED result), and
+// the old owner link stays in state() while a new one is minted (main clears it).
 //
 // Tests drive "the engine" from outside through window.__sim.* (page.evaluate).
 ;(function () {
@@ -66,7 +71,7 @@
       version: 1,
       mode: sim.mode,
       library: { id: "00000000000000a001" },
-      cloud: sim.mode === "local" ? null : cloudRecord,
+      cloud: sim.mode !== "local" ? cloudRecord : config.detached ? { ...cloudRecord, detachedAt: "2026-11-07T09:00:00Z" } : null,
       snapshot: sim.mode === "cloud" ? snapshotRecord : null,
       transfer: null,
       steps: [],
@@ -82,7 +87,7 @@
     const answer = {
       cloudStatus: null,
       mode: sim.mode,
-      state: fileState(),
+      state: sim.mode === "unreadable" ? null : fileState(),
       busy: !!run && !run.resultSeen && run.purpose !== "owner-link",
       running: run ? { command: run.command, step: run.step } : null,
       link: sim.ownerLink
@@ -100,7 +105,7 @@
   // main.cjs startCloudRun
   function startRun(command, flags, purpose) {
     if (sim.run) return { error: "busy" }
-    const run = { command, step: null, cancelRequested: false, resultSeen: false, purpose, link: null, flags: flags || {} }
+    const run = { command, args: [command, flags, purpose], step: null, cancelRequested: false, resultSeen: false, purpose, link: null, flags: flags || {} }
     sim.run = run
     sim.lastResult = null
     if (purpose !== "owner-link") {
@@ -119,9 +124,6 @@
       sim.lastResult = event
       run.resultSeen = true
       if (event.mode) sim.mode = event.mode
-    }
-    if (event.event === "needs_input") {
-      for (const key of event.keys || []) sim.cloudInput.set(key.key, "")
     }
     if (event.event === "log") sendLog(event.level, event.message)
     if (run.purpose === "owner-link") return
@@ -153,10 +155,13 @@
       }
       return
     }
+    // Answers belong to the run they were given for.
+    sim.cloudInput.clear()
+    sim.failed = result && result.ok ? null : run.args
     if (result && result.ok) {
       sendLog("info", result.mode === "cloud" ? "Snip is now using your cloud library." : "Snip is back on this Mac.")
     } else if (cancelled || (result && result.code === "CANCELLED")) {
-      sendLog("info", "Stopped. Nothing on Cloudflare was changed.")
+      sendLog("info", "Stopped.")
     } else {
       const fallback = code === 2 ? "Snip needs one more choice before it can continue." : "Setup stopped before it finished. Retry the step that failed."
       const byCode = { NEEDS_INPUT: fallback }
@@ -181,7 +186,6 @@
       record("enable", [options])
       if (sim.mode === "cloud") return { error: "This Mac is already using a cloud library." }
       const reply = startRun("setup", { ...Object.fromEntries(sim.cloudInput), ...(options || {}) })
-      sim.cloudInput.clear()
       if (reply.started) sim.mode = "enabling"
       return reply
     },
@@ -193,10 +197,10 @@
     },
     retryStep: async step => {
       record("retryStep", [step])
-      if (sim.mode === "enabling") return startRun("setup", Object.fromEntries(sim.cloudInput))
-      if (sim.mode === "disabling") return startRun("pull")
-      if (sim.mode === "cloud" && typeof step === "string") return startRun("setup", {})
-      return { error: "Nothing to retry." }
+      // main.cjs retryArgs
+      const failed = sim.failed
+      if (failed ? failed[0] === "setup" : sim.mode === "enabling") return startRun("setup", Object.fromEntries(sim.cloudInput))
+      return failed ? startRun(...failed) : { error: "Nothing to retry." }
     },
     cancel: async () => { record("cancel", []); return { cancelled: cancelRun() } },
     abort: async () => {
@@ -213,11 +217,15 @@
     openSettings: async () => ({ opened: true }),
     openUrl: async url => { record("openUrl", [url]); return { opened: true } },
     signOutAll: async () => ({ ok: true, epoch: 1 }),
-    deleteResources: async confirm => { record("deleteResources", [confirm]); return startRun("delete-resources") },
+    deleteResources: async confirm => {
+      record("deleteResources", [confirm])
+      if (sim.mode === "cloud") return { error: "This Mac is using its cloud library. Turn off cloud first, then delete the cloud copy." }
+      return startRun("delete-resources")
+    },
     snapshot: async (action, confirm) => { record("snapshot", [action, confirm]); return startRun("snapshot " + action) },
     ownerLink: async () => {
       record("ownerLink", [])
-      // main does NOT clear sim.ownerLink here.
+      // Harsher than main, which clears the old link here (see the header).
       return startRun("owner link", {}, "owner-link")
     },
     onProgress: callback => { listeners.progress.add(callback); return () => listeners.progress.delete(callback) },
