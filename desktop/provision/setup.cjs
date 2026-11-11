@@ -268,7 +268,7 @@ function accountStep() {
       return { message: chosen.name, detail: chosen.id };
     },
     async verify(ctx) {
-      return Boolean(ctx.cloud.accountId) && Boolean(ctx.state().cloud && ctx.state().cloud.accountId === ctx.cloud.accountId);
+      return Boolean(ctx.cloud.accountId);
     },
   };
 }
@@ -292,7 +292,7 @@ function urlStep() {
       return { message: ctx.cloud.url };
     },
     async verify(ctx) {
-      return Boolean(ctx.cloud.url) && Boolean(ctx.state().cloud && ctx.state().cloud.url === ctx.cloud.url);
+      return Boolean(ctx.cloud.url);
     },
   };
 }

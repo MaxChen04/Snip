@@ -755,3 +755,21 @@ test('abort keeps the paused list when Snip is not running to resume them', asyn
   // The next setup still knows about it, so its finish step resumes it in the cloud.
   assert.deepEqual(stateModule.beginEnabling(library.root).pausedForMove, ['ref-1']);
 });
+
+test('rerunning an interrupted setup with a different --domain refuses; the same one resumes', async () => {
+  const model = buildModel();
+  const wrangler = fakeWrangler(model);
+  model.intercept = async (args) => (args[0] === 'deploy' ? failed('deploy exploded: bad bundle') : null);
+  const first = await attemptSetup(model, {}, { wrangler });
+  assert.ok(first.error, 'harness check: run 1 must fail after the address was chosen');
+  model.intercept = null;
+
+  const other = await attemptSetup(model, { domain: 'snip.example.com' }, { wrangler });
+  assert.equal(other.error && other.error.code, 'SETUP_TARGET_CHANGED');
+  assert.match(other.error.hint, /abort/i);
+  assert.equal(stateModule.readState(model.root).cloud.url, PROVIDED, 'the stored address is not switched');
+
+  const same = await attemptSetup(model, {}, { wrangler });
+  assert.equal(same.error, null, 'the same address resumes');
+  assert.equal(same.result.ok, true);
+});
