@@ -258,8 +258,9 @@ export interface CrawlState {
   version: 1
   /** URLs still to visit, in order. */
   queue: string[]
-  /** URLs already visited (captured or failed), so they are not queued again. */
+  /** URLs already visited (captured, skipped or failed), so they are not queued again. A page's ord and file prefix are its place here. */
   visited: string[]
+  /** Pages saved so far. */
   captured: number
   failures: number
   navLinksQueued: boolean

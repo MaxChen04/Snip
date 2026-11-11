@@ -36,9 +36,10 @@
   "r2_buckets": [{ "binding": "FILES", "bucket_name": "snip-files" }],
   "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "REPLACE_WITH_KV_NAMESPACE_ID" }],
   "vars": {
-    // Comma-separated GitHub logins allowed to sign in. Read only when GITHUB_CLIENT_ID and
-    // GITHUB_CLIENT_SECRET are both set: a new install signs in with a passkey and never
-    // configures them, while an install that already had GitHub sign-in keeps working.
+    // Comma-separated GitHub logins allowed to sign in. GitHub sign-in is offered only when
+    // GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET are both set: a new install signs in with a passkey
+    // and never configures them, while an install that already had GitHub sign-in keeps working.
+    // A GitHub session ends as soon as its login is taken off this list.
     "ALLOWED_GITHUB_LOGINS": "your-github-login",
     // Public origin of the deployed Worker, used as the MCP OAuth resource id.
     "PUBLIC_URL": "https://snip.YOUR-SUBDOMAIN.workers.dev"
