@@ -127,6 +127,19 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
   const [selecting, setSelecting] = useDesktopState(`snip:${id}:selecting`, false)
   const [sel, setSel] = useDesktopState<Selection>(`snip:${id}:selection`, EMPTY_SELECTION)
   const { collections, refresh: refreshCollections } = useCollections()
+  const [working, setWorking] = useState(false)
+  /** Re-capture and Delete: one at a time, and a failure is said. */
+  const act = async (fn: () => Promise<unknown>) => {
+    if (working) return
+    setWorking(true)
+    try {
+      await fn()
+    } catch (e) {
+      toast.error((e as Error).message)
+    } finally {
+      setWorking(false)
+    }
+  }
 
   const load = useCallback(() => {
     return api
@@ -248,16 +261,21 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
               <CollectionPicker className="max-h-72" selected={r.collectionIds} onToggle={(cid, on) => void toggleCollection(cid, on)} />
             </PopoverContent>
           </Popover>
-          <ActionCircle
-            icon={<RefreshCwIcon />}
-            label="Re-capture"
-            onClick={async () => {
-              if (pages.length && !confirm(`Re-capture ${r.domain}? Its ${pages.length} captured ${pages.length === 1 ? "page" : "pages"} will be replaced.`)) return
-              await api.recapture(r.id)
-              notify("Re-capture queued")
-              load()
-            }}
-          />
+          {/* The server refuses to re-capture one that is still queued, capturing or paused. */}
+          {(r.status === "ready" || r.status === "failed") && (
+            <ActionCircle
+              icon={<RefreshCwIcon />}
+              label="Re-capture"
+              onClick={() => {
+                if (pages.length && !confirm(`Re-capture ${r.domain}? Its ${pages.length} captured ${pages.length === 1 ? "page" : "pages"} will be replaced.`)) return
+                void act(async () => {
+                  await api.recapture(r.id)
+                  notify("Re-capture queued")
+                  await load()
+                })
+              }}
+            />
+          )}
           <DropdownMenu>
             <DropdownMenuTrigger render={<button className="group flex flex-col items-center gap-1.5" />}>
               <span className="tactile press grid size-9 place-items-center rounded-full group-active:scale-[0.94] group-data-popup-open:bg-control-hover [&_svg]:size-4 [&_svg]:text-ink-11">
@@ -282,11 +300,13 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
               </DropdownMenuItem>
               <DropdownMenuItem
                 variant="destructive"
-                onClick={async () => {
+                onClick={() => {
                   if (!confirm("Delete this reference and all its captures?")) return
-                  await api.deleteReference(r.id)
-                  void refreshCollections()
-                  navigate("/")
+                  void act(async () => {
+                    await api.deleteReference(r.id)
+                    void refreshCollections().catch(() => {})
+                    navigate("/")
+                  })
                 }}
               >
                 <Trash2Icon /> Delete reference

@@ -3,7 +3,7 @@
 // even though later polls succeed. Correct behaviour: the page comes back (title visible, no error screen).
 import assert from "node:assert/strict"
 import { after, before, test } from "node:test"
-import { reference, startApp, until, sleep, type App } from "./harness.ts"
+import { gate, reference, startApp, until, sleep, type App } from "./harness.ts"
 
 let app: App
 before(async () => void (app = await startApp()))
@@ -94,5 +94,57 @@ test("a failed board toggle is reported and leaves the board unchecked", async (
   await board.click()
   await page.getByText("Boom: could not save to the board").waitFor()
   assert.equal(await board.getAttribute("aria-checked"), "false")
+  assert.deepEqual(t.consoleErrors, [])
+})
+
+test("Re-capture is offered only for a ready or failed reference", async () => {
+  const state = {
+    references: {
+      busy: reference({ id: "busy", title: "Busy", status: "capturing", progress: "Capturing 1/3: /" }),
+      paused: reference({ id: "paused", title: "Paused", status: "paused" }),
+      failed: reference({ id: "failed", title: "Failed", status: "failed", error: "nope" }),
+    },
+  }
+  const t = await app.session({ state })
+  const { page } = t
+  const recapture = page.getByRole("button", { name: "Re-capture" })
+  for (const [id, offered] of [["busy", false], ["paused", false], ["failed", true]] as const) {
+    await t.goto(`/r/${id}`)
+    await page.getByRole("button", { name: "Organize" }).waitFor()
+    assert.equal(await recapture.isVisible(), offered, `Re-capture on a ${id} reference`)
+  }
+})
+
+test("pressing Re-capture twice sends one request, and a refusal is shown", async () => {
+  const t = await app.session({ state: { references: { ref1: reference({ id: "ref1", title: "Poll Target" }) } } })
+  const { page } = t
+  const url = "/api/references/ref1/recapture"
+  const hold = gate()
+  t.on("POST", url, async () => {
+    await hold.opened
+    return { status: 409, json: { error: "This capture is still in progress." } }
+  })
+  await t.goto("/r/ref1")
+  const recapture = page.getByRole("button", { name: "Re-capture" })
+  await recapture.click()
+  await until("first recapture in flight", () => t.count("POST", url) === 1)
+  await recapture.click()
+  await sleep(300)
+  hold.open()
+  await page.getByText("This capture is still in progress.").waitFor()
+  assert.equal(t.count("POST", url), 1, "the second press sent another recapture")
+  assert.deepEqual(t.consoleErrors, [])
+})
+
+test("a failed delete is shown and stays on the page", async () => {
+  const t = await app.session({ state: { references: { ref1: reference({ id: "ref1", title: "Poll Target" }) } } })
+  const { page } = t
+  t.on("DELETE", "/api/references/ref1", () => ({ status: 500, json: { error: "Boom: could not delete" } }))
+  page.on("dialog", (d) => void d.accept())
+  await t.goto("/r/ref1")
+  await page.getByRole("button", { name: "More" }).click()
+  await page.getByRole("menuitem", { name: "Delete reference" }).click()
+  await page.getByText("Boom: could not delete").waitFor()
+  assert.equal(await page.getByRole("heading", { name: "Poll Target" }).isVisible(), true)
   assert.deepEqual(t.consoleErrors, [])
 })
