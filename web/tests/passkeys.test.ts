@@ -167,6 +167,30 @@ test("removing a device deletes only that passkey, and only for its owner", () =
     assert.deepEqual(options.allowCredentials.map((c) => c.id), [second.credential.id])
   }))
 
+test("removing a device signs out the sessions it had, and keeps the one that removed it", () =>
+  withWorker(async (ctx) => {
+    const signIn = async (credential: Credential) => {
+      const options = (await (await ctx.call("/auth/passkey/login/options")).json()) as { challenge: string }
+      const assertion = await createAssertion({ rpID: RP_ID, origin: PUBLIC_URL, challenge: options.challenge, credential })
+      const login = await ctx.call("/auth/passkey/login/verify", { method: "POST", body: JSON.stringify({ response: assertion.response }), headers: { "content-type": "application/json" } })
+      return login.headers.getSetCookie().find((c) => c.startsWith(`${SESSION_COOKIE}=`))!.split(";")[0]!
+    }
+    const me = async (cookie: string) => (await ctx.call("/api/me", { headers: { cookie } })).status
+    const lost = await register(ctx, "Lost laptop")
+    const kept = await register(ctx, "Phone")
+    const lostSession = await signIn(lost.credential)
+    const keptSession = await signIn(kept.credential)
+    assert.equal(await me(lostSession), 200)
+
+    const removed = await ctx.call(`/api/passkeys/${lost.credential.id}`, { method: "DELETE", headers: { cookie: keptSession } })
+    assert.equal(removed.status, 200)
+    assert.equal(await me(lostSession), 401, "the removed device's session is over")
+    const renewed = removed.headers.getSetCookie().find((c) => c.startsWith(`${SESSION_COOKIE}=`))!.split(";")[0]!
+    assert.equal(await me(renewed), 200, "the device that removed it stays signed in")
+    assert.equal((await ctx.call("/api/passkeys/missing", { method: "DELETE", headers: { cookie: renewed } })).status, 404)
+    assert.equal(await me(renewed), 200, "removing nothing signs nobody out")
+  }))
+
 test("registering the same credential twice refreshes that row instead of returning 500", () =>
   withWorker(async (ctx) => {
     const first = await register(ctx, "MacBook Pro")
