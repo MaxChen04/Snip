@@ -324,7 +324,8 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
   // ---- Saving: changed items and frames queue up and go out together ~400 ms after the last change ----
   // The queue only names what changed; what is saved is the board as it is when the save goes out.
   const pending = useRef({ items: new Set<string>(), groups: new Set<string>(), timer: 0 })
-  // Settles when everything sent so far has been answered: a save waits for it, so changes reach the server in order.
+  // Settles when everything sent so far has been answered: a save waits for it, so changes reach the server in order,
+  // and a load starts over when it changed meanwhile. Every request that changes the board goes through sent().
   const saving = useRef<Promise<unknown>>(Promise.resolve())
   const sent = <T,>(request: Promise<T>) => {
     saving.current = Promise.allSettled([saving.current, request])
@@ -366,17 +367,22 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
   const latest = useRef(0)
   const load = useCallback(async () => {
     const n = ++latest.current
-    await saving.current
     let data
-    try {
-      data = await api.board(id)
-    } catch (e) {
+    let asked
+    // A change sent after the board was asked for may be missing from the reply: ask again once it has been answered.
+    do {
+      asked = saving.current
+      await asked
+      try {
+        data = await api.board(id)
+      } catch (e) {
+        if (n !== latest.current) return
+        if (/not found/i.test(message(e))) setStatus("missing")
+        else if (!live.current) setStatus("error")
+        return
+      }
       if (n !== latest.current) return
-      if (/not found/i.test(message(e))) setStatus("missing")
-      else if (!live.current) setStatus("error")
-      return
-    }
-    if (n !== latest.current) return
+    } while (asked !== saving.current)
     const order = new Map(live.current?.nodes.map((x, i) => [x.key, i]))
     // What is queued to save has not reached the server yet: there the board's own placement stands.
     const unsaved = new Map(live.current?.nodes.filter((x) => pending.current.items.has(x.key)).map((x) => [x.key, x]))
@@ -568,7 +574,7 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
     apply({ ...b, nodes: b.nodes.filter((n) => !goneKeys.has(n.key)) })
     setSelected(new Set([...sel.current].filter((k) => !goneKeys.has(k))))
     try {
-      await Promise.all([setMembers(id, gone, false), ...notes.map((n) => api.deleteBoardNote(id, n.id))])
+      await sent(Promise.all([setMembers(id, gone, false), ...notes.map((n) => api.deleteBoardNote(id, n.id))]))
       void refresh().catch(() => {})
     } catch (e) {
       toast.error(message(e))
@@ -727,7 +733,7 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
       try {
         const made = await Promise.all(
           notes.map(async (n) => {
-            const c = await api.addBoardNote(id, { text: n.text ?? "", x: Math.round(n.x + 24), y: Math.round(n.y + 24), w: n.w, groupId: n.groupId })
+            const c = await sent(api.addBoardNote(id, { text: n.text ?? "", x: Math.round(n.x + 24), y: Math.round(n.y + 24), w: n.w, groupId: n.groupId }))
             return { ...toNode(c, c.x!, c.y!)!, style: n.style, h: n.h }
           }),
         )
@@ -740,7 +746,7 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
           const b2 = live.current!
           apply({ ...b2, nodes: b2.nodes.filter((n) => !gone.has(n.key)) })
           setSelected(new Set([...sel.current].filter((k) => !gone.has(k))))
-          await Promise.all(made.map((n) => api.deleteBoardNote(id, n.id)))
+          await sent(Promise.all(made.map((n) => api.deleteBoardNote(id, n.id))))
         })
         return say(notes.length < targets.length ? "Duplicated the notes; saves appear once per board" : `${label} applied`)
       } catch (e) {
@@ -890,7 +896,7 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
     const y = Math.round(p.y - (w * NOTE_H) / 2)
     const frame = frameAt(live.current?.groups ?? [], p.x, p.y)
     try {
-      const it = await api.addBoardNote(id, { text: "", x, y, groupId: frame?.id ?? null })
+      const it = await sent(api.addBoardNote(id, { text: "", x, y, groupId: frame?.id ?? null }))
       const node = toNode(it, x, y)!
       const b = live.current!
       apply({ ...b, nodes: [...b.nodes, node] })
@@ -904,7 +910,7 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
 
   const renameBoard = async (name: string) => {
     try {
-      await api.renameCollection(id, name)
+      await sent(api.renameCollection(id, name))
       if (live.current) apply({ ...live.current, collection: { ...live.current.collection, name } })
       await refresh()
     } catch (e) {
@@ -953,7 +959,7 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
     noteSave: (noteId, text) => {
       const b = live.current
       if (b) apply({ ...b, nodes: b.nodes.map((n) => (n.kind === "note" && n.id === noteId ? { ...n, text } : n)) })
-      api.updateBoardNote(id, noteId, text).catch((e: unknown) => toast.error(`Couldn't save the note. ${message(e)}`))
+      sent(api.updateBoardNote(id, noteId, text)).catch((e: unknown) => toast.error(`Couldn't save the note. ${message(e)}`))
     },
     noteDelete: (noteId) => void removeNodes(new Set([`note:${noteId}`])),
     titleDown: (e, gid) => {
@@ -965,7 +971,7 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
       const b = live.current
       if (!name || !b) return
       apply({ ...b, groups: b.groups.map((g) => (g.id === gid ? { ...g, name } : g)) })
-      api.updateBoardGroup(id, gid, { name }).catch((e: unknown) => {
+      sent(api.updateBoardGroup(id, gid, { name })).catch((e: unknown) => {
         toast.error(message(e))
         void load()
       })
@@ -974,7 +980,7 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
       const b = live.current
       if (!b) return
       apply({ ...b, groups: b.groups.filter((g) => g.id !== gid), nodes: b.nodes.map((n) => (n.groupId === gid ? { ...n, groupId: null } : n)) })
-      api.deleteBoardGroup(id, gid).catch((e: unknown) => {
+      sent(api.deleteBoardGroup(id, gid)).catch((e: unknown) => {
         toast.error(message(e))
         void load()
       })
