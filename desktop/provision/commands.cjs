@@ -966,8 +966,8 @@ async function commandAbort(ctx) {
         if (paused.length && await ctx2.deps.local.reachable(origin)) {
           const api = ctx2.deps.local.createLocalApi(origin, { fetchImpl: ctx2.deps.fetch });
           const results = await Promise.all(paused.map((id) => api.resumeReference(id).catch(() => null)));
-          // 409 means it is no longer paused, so there is nothing left to resume.
-          paused = paused.filter((_id, index) => !results[index] || !(results[index].ok || results[index].status === 409));
+          // 409 means it is no longer paused and 404 that it was deleted: nothing left to resume.
+          paused = paused.filter((_id, index) => !results[index] || !(results[index].ok || [404, 409].includes(results[index].status)));
         }
         if (paused.length) ctx2.emit.log('warn', `${paused.length} paused capture${paused.length === 1 ? '' : 's'} could not be resumed because Snip is not running; resume ${paused.length === 1 ? 'it' : 'them'} from the library.`);
         ctx2.save((next) => {
