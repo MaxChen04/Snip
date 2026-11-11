@@ -169,3 +169,37 @@ test("a lost lease stops the heartbeat for that job, and the capture reports pro
     mock.timers.reset()
   }
 })
+
+test("a hung capture is failed before its browser is closed, and a slow browser launch is not taken for a hang", async () => {
+  mock.timers.enable({ apis: ["setTimeout", "setInterval"] })
+  try {
+    const events: string[] = []
+    let launched!: () => void
+    const runtime = new CaptureRuntime({
+      api: {
+        claim: async () => (events.length ? null : job1),
+        heartbeat: async () => {},
+        fail: async () => { events.push("fail") },
+      },
+      // The first launch downloads the browser.
+      launch: async () => { events.push("launch"); await new Promise<void>((resolve) => { launched = resolve }); return { isConnected: () => true, close: async () => { events.push("close") } } },
+      capture: async () => { events.push("capture"); await new Promise<void>(() => {}) },
+      status: () => {}, pollMs: 5, idleMs: 50, once: false,
+    })
+    const done = runtime.run()
+    await flush()
+    mock.timers.tick(600_000)
+    await flush()
+    assert.deepEqual(events, ["launch"], "ten minutes of launching fails nothing")
+    launched()
+    await flush()
+    mock.timers.tick(600_000)
+    await flush()
+    // Closed only once the job is failed: a capture freed by the close must find its job gone, not hand it back to the queue.
+    assert.deepEqual(events, ["launch", "capture", "fail", "close"])
+    runtime.stop()
+    await done
+  } finally {
+    mock.timers.reset()
+  }
+})

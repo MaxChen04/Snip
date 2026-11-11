@@ -116,16 +116,15 @@ export class CaptureRuntime<B extends Browser> {
           if (!this.stopping) this.emit({ state: "busy", jobId: job.id })
           const abort = this.abort = new AbortController()
           if (this.stopping) abort.abort()
-          let stall: ReturnType<typeof setTimeout> | undefined
+          let timer: ReturnType<typeof setTimeout> | undefined
+          const stall = new Error("Capture stopped making progress")
           let hung!: (error: Error) => void
           const stalled = new Promise<never>((_, reject) => { hung = reject })
           const progress = () => {
-            clearTimeout(stall)
-            stall = setTimeout(() => {
+            clearTimeout(timer)
+            timer = setTimeout(() => {
               abort.abort()
-              // Closing the browser ends whatever the hung capture still holds.
-              void this.closeBrowser()
-              hung(new Error("Capture stopped making progress"))
+              hung(stall)
             }, STALL_MS)
           }
           const beat = setInterval(() => {
@@ -135,17 +134,20 @@ export class CaptureRuntime<B extends Browser> {
               abort.abort()
             })
           }, 30_000)
-          progress()
           try {
-            const capture = (async () => this.options.capture(await this.getBrowser(job), job, abort.signal, progress))()
+            // The hang timeout starts with the capture itself: launching can include a one-time browser download.
+            const capture = (async () => { const browser = await this.getBrowser(job); progress(); return this.options.capture(browser, job, abort.signal, progress) })()
             capture.catch(() => {}) // a hung capture that fails later was already reported
             await Promise.race([capture, stalled])
           } catch (e) {
             this.options.logError?.(`[${job.id}] capture failed`)
             await this.options.api.fail(job.id, (e instanceof Error ? e.message : "Capture failed").split("\n")[0] || "Capture failed")
+            // Closing the browser ends whatever a hung capture still holds. Only now that the job is failed,
+            // so the capture's wind-down cannot hand it back to the queue.
+            if (e === stall) void this.closeBrowser()
           } finally {
             clearInterval(beat)
-            clearTimeout(stall)
+            clearTimeout(timer)
             this.abort = undefined
           }
           if (!this.stopping && this.browser) {
