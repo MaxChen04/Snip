@@ -51,3 +51,23 @@ test("a failed Copy back leaves an error with its message and a retry affordance
     await close()
   }
 })
+
+test("a refusal with no failed step shows the engine's own sentence from the result", async () => {
+  const { page, close } = await openSettings(browser, server, { mode: "cloud" })
+  try {
+    await page.getByRole("button", { name: "Turn off cloud…" }).click()
+    await page.getByText("Bring the cloud library back to this Mac").click()
+    await page.getByRole("button", { name: "Copy back now" }).click()
+    await page.waitForFunction(() => (window as any).__sim.run?.command === "pull")
+    // cli.cjs passes `message` beside `data`, not inside it.
+    await sim(page, "result", { ok: false, code: "LOCKED", mode: null, data: { holder: null }, message: "Another Snip command holds the lock.", retryable: true })
+    await sim(page, "exit", { code: 3 })
+    await page.waitForTimeout(1500)
+    // <main> holds no toasts, so this is the card and not main's log line.
+    const main = page.locator("main")
+    assert.equal(await main.getByText("Another Snip command holds the lock.").count(), 1)
+    assert.equal(await main.getByRole("button", { name: "Retry" }).count(), 1)
+  } finally {
+    await close()
+  }
+})

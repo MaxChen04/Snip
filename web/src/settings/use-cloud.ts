@@ -92,7 +92,6 @@ export function useCloud(bridge = window.snipCloud) {
       reads.current.applied = ticket
       setSnapshot(next)
       setLink(current => keepLink(current, next.link))
-      setError(next.state?.error ?? null)
       if (!next.busy) {
         // A cold read wins only when no engine is running; live events are fresher otherwise.
         const seeded: Record<string, LiveStep> = {}
@@ -189,7 +188,7 @@ export function useCloud(bridge = window.snipCloud) {
               : {
                   step: typeof event.data?.step === "string" ? event.data.step : null,
                   code,
-                  message: typeof event.data?.message === "string" ? event.data.message : resultMessage(code),
+                  message: [event.message, event.data?.message].find((value): value is string => typeof value === "string" && value !== "") ?? resultMessage(code),
                   hint: typeof event.data?.hint === "string" ? event.data.hint : null,
                   at: null,
                   retryable,
@@ -285,6 +284,8 @@ export function useCloud(bridge = window.snipCloud) {
     return true
   }, [])
 
+  const busy = snapshot.busy
+
   return {
     bridge,
     snapshot,
@@ -295,14 +296,15 @@ export function useCloud(bridge = window.snipCloud) {
     snapshotRecord: snapshot.state?.snapshot ?? null,
     local: snapshot.local ?? null,
     engineAvailable: snapshot.engine?.available !== false,
-    busy: snapshot.busy,
+    busy,
     running: snapshot.running,
     steps,
     action,
     choice,
     needed,
     progress,
-    error,
+    // The file's error is from before the run in flight; a live one is newer than the file.
+    error: busy ? null : error ?? snapshot.state?.error ?? null,
     note,
     link,
     linkPending,
@@ -312,6 +314,7 @@ export function useCloud(bridge = window.snipCloud) {
     begin,
     clearChoice: () => setChoice(null),
     clearNeeded: () => setNeeded(null),
+    clearError: () => setError(null),
     clearNote: () => setNote(null),
   }
 }

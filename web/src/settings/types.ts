@@ -154,6 +154,8 @@ export interface EngineResultEvent {
   mode: CloudMode
   /** Only preflight refusals set this; absent means a retry is worth offering. */
   retryable?: boolean
+  /** The engine's own sentence for a failure (cli.cjs passes it beside `data`). */
+  message?: string
   data?: Record<string, unknown>
 }
 

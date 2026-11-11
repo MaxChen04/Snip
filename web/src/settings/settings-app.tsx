@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from "react"
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react"
 import { useTheme } from "@/components/theme-provider"
 import { toast } from "sonner"
 import { cn } from "cn"
@@ -140,6 +140,21 @@ export function SettingsApp() {
     if (!cloud.link) createLink()
   }
 
+  // Main decides what a retry runs: the unfinished setup, or the command that last failed.
+  const retry = () => void cloud.begin(() => cloud.bridge!.retryStep(""))
+
+  const errorCard =
+    cloud.error && !cloud.choice ? (
+      <ErrorCard
+        error={cloud.error}
+        onRetry={retry}
+        onRefresh={() => {
+          cloud.clearError()
+          void cloud.refresh()
+        }}
+      />
+    ) : null
+
   return (
     <div className="flex min-h-svh flex-col bg-ground text-foreground">
       <Header />
@@ -147,12 +162,13 @@ export function SettingsApp() {
         {working || cloud.choice ? (
           <ProgressView
             cloud={cloud}
+            errorCard={errorCard}
             onAdopt={() => void cloud.begin(() => cloud.bridge!.enable({ adoptExisting: true }))}
             onStopChoice={() => {
               cloud.clearChoice()
               void cloud.refresh()
             }}
-            onResume={() => void cloud.begin(() => cloud.bridge!.retryStep(""))}
+            onResume={retry}
             onUndo={() => setDialog("abort")}
           />
         ) : (
@@ -161,6 +177,8 @@ export function SettingsApp() {
               <h1 className="text-xl tracking-[-0.02em]">Cloud</h1>
               <p className="mt-1.5 text-sm leading-[1.55] text-muted-foreground">{intro}</p>
             </div>
+
+            {errorCard}
 
             {mode === "cloud" ? (
               <CloudPanels
@@ -603,12 +621,14 @@ function DetachedPanel({ cloud, onOpen }: { cloud: CloudRecord; onOpen: () => vo
 
 function ProgressView({
   cloud,
+  errorCard,
   onAdopt,
   onStopChoice,
   onResume,
   onUndo,
 }: {
   cloud: ReturnType<typeof useCloud>
+  errorCard: ReactNode
   onAdopt: () => void
   onStopChoice: () => void
   onResume: () => void
@@ -620,7 +640,6 @@ function ProgressView({
     const status = cloud.steps[id]?.status
     return status === "done" || status === "skipped"
   }).length
-  const error = cloud.error
   const percent = ids.length ? Math.round((doneCount / ids.length) * 100) : 0
   const copy = {
     setup: { title: "Setting up your cloud library", body: "Keep this window open. Cloudflare asks for two approvals: your account, and R2 if it's off." },
@@ -654,20 +673,14 @@ function ProgressView({
           needed={cloud.needed}
           onContinue={async values => {
             for (const [key, value] of Object.entries(values)) await cloud.bridge!.answer(key, value)
-            await cloud.begin(() => cloud.bridge!.retryStep(""))
+            onResume()
           }}
           onCancel={cloud.clearNeeded}
         />
       ) : cloud.action ? (
         <HumanActionCard action={cloud.action} onOpen={url => void cloud.bridge?.openUrl(url)} />
       ) : null}
-      {error && !cloud.choice ? (
-        <ErrorCard
-          error={error}
-          onRetry={() => void cloud.begin(() => cloud.bridge!.retryStep(error.step ?? ""))}
-          onRefresh={() => void cloud.refresh()}
-        />
-      ) : null}
+      {errorCard}
 
       <ol className="flex flex-col">
         {ids.map(id => {
