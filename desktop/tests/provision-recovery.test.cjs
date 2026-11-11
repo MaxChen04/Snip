@@ -700,6 +700,14 @@ test('BUG 9: after a crash between the two swap renames, a rerun still records t
   assert.equal(fs.readFileSync(path.join(library.root, record.snapshot.path, 'v3/d1/marker'), 'utf8'), 'pre-pull-library');
 });
 
+test('a new setup run forgets the backup note of a pull that was never finished', () => {
+  const library = fakeLibrary();
+  // A pull died mid-swap and the person detached instead of running it again.
+  stateModule.updateState(library.root, (state) => { state.pullBackup = 'backups/cloud-pull-1'; return state; });
+  // Kept, the next pull would take the live library for its own download and remove it.
+  assert.equal(stateModule.beginEnabling(library.root).pullBackup, undefined);
+});
+
 test('a new setup run does not inherit an earlier run\'s abort scope', () => {
   const library = fakeLibrary();
   // A finished install that was detached: its record still says what that run created.

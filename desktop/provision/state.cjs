@@ -130,6 +130,9 @@ function beginEnabling(dataRoot) {
     if (state.mode !== 'enabling') {
       state.steps = [];
       state.transfer = null;
+      // A pull that died mid-swap is not being resumed any more, so its backup
+      // note must not make a later pull treat the live library as its own download.
+      delete state.pullBackup;
       if (state.cloud) {
         // Keep what the account already holds (ids, url, detachedAt) so guard
         // can recognise this Mac's own install, but drop the last run's outcome
