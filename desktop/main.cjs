@@ -227,14 +227,17 @@ function openExternal(url) {
   const safe = externalUrl(url)
   if (safe) void shell.openExternal(safe)
 }
-function configureLinks(window, pin) {
+// The pin is read from the map on every event: the first window's origin is adopted after it is created.
+function configureLinks(window) {
   window.webContents.setWindowOpenHandler(({ url }) => {
     try {
+      const pin = pins.get(window)
       if (windowOrigin.isSettingsUrl(url)) { openSettings(); return { action: "deny" } }
-      if (pin.origin && windowOrigin.originOf(url) === pin.origin) {
+      if (windowOrigin.allowsNavigation(pin, url)) {
         if (pin.role === "local" && isGallery(url)) { showApp(); void win.loadURL(url).catch(() => {}); return { action: "deny" } }
         const child = new BrowserWindow({ width: 1280, height: 860, autoHideMenuBar: true, webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false } })
-        configureLinks(child, pin)
+        pinWindow(child, pin)
+        configureLinks(child)
         // Snapshot windows close normally. Minimized viewers release their
         // document after the same idle grace period and reload on restoration.
         let timer, suspendedUrl
@@ -258,7 +261,7 @@ function configureLinks(window, pin) {
   })
   window.webContents.on("will-navigate", (event, url) => {
     if (windowOrigin.isSettingsUrl(url)) { event.preventDefault(); openSettings(); return }
-    if (!windowOrigin.allowsNavigation(pin, url)) { event.preventDefault(); openExternal(url) }
+    if (!windowOrigin.allowsNavigation(pins.get(window), url)) { event.preventDefault(); openExternal(url) }
   })
 }
 function createWindow() {
@@ -272,7 +275,7 @@ function createWindow() {
   win = new BrowserWindow({ width: 1280, height: 860, minWidth: 720, minHeight: 480, title: identity.name, backgroundColor: "#f6f5f2", webPreferences })
   if (nightly) win.on("page-title-updated", event => { event.preventDefault(); win.setTitle("Snip Dev — Test library") })
   pinWindow(win, pin)
-  configureLinks(win, pin)
+  configureLinks(win)
   const current = win
   const isBackground = () => !current.isVisible() || current.isMinimized() || app.isHidden()
   const releaseWhenIdle = () => {
