@@ -201,7 +201,7 @@ test("a Recapture ends the old run's task as cancelled, and cancelling it leaves
     assert.match(old.statusMessage, /recaptured/)
     assert.equal(old.result, undefined)
 
-    await task("tasks/cancel", created.taskId)
+    assert.equal((await task("tasks/cancel", created.taskId)).error?.code, -32602, "a task that has ended cannot be cancelled")
     const ref = (await db.getReferenceRecord(DB, id))!
     assert.equal(ref.status, "queued")
     assert.equal(ref.captureRun, 2)
@@ -210,6 +210,51 @@ test("a Recapture ends the old run's task as cancelled, and cancelling it leaves
     // The new run is reachable as its own task id, and a run that was never issued is not.
     assert.equal((await task("tasks/get", `${id}.2`)).result!.status, "working")
     assert.equal((await task("tasks/get", `${id}.3`)).error?.code, -32602)
+  } finally {
+    await mf.dispose()
+  }
+})
+
+test("a capture only the user can move is input_required for tasks/get exactly when wait_for_capture says not to wait", async () => {
+  const { mf, DB, call, task, finish } = await setup()
+  try {
+    await db.touchPresence(DB, "idle", null)
+    const created = (await call("add_reference", { url: "https://example.com" })).result!
+    const id = refOf(created.taskId)
+    const both = async () => ({
+      task: (await task("tasks/get", created.taskId)).result!,
+      wait: (await call("wait_for_capture", { reference_id: id, timeout_seconds: 1 })).result!.structuredContent,
+    })
+
+    // The user pauses it from the app.
+    assert.equal(await db.requestPause(DB, id), true)
+    const paused = await both()
+    assert.equal(paused.task.status, "input_required")
+    assert.match(paused.task.statusMessage, /paused/)
+    assert.ok(paused.task.pollIntervalMs > 0)
+    assert.equal(paused.wait.waitAgain, false)
+
+    assert.equal(await db.resumeReference(DB, id), true)
+    const resumed = await both()
+    assert.equal(resumed.task.status, "working")
+    assert.equal(resumed.wait.waitAgain, true)
+
+    // The capture agent goes away.
+    await DB.prepare("UPDATE worker_presence SET last_seen_at = ?").bind(new Date(Date.now() - 10 * 60_000).toISOString()).run()
+    const offline = await both()
+    assert.equal(offline.task.status, "input_required")
+    assert.match(offline.task.statusMessage, /npm run capture/)
+    assert.equal(offline.wait.waitAgain, false)
+
+    // It comes back and finishes: the same task completes, and can no longer be cancelled.
+    await db.touchPresence(DB, "idle", null)
+    await finish(id)
+    const done = await both()
+    assert.equal(done.task.status, "completed")
+    assert.equal(done.wait.done, true)
+    const cancel = await task("tasks/cancel", created.taskId)
+    assert.equal(cancel.error?.code, -32602)
+    assert.equal((await db.getReferenceRecord(DB, id))!.status, "ready")
   } finally {
     await mf.dispose()
   }

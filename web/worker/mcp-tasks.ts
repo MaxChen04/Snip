@@ -10,6 +10,8 @@ import { STOPPED_EMPTY } from "../shared/capture-errors"
 // - A task is returned only to a client that declared the extension on that request.
 // - "failed" is reserved for JSON-RPC errors; a capture that failed is a completed
 //   task whose tool result has isError: true.
+// - "input_required" is a capture only the user can move (paused, or no capture agent). It asks the
+//   client nothing, so there are no input requests; statusMessage says what the user has to do.
 // - The client honors pollIntervalMs, so it tracks the capture's own poll advice.
 
 export const TASKS_EXTENSION = "io.modelcontextprotocol/tasks"
@@ -29,21 +31,22 @@ export function clientDeclaresTasks(ctx: unknown): boolean {
   return !!caps?.extensions && Object.prototype.hasOwnProperty.call(caps.extensions, TASKS_EXTENSION)
 }
 
-export type CaptureTaskStatus = "working" | "completed" | "cancelled"
+export type CaptureTaskStatus = "working" | "input_required" | "completed" | "cancelled"
 
-/** Whether the capture has reached an end state (the task, or a wait, is over). */
-export const isFinished = (ref: Reference) => ref.status === "ready" || ref.status === "failed"
-
-/** Whether waiting is pointless right now: nobody is capturing this, so only the user can move it. */
-export const needsUser = (ref: Reference, status: CaptureStatus) =>
-  !isFinished(ref) && (ref.status === "paused" || status.pollAfterSeconds == null)
-
-export function taskStatus(ref: Reference): CaptureTaskStatus {
+/**
+ * Where a capture stands for anyone following it. wait_for_capture and tasks/get both read this,
+ * so they agree on when it is over and when waiting is pointless.
+ */
+export function taskStatus(ref: Reference, status: CaptureStatus): CaptureTaskStatus {
   if (ref.status === "ready") return "completed"
   // Stopping a capture before its first page is the one way it ends with nothing, so that is a cancellation.
   if (ref.status === "failed") return ref.error === STOPPED_EMPTY ? "cancelled" : "completed"
-  return "working"
+  // No poll advice means nobody is capturing this (paused, or no capture agent): only the user can move it.
+  return status.pollAfterSeconds == null ? "input_required" : "working"
 }
+
+/** Whether the capture has reached an end state (the task, or a wait, is over). */
+export const isOver = (state: CaptureTaskStatus) => state === "completed" || state === "cancelled"
 
 export const taskIdFor = (ref: Reference) => `${ref.id}.${ref.captureRun}`
 
@@ -67,7 +70,7 @@ export function supersededTaskFields(ref: Reference, run: number) {
 
 /** The Task fields shared by CreateTaskResult and tasks/get. */
 export function taskFields(ref: Reference, status: CaptureStatus) {
-  const state = taskStatus(ref)
+  const state = taskStatus(ref, status)
   // Queued advice already starts with the progress text ("Waiting for your Mac: …"); don't say it twice.
   const progress = ref.progress && !status.advice.startsWith(ref.progress) ? ref.progress : null
   const message = state === "working" ? [progress, status.advice].filter(Boolean).join(". ") : status.advice
@@ -79,7 +82,7 @@ export function taskFields(ref: Reference, status: CaptureStatus) {
     lastUpdatedAt: ref.updatedAt,
     // References persist until the user deletes them, so the task does too.
     ttlMs: null,
-    // Paused or waiting for the Mac: check back slowly instead of stopping, so the task still ends when the user acts.
+    // Waiting on the user: check back slowly instead of stopping, so the task still ends when they act.
     pollIntervalMs: (status.pollAfterSeconds ?? 60) * 1000,
   }
 }

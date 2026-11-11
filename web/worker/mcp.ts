@@ -8,7 +8,7 @@ import { readText } from "./files"
 import { bounded, decodeCursor, encodeCursor } from "./mcp-bounds"
 import {
   TASKS_EXTENSION, WAIT_DEFAULT_SECONDS, WAIT_MAX_SECONDS, WAIT_STEP_MS,
-  clientDeclaresTasks, isFinished, needsUser, parseTaskId, supersededTaskFields, taskFields,
+  clientDeclaresTasks, isOver, parseTaskId, supersededTaskFields, taskFields, taskStatus,
 } from "./mcp-tasks"
 import { WORKER_VERSION } from "./version"
 
@@ -276,8 +276,10 @@ function buildServer(env: Env, origin: string) {
     requireTasks(ctx)
     const { ref, current } = await findTask(taskId)
     // Cooperative, like the app's Stop: a running crawl ends after its current page and keeps what it captured.
-    // A superseded task is already over; cancelling it must not stop the user's recapture.
-    if (current) await db.requestStop(env.DB, ref.id)
+    // A finished or superseded task is already over; cancelling it must not stop the user's recapture.
+    if (!current || isOver(taskStatus(ref, await db.getCaptureStatus(env.DB, ref))))
+      throw new ProtocolError(ProtocolErrorCode.InvalidParams, "Failed to cancel task: Task has already ended")
+    await db.requestStop(env.DB, ref.id)
     return {}
   })
   server.server.setRequestHandler("tasks/update", { params: z.looseObject({ taskId: z.string() }) }, async ({ taskId }, ctx) => {
@@ -764,16 +766,17 @@ Scroll timing is synthetic playback; hover offsets are measured. Treat easing an
       for (;;) {
         const ref = await db.getReferenceRecord(env.DB, reference_id)
         if (!ref) return fail(`No reference with id "${reference_id}". It may have been deleted. Call search_references to find ids.`)
-        if (isFinished(ref)) {
+        const status = await db.getCaptureStatus(env.DB, ref)
+        const state = taskStatus(ref, status)
+        if (isOver(state)) {
           // done goes into the payload before it is serialized, so text-only clients see it too.
           return captureResult(ref, max_images, { done: true })
         }
-        const status = await db.getCaptureStatus(env.DB, ref)
         const left = deadline - Date.now()
-        if (needsUser(ref, status) || left <= 0)
+        if (state === "input_required" || left <= 0)
           return ok({
             done: false,
-            waitAgain: !needsUser(ref, status),
+            waitAgain: state === "working",
             referenceId: ref.id,
             state: ref.status,
             progress: ref.progress,
