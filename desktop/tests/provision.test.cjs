@@ -1105,7 +1105,6 @@ test('detach is offline, keeps the cloud record and refuses during enabling', as
 
 test('delete-resources refuses without an exact host confirmation', async () => {
   const library = fakeLibrary();
-  stateModule.setMode(library.root, 'cloud');
   stateModule.updateState(library.root, (next) => {
     next.cloud = { url: PROVIDED, accountId: 'acct', workerName: 'snip', d1: { name: 'snip', id: 'd1' }, kv: { name: 'OAUTH_KV', id: 'kv' }, bucket: 'snip-files' };
     return next;
@@ -2350,7 +2349,6 @@ test('the snapshot command runs the contract step ids, in order', async () => {
 
 test('delete-resources verifies every artifact and clears the install record', async () => {
   const library = fakeLibrary();
-  stateModule.setMode(library.root, 'cloud');
   stateModule.updateState(library.root, (next) => {
     next.cloud = { url: PROVIDED, accountId: 'acct', workerName: 'snip', d1: { name: 'snip', id: 'd1' }, kv: { name: 'OAUTH_KV', id: 'kv' }, bucket: 'snip-files' };
     return next;
@@ -2378,7 +2376,6 @@ test('delete-resources verifies every artifact and clears the install record', a
 
   // A surviving database is a failed delete, not a success.
   const library2 = fakeLibrary();
-  stateModule.setMode(library2.root, 'cloud');
   stateModule.updateState(library2.root, (next) => {
     next.cloud = { url: PROVIDED, accountId: 'acct', workerName: 'snip', d1: { name: 'snip', id: 'd1' }, bucket: 'snip-files' };
     return next;
@@ -2391,6 +2388,27 @@ test('delete-resources verifies every artifact and clears the install record', a
   });
   await assert.rejects(() => commands.commandDeleteResources(survivor), (error) => error.code === 'DELETE_INCOMPLETE' && error.data.leftover.includes('database'));
   assert.equal(stateModule.readState(library2.root).cloud.url, PROVIDED, 'the record stays until everything is gone');
+});
+
+test('delete-resources refuses while this Mac is using the cloud library', async () => {
+  const library = fakeLibrary();
+  stateModule.updateState(library.root, (next) => {
+    next.mode = 'cloud';
+    next.cloud = { url: PROVIDED, accountId: 'acct', workerName: 'snip', d1: { name: 'snip', id: 'd1' }, kv: { name: 'OAUTH_KV', id: 'kv' }, bucket: 'snip-files' };
+    return next;
+  });
+  const calls = [];
+  const ctx = createContext({
+    root: library.root, dataRoot: library.root, flags: { confirm: 'snip.tester.workers.dev' }, emit: collectedEmitter().emit,
+    api: { workerExists: async () => false },
+    wrangler: { bin: '/x', run: async (args) => { calls.push(args); return { ok: true, stdout: '', stderr: '' }; } },
+    deps: { fetch: async () => { throw new Error('no network'); } },
+  });
+  await assert.rejects(() => commands.commandDeleteResources(ctx), (error) => error.code === 'CLOUD_IN_USE' && /pull/.test(error.hint) && /detach/.test(error.hint));
+  assert.deepEqual(calls, [], 'nothing was deleted');
+  const record = stateModule.readState(library.root);
+  assert.equal(record.mode, 'cloud');
+  assert.equal(record.cloud.url, PROVIDED);
 });
 
 /** A pull-verify context that records which tables verify actually compares. */

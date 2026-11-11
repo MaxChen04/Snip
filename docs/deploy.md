@@ -158,7 +158,7 @@ Pass `--capture-env replace` to point `capture/.env` at the cloud copy, or use t
 | `npm run setup:cloudflare -- snapshot restore --json` | Switch back to the **Previous library** left by a `pull`. Refuses when this Mac's own library never moved. |
 | `npm run setup:cloudflare -- snapshot delete --confirm <basename>` | Delete the **Previous library**. Destructive. |
 | `npm run setup:cloudflare -- snapshot delete-export --confirm <basename>` | Delete setup's portable dump and file list. It cannot restore anything on its own. |
-| `npm run setup:cloudflare -- delete-resources --confirm <host>` | Delete the Worker, D1, KV and R2 for this install. Destructive. |
+| `npm run setup:cloudflare -- delete-resources --confirm <host>` | Delete the Worker, D1, KV and R2 for this install. Destructive. Refused while this Mac is using the cloud library: `pull` or `detach` first. |
 | `npm run setup:cloudflare -- owner link` | Mint and open a fresh one-time sign-in link for this Mac. |
 | `npm run setup:cloudflare -- owner link --no-handoff` | Mint a link for another browser or device and print it. Settings' **Sign in another browser** runs exactly this. |
 | `npm run setup:cloudflare -- owner rotate` | Replace the owner-link secret and mint a new link. Recovery path. |

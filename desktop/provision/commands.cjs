@@ -621,6 +621,13 @@ async function commandDeleteResources(ctx) {
       id: 'delete-preflight',
       title: 'Checking the confirmation',
       async run(ctx2) {
+        // The cloud library is the only current copy while this Mac is using it.
+        if (ctx2.state().mode === 'cloud') {
+          throw new StepError('CLOUD_IN_USE', 'This Mac is using its cloud library, so deleting it would delete the only current copy.', {
+            hint: 'Copy it back first with `pull`, or run `detach` to return to this Mac’s own library as it is, then run `delete-resources` again. Nothing was changed.',
+            retryable: false,
+          });
+        }
         // Same interlock as the snapshot commands, keyed on the host the row
         // shows. Missing → exit 2; different → exit 1; nothing deleted either way.
         snapshotModule.requireConfirm(ctx2, { recordPath: record.url, command: 'delete-resources' });
@@ -928,7 +935,7 @@ async function commandAbort(ctx) {
       title: 'Checking this Mac',
       async run(ctx2) {
         const mode = ctx2.state().mode;
-        if (mode === 'cloud') throw new StepError('HEALTHY_CLOUD', 'This Mac is using its cloud library, so there is nothing to abort.', { hint: 'Use `detach` to go back to local, or `delete-resources` to remove it.' });
+        if (mode === 'cloud') throw new StepError('HEALTHY_CLOUD', 'This Mac is using its cloud library, so there is nothing to abort.', { hint: 'Use `detach` to go back to local, or `pull` to copy it back.' });
         if (mode !== 'enabling') throw new StepError('NOTHING_TO_ABORT', 'No setup is in progress.', { hint: 'Nothing was changed.' });
         return { message: 'Cleaning up an interrupted setup' };
       },
