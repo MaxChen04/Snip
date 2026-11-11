@@ -163,12 +163,12 @@ test("an aborted crawl pauses at the next page boundary when the server accepts 
       const run = async (acceptsPause: boolean, abortAt: "start" | "first page") => {
         const abort = new AbortController()
         if (abortAt === "start") abort.abort()
-        const seen = { pages: [] as string[], paused: [] as CrawlState[], completed: 0, controls: 0 }
+        const seen = { pages: [] as string[], states: [] as CrawlState[], paused: [] as CrawlState[], completed: 0, controls: 0 }
         const api = {
           control: async () => { seen.controls++; return null },
           progress: async () => {},
           upload: async (key: string) => key,
-          addPage: async (_id: string, page: PageUpload) => { seen.pages.push(page.path); abort.abort() },
+          addPage: async (_id: string, page: PageUpload) => { seen.pages.push(page.path); seen.states.push(page.state!); abort.abort() },
           pause: async (_id: string, state: CrawlState, release?: boolean) => { assert.equal(release, true, "the hand-back is marked as the worker's own"); seen.paused.push(state); return acceptsPause },
           complete: async () => { seen.completed++ },
         }
@@ -182,6 +182,9 @@ test("an aborted crawl pauses at the next page boundary when the server accepts 
       assert.equal(paused.paused[0]!.captured, 1)
       assert.deepEqual(paused.paused[0]!.queue, [`${base}b`, `${base}c`], "the checkpoint holds the rest of the crawl")
       assert.equal(paused.completed, 0, "a paused crawl is not completed")
+      // Each page carries where the crawl stands once it is saved, so a crawl whose agent dies resumes from there.
+      assert.deepEqual({ ...paused.states[0]!, meta: null }, { ...paused.paused[0]!, meta: null })
+      assert.equal(paused.states[0]!.meta!.title, paused.paused[0]!.meta!.title)
 
       const stopped = await run(false, "first page")
       assert.deepEqual(stopped.pages, ["/"])

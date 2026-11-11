@@ -253,7 +253,7 @@ export interface Job {
   features?: ("sections" | "live" | "schemes" | "icon" | "gzip")[]
 }
 
-/** Crawl position saved when a capture pauses. */
+/** Crawl position, saved with each page and when a capture pauses. */
 export interface CrawlState {
   version: 1
   /** URLs still to visit, in order. */
@@ -288,6 +288,8 @@ export interface PageUpload {
   snapshotKey: string | null
   stylesKey: string | null
   tokens: DesignTokens | null
+  /** Where the crawl stands once this page is saved, so a capture whose agent dies carries on from here. Older agents send none. */
+  state?: CrawlState
   /** Older agents send none. */
   sections?: PageSection[]
   altScheme?: AltScheme

@@ -641,9 +641,9 @@ export async function addPage(db: D1Database, referenceId: string, attempt: stri
       .prepare(
         `UPDATE refs SET page_count = (SELECT count(*) FROM pages WHERE reference_id = ?1),
           animation_count = (SELECT count(*) FROM animations WHERE reference_id = ?1),
-          cover_key = coalesce(cover_key, ?2), updated_at = ?3 WHERE id = ?1 AND status = 'capturing' AND capture_attempt = ?4`,
+          cover_key = coalesce(cover_key, ?2), crawl_state = coalesce(?5, crawl_state), updated_at = ?3 WHERE id = ?1 AND status = 'capturing' AND capture_attempt = ?4`,
       )
-      .bind(referenceId, p.desktopThumbKey, ts, attempt),
+      .bind(referenceId, p.desktopThumbKey, ts, attempt, p.state ? JSON.stringify(p.state) : null),
   )
   const results = await db.batch(stmts)
   return results[0]?.meta.changes ? pageId : null

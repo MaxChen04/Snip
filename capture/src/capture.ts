@@ -1508,6 +1508,8 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
         sections: await uploadSections(),
         altScheme: await uploadOtherScheme(),
         animations,
+        // Saved with the page, so a crawl whose agent dies is resumed from its last saved page.
+        state: { ...checkpoint(), captured: captured + 1, tokens: mergeTokens([...allTokens, styles.tokens]) },
       }
       await api.addPage(job.id, upload)
       for (const [sig, clip] of newClips) liveSeen.set(sig, clip)

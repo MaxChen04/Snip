@@ -330,3 +330,27 @@ test("an agent that is stopping hands its crawl back to the queue, and the next 
     await mf.dispose()
   }
 })
+
+test("a crawl whose agent dies without ever pausing carries on from its last saved page", async () => {
+  const { mf, database, makeStale, row } = await setup()
+  try {
+    const ref = await db.createReference(database, { url: "https://example.com", mode: "crawl", maxPages: 9 })
+    const first = (await db.claimJob(database))!
+    assert.ok(await db.addPage(database, ref.id, first.attempt, { ...page(ref.id, first.attempt, 0), state: state(1) }))
+    await makeStale(ref.id)
+    const again = (await db.claimJob(database))!
+    assert.equal(again.attempt, first.attempt)
+    assert.deepEqual(again.resume, state(1), "the rest of the crawl, its title and its tokens are still known")
+
+    // An older agent sends no state with its pages: the last one saved stays.
+    assert.ok(await db.addPage(database, ref.id, again.attempt, page(ref.id, again.attempt, 1)))
+    assert.deepEqual(JSON.parse((await row(ref.id))!.crawl_state!), state(1))
+    // A stop finds the title and tokens there too.
+    await db.requestStop(database, ref.id)
+    await makeStale(ref.id)
+    assert.equal(await db.claimJob(database), null)
+    assert.equal((await db.getReference(database, ref.id))!.reference.title, "Example")
+  } finally {
+    await mf.dispose()
+  }
+})
