@@ -163,6 +163,23 @@ function usesCloud(state) {
   return cloudMode(state) === "cloud" && typeof state?.cloud?.url === "string"
 }
 
+/**
+ * What it takes to make the services and the window match `mode`. `applied` is the
+ * kind of library they were last set up for. A running capture agent keeps the
+ * destination it started with, and the local Worker has no place beside a cloud library.
+ */
+function modePlan({ mode, applied, webRunning }) {
+  const kind = mode === "cloud" ? "cloud" : "local"
+  const moved = kind !== applied
+  return {
+    kind,
+    stopCapture: moved,
+    stopWeb: kind !== "local" && webRunning,
+    recreateWindow: moved,
+    start: kind === "cloud" ? ["capture"] : ["web", "capture"],
+  }
+}
+
 // The capture agent keeps one file per destination. Snip rewrites neither mid-capture:
 // the engine writes `.env.cloud` during `finish`, and Snip copies `.env` to `.env.local`
 // the first time the app enables cloud. `SNIP_CAPTURE_ENV_FILE` picks between them.
@@ -225,6 +242,7 @@ module.exports = {
   readCloudState,
   cloudMode,
   usesCloud,
+  modePlan,
   captureEnvFiles,
   selectCaptureEnvFile,
   keepLocalCaptureEnv,

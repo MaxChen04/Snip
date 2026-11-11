@@ -12,6 +12,7 @@ const {
   readCloudState,
   cloudMode,
   usesCloud,
+  modePlan,
   captureEnvFiles,
   selectCaptureEnvFile,
   keepLocalCaptureEnv,
@@ -164,4 +165,15 @@ test("cloud paths stay inside .snip", t => {
   const paths = cloudPaths(root)
   assert.equal(paths.state, path.join(root, ".snip", "cloud.json"))
   assert.equal(paths.lock, path.join(root, ".snip", "cloud.lock"))
+})
+
+test("a finished run is followed by whatever the recorded mode needs, whatever the result", () => {
+  // A failed or cancelled local run: the engine stopped captures or the Worker, and both come back.
+  assert.deepEqual(modePlan({ mode: "local", applied: "local", webRunning: false }), { kind: "local", stopCapture: false, stopWeb: false, recreateWindow: false, start: ["web", "capture"] })
+  assert.deepEqual(modePlan({ mode: "enabling", applied: "local", webRunning: true }), { kind: "local", stopCapture: false, stopWeb: false, recreateWindow: false, start: ["web", "capture"] })
+  // The mode moved, even under a failed result: capture changes destination and the window its origin.
+  assert.deepEqual(modePlan({ mode: "cloud", applied: "local", webRunning: true }), { kind: "cloud", stopCapture: true, stopWeb: true, recreateWindow: true, start: ["capture"] })
+  assert.deepEqual(modePlan({ mode: "local", applied: "cloud", webRunning: false }), { kind: "local", stopCapture: true, stopWeb: false, recreateWindow: true, start: ["web", "capture"] })
+  // The local Worker never runs beside a cloud library.
+  assert.deepEqual(modePlan({ mode: "cloud", applied: "cloud", webRunning: true }), { kind: "cloud", stopCapture: false, stopWeb: true, recreateWindow: false, start: ["capture"] })
 })

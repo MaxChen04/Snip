@@ -12,7 +12,7 @@ const { channelConfig } = require("./channels.cjs")
 const { SourceUpdates } = require("./source-updates.cjs")
 const { prepareRuntimeLayout, selectExistingLibrary } = require("./runtime-layout.cjs")
 const windowOrigin = require("./window-origin.cjs")
-const { readCloudState, cloudMode, selectCaptureEnvFile, keepLocalCaptureEnv } = require("./cloud-state.cjs")
+const { readCloudState, cloudMode, modePlan, selectCaptureEnvFile, keepLocalCaptureEnv } = require("./cloud-state.cjs")
 const { engineAvailable, runEngine } = require("./cloud-engine.cjs")
 const { sessionCookie, externalUrl } = require("./cloud-session.cjs")
 const { snapshotFlags } = require("./cloud-confirm.cjs")
@@ -67,6 +67,8 @@ let cloudRun = null, cloudResult = null
 let ownerLink = null
 const pins = new WeakMap()
 const cloudInput = new Map()
+// The kind of library the services and the window were last set up for; the launch window is local.
+let applied = "local"
 let localLibrary = { at: 0, value: null }
 const uiState = Object.create(null)
 const logs = new Set()
@@ -510,31 +512,24 @@ function onCloudEvent(run, event) {
   if (event.event === "log") sendToSettings("snip:cloud-log", { level: ["info", "warn", "error"].includes(event.level) ? event.level : "info", message: String(event.message ?? "").slice(0, 2000) })
   sendToSettings("snip:cloud-progress", event)
 }
-// A running capture agent keeps the destination it started with, and start() is a
-// no-op while it runs, so switching libraries has to stop it first. stop() lets an
-// in-flight capture finish.
-async function restartCaptureForMode() {
-  if (services.capture.proc) await services.capture.stop().catch(() => {})
-}
-async function enterCloudMode() {
-  if (!layout) return
-  try { keepLocalCaptureEnv({ dataRoot: layout.dataRoot }) } catch {}
-  // The local Worker has no place beside a cloud library, and the tray no longer offers to stop it.
-  if (services.web.proc) await stopWeb()
-  await restartCaptureForMode()
-  autoCapture = true
-  recreateWindow()
-  start("capture")
-}
-async function enterLocalMode() {
-  await restartCaptureForMode()
+/**
+ * Put the services and the window in the state mode() calls for. Every finished run
+ * ends here, whatever its result: a failed one has still stopped things.
+ */
+async function applyMode() {
+  if (!layout || quitting) return
+  // A run's last step may still be stopping the local Worker; start() would return early.
+  if (shutdown) await shutdown.catch(() => {})
+  const plan = modePlan({ mode: mode(), applied, webRunning: !!services.web.proc })
+  applied = plan.kind
+  // stop() lets an in-flight capture finish.
+  if (plan.stopCapture) await services.capture.stop()
+  if (plan.stopWeb) await stopWeb()
+  if (quitting) return
   autoCapture = true
   localLibrary = { at: 0, value: null }
-  // `pull` stopped the local Worker at pull-swap; wait for that to finish, or start()
-  // would return early on the shutdown guard.
-  if (shutdown) await shutdown.catch(() => {})
-  start("web")
-  recreateWindow()
+  if (plan.recreateWindow) recreateWindow()
+  for (const key of plan.start) start(key)
 }
 // runEngine always delivers a result before the exit, so `result` is the whole verdict.
 async function finishCloudRun(run, { code }) {
@@ -562,9 +557,8 @@ async function finishCloudRun(run, { code }) {
     return
   }
   if (result.ok) {
-    if (result.mode === "cloud") await enterCloudMode()
-    else if (result.mode === "local") await enterLocalMode()
-    sendToSettings("snip:cloud-log", { level: "info", message: result.mode === "cloud" ? "Snip is now using your cloud library." : "Snip is back on this Mac." })
+    await applyMode()
+    sendToSettings("snip:cloud-log", { level: "info", message: mode() === "cloud" ? "Snip is now using your cloud library." : "Snip is back on this Mac." })
   } else if (result.code === "CANCELLED") {
     sendToSettings("snip:cloud-log", { level: "info", message: "Stopped. Nothing on Cloudflare was changed." })
   } else {
@@ -576,6 +570,8 @@ async function finishCloudRun(run, { code }) {
     // Main's log is the one place a failed run is recorded; the renderer only shows copy.
     makeLog("cloud").end(`${new Date().toISOString()} ${run.command} exited ${code ?? "?"} ${result.code}\n`)
   }
+  // A run that stopped short has still stopped captures or the local Worker.
+  if (!result.ok) await applyMode()
   refresh()
 }
 function startCloudRun(command, flags = {}, subcommand, purpose) {
@@ -821,7 +817,7 @@ function configureUpdates() {
     enabled: nightly || (releaseBuild && config?.repository === "MaxChen04/Snip" && config?.updatesEnabled === true),
     nativeEnabled: releaseBuild && config?.repository === "MaxChen04/Snip" && config?.updatesEnabled === true,
     drain: drainForQuit,
-    installFailed: () => { quitting = false; finishedQuit = false; autoCapture = true; start("web"); showApp() },
+    installFailed: () => { quitting = false; finishedQuit = false; void applyMode(); showApp() },
   })
   let previous = updates.phase, notifiedVersion
   updates.on("change", () => {
@@ -944,11 +940,7 @@ async function setup() {
     // The mode is read before anything loads a URL: a restart in cloud mode must not
     // open the local library, and a restart in local mode must not wait on cloud.
     cloudState = readCloudState(layout.dataRoot)
-    if (mode() === "cloud") {
-      // The window created at launch still shows the startup page with the local pin.
-      recreateWindow()
-      if (!quitting) start("capture")
-    } else if (!quitting) start("web")
+    await applyMode()
   } catch (error) { startupError = error.message; showLoading() }
   finally { resolvingNode = false; refresh() }
 }
