@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useLocation } from "wouter"
 import { ChevronRightIcon, ClipboardIcon, CornerDownLeftIcon, FileIcon, GlobeIcon, NetworkIcon, XIcon } from "@/components/icons"
 import { toast } from "sonner"
@@ -22,15 +22,12 @@ const LIMITS = [10, 25, 50, 100]
 export function AddReferenceDialog({
   open,
   onOpenChange,
-  onAdded,
   onCreated,
   defaultCollection,
   defaultUrl,
 }: {
   open: boolean
   onOpenChange: (o: boolean) => void
-  /** null after adding several websites at once. */
-  onAdded: (r: Reference | null) => void
   /** Each reference as it is created, including the ones saved before a bulk add fails part way. */
   onCreated?: (r: Reference) => void
   defaultCollection?: string
@@ -53,6 +50,12 @@ export function AddReferenceDialog({
   const [submitting, setSubmitting] = useState(false)
   const parsed = useMemo(() => parseSiteUrl(url), [url])
   useEffect(() => setDuplicate(null), [url])
+  // Closing unmounts the dialog. A submit still running then adds nothing more and closes nothing.
+  const gone = useRef(false)
+  useEffect(() => {
+    gone.current = false
+    return () => void (gone.current = true)
+  }, [])
 
   const options: CaptureOptions = { colorScheme, desktopWidth, signedIn }
   const body = (u: URL, allowDuplicate = false) => ({
@@ -71,6 +74,7 @@ export function AddReferenceDialog({
     const failed: URL[] = []
     let lastError = ""
     for (const u of bulk) {
+      if (gone.current) break
       try {
         onCreated?.(await api.addReference(body(u)))
         added++
@@ -83,15 +87,14 @@ export function AddReferenceDialog({
       }
     }
     const summary = [added && `Added ${added} ${added === 1 ? "website" : "websites"}`, saved && `${saved} already saved`].filter(Boolean).join(", ")
+    if (added) window.dispatchEvent(new Event("rs:reload"))
     if (failed.length) {
       // Keep the ones that failed in the dialog so they can be retried as they were.
       setBulk(failed)
-      if (added) window.dispatchEvent(new Event("rs:reload"))
       toast.error(`${summary ? `${summary}. ` : ""}${failed.length} couldn't be added: ${lastError}`)
       return
     }
-    setBulk([])
-    onAdded(null)
+    if (!gone.current) onOpenChange(false)
     notify(summary)
   }
 
@@ -103,8 +106,8 @@ export function AddReferenceDialog({
       if (bulk.length) return await submitBulk()
       const ref = await api.addReference(body(parsed!, allowDuplicate))
       onCreated?.(ref)
-      setUrl("")
-      onAdded(ref)
+      window.dispatchEvent(new Event("rs:reload"))
+      if (!gone.current) onOpenChange(false)
       notify(mode === "crawl" ? `Crawling ${parsed!.hostname}` : "Added 1 reference", {
         action: { label: "View", onClick: () => navigate(`/r/${ref.id}`) },
       })

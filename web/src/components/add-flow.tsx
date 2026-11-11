@@ -86,10 +86,6 @@ export function AddFlowProvider({ children }: { children: ReactNode }) {
         onOpenChange={(o) => !o && setAdding(null)}
         // Captures started here show on the canvas capture card too.
         onCreated={(r) => trackCapture(r.id)}
-        onAdded={() => {
-          setAdding(null)
-          window.dispatchEvent(new Event("rs:reload"))
-        }}
       />
       <NewCollectionDialog open={naming} onOpenChange={setNaming} />
       <ConnectMcpDialog open={connecting} onOpenChange={setConnecting} />

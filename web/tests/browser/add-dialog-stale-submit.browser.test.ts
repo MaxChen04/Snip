@@ -44,3 +44,16 @@ test("a late response for a closed Add dialog leaves the newly opened one alone"
   assert.equal(stillOpen, true, "A's late response closed the newer Add dialog")
   assert.equal(await field.inputValue(), "https://bbb.example.com", "B should still be in the field")
 })
+
+test("a submit that finishes while its dialog is open closes it and reloads the library", async () => {
+  const t = await app.session({ state: { boards: { board1: boardOf() } } })
+  const { page } = t
+  await t.goto("/b/board1")
+  const dialog = await openAddDialog(page)
+  await page.evaluate(() => window.addEventListener("rs:reload", () => ((window as any).reloads = ((window as any).reloads ?? 0) + 1)))
+  await dialog.getByRole("textbox", { name: "Website URL" }).fill("https://aaa.example.com")
+  await dialog.getByRole("button", { name: /Save reference/ }).click()
+  await dialog.waitFor({ state: "detached" })
+  assert.equal(t.count("POST", "/api/references"), 1)
+  assert.equal(await page.evaluate(() => (window as any).reloads), 1)
+})
