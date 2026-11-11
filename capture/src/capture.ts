@@ -1303,8 +1303,8 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
         continue
       }
       if (!meta) meta = pageMeta
-      // The icon is saved beside the first page's own work, never ahead of it, and nothing waits for it. Its key replaces
-      // the URL in `meta` when it lands, so the next pause checkpoint, or completion, carries whichever it has by then.
+      // The icon is saved beside the first page's own work, never ahead of it. Its key replaces the URL in `meta` when it
+      // lands: a pause checkpoint carries whichever it has by then, and completion waits for it (its fetch gives up after 10 s).
       // A resumed crawl whose checkpoint already holds the key (not a URL) keeps it; one that only has the URL tries once.
       if (features.has("icon") && !iconTask && meta.favicon && !meta.favicon.startsWith("refs/")) {
         iconTask = storeIcon(desktop, api, meta.favicon, prefix).then((key) => { if (key && meta) meta = { ...meta, favicon: key } })
@@ -1523,6 +1523,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
 
   network?.assertAllowed()
   if (!captured) throw new Error(stopped ? STOPPED_EMPTY : "No pages could be captured")
+  await iconTask
   await api.complete(job.id, {
     title: meta?.title ?? null,
     description: meta?.description ?? null,
