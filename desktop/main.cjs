@@ -497,11 +497,6 @@ function onCloudEvent(run, event) {
     return
   }
   if (event.event === "session") { void acceptCloudSession(event); return }
-  if (event.event === "needs_input") {
-    for (const key of Array.isArray(event.keys) ? event.keys : []) {
-      if (key && typeof key.key === "string") cloudInput.set(key.key.slice(0, 64), "")
-    }
-  }
   if (event.event === "step") applyCloudStep(event)
   if (event.event === "log") sendToSettings("snip:cloud-log", { level: ["info", "warn", "error"].includes(event.level) ? event.level : "info", message: String(event.message ?? "").slice(0, 2000) })
   sendToSettings("snip:cloud-progress", event)
@@ -550,6 +545,8 @@ async function finishCloudRun(run, { code }) {
     refresh()
     return
   }
+  // Answers belong to the run they were given for; this is the one place they are dropped.
+  cloudInput.clear()
   if (result.ok) {
     await applyMode()
     sendToSettings("snip:cloud-log", { level: "info", message: mode() === "cloud" ? "Snip is now using your cloud library." : "Snip is back on this Mac." })
@@ -620,9 +617,7 @@ function registerCloudIpc() {
   ipcMain.handle("snip:cloud-state", guard(() => cloudSnapshotState()))
   ipcMain.handle("snip:cloud-enable", guard(payload => {
     if (mode() === "cloud") return { error: "This Mac is already using a cloud library." }
-    const merged = { ...Object.fromEntries(cloudInput), ...payload }
-    cloudInput.clear()
-    return startCloudRun("setup", setupFlags(merged))
+    return startCloudRun("setup", setupFlags({ ...Object.fromEntries(cloudInput), ...payload }))
   }))
   ipcMain.handle("snip:cloud-disable", guard(payload => {
     if (payload.action === "pull") return startCloudRun("pull")
