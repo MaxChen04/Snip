@@ -265,7 +265,8 @@ export function useCloud(bridge = window.snipCloud) {
     }
   }, [bridge])
 
-  const begin = useCallback(async (call: () => Promise<{ started?: true; error?: string }>) => {
+  /** Starts a run. `command` is what the window asked for; main's snapshot then confirms it. */
+  const begin = useCallback(async (command: string | null, call: () => Promise<{ started?: true; error?: string }>) => {
     // A read from before this run must not land on top of it.
     reads.current.applied = ++reads.current.issued
     setSteps({})
@@ -274,15 +275,17 @@ export function useCloud(bridge = window.snipCloud) {
     setError(null)
     setChoice(null)
     setNeeded(null)
-    setSnapshot(current => ({ ...current, busy: true }))
-    const reply = await call()
-    if (reply?.error) {
-      setSnapshot(current => ({ ...current, busy: false }))
-      toast.error(reply.error)
-      return false
+    setSnapshot(current => ({ ...current, busy: true, running: command ? { command, step: null } : null }))
+    try {
+      const reply = await call()
+      if (reply?.error) {
+        setSnapshot(current => ({ ...current, busy: false }))
+        toast.error(reply.error)
+      }
+    } finally {
+      void refresh()
     }
-    return true
-  }, [])
+  }, [refresh])
 
   const busy = snapshot.busy
 

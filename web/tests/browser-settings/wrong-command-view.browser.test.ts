@@ -44,3 +44,21 @@ test("Copy back shows the copy-back title and its 8 steps, not setup's", async (
     await close()
   }
 })
+
+test("deleting the export shows its own title and steps", async () => {
+  const { page, close } = await openSettings(browser, server, { mode: "cloud" })
+  try {
+    await page.getByRole("button", { name: "Turn off cloud…" }).waitFor()
+    // The fake's snapshot has no export row; start the command the row's button starts.
+    await page.evaluate(() => void (window as any).snipCloud.snapshot("delete-export", "cloud-export"))
+    await sim(page, "step", "snapshot-preflight", "started")
+    await sim(page, "step", "snapshot-preflight", "ok")
+    await sim(page, "step", "snapshot-delete-export", "started")
+    const main = page.locator("main")
+    await main.getByText("1 of 3").waitFor()
+    assert.equal((await main.getByRole("heading", { level: 1 }).innerText()).trim(), "Deleting the export")
+    assert.deepEqual(await main.locator("ol > li").allInnerTexts(), ["Check the snapshot", "Delete the export", "Finish"])
+  } finally {
+    await close()
+  }
+})

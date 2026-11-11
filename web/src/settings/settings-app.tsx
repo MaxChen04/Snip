@@ -72,7 +72,7 @@ export function SettingsApp() {
 
   const startEnable = async () => {
     setDialog(null)
-    await cloud.begin(() => cloud.bridge!.enable())
+    await cloud.begin("setup", () => cloud.bridge!.enable())
   }
 
   const chooseTurnOff = async (choice: TurnOffChoice) => {
@@ -81,26 +81,26 @@ export function SettingsApp() {
       return
     }
     setDialog(null)
-    await cloud.begin(() => cloud.bridge!.disable(choice))
+    await cloud.begin(choice, () => cloud.bridge!.disable(choice))
   }
 
   const confirmDelete = async () => {
     const host = hostOf(cloud.cloud?.url)
     setDialog(null)
-    await cloud.begin(() => cloud.bridge!.deleteResources(host))
+    await cloud.begin("delete-resources", () => cloud.bridge!.deleteResources(host))
   }
 
   const confirmSnapshotDelete = async () => {
     const name = dirName(cloud.snapshotRecord?.path)
     setDialog(null)
-    await cloud.begin(() => cloud.bridge!.snapshot("delete", name))
+    await cloud.begin("snapshot delete", () => cloud.bridge!.snapshot("delete", name))
   }
 
   const confirmExportDelete = async () => {
     const name = dirName(cloud.snapshotRecord?.export?.path)
     setDialog(null)
     // The export is delete-only; there is no restore path for it by design.
-    await cloud.begin(() => cloud.bridge!.snapshot("delete-export", name))
+    await cloud.begin("snapshot delete-export", () => cloud.bridge!.snapshot("delete-export", name))
   }
 
   const signOut = async () => {
@@ -141,7 +141,7 @@ export function SettingsApp() {
   }
 
   // Main decides what a retry runs: the unfinished setup, or the command that last failed.
-  const retry = () => void cloud.begin(() => cloud.bridge!.retryStep(""))
+  const retry = () => void cloud.begin(null, () => cloud.bridge!.retryStep(""))
 
   const errorCard =
     cloud.error && !cloud.choice ? (
@@ -163,7 +163,7 @@ export function SettingsApp() {
           <ProgressView
             cloud={cloud}
             errorCard={errorCard}
-            onAdopt={() => void cloud.begin(() => cloud.bridge!.enable({ adoptExisting: true }))}
+            onAdopt={() => void cloud.begin("setup", () => cloud.bridge!.enable({ adoptExisting: true }))}
             onStopChoice={() => {
               cloud.clearChoice()
               void cloud.refresh()
@@ -207,7 +207,7 @@ export function SettingsApp() {
                 onOpen={openCloud}
                 onCopyPrompt={copyPrompt}
                 onRestorePrevious={async () => {
-                  await cloud.begin(() => cloud.bridge!.snapshot("restore"))
+                  await cloud.begin("snapshot restore", () => cloud.bridge!.snapshot("restore"))
                 }}
                 onDeleteSnapshot={() => setDialog("snapshot-delete")}
               />
@@ -648,6 +648,8 @@ function ProgressView({
     "delete-resources": { title: "Deleting cloud resources", body: "Removing the Worker, database, KV and stored files from Cloudflare." },
     "snapshot restore": { title: "Restoring the snapshot", body: "Bringing the copy from before cloud back as the live library." },
     "snapshot delete": { title: "Deleting the snapshot", body: "Removing the local copy from before cloud." },
+    "snapshot delete-export": { title: "Deleting the export", body: "Removing the database dump and file list made during setup." },
+    abort: { title: "Undoing setup", body: "Removing what the unfinished setup created. This Mac goes back to its local library." },
   }[command] ?? { title: "Working", body: "Keep this window open." }
 
   return (

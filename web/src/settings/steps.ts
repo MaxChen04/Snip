@@ -15,6 +15,8 @@ const ORDER: Record<string, string[]> = {
   "delete-resources": ["delete-preflight", "delete-execute", "delete-verify"],
   "snapshot restore": ["snapshot-preflight", "snapshot-restore", "snapshot-finish"],
   "snapshot delete": ["snapshot-preflight", "snapshot-delete", "snapshot-finish"],
+  "snapshot delete-export": ["snapshot-preflight", "snapshot-delete-export", "snapshot-finish"],
+  abort: ["abort-preflight", "abort-cleanup"],
 }
 
 const TITLES: Record<string, string> = {
@@ -52,7 +54,10 @@ const TITLES: Record<string, string> = {
   "snapshot-preflight": "Check the snapshot",
   "snapshot-restore": "Restore the snapshot",
   "snapshot-delete": "Delete the snapshot",
+  "snapshot-delete-export": "Delete the export",
   "snapshot-finish": "Finish",
+  "abort-preflight": "Check this Mac",
+  "abort-cleanup": "Remove what setup created",
 }
 
 export function commandFor(running: string | null, mode: string | null): string {
