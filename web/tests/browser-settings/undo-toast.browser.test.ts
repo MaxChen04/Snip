@@ -41,3 +41,27 @@ test("a failed Undo never says the setup was undone", async () => {
     await close()
   }
 })
+
+test("Undo runs as a command of its own and ends on the local panels", async () => {
+  const { page, close } = await openSettings(browser, server, { mode: "enabling" })
+  try {
+    const main = page.locator("main")
+    await main.getByRole("button", { name: "Undo setup" }).click()
+    await page.getByRole("dialog").getByRole("button", { name: "Undo setup" }).click()
+    await page.waitForFunction(() => (window as any).__sim.run?.command === "abort")
+    await sim(page, "step", "abort-preflight", "started")
+    await sim(page, "step", "abort-preflight", "ok")
+    await sim(page, "step", "abort-cleanup", "started")
+    await main.getByText("1 of 2").waitFor()
+    assert.equal((await main.getByRole("heading", { level: 1 }).innerText()).trim(), "Undoing setup")
+    assert.deepEqual(await main.locator("ol > li").allInnerTexts(), ["Check this Mac", "Remove what setup created"])
+    assert.equal(await main.getByRole("button", { name: "Cancel", exact: true }).count(), 1)
+
+    await sim(page, "step", "abort-cleanup", "ok")
+    await sim(page, "result", { ok: true, code: "OK", mode: "local" })
+    await sim(page, "exit", { code: 0 })
+    await page.getByRole("button", { name: "Enable cloud" }).waitFor()
+  } finally {
+    await close()
+  }
+})

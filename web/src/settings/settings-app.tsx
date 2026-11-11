@@ -113,9 +113,7 @@ export function SettingsApp() {
 
   const undoSetup = async () => {
     setDialog(null)
-    const reply = await cloud.bridge!.abort()
-    if (reply.error) toast.error(reply.error)
-    else toast.success("Setup undone. This Mac is back on its local library.")
+    await cloud.begin("abort", () => cloud.bridge!.abort())
   }
 
   const openCloud = () => {
