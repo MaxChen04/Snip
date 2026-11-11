@@ -379,6 +379,36 @@ test("placements upsert, keep omitted fields, survive a recapture and reject any
   }
 })
 
+test("an item that leaves the board between the membership check and the write is not placed", async () => {
+  const { mf, database, env, ctx, board, rows } = await setup()
+  try {
+    const stripe = await capture(database, "https://stripe.com", [{ path: "/" }])
+    const id = stripe.reference.id
+    // Runs `leave` right after the route's membership check (its only batch) has answered.
+    const racing = (leave: () => Promise<unknown>) => ({ ...env, DB: new Proxy(database, { get(target, name) {
+      if (name === "batch") return async (statements: D1PreparedStatement[]) => { const results = await target.batch(statements); await leave(); return results }
+      const value = Reflect.get(target, name, target)
+      return typeof value === "function" ? value.bind(target) : value
+    } }) })
+    const send = (path: string, method: string, body: unknown, raceEnv: unknown) =>
+      app.request(`http://localhost${path}`, { method, body: JSON.stringify(body), headers: { "content-type": "application/json" } }, raceEnv as Env, ctx)
+
+    const placed = await board("Placed")
+    await db.setReferenceCollection(database, id, placed, true)
+    await send(`/api/boards/${placed}/items`, "PUT", { items: [{ kind: "reference", id, x: 1, y: 2 }] }, racing(() => db.setReferenceCollection(database, id, placed, false)))
+    assert.deepEqual(await rows("SELECT item_id FROM board_items WHERE collection_id = ?", placed), [])
+
+    const grouped = await board("Grouped")
+    await db.setReferenceCollection(database, id, grouped, true)
+    let left = false
+    const leaveOnce = async () => { if (!left) { left = true; await db.deleteReference(database, id) } }
+    await send(`/api/boards/${grouped}/groups`, "POST", { name: "Heroes", x: 0, y: 0, w: 100, h: 100, items: [{ kind: "reference", id }] }, racing(leaveOnce))
+    assert.deepEqual(await rows("SELECT item_id FROM board_items WHERE collection_id = ?", grouped), [])
+  } finally {
+    await mf.dispose()
+  }
+})
+
 test("an item's style round-trips, is kept when omitted, cleared by null and checked strictly", async () => {
   const { mf, call, get, uploaded, board } = await setup()
   try {

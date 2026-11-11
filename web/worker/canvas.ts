@@ -287,11 +287,20 @@ function cleanStyle(v: unknown): BoardItemStyle | null | undefined {
 const styleJson = (s: BoardItemStyle | null) => (s && Object.keys(s).length ? JSON.stringify(s) : null)
 /**
  * The text column for an upsert from json_each rows `[kind, item_id, ...]` on board ?1. SQLite checks
- * CHECK before ON CONFLICT, so a note's candidate row carries its current text; a note deleted
- * meanwhile has none, and the change fails instead of leaving a blank note behind.
+ * CHECK before ON CONFLICT, so a note's candidate row carries its current text.
  */
 const NOTE_TEXT = `CASE json_extract(value, '$[0]') WHEN 'note' THEN
   (SELECT n.text FROM board_items n WHERE n.collection_id = ?1 AND n.kind = 'note' AND n.item_id = json_extract(value, '$[1]')) END`
+
+/** Whether (kind, item id, page path) is on board ?1. Resolving and writing share it, so a write places nothing that has just left the board. */
+const onBoard = (kind: string, item: string, path: string) => `CASE ${kind}
+  WHEN 'reference' THEN EXISTS (SELECT 1 FROM reference_collections WHERE collection_id = ?1 AND reference_id = ${item})
+  WHEN 'page' THEN EXISTS (SELECT 1 FROM page_collections WHERE collection_id = ?1 AND reference_id = ${item} AND page_path = ${path})
+  WHEN 'image' THEN EXISTS (SELECT 1 FROM image_collections WHERE collection_id = ?1 AND image_id = ${item})
+  WHEN 'note' THEN EXISTS (SELECT 1 FROM board_items WHERE collection_id = ?1 AND kind = 'note' AND item_id = ${item})
+END`
+/** The same check for json_each rows `[kind, item_id, page_path, ...]`. */
+const ROW_ON_BOARD = onBoard(`json_extract(value, '$[0]')`, `json_extract(value, '$[1]')`, `json_extract(value, '$[2]')`)
 
 async function getBoard(database: D1Database, id: string): Promise<BoardCanvas | null> {
   const [board, placed, refs, pages, images, groups] = await database.batch<db.Row>([
@@ -342,12 +351,7 @@ async function resolveItems(database: D1Database, boardId: string, items: { kind
         ), resolved AS (
           SELECT input.kind, input.id, CASE input.kind WHEN 'page' THEN p.reference_id ELSE input.id END AS item_id, coalesce(p.path, '') AS page_path
           FROM input LEFT JOIN pages p ON input.kind = 'page' AND p.id = input.id
-          WHERE CASE input.kind
-            WHEN 'reference' THEN EXISTS (SELECT 1 FROM reference_collections WHERE collection_id = ?1 AND reference_id = input.id)
-            WHEN 'page' THEN EXISTS (SELECT 1 FROM page_collections WHERE collection_id = ?1 AND reference_id = p.reference_id AND page_path = p.path)
-            WHEN 'image' THEN EXISTS (SELECT 1 FROM image_collections WHERE collection_id = ?1 AND image_id = input.id)
-            WHEN 'note' THEN EXISTS (SELECT 1 FROM board_items WHERE collection_id = ?1 AND kind = 'note' AND item_id = input.id)
-          END
+          WHERE ${onBoard("input.kind", "coalesce(p.reference_id, input.id)", "p.path")}
         )
         SELECT resolved.*, b.w, b.group_id, b.style_json FROM resolved LEFT JOIN board_items b
           ON b.collection_id = ?1 AND b.kind = resolved.kind AND b.item_id = resolved.item_id AND b.page_path = resolved.page_path`)
@@ -402,7 +406,7 @@ canvas.put("/boards/:id/items", async (c) => {
   })
   await c.env.DB.prepare(`INSERT INTO board_items (collection_id, kind, item_id, page_path, x, y, w, group_id, style_json, text, updated_at)
       SELECT ?1, json_extract(value, '$[0]'), json_extract(value, '$[1]'), json_extract(value, '$[2]'), json_extract(value, '$[3]'),
-        json_extract(value, '$[4]'), json_extract(value, '$[5]'), json_extract(value, '$[6]'), json_extract(value, '$[7]'), ${NOTE_TEXT}, ?2 FROM json_each(?3) WHERE true
+        json_extract(value, '$[4]'), json_extract(value, '$[5]'), json_extract(value, '$[6]'), json_extract(value, '$[7]'), ${NOTE_TEXT}, ?2 FROM json_each(?3) WHERE ${ROW_ON_BOARD}
       ON CONFLICT (collection_id, kind, item_id, page_path) DO UPDATE SET x = excluded.x, y = excluded.y, w = excluded.w,
         group_id = excluded.group_id, style_json = excluded.style_json, updated_at = excluded.updated_at`)
     .bind(boardId, db.now(), JSON.stringify(rows))
@@ -472,7 +476,7 @@ canvas.post("/boards/:id/groups", async (c) => {
     c.env.DB.prepare(`INSERT INTO board_groups (id, collection_id, name, x, y, w, h, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(group.id, boardId, group.name, x, y, w, h, ts),
     // Members not placed yet start at the group's corner.
     c.env.DB.prepare(`INSERT INTO board_items (collection_id, kind, item_id, page_path, x, y, group_id, text, updated_at)
-        SELECT ?1, json_extract(value, '$[0]'), json_extract(value, '$[1]'), json_extract(value, '$[2]'), ?2, ?3, ?4, ${NOTE_TEXT}, ?5 FROM json_each(?6) WHERE true
+        SELECT ?1, json_extract(value, '$[0]'), json_extract(value, '$[1]'), json_extract(value, '$[2]'), ?2, ?3, ?4, ${NOTE_TEXT}, ?5 FROM json_each(?6) WHERE ${ROW_ON_BOARD}
         ON CONFLICT (collection_id, kind, item_id, page_path) DO UPDATE SET group_id = excluded.group_id, updated_at = excluded.updated_at`)
       .bind(boardId, x, y, group.id, ts, JSON.stringify(rows)),
   ])
