@@ -695,3 +695,15 @@ test('BUG 9: after a crash between the two swap renames, a rerun still records t
   assert.match(record.snapshot.path, /^backups\/cloud-pull-/);
   assert.equal(fs.readFileSync(path.join(library.root, record.snapshot.path, 'v3/d1/marker'), 'utf8'), 'pre-pull-library');
 });
+
+test('a new setup run does not inherit an earlier run\'s abort scope', () => {
+  const library = fakeLibrary();
+  // A finished install that was detached: its record still says what that run created.
+  stateModule.updateState(library.root, (state) => {
+    state.cloud = { accountId: 'acct', url: PROVIDED, d1: { name: 'snip', id: 'live-d1' }, created: { d1: { name: 'snip', id: 'live-d1' }, bucket: 'snip-files' } };
+    return state;
+  });
+  const next = stateModule.beginEnabling(library.root);
+  assert.equal(next.cloud.created, undefined, 'abort of the new run must not delete the live library an earlier run created');
+  assert.equal(next.cloud.d1.id, 'live-d1', 'the ids guard recognises are kept');
+});

@@ -134,8 +134,9 @@ function beginEnabling(dataRoot) {
       state.transfer = null;
       if (state.cloud) {
         // Keep what the account already holds (ids, url, detachedAt) so guard
-        // can recognise this Mac's own install, but drop the last run's outcome.
-        const { outcome, move, ...kept } = state.cloud;
+        // can recognise this Mac's own install, but drop the last run's outcome
+        // and its abort scope: what an earlier run created is not this run's to delete.
+        const { outcome, move, created, ...kept } = state.cloud;
         state.cloud = kept;
       }
     }

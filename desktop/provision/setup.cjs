@@ -354,31 +354,31 @@ function resourcesStep() {
       }
       if (outcome === 'foreign') throw foreignError(ctx, { database: null });
 
+      // `created` is the abort scope: abort may delete only what this run made, so
+      // each resource is recorded the moment it exists, not after all three do.
+      const recordCreated = (patch) => ctx.setCloud({ created: { ...(ctx.cloud.created || {}), ...patch } });
+
       const databases = await ctx.deps.cloud.listD1(ctx.wrangler, { accountId });
       let database = databases.find((entry) => entry.name === D1_NAME) || null;
-      const created = {};
       if (!database) {
         database = await ctx.deps.cloud.createD1(ctx.wrangler, { accountId });
-        created.d1 = { name: D1_NAME, id: database.id };
+        recordCreated({ d1: { name: D1_NAME, id: database.id } });
       }
 
       const namespaces = await ctx.deps.cloud.listKv(ctx.wrangler, { accountId });
       let namespace = namespaces.find((entry) => entry.title === KV_NAME) || null;
       if (!namespace) {
         namespace = await ctx.deps.cloud.createKv(ctx.wrangler, { accountId });
-        created.kv = { name: KV_NAME, id: namespace.id };
+        recordCreated({ kv: { name: KV_NAME, id: namespace.id } });
       }
 
       const buckets = await ctx.deps.cloud.listBuckets(ctx.wrangler, { accountId });
-      let bucket = buckets.some((entry) => entry.name === BUCKET_NAME) ? null : null;
       if (!buckets.some((entry) => entry.name === BUCKET_NAME)) {
         await ctx.deps.cloud.createBucket(ctx.wrangler, { accountId });
-        created.bucket = BUCKET_NAME;
+        recordCreated({ bucket: BUCKET_NAME });
       }
-      bucket = BUCKET_NAME;
 
-      // `created` is the abort scope: abort may delete only what this run made.
-      ctx.setCloud({ d1: { name: D1_NAME, id: database.id }, kv: { name: KV_NAME, id: namespace.id }, bucket, created });
+      ctx.setCloud({ d1: { name: D1_NAME, id: database.id }, kv: { name: KV_NAME, id: namespace.id }, bucket: BUCKET_NAME });
       return { message: 'Database, key-value store and bucket ready', detail: JSON.stringify({ d1: database.id, kv: namespace.id }) };
     },
     async verify(ctx) {
