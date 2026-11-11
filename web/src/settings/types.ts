@@ -183,7 +183,7 @@ export type EngineEvent =
 
 export interface CloudBridge {
   state(): Promise<CloudSnapshotState>
-  enable(options?: { accountId?: string; domain?: string; login?: string; captureEnv?: string; adoptExisting?: boolean }): Promise<CloudReply>
+  enable(options?: { account?: string; domain?: string; login?: string; captureEnv?: string; adoptExisting?: boolean }): Promise<CloudReply>
   disable(action: "detach" | "pull"): Promise<CloudReply>
   retryStep(step: string): Promise<CloudReply>
   cancel(): Promise<{ cancelled: boolean }>
