@@ -595,7 +595,7 @@ function secretsStep() {
       try {
         const ping = await ctx.deps.fetch(new URL('/agent/ping', ctx.cloud.url), {
           method: 'GET',
-          headers: { authorization: `Bearer ${next.captureToken}`, 'x-snip-capture-protocol': '3' },
+          headers: { authorization: `Bearer ${next.captureToken}`, 'x-snip-capture-protocol': '4' },
           signal: AbortSignal.timeout(15000),
         });
         proof.captureToken = ping.ok;

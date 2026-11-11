@@ -60,7 +60,7 @@ async function capture(database: D1Database, url: string, pages: { path: string;
   const job = (await db.claimJob(database))!
   for (const [i, p] of pages.entries()) {
     const base = `refs/${ref.id}/${job.attempt}/p${i}`
-    await db.addPage(database, ref.id, job.attempt, {
+    await db.addPage(database, ref.id, job.lease, {
       url: new URL(p.path, url).toString(), path: p.path, title: `Page ${p.path}`, ord: i,
       desktopKey: `${base}/desktop.jpg`, desktopThumbKey: `${base}/desktop-thumb.webp`, desktopWidth: 1280, desktopHeight: 3000,
       mobileKey: null, mobileThumbKey: null, mobileWidth: null, mobileHeight: null, snapshotKey: null, stylesKey: null, tokens: null,
@@ -68,7 +68,7 @@ async function capture(database: D1Database, url: string, pages: { path: string;
       animations: [],
     })
   }
-  await db.completeJob(database, ref.id, job.attempt, { title: url, description: null, favicon: null, coverKey: `refs/${ref.id}/${job.attempt}/cover.webp`, tokens: null })
+  await db.completeJob(database, ref.id, job.lease, { title: url, description: null, favicon: null, coverKey: `refs/${ref.id}/${job.attempt}/cover.webp`, tokens: null })
   return (await db.getReference(database, ref.id))!
 }
 
@@ -368,7 +368,7 @@ test("placements upsert, keep omitted fields, survive a recapture and reject any
     await db.requeueReference(database, stripe.reference.id)
     const job = (await db.claimJob(database))!
     assert.equal(job.id, stripe.reference.id)
-    await db.addPage(database, stripe.reference.id, job.attempt, { url: "https://stripe.com/pricing", path: "/pricing", title: null, ord: 0, desktopKey: null, desktopThumbKey: null, desktopWidth: 1280, desktopHeight: 100, mobileKey: null, mobileThumbKey: null, mobileWidth: null, mobileHeight: null, snapshotKey: null, stylesKey: null, tokens: null, animations: [] })
+    await db.addPage(database, stripe.reference.id, job.lease, { url: "https://stripe.com/pricing", path: "/pricing", title: null, ord: 0, desktopKey: null, desktopThumbKey: null, desktopWidth: 1280, desktopHeight: 100, mobileKey: null, mobileThumbKey: null, mobileWidth: null, mobileHeight: null, snapshotKey: null, stylesKey: null, tokens: null, animations: [] })
     const pageItem = (await get<BoardCanvas>(`/api/boards/${moodboard}`)).items.find((i) => i.kind === "page")!
     assert.notEqual(pageItem.id, oldPageId)
     assert.deepEqual([pageItem.x, pageItem.y], [-100.5, 40])
@@ -475,7 +475,7 @@ test("the z migration keeps the order boards loaded in before it", async () => {
     await row("b1", "page", stripe.reference.id, "/pricing")
     await row("b1", "reference", linear.reference.id)
 
-    await applyMigrations(database, (f) => f >= "0017")
+    await applyMigrations(database, (f) => f.startsWith("0017"))
     const env = { DB: database, SESSION_SECRET: "test-secret", DEV_LOGIN: "max" } as unknown as Env
     const load = async (id: string) => ((await (await app.request(`http://localhost/api/boards/${id}`, {}, env)).json()) as BoardCanvas).items.map((i) => [i.kind, i.id, i.z])
     assert.deepEqual(await load("b1"), [
