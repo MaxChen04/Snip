@@ -66,6 +66,8 @@ function runEngine({ executable = process.execPath, appDir, root, dataRoot, comm
   let resultSeen = false
   let killTimer = null
   let drainTimer = null
+  let exited
+  const exit = new Promise(resolve => (exited = resolve))
 
   const emit = value => {
     const event = safeEvent(value)
@@ -113,6 +115,7 @@ function runEngine({ executable = process.execPath, appDir, root, dataRoot, comm
     clearTimeout(drainTimer)
     if (!resultSeen) onEvent({ v: 1, event: "result", ok: false, code: cancelled ? "CANCELLED" : "FAILED" })
     onExit({ code, signal, cancelled })
+    exited()
   }
   child.on("error", error => {
     onEvent({ v: 1, event: "log", level: "error", message: error.message })
@@ -125,6 +128,8 @@ function runEngine({ executable = process.execPath, appDir, root, dataRoot, comm
 
   return {
     child,
+    /** Settles once the run has finished, after `onExit`. */
+    exited: exit,
     get cancelled() {
       return cancelled
     },

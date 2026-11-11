@@ -116,6 +116,20 @@ test("cancel sends SIGINT exactly once the child is alive", () => {
   assert.equal(run.cancelled, true)
 })
 
+test("a cancelled run can be awaited until the child is gone", async () => {
+  const child = fakeChild()
+  const seen = []
+  const run = runEngine({ appDir: APP, root: "/repo", dataRoot: "/library", command: "setup", baseEnv: {}, env: {}, spawnProcess: () => child, onExit: info => seen.push(info.cancelled) })
+  let settled = false
+  void run.exited.then(() => (settled = true))
+  assert.equal(run.cancel(), true)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(settled, false, "cancel alone does not end the run")
+  child.emit("close", null, "SIGINT")
+  await run.exited
+  assert.deepEqual(seen, [true])
+})
+
 test("a snapshot delete without the rendered basename stops before deleting", async t => {
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "snip-cloud-confirm-"))
   t.after(() => fs.rmSync(dataRoot, { recursive: true, force: true }))

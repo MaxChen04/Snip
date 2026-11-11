@@ -540,6 +540,7 @@ async function finishCloudRun(run, { code }) {
   cloudResult = null
   if (cloudRun === run) cloudRun = null
   cloudState = layout ? readCloudState(layout.dataRoot) : null
+  if (quitting) return
   if (run.purpose === "owner-link") {
     // Nothing about the library changed, so there is no mode to enter and no log line
     // to add: a link that was minted is already in Settings, and one that was not has
@@ -602,6 +603,8 @@ function startCloudRun(command, flags = {}, subcommand, purpose) {
       onExit: info => { if (cloudRun === run) void finishCloudRun(run, info) },
     })
     run.cancel = () => handle.cancel()
+    run.child = handle.child
+    run.exited = handle.exited
     // An event can land before the handle exists; honour a cancel that came first.
     if (run.cancelPending) run.cancel()
   } catch (error) {
@@ -712,6 +715,7 @@ async function forceQuit() {
   const { response } = await dialog.showMessageBox({ type: "warning", buttons: ["Keep finishing", "Force quit"], defaultId: 0, cancelId: 0, message: "Interrupt the current capture?", detail: "An unfinished capture may need to be retried when Snip starts again." })
   if (response !== 1) return
   quitting = true
+  try { cloudRun?.child?.kill("SIGKILL") } catch {}
   services.capture.forceStop()
   services.web.forceStop()
   finishedQuit = true
@@ -778,6 +782,8 @@ async function drainForQuit() {
   clearTimeout(idleTimer)
   clearTimeout(readyTimer)
   refresh()
+  // The engine is this app's child too: cancel it, and wait out its bounded kill.
+  if (cloudRun?.cancel?.()) await cloudRun.exited
   await (shutdown || stopServices(services.capture, services.web))
   await Promise.all([...logs].map(log => log.end()))
   try {
