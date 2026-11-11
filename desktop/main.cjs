@@ -668,6 +668,8 @@ function registerCloudIpc() {
     }
   }))
   ipcMain.handle("snip:cloud-delete-resources", guard(payload => {
+    // The engine refuses this too; saying so here keeps a refusal out of the library's record.
+    if (mode() === "cloud") return { error: "This Mac is using its cloud library. Turn off cloud first, then delete the cloud copy." }
     const confirm = typeof payload.confirm === "string" ? payload.confirm.trim().toLowerCase().slice(0, 253) : ""
     let host = null
     try { host = new URL(cloudState?.cloud?.url).host.toLowerCase() } catch {}
