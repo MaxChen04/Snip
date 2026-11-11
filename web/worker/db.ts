@@ -119,12 +119,12 @@ function toAnimation(r: Row): Animation {
   }
 }
 
-// Cursor = base64("<sortValue>|<id>")
-export const encodeCursor = (v: string | number, id: string) => btoa(`${v}|${id}`)
-export const decodeCursor =(c?: string | null): [string, string] | null => {
+// Cursor = base64 of the UTF-8 bytes of "<sortValue>|<id>"
+export const encodeCursor = (v: string | number, id: string) => btoa(String.fromCharCode(...new TextEncoder().encode(`${v}|${id}`)))
+export const decodeCursor = (c?: string | null): [string, string] | null => {
   if (!c) return null
   try {
-    const s = atob(c)
+    const s = new TextDecoder().decode(Uint8Array.from(atob(c), (ch) => ch.charCodeAt(0)))
     const i = s.lastIndexOf("|")
     return [s.slice(0, i), s.slice(i + 1)]
   } catch {
@@ -180,37 +180,18 @@ export function referenceWhere(f: ListFilter): Where {
 export async function listReferences(db: D1Database, f: ListFilter): Promise<Paged<Reference>> {
   const limit = Math.min(Math.max(f.limit ?? 24, 1), 100)
   const { where, args } = referenceWhere(f)
-  const sort = f.sort ?? "newest"
+  // One expression is the sort key: it orders the rows, bounds the next page and is read back for the cursor.
+  const key = f.sort === "name" ? `lower(coalesce(r.title, r.domain))` : `r.created_at`
+  const [dir, after] = f.sort === "name" || f.sort === "oldest" ? ["ASC", ">"] : ["DESC", "<"]
   const cur = decodeCursor(f.cursor)
-  let order: string
-  if (sort === "name") {
-    order = `ORDER BY lower(coalesce(r.title, r.domain)) ASC, r.id ASC`
-    if (cur) {
-      where.push(`(lower(coalesce(r.title, r.domain)) > ? OR (lower(coalesce(r.title, r.domain)) = ? AND r.id > ?))`)
-      args.push(cur[0], cur[0], cur[1])
-    }
-  } else if (sort === "oldest") {
-    order = `ORDER BY r.created_at ASC, r.id ASC`
-    if (cur) {
-      where.push(`(r.created_at > ? OR (r.created_at = ? AND r.id > ?))`)
-      args.push(cur[0], cur[0], cur[1])
-    }
-  } else {
-    order = `ORDER BY r.created_at DESC, r.id DESC`
-    if (cur) {
-      where.push(`(r.created_at < ? OR (r.created_at = ? AND r.id < ?))`)
-      args.push(cur[0], cur[0], cur[1])
-    }
+  if (cur) {
+    where.push(`(${key} ${after} ? OR (${key} = ? AND r.id ${after} ?))`)
+    args.push(cur[0], cur[0], cur[1])
   }
-  const sql = `${REF_SELECT} ${whereSql(where)} ${order} LIMIT ?`
+  const sql = `${REF_SELECT.replace("SELECT", `SELECT ${key} AS sort_key,`)} ${whereSql(where)} ORDER BY ${key} ${dir}, r.id ${dir} LIMIT ?`
   const { results } = await db.prepare(sql).bind(...args, limit + 1).all<Row>()
-  const rows = results.slice(0, limit).map(toReference)
-  const last = rows[rows.length - 1]
-  const nextCursor =
-    results.length > limit && last
-      ? encodeCursor(sort === "name" ? (last.title ?? last.domain).toLowerCase() : last.createdAt, last.id)
-      : null
-  return { items: rows, nextCursor }
+  const last = results.length > limit ? results[limit - 1] : null
+  return { items: results.slice(0, limit).map(toReference), nextCursor: last ? encodeCursor(last.sort_key as string, last.id as string) : null }
 }
 
 export async function getReferenceRecord(db: D1Database, id: string) {
