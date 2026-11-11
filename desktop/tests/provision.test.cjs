@@ -439,6 +439,15 @@ test('a build without rate-limit bindings takes them from the tracked template',
   assert.equal(lib.readRatelimits('{ "name": "snip" }'), null);
 });
 
+test('a failed result carries its sentence in the JSON stream, a successful one does not', () => {
+  const events = [];
+  const emit = createEmitter({ json: true, stdout: { write: (line) => { events.push(JSON.parse(line)); return true; } }, stderr: { write: () => true } });
+  emit.result({ ok: false, code: 'LOCKED', data: {}, message: 'Another Snip setup is running.', retryable: true });
+  emit.result({ ok: true, code: 'OK', mode: 'cloud', message: 'Done.' });
+  assert.equal(events[0].message, 'Another Snip setup is running.');
+  assert.equal('message' in events[1], false);
+});
+
 test('prepareDeployLayout copies snip, client and migrations and never touches the runtime', () => {
   const library = fakeLibrary();
   const result = deploy.prepareDeployLayout({ root: library.root, dataRoot: library.root, d1Id: 'd1-id', kvId: 'kv-id', login: 'tester', url: PROVIDED });
