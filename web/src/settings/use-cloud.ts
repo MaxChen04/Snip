@@ -219,7 +219,8 @@ export function useCloud(bridge = window.snipCloud) {
     setLinkError(null)
     const reply = await bridge.ownerLink()
     if (reply?.error) {
-      setLinkError(reply.error)
+      // "busy" is main's word for a run still in flight, often the last mint winding down.
+      setLinkError(reply.error === "busy" ? "Snip is still finishing something else. Try again in a moment." : reply.error)
       setLinkPending(false)
     }
   }, [bridge])
