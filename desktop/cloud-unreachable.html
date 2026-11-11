@@ -43,10 +43,14 @@
         reason.textContent = query.get("detail")
         reason.hidden = false
       }
-      document.getElementById("retry").addEventListener("click", event => {
-        event.preventDefault()
-        location.reload()
-      })
+      // Retry is a plain link to the library; the cloud window is pinned to that origin.
+      const retry = document.getElementById("retry")
+      try {
+        if (new URL(url).protocol !== "https:") throw new Error("not https")
+        retry.href = url
+      } catch {
+        retry.remove()
+      }
     </script>
   </body>
 </html>
