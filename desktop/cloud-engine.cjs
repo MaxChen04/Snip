@@ -50,12 +50,13 @@ function setupFlags(options = {}) {
 }
 
 /**
- * What Retry runs, as `[command, flags, subcommand]`. An unfinished setup resumes with
- * whatever was answered since; anything else is the command that last failed. With
- * neither there is nothing to retry: a healthy library is never set up again.
+ * What Retry runs, as `[command, flags, subcommand]`. A setup resumes with whatever
+ * was answered since; anything else that failed (an Undo included) is run again as
+ * it was. With no failed run, only an unfinished setup has something to retry: a
+ * healthy library is never set up again.
  */
 function retryArgs({ mode, failed, answers }) {
-  if (mode === "enabling" || failed?.[0] === "setup") return ["setup", setupFlags(answers)]
+  if (failed ? failed[0] === "setup" : mode === "enabling") return ["setup", setupFlags(answers)]
   return failed ?? null
 }
 

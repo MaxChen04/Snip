@@ -51,6 +51,9 @@ test("Retry resumes an unfinished setup, re-runs what failed, and never sets up 
   // Setup resumes from its journal with the answers given since, in whatever mode it stopped.
   assert.deepEqual(retryArgs({ mode: "enabling", failed: undefined, answers: { account: "acct-2" } }), ["setup", setupFlags({ account: "acct-2" })])
   assert.equal(retryArgs({ mode: "cloud", failed: ["setup", { account: "old" }, undefined], answers: { account: "acct-2" } })[1].account, "acct-2")
+  // An Undo that failed is retried as an Undo: Retry must not resume the setup it was undoing.
+  const abort = ["abort", {}, undefined]
+  assert.equal(retryArgs({ mode: "enabling", failed: abort, answers: {} }), abort)
 })
 
 test("snapshot actions are positional subcommands", () => {
