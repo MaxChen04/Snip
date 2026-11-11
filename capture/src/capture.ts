@@ -1249,9 +1249,9 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
   /** Between pages: honour a pause or stop the user asked for, or a stop of this worker. A pause hands back where the crawl is. */
   const windDown = async (): Promise<"stop" | "paused" | null> => {
     try {
-      // A stopping worker pauses where the server lets the crawl resume later; otherwise it stops with the pages it has,
-      // after at least one, so a job claimed just before the stop is not failed as empty.
-      if (signal.aborted) return (await api.pause(job.id, checkpoint())) ? "paused" : captured ? "stop" : null
+      // A stopping worker hands the crawl back, to be resumed by the next claim. An older Worker refuses unless the user asked
+      // for a pause: then it stops with the pages it has, after at least one, so a job claimed just before the stop is not failed as empty.
+      if (signal.aborted) return (await api.pause(job.id, checkpoint(), true)) ? "paused" : captured ? "stop" : null
       for (let checks = 0; checks < 5; checks++) {
         const control = await api.control(job.id)
         if (control !== "pause") return control

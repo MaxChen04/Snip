@@ -414,7 +414,8 @@ agent.post("/jobs/:id/pause", async (c) => {
   const attempt = attemptFrom(c)
   if (!validAttempt(attempt)) return c.json({ error: "job is gone" }, 410)
   const state = await c.req.json<CrawlState>()
-  const result = await db.pauseJob(c.env.DB, c.req.param("id"), attempt, state)
+  // ?release: the agent is stopping and hands the crawl back whether or not a pause was asked for.
+  const result = await db.pauseJob(c.env.DB, c.req.param("id"), attempt, state, c.req.query("release") !== undefined)
   if (result === "gone") return c.json({ error: "job is gone" }, 410)
   if (result === "changed") return c.json({ error: "pause no longer requested" }, 409)
   await db.touchPresence(c.env.DB, "idle", null)

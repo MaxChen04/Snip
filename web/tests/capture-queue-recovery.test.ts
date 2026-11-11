@@ -305,3 +305,28 @@ test("a stale reclaim never hands the agent an ord, or a file prefix, that a sav
     await mf.dispose()
   }
 })
+
+test("an agent that is stopping hands its crawl back to the queue, and the next claim resumes it", async () => {
+  const { mf, database, row, pageCount } = await setup()
+  try {
+    const ref = await db.createReference(database, { url: "https://example.com", mode: "crawl", maxPages: 9 })
+    const first = (await db.claimJob(database))!
+    assert.ok(await db.addPage(database, ref.id, first.attempt, page(ref.id, first.attempt, 0)))
+    // Nobody asked for a pause: the agent itself is winding down.
+    assert.equal(await db.pauseJob(database, ref.id, first.attempt, state(1)), "changed", "an ordinary pause still needs a request")
+    assert.equal(await db.pauseJob(database, ref.id, first.attempt, state(1), true), "paused")
+    assert.deepEqual({ status: (await row(ref.id))!.status, control: (await row(ref.id))!.capture_control }, { status: "queued", control: null })
+    assert.equal(await db.setProgress(database, ref.id, first.attempt, "late"), false, "the lease is released")
+    const next = (await db.claimJob(database))!
+    assert.equal(next.attempt, first.attempt)
+    assert.deepEqual(next.resume!.queue, ["https://example.com/next"])
+    assert.equal(next.resume!.captured, 1)
+    assert.equal(await pageCount(ref.id), 1)
+
+    // A stop the user asked for still wins over the hand-back.
+    await db.requestStop(database, ref.id)
+    assert.equal(await db.pauseJob(database, ref.id, next.attempt, state(1), true), "changed")
+  } finally {
+    await mf.dispose()
+  }
+})

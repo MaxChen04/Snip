@@ -169,7 +169,7 @@ test("an aborted crawl pauses at the next page boundary when the server accepts 
           progress: async () => {},
           upload: async (key: string) => key,
           addPage: async (_id: string, page: PageUpload) => { seen.pages.push(page.path); abort.abort() },
-          pause: async (_id: string, state: CrawlState) => { seen.paused.push(state); return acceptsPause },
+          pause: async (_id: string, state: CrawlState, release?: boolean) => { assert.equal(release, true, "the hand-back is marked as the worker's own"); seen.paused.push(state); return acceptsPause },
           complete: async () => { seen.completed++ },
         }
         await captureJob(browser, api as never, { id: "abort", url: base, mode: "crawl", maxPages: 3, attempt, resume: null, options: null, features: [] } as unknown as Job, abort.signal)

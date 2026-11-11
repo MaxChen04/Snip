@@ -712,10 +712,12 @@ export async function getControl(db: D1Database, id: string, attempt: string): P
 /**
  * The agent pauses at a page boundary and hands back where it was. Only applies while a pause is
  * still requested, so a stop or resume that arrived meanwhile wins: "changed" tells the agent to check again.
+ * With `release` the agent itself is stopping: when nothing is requested the capture goes back to the queue, to be resumed by the next claim.
  */
-export async function pauseJob(db: D1Database, id: string, attempt: string, state: CrawlState): Promise<"paused" | "changed" | "gone"> {
-  const result = await db.prepare(`UPDATE refs SET status = 'queued', capture_control = 'paused', crawl_state = ?, progress = 'Paused', claimed_at = NULL, updated_at = ?
-    WHERE id = ? AND status = 'capturing' AND capture_attempt = ? AND capture_control = 'pause'`).bind(JSON.stringify(state), now(), id, attempt).run()
+export async function pauseJob(db: D1Database, id: string, attempt: string, state: CrawlState, release = false): Promise<"paused" | "changed" | "gone"> {
+  const result = await db.prepare(`UPDATE refs SET status = 'queued', crawl_state = ?1, claimed_at = NULL, updated_at = ?2,
+    progress = CASE WHEN capture_control = 'pause' THEN 'Paused' ELSE 'Waiting for your Mac' END, capture_control = CASE WHEN capture_control = 'pause' THEN 'paused' END
+    WHERE id = ?3 AND status = 'capturing' AND capture_attempt = ?4 AND (capture_control = 'pause' OR (?5 AND capture_control IS NULL))`).bind(JSON.stringify(state), now(), id, attempt, release ? 1 : 0).run()
   if (result.meta.changes) return "paused"
   return (await isCapturing(db, id, attempt)) ? "changed" : "gone"
 }

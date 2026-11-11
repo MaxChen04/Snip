@@ -89,9 +89,12 @@ export class SnipApi {
     return ((await res!.json()) as { control: CaptureControl | null }).control
   }
 
-  /** Hand back the crawl position and release the job. False when the pause was cancelled or replaced by a stop meanwhile. */
-  async pause(jobId: string, state: CrawlState) {
-    return (await this.call(`/agent/jobs/${jobId}/pause`, json(state), { conflict: true })) !== null
+  /**
+   * Hand back the crawl position and release the job. False when the pause was cancelled or replaced by a stop meanwhile.
+   * `release` is a stopping worker handing the crawl back unasked; a Worker that predates it answers false.
+   */
+  async pause(jobId: string, state: CrawlState, release = false) {
+    return (await this.call(`/agent/jobs/${jobId}/pause${release ? "?release" : ""}`, json(state), { conflict: true })) !== null
   }
 
   async fail(jobId: string, error: string) {
