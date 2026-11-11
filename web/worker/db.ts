@@ -560,10 +560,13 @@ export async function claimJob(db: D1Database): Promise<Job | null> {
   const stale = new Date(Date.now() - STALE_MINUTES * 60_000).toISOString()
   const ts = now()
   const attempt = crypto.randomUUID().replace(/-/g, "")
+  // A stale lease means the agent is gone, so nobody is left to act on a pause or stop: apply it here.
   const abandoned = `status = 'capturing' AND claimed_at < ?`
   const candidate = `SELECT id FROM refs WHERE (status = 'queued' AND coalesce(capture_control, '') != 'paused') OR (${abandoned}) ORDER BY created_at LIMIT 1`
   // D1 batches are transactions. Record the old namespace before replacing the lease.
   const results = await db.batch([
+    ...settleStopped(db, `${abandoned} AND capture_control = 'stop'`, stale, ts),
+    db.prepare(`UPDATE refs SET status = 'queued', capture_control = 'paused', progress = 'Paused', claimed_at = NULL, updated_at = ? WHERE ${abandoned} AND capture_control = 'pause'`).bind(ts, stale),
     db.prepare(`INSERT OR IGNORE INTO capture_cleanup (prefix) SELECT 'refs/' || id || '/' || coalesce(capture_attempt || '/', 'p') FROM refs WHERE id = (${candidate}) AND NOT ${HAS_PAGES}`).bind(stale),
     db.prepare(`UPDATE refs SET status = 'capturing', claimed_at = ?2, updated_at = ?2,
       capture_attempt = CASE WHEN ${HAS_PAGES} THEN capture_attempt ELSE ?1 END, progress = CASE WHEN ${HAS_PAGES} THEN 'Resuming capture' ELSE 'Starting capture' END

@@ -5,6 +5,7 @@ import { app } from "../worker/app"
 import * as db from "../worker/db"
 import { applyMigrations } from "./helpers/d1"
 import type { CrawlState, PageUpload } from "../shared/types"
+import { STOPPED_EMPTY } from "../shared/capture-errors"
 
 // Regression tests for capture-queue recovery bugs found by a code audit. Each asserts the CORRECT behaviour,
 // so each fails until the matching bug is fixed.
@@ -106,6 +107,38 @@ test("a pause requested on a capturing row whose agent is gone does not delete i
     await db.claimJob(database)
     assert.equal(await pageCount(ref.id), 2, "the pages survive the next claim")
     assert.equal((await db.getReference(database, ref.id))!.reference.pageCount, 2)
+  } finally {
+    await mf.dispose()
+  }
+})
+
+test("a stop or pause left pending by a dead agent is applied by the next claim: stopped-empty without pages, paused with them", async () => {
+  const { mf, database, makeStale, row, pageCount } = await setup()
+  try {
+    const empty = await db.createReference(database, { url: "https://empty.example", mode: "crawl", maxPages: 5 })
+    assert.ok(await db.claimJob(database))
+    assert.equal(await db.requestStop(database, empty.id), true)
+    await makeStale(empty.id)
+    assert.equal(await db.claimJob(database), null)
+    const stopped = (await row(empty.id))!
+    assert.equal(stopped.status, "failed")
+    assert.equal(stopped.error, STOPPED_EMPTY)
+
+    const ref = await db.createReference(database, { url: "https://example.com", mode: "crawl", maxPages: 5 })
+    const job = (await db.claimJob(database))!
+    assert.ok(await db.addPage(database, ref.id, job.attempt, page(ref.id, job.attempt, 0)))
+    assert.equal(await db.requestPause(database, ref.id), true)
+    await makeStale(ref.id)
+    assert.equal(await db.claimJob(database), null, "a paused capture waits for the user")
+    assert.equal((await db.getReference(database, ref.id))!.reference.status, "paused")
+
+    // Resumed, it continues in the same files after the page it has.
+    assert.equal(await db.resumeReference(database, ref.id), true)
+    const resumed = (await db.claimJob(database))!
+    assert.equal(resumed.attempt, job.attempt)
+    assert.equal(resumed.resume?.captured, 1)
+    assert.deepEqual(resumed.resume?.visited, ["https://example.com/0"])
+    assert.equal(await pageCount(ref.id), 1)
   } finally {
     await mf.dispose()
   }
