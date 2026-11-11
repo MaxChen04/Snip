@@ -578,6 +578,8 @@ function startCloudRun(command, flags = {}, subcommand, purpose) {
   const run = { command: subcommand ? `${command} ${subcommand}` : command, step: null, cancel: null, resultSeen: false, purpose, link: null }
   cloudRun = run
   cloudResult = null
+  // "Create a new link" must never hand back the one it replaces.
+  if (purpose === "owner-link") ownerLink = null
   const opening = {
     pull: "Reading your cloud library.",
     detach: "Turning off cloud on this Mac.",
