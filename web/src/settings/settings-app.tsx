@@ -144,7 +144,7 @@ export function SettingsApp() {
   const retry = () => void cloud.begin(null, () => cloud.bridge!.retryStep(""))
 
   const errorCard =
-    cloud.error && !cloud.choice ? (
+    cloud.error && !cloud.choice && !cloud.needed ? (
       <ErrorCard
         error={cloud.error}
         onRetry={retry}
@@ -159,7 +159,7 @@ export function SettingsApp() {
     <div className="flex min-h-svh flex-col bg-ground text-foreground">
       <Header />
       <main className="mx-auto flex w-full max-w-[620px] flex-1 flex-col gap-7 px-6 pt-7 pb-16">
-        {working || cloud.choice ? (
+        {working || cloud.choice || cloud.needed ? (
           <ProgressView
             cloud={cloud}
             errorCard={errorCard}
@@ -821,10 +821,12 @@ function NeedsInputCard({
   onCancel: () => void
 }) {
   const [values, setValues] = useState<Record<string, string>>({})
+  const [sending, setSending] = useState(false)
   useEffect(() => {
     setValues({})
+    setSending(false)
   }, [needed])
-  const ready = needed.every(entry => (values[entry.key] ?? "").trim().length > 0)
+  const ready = !sending && needed.every(entry => (values[entry.key] ?? "").trim().length > 0)
   return (
     <div className="rounded-xl bg-card p-4 shadow-[inset_0_0_0_1px_var(--ink-6)]">
       <p className="flex items-start gap-2 text-sm leading-5">
@@ -832,26 +834,55 @@ function NeedsInputCard({
         Snip needs one more thing before it can continue.
       </p>
       <div className="mt-3 flex flex-col gap-2.5">
-        {needed.map(entry => (
-          <label key={entry.key} className="flex flex-col gap-1.5">
-            <span className="text-xs font-medium text-muted-foreground">{entry.label}</span>
-            <Input
-              autoFocus={entry === needed[0]}
-              type={entry.secret ? "password" : "text"}
-              value={values[entry.key] ?? ""}
-              onChange={event => setValues(current => ({ ...current, [entry.key]: event.target.value }))}
-              spellCheck={false}
-              autoComplete="off"
-              aria-label={entry.label}
-            />
-          </label>
-        ))}
+        {needed.map(entry =>
+          entry.options?.length ? (
+            // The answer is a value the person cannot be asked to type, such as an account id.
+            <div key={entry.key} role="group" aria-label={entry.label} className="flex flex-col gap-1.5">
+              <span className="text-xs font-medium text-muted-foreground">{entry.label}</span>
+              {entry.options.map(option => (
+                <button
+                  key={option.value}
+                  type="button"
+                  aria-pressed={values[entry.key] === option.value}
+                  onClick={() => setValues(current => ({ ...current, [entry.key]: option.value }))}
+                  className={cn(
+                    "rounded-lg px-3.5 py-2.5 text-left transition-[background-color,box-shadow] duration-150 ease-out",
+                    values[entry.key] === option.value ? "bg-fill-2 shadow-[0_0_0_1px_var(--ink-7)]" : "hover:bg-fill-2/70",
+                  )}
+                >
+                  <span className="block text-sm">{option.label}</span>
+                  <span className="mt-0.5 block font-mono text-xs text-muted-foreground">{option.value}</span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <label key={entry.key} className="flex flex-col gap-1.5">
+              <span className="text-xs font-medium text-muted-foreground">{entry.label}</span>
+              <Input
+                autoFocus={entry === needed[0]}
+                type={entry.secret ? "password" : "text"}
+                value={values[entry.key] ?? ""}
+                onChange={event => setValues(current => ({ ...current, [entry.key]: event.target.value }))}
+                spellCheck={false}
+                autoComplete="off"
+                aria-label={entry.label}
+              />
+            </label>
+          ),
+        )}
       </div>
       <div className="mt-3 flex items-center justify-end gap-1.5">
         <Button variant="ghost" size="sm" onClick={onCancel}>
           Cancel
         </Button>
-        <Button size="sm" disabled={!ready} onClick={() => void onContinue(values)}>
+        <Button
+          size="sm"
+          disabled={!ready}
+          onClick={() => {
+            setSending(true)
+            void onContinue(values)
+          }}
+        >
           Continue
         </Button>
       </div>

@@ -101,3 +101,44 @@ test("the account question lets the person pick Personal or Work and sends the f
     await close()
   }
 })
+
+test("the account question shows even when the snapshot still says this Mac is local", async () => {
+  const { page, close } = await openSettings(browser, server, { mode: "local" })
+  try {
+    await page.getByRole("button", { name: "Enable cloud" }).click()
+    await page.getByRole("button", { name: "Continue to Cloudflare" }).click()
+    await page.waitForFunction(() => (window as any).__sim.run?.command === "setup")
+    // Real main does not re-read cloud.json during a run, and the engine may not have
+    // written "enabling" yet: state() keeps saying "local".
+    await page.evaluate(() => ((window as any).__sim.mode = "local"))
+    await sim(page, "step", "account", "started")
+    await sim(page, "emit", { v: 1, event: "needs_input", keys: [{ key: "account", label: "Cloudflare account", secret: false, options: [{ value: ID_A, label: "Personal" }, { value: ID_B, label: "Work" }] }] })
+    await sim(page, "result", { ok: false, code: "NEEDS_INPUT", mode: null })
+    await sim(page, "exit", { code: 2 })
+    await page.waitForTimeout(1000) // every refresh has landed
+    assert.equal(await page.evaluate(() => (window as any).__sim.mode), "local")
+    assert.equal(await page.getByText("Snip needs one more thing before it can continue.").count(), 1)
+    assert.equal(await page.locator("main").getByRole("button", { name: /Work/ }).count(), 1)
+  } finally {
+    await close()
+  }
+})
+
+test("a double click on Continue starts one run and never shows main's raw \"busy\"", async () => {
+  const { page, close } = await openSettings(browser, server, { mode: "enabling" })
+  try {
+    await watch(page, "busyText", `/\\bbusy\\b/.test(document.body.innerText || "")`)
+    await reachAccountQuestion(page)
+    const main = page.locator("main")
+    await main.getByRole("button", { name: /Work/ }).click()
+    await main.getByRole("button", { name: "Continue" }).dblclick()
+    await page.waitForFunction(() => (window as any).__sim.run?.command === "setup")
+    await page.waitForTimeout(800)
+    assert.equal((await calls(page, "retryStep")).length, 2, "one Resume and one Continue")
+    assert.equal(await watched(page, "busyText"), false, `main's "busy" reached the page; toasts: ${JSON.stringify(await toastTexts(page))}`)
+    // The run that did start is still the one on screen.
+    assert.equal(await main.getByRole("button", { name: "Cancel", exact: true }).count(), 1)
+  } finally {
+    await close()
+  }
+})

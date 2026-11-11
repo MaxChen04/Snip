@@ -179,7 +179,8 @@ export interface EngineLogEvent {
 export interface EngineInputEvent {
   v: 1
   event: "needs_input"
-  keys: { key: string; label?: string; secret?: boolean }[]
+  /** `options` are the only valid answers; the answer is an option's `value`. */
+  keys: { key: string; label?: string; secret?: boolean; options?: { value: string; label: string }[] }[]
 }
 
 export type EngineEvent =

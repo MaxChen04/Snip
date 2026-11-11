@@ -26,14 +26,13 @@ export interface NeededInput {
   key: string
   label: string
   secret: boolean
+  options?: { value: string; label: string }[]
 }
 
 const EMPTY: CloudSnapshotState = { mode: "local", state: null, busy: false, running: null }
 
 function resultMessage(code: string): string {
   switch (code) {
-    case "NEEDS_INPUT":
-      return "Snip needs one more choice before it can continue."
     case "LOCKED":
       return "Another Snip setup is already running."
     case "UNSUPPORTED":
@@ -76,8 +75,12 @@ export function useCloud(bridge = window.snipCloud) {
   const linkSettled = useRef(false)
   const linkLatest = useRef<OwnerLink | null>(null)
   const [note, setNote] = useState<{ level: "info" | "warn" | "error"; message: string; id: number } | null>(null)
+  // The bridge callbacks are installed once; this lets them read what is on screen.
+  const asking = useRef(false)
+  asking.current = choice !== null || needed !== null
   // `state()` replies can land out of order: one issued before the last applied is dropped.
   const reads = useRef({ issued: 0, applied: 0 })
+  const starting = useRef(false)
 
   // A snapshot read can be older than the link event; keep a link that is still valid
   // rather than blanking it, and drop one that has run out.
@@ -162,7 +165,7 @@ export function useCloud(bridge = window.snipCloud) {
         // Terminal: the engine never reads stdin. Collect the value here and re-invoke.
         const keys = (event.keys ?? [])
           .filter(entry => entry && typeof entry.key === "string")
-          .map(entry => ({ key: entry.key, label: entry.label ?? entry.key, secret: entry.secret === true }))
+          .map(entry => ({ key: entry.key, label: entry.label ?? entry.key, secret: entry.secret === true, options: entry.options }))
           .slice(0, 4)
         if (keys.some(entry => entry.key === "confirm")) {
           // `confirm` is never typed by a person: the record the shell rendered is stale.
@@ -177,7 +180,8 @@ export function useCloud(bridge = window.snipCloud) {
         setSnapshot(current => ({ ...current, busy: false }))
         setAction(null)
         setProgress(null)
-        if (!event.ok && event.code !== "CANCELLED") {
+        // NEEDS_INPUT is a question, already on screen as a choice or an input card.
+        if (!event.ok && event.code !== "CANCELLED" && event.code !== "NEEDS_INPUT") {
           const retryable = event.retryable !== false
           const code = typeof event.data?.code === "string" ? event.data.code : event.code
           if (CONFIRM_CODES.has(code)) {
@@ -207,7 +211,8 @@ export function useCloud(bridge = window.snipCloud) {
         return
       }
       setNote({ level: entry.level, message: entry.message, id: Date.now() })
-      if (entry.level === "error") toast.error(entry.message)
+      // Main's closing line for a run that stopped to ask is not a failure.
+      if (entry.level === "error" && !asking.current) toast.error(entry.message)
       // Main logs when a run starts and when its child has exited, with or without a result.
       void refresh()
     })
@@ -267,6 +272,8 @@ export function useCloud(bridge = window.snipCloud) {
 
   /** Starts a run. `command` is what the window asked for; main's snapshot then confirms it. */
   const begin = useCallback(async (command: string | null, call: () => Promise<{ started?: true; error?: string }>) => {
+    if (starting.current) return
+    starting.current = true
     // A read from before this run must not land on top of it.
     reads.current.applied = ++reads.current.issued
     setSteps({})
@@ -278,11 +285,13 @@ export function useCloud(bridge = window.snipCloud) {
     setSnapshot(current => ({ ...current, busy: true, running: command ? { command, step: null } : null }))
     try {
       const reply = await call()
-      if (reply?.error) {
+      // "busy" is main saying a run already exists; the read below shows which.
+      if (reply?.error && reply.error !== "busy") {
         setSnapshot(current => ({ ...current, busy: false }))
         toast.error(reply.error)
       }
     } finally {
+      starting.current = false
       void refresh()
     }
   }, [refresh])
