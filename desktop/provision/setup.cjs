@@ -651,7 +651,11 @@ function quiesceStep() {
           for (const reference of await api.listReferences(status)) {
             ctx.checkCancel();
             const result = await api.pauseReference(reference.id);
-            if (result.ok) paused.add(reference.id);
+            if (result.ok) {
+              paused.add(reference.id);
+              // Recorded as each one is paused, so an interrupted run still knows what to resume.
+              ctx.setPausedForMove([...paused]);
+            }
           }
         }
         const deadline = ctx.deps.now() + 60_000;

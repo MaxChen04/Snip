@@ -742,3 +742,16 @@ test('delete-resources passes the bucket delete no flag wrangler rejects', async
   await commands.commandDeleteResources(ctx);
   assert.deepEqual(model.r2, [], 'the bucket is gone');
 });
+
+test('abort keeps the paused list when Snip is not running to resume them', async () => {
+  const library = fakeLibrary();
+  stateModule.updateState(library.root, (state) => { state.mode = 'enabling'; state.pausedForMove = ['ref-1']; return state; });
+  const model = buildModel({ root: library.root });
+  const { ctx } = laterContext(model, fakeWrangler(model));
+  await commands.commandAbort(ctx);
+  const record = stateModule.readState(library.root);
+  assert.equal(record.mode, 'local');
+  assert.deepEqual(record.pausedForMove, ['ref-1'], 'an unresumed capture is not forgotten');
+  // The next setup still knows about it, so its finish step resumes it in the cloud.
+  assert.deepEqual(stateModule.beginEnabling(library.root).pausedForMove, ['ref-1']);
+});

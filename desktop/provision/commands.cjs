@@ -950,9 +950,19 @@ async function commandAbort(ctx) {
         if (created.bucket) await remove('bucket', `bucket ${created.bucket}`, ['r2', 'bucket', 'delete', created.bucket]);
         if (created.kv && created.kv.id) await remove('kv', `KV namespace ${created.kv.name}`, ['kv', 'namespace', 'delete', '--namespace-id', created.kv.id, '--skip-confirmation']);
         if (created.d1 && created.d1.name) await remove('d1', `database ${created.d1.name}`, ['d1', 'delete', created.d1.name, '--skip-confirmation']);
+        // Setup paused these in this Mac's library, which is the one in use again.
+        let paused = ctx2.state().pausedForMove || [];
+        const origin = ctx2.deps.local.localOrigin(ctx2.dataRoot);
+        if (paused.length && await ctx2.deps.local.reachable(origin)) {
+          const api = ctx2.deps.local.createLocalApi(origin, { fetchImpl: ctx2.deps.fetch });
+          const results = await Promise.all(paused.map((id) => api.resumeReference(id).catch(() => null)));
+          // 409 means it is no longer paused, so there is nothing left to resume.
+          paused = paused.filter((_id, index) => !results[index] || !(results[index].ok || results[index].status === 409));
+        }
+        if (paused.length) ctx2.emit.log('warn', `${paused.length} paused capture${paused.length === 1 ? '' : 's'} could not be resumed because Snip is not running; resume ${paused.length === 1 ? 'it' : 'them'} from the library.`);
         ctx2.save((next) => {
           next.mode = 'local';
-          next.pausedForMove = [];
+          next.pausedForMove = paused;
           next.error = null;
           // What could not be removed stays recorded, so the record never claims a cleanup that did not happen.
           if (next.cloud) next.cloud = { ...next.cloud, created };

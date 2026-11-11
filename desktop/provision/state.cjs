@@ -130,7 +130,6 @@ function beginEnabling(dataRoot) {
     if (!state.library.id) state.library.id = randomId();
     if (state.mode !== 'enabling') {
       state.steps = [];
-      state.pausedForMove = [];
       state.transfer = null;
       if (state.cloud) {
         // Keep what the account already holds (ids, url, detachedAt) so guard
