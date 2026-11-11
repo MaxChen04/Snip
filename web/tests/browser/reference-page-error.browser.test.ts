@@ -57,3 +57,42 @@ test("a failed poll while capturing does not leave a permanent error screen", as
   await sleep(300)
   assert.equal(t.count("GET", url), before, "polling should stop once the reference is ready")
 })
+
+test("a reference deleted while capturing shows the error and stops polling", async () => {
+  const state = { references: { ref1: reference({ id: "ref1", title: "Poll Target", status: "capturing", progress: "Capturing 1/3: /" }) } }
+  const t = await app.session({ state, clock: true })
+  const { page } = t
+  const url = /^\/api\/references\/ref1$/
+  let gone = false
+  t.on("GET", url, () => (gone ? { status: 404, json: { error: "not found" } } : undefined))
+  await t.goto("/r/ref1")
+  await page.getByRole("heading", { name: "Poll Target" }).waitFor()
+  await sleep(300)
+
+  gone = true
+  const boot = t.count("GET", url)
+  await page.clock.fastForward(4500)
+  await until("the poll that finds it gone", () => t.count("GET", url) > boot)
+  await page.getByText("not found").waitFor()
+  assert.equal(await page.getByRole("heading", { name: "Poll Target" }).isVisible(), false, "the deleted reference's page is still showing")
+
+  const before = t.count("GET", url)
+  await page.clock.fastForward(30_000)
+  await sleep(300)
+  await page.clock.fastForward(30_000)
+  await sleep(300)
+  assert.equal(t.count("GET", url), before, "polling should stop once the reference is gone")
+})
+
+test("a failed board toggle is reported and leaves the board unchecked", async () => {
+  const t = await app.session({ state: { references: { ref1: reference({ id: "ref1", title: "Poll Target" }) } } })
+  const { page } = t
+  t.on("PUT", "/api/references/ref1/collections/board1", () => ({ status: 500, json: { error: "Boom: could not save to the board" } }))
+  await t.goto("/r/ref1")
+  await page.getByRole("button", { name: "Organize" }).click()
+  const board = page.getByRole("checkbox", { name: /Moodboard/ })
+  await board.click()
+  await page.getByText("Boom: could not save to the board").waitFor()
+  assert.equal(await board.getAttribute("aria-checked"), "false")
+  assert.deepEqual(t.consoleErrors, [])
+})

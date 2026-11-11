@@ -35,7 +35,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { cn } from "@/lib/utils"
-import { api, fileUrl, type Animation, type Page, type Reference } from "@/lib/api"
+import { api, fileUrl, NotFoundError, type Animation, type Page, type Reference } from "@/lib/api"
 import { isVideoKey } from "../../shared/types"
 import { useCollections } from "@/lib/collections"
 import { referenceViewUrl, useDesktopState } from "@/hooks/use-desktop-state"
@@ -115,6 +115,7 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
   const query = useSearch()
   const search = new URLSearchParams(query)
   const [data, setData] = useState<Detail | null>(null)
+  // Shown only while there is no data: a failed refresh keeps the last good page on screen.
   const [error, setError] = useState<string | null>(null)
   const tab = search.get("tab") ?? "pages"
   const openPage = search.get("page")
@@ -130,8 +131,15 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
   const load = useCallback(() => {
     return api
       .reference(id)
-      .then(setData)
-      .catch((e) => setError((e as Error).message))
+      .then((d) => {
+        setData(d)
+        setError(null)
+      })
+      .catch((e) => {
+        // A reference that is gone has no page to keep, and nothing left to poll.
+        if (e instanceof NotFoundError) setData(null)
+        setError((e as Error).message)
+      })
   }, [id])
 
   useEffect(() => { void load() }, [load])
@@ -140,8 +148,8 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
   // Each captured page appears as soon as it is saved: poll at a steady pace while capturing, back off while queued.
   usePoll(load, !!busy, data?.reference.status === "capturing" ? LIVE_POLL : undefined)
 
-  if (error) return <div className="grid min-h-svh place-items-center text-sm text-muted-foreground">{error}</div>
   if (!data) {
+    if (error) return <div className="grid min-h-svh place-items-center text-sm text-muted-foreground">{error}</div>
     return (
       <div className="mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6">
         <Skeleton className="h-8 w-64" />
@@ -156,9 +164,17 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
 
   const { reference: r, pages, animations } = data
   const toggleCollection = async (cid: string, member: boolean) => {
-    await api.setMembership(r.id, cid, member)
-    setData({ ...data, reference: { ...r, collectionIds: member ? [...r.collectionIds, cid] : r.collectionIds.filter((x) => x !== cid) } })
-    void refreshCollections()
+    try {
+      await api.setMembership(r.id, cid, member)
+    } catch (e) {
+      return void toast.error((e as Error).message)
+    }
+    setData((d) => {
+      if (!d) return d
+      const others = d.reference.collectionIds.filter((x) => x !== cid)
+      return { ...d, reference: { ...d.reference, collectionIds: member ? [...others, cid] : others } }
+    })
+    void refreshCollections().catch(() => {})
   }
   const setPageCollections = (pageIds: string[], cid: string, member: boolean) =>
     setData((d) =>

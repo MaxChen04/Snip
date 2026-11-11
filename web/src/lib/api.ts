@@ -43,6 +43,7 @@ export type PageWithRef = Page & { reference: RefSummary }
 export type AnimationWithRef = Animation & { reference: RefSummary }
 
 export class UnauthorizedError extends Error {}
+export class NotFoundError extends Error {}
 
 /** The URL is already in the library. */
 export class DuplicateError extends Error {
@@ -60,7 +61,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as { error?: string; existing?: Reference }
     if (res.status === 409 && body.existing) throw new DuplicateError(body.existing)
-    throw new Error(body.error ?? `Request failed (${res.status})`)
+    const message = body.error ?? `Request failed (${res.status})`
+    throw res.status === 404 ? new NotFoundError(message) : new Error(message)
   }
   return res.json() as Promise<T>
 }
