@@ -12,7 +12,7 @@ const { channelConfig } = require("./channels.cjs")
 const { SourceUpdates } = require("./source-updates.cjs")
 const { prepareRuntimeLayout, selectExistingLibrary } = require("./runtime-layout.cjs")
 const windowOrigin = require("./window-origin.cjs")
-const { readCloudState, cloudMode, modePlan, selectCaptureEnvFile, keepLocalCaptureEnv } = require("./cloud-state.cjs")
+const { cloudPaths, readCloud, modeServices, modePlan, selectCaptureEnvFile, keepLocalCaptureEnv } = require("./cloud-state.cjs")
 const { engineAvailable, runEngine } = require("./cloud-engine.cjs")
 const { sessionCookie, externalUrl } = require("./cloud-session.cjs")
 const { snapshotFlags } = require("./cloud-confirm.cjs")
@@ -60,7 +60,7 @@ let tray, win, node, idleTimer, readyTimer, layout, updates, sourceUpdates
 let quitting = false, finishedQuit = false, shutdown = null, autoCapture = true
 let startupError = "", lastUrl = null, position = null
 let resolvingNode = false
-let settingsWin = null, cloudState = null
+let settingsWin = null, cloudState = null, cloudMode = "local"
 let cloudRun = null, cloudResult = null
 // The owner link is minted for a person to open in another browser, so it is the one
 // URL that belongs in the renderer. It lives in memory only, and never in a log.
@@ -84,7 +84,10 @@ try {
   }
 } catch {} // A corrupt view-state cache must not prevent opening the library.
 
-const mode = () => cloudMode(cloudState)
+const mode = () => cloudMode
+function loadCloud() {
+  ({ mode: cloudMode, state: cloudState } = layout ? readCloud(layout.dataRoot) : { mode: "local", state: null })
+}
 function cloudOrigin() {
   try { return cloudState?.cloud?.url ? new URL(cloudState.cloud.url).origin : null } catch { return null }
 }
@@ -142,7 +145,7 @@ function captureEnvFile() {
 }
 function start(key) {
   if (!node || quitting || shutdown || services[key].proc) return
-  if (key === "web" && mode() === "cloud") return
+  if (!modeServices(mode()).includes(key)) return
   if (key === "capture" && mode() !== "cloud" && services.web.status !== "running") return
   try {
     let args, cwd
@@ -209,7 +212,8 @@ for (const [key, service] of Object.entries(services)) {
 function showLoading() {
   if (!win || win.isDestroyed() || quitting || mode() === "cloud") return
   const s = services.web
-  const msg = startupError || (s.status === "crashed" ? s.detail || "The web app stopped. Check its log and retry from the menu bar." : s.status === "stopped" && node ? "The web app is stopped. Start it from the menu bar." : "Starting Snip…")
+  // Nothing is started on a record Snip cannot read: the local library may be stale.
+  const msg = mode() === "unreadable" ? `Snip can’t read this library’s cloud record, so it hasn’t opened or captured anything. Repair or remove ${cloudPaths(layout.dataRoot).state}, or update Snip, then reopen it.` : startupError || (s.status === "crashed" ? s.detail || "The web app stopped. Check its log and retry from the menu bar." : s.status === "stopped" && node ? "The web app is stopped. Start it from the menu bar." : "Starting Snip…")
   const logo = require("node:url").pathToFileURL(path.join(ROOT, "web/public/logo.png")).href
   void win.loadFile(path.join(__dirname, "loading.html"), { query: { msg, logo } }).catch(() => {})
 }
@@ -429,7 +433,7 @@ async function cloudSignInMethods() {
 async function cloudSnapshotState() {
   // While the engine is writing, its own events are the freshest source; between runs
   // re-read so a change made by the CLI shows the next time Settings opens.
-  if (!cloudRun && layout) cloudState = readCloudState(layout.dataRoot)
+  if (!cloudRun) loadCloud()
   // An expired link is dead: drop it rather than offer a button that cannot work.
   if (ownerLink && Date.now() - ownerLink.at >= LINK_TTL_MS) ownerLink = null
   return {
@@ -536,7 +540,7 @@ async function finishCloudRun(run, { code }) {
   const result = cloudResult
   cloudResult = null
   if (cloudRun === run) cloudRun = null
-  cloudState = layout ? readCloudState(layout.dataRoot) : null
+  loadCloud()
   if (quitting) return
   if (run.purpose === "owner-link") {
     // Nothing about the library changed, so there is no mode to enter and no log line
@@ -863,7 +867,7 @@ function refresh() {
     ...(mode() === "cloud" && cloudOrigin() ? [{ label: windowOrigin.parse(cloudState.cloud.url)?.host ?? "Cloud library", enabled: false }] : []),
     { id: "snip-settings-tray", label: "Settings…", enabled: !quitting, click: openSettings }, { type: "separator" },
     ...(!node ? [{ label: resolvingNode ? "Finding Node.js…" : "Retry setup", enabled: !resolvingNode && !quitting, click: () => void setup() }] : []),
-    ...(mode() === "cloud" ? [] : serviceItems("web")), ...(mode() === "cloud" ? [] : [{ type: "separator" }]), ...serviceItems("capture"), { type: "separator" },
+    ...modeServices(mode()).flatMap(key => [...serviceItems(key), { type: "separator" }]),
     ...updateItems(), { type: "separator" },
     { label: "Show logs", click: () => shell.openPath(app.getPath("logs")) },
     ...(quitting || shutdown || services.capture.stopping ? [{ label: "Force quit Snip…", click: () => void forceQuit() }] : []),
@@ -939,7 +943,7 @@ async function setup() {
     if (releaseBuild) Object.assign(node.env, { PLAYWRIGHT_BROWSERS_PATH: layout.browsersPath, SNIP_BROWSER_AUTO_INSTALL: "0" })
     // The mode is read before anything loads a URL: a restart in cloud mode must not
     // open the local library, and a restart in local mode must not wait on cloud.
-    cloudState = readCloudState(layout.dataRoot)
+    loadCloud()
     await applyMode()
   } catch (error) { startupError = error.message; showLoading() }
   finally { resolvingNode = false; refresh() }

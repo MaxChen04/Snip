@@ -153,6 +153,24 @@ function readCloudState(dataRoot) {
   }
 }
 
+/**
+ * The record and the mode it puts this library in. "local" means there is no
+ * cloud.json; a file that is damaged, or written as a version the engine refuses
+ * (provision/state.cjs), is "unreadable" and never silently a local library.
+ */
+function readCloud(dataRoot) {
+  const state = readCloudState(dataRoot)
+  if (state?.version === 1) return { mode: state.mode, state }
+  return { mode: state || fs.existsSync(cloudPaths(dataRoot).state) ? "unreadable" : "local", state: null }
+}
+
+const cloudModeFor = dataRoot => readCloud(dataRoot).mode
+
+/** The services a mode runs: the local Worker serves only a library that is on this Mac. */
+function modeServices(mode) {
+  return mode === "unreadable" ? [] : mode === "cloud" ? ["capture"] : ["web", "capture"]
+}
+
 /** "local" for a fresh library. A stale lock never changes mode. */
 function cloudMode(state) {
   return state && MODES.has(state.mode) ? state.mode : "local"
@@ -169,14 +187,14 @@ function usesCloud(state) {
  * destination it started with, and the local Worker has no place beside a cloud library.
  */
 function modePlan({ mode, applied, webRunning }) {
-  const kind = mode === "cloud" ? "cloud" : "local"
+  const kind = mode === "cloud" || mode === "unreadable" ? mode : "local"
   const moved = kind !== applied
   return {
     kind,
     stopCapture: moved,
     stopWeb: kind !== "local" && webRunning,
     recreateWindow: moved,
-    start: kind === "cloud" ? ["capture"] : ["web", "capture"],
+    start: modeServices(mode),
   }
 }
 
@@ -240,6 +258,9 @@ module.exports = {
   cloudPaths,
   normalizeCloudState,
   readCloudState,
+  readCloud,
+  cloudModeFor,
+  modeServices,
   cloudMode,
   usesCloud,
   modePlan,

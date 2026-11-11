@@ -1,6 +1,6 @@
 // The mode lives in cloud.json, which the engine writes. These tests pin the readings
-// the app depends on: a missing or broken file means local, never a crash, and the
-// capture env choice follows the mode.
+// the app depends on: a missing file means local, a broken one is unreadable and never
+// a crash, and the capture env choice follows the mode.
 const { test } = require("node:test")
 const assert = require("node:assert/strict")
 const fs = require("node:fs")
@@ -13,6 +13,8 @@ const {
   cloudMode,
   usesCloud,
   modePlan,
+  modeServices,
+  cloudModeFor,
   captureEnvFiles,
   selectCaptureEnvFile,
   keepLocalCaptureEnv,
@@ -176,4 +178,19 @@ test("a finished run is followed by whatever the recorded mode needs, whatever t
   assert.deepEqual(modePlan({ mode: "local", applied: "cloud", webRunning: false }), { kind: "local", stopCapture: true, stopWeb: false, recreateWindow: true, start: ["web", "capture"] })
   // The local Worker never runs beside a cloud library.
   assert.deepEqual(modePlan({ mode: "cloud", applied: "cloud", webRunning: true }), { kind: "cloud", stopCapture: false, stopWeb: true, recreateWindow: false, start: ["capture"] })
+})
+
+test("an unreadable or unsupported record starts nothing and is never a local library", t => {
+  assert.deepEqual(modeServices("unreadable"), [])
+  assert.deepEqual(modeServices("cloud"), ["capture"])
+  assert.deepEqual(modeServices("enabling"), ["web", "capture"])
+  assert.deepEqual(modePlan({ mode: "unreadable", applied: "local", webRunning: true }), { kind: "unreadable", stopCapture: true, stopWeb: true, recreateWindow: true, start: [] })
+  // The engine refuses any record version but 1 (provision/state.cjs); so does the app.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "snip-cloud-version-"))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  fs.mkdirSync(path.join(root, ".snip"))
+  fs.writeFileSync(path.join(root, ".snip", "cloud.json"), JSON.stringify({ version: 2, mode: "local" }))
+  assert.equal(cloudModeFor(root), "unreadable")
+  fs.writeFileSync(path.join(root, ".snip", "cloud.json"), JSON.stringify({ version: 1, mode: "enabling" }))
+  assert.equal(cloudModeFor(root), "enabling")
 })
