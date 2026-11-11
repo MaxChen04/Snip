@@ -524,15 +524,36 @@ export async function cleanupRetiredFiles(db: D1Database, files: R2Bucket) {
 const HAS_PAGES = `EXISTS (SELECT 1 FROM pages WHERE reference_id = refs.id)`
 const MAX_STALE_RECLAIMS = 3
 
-/** Ends the captures matching `where` (one bound value) with what they have: ready with their pages, stopped-empty without. */
-const settleStopped = (db: D1Database, where: string, arg: unknown, ts: string) => [
+/** Ends the captures matching `where` (its bound values in `args`) with what they have: ready with their pages, stopped-empty without. */
+const settleStopped = (db: D1Database, where: string, args: unknown[], ts: string) => [
   db.prepare(`UPDATE refs SET status = 'ready', progress = NULL, error = NULL, capture_control = NULL, capture_lease = NULL,
     title = coalesce(json_extract(crawl_state, '$.meta.title'), title), description = coalesce(json_extract(crawl_state, '$.meta.description'), description),
     favicon = CASE WHEN instr(json_extract(crawl_state, '$.meta.favicon'), 'refs/' || id || '/' || capture_attempt || '/') = 1 THEN json_extract(crawl_state, '$.meta.favicon') ELSE favicon END,
     tokens_json = json_extract(crawl_state, '$.tokens'), crawl_state = NULL, updated_at = ?
-    WHERE ${where} AND ${HAS_PAGES}`).bind(ts, arg),
-  db.prepare(`UPDATE refs SET status = 'failed', progress = NULL, error = ?, capture_control = NULL, capture_lease = NULL, crawl_state = NULL, updated_at = ? WHERE ${where}`).bind(STOPPED_EMPTY, ts, arg),
+    WHERE ${where} AND ${HAS_PAGES}`).bind(ts, ...args),
+  db.prepare(`UPDATE refs SET status = 'failed', progress = NULL, error = ?, capture_control = NULL, capture_lease = NULL, crawl_state = NULL, updated_at = ? WHERE ${where}`).bind(STOPPED_EMPTY, ts, ...args),
 ]
+
+/** A capture whose agent has not renewed its claim since the bound time. */
+const STALE_CAPTURE = `status = 'capturing' AND claimed_at < ?`
+const staleBefore = (ts: string) => new Date(Date.parse(ts) - STALE_MINUTES * 60_000).toISOString()
+
+/**
+ * Settles what an agent that went silent left behind: a stop it never acted on ends the capture with its pages, a pause it never
+ * took parks it, and a capture already reclaimed too often fails. `id` limits this to one capture. A claim, a stop or pause request
+ * and the hourly sweep all run it, so a request lands at once on an agent that is already gone and within the hour on one that goes quiet later.
+ */
+const settleAbandoned = (db: D1Database, ts: string, id: string | null = null) => {
+  const abandoned = `${STALE_CAPTURE} AND id = coalesce(?, id)`
+  const args = [staleBefore(ts), id]
+  return [
+    ...settleStopped(db, `${abandoned} AND capture_control = 'stop'`, args, ts),
+    db.prepare(`UPDATE refs SET status = 'queued', capture_control = 'paused', progress = 'Paused', claimed_at = NULL, capture_lease = NULL, updated_at = ? WHERE ${abandoned} AND capture_control = 'pause'`).bind(ts, ...args),
+    db.prepare(`UPDATE refs SET status = 'failed', progress = NULL, error = ?, crawl_state = NULL, capture_lease = NULL, updated_at = ? WHERE ${abandoned} AND stale_reclaims >= ${MAX_STALE_RECLAIMS}`).bind(ABANDONED, ts, ...args),
+  ]
+}
+
+export const sweepAbandoned = (db: D1Database) => db.batch(settleAbandoned(db, now()))
 
 /**
  * The last checkpoint brought up to the pages saved since: they count as captured and are not visited again.
@@ -548,17 +569,13 @@ function resumeState(checkpoint: CrawlState | null, pages: [url: string, ord: nu
 }
 
 export async function claimJob(db: D1Database): Promise<Job | null> {
-  const stale = new Date(Date.now() - STALE_MINUTES * 60_000).toISOString()
   const ts = now()
+  const stale = staleBefore(ts)
   const token = () => crypto.randomUUID().replace(/-/g, "")
-  // A stale lease means the agent is gone, so nobody is left to act on a pause or stop: apply it here.
-  const abandoned = `status = 'capturing' AND claimed_at < ?`
-  const candidate = `SELECT id FROM refs WHERE (status = 'queued' AND coalesce(capture_control, '') != 'paused') OR (${abandoned}) ORDER BY created_at LIMIT 1`
-  // D1 batches are transactions. Record the old namespace before replacing the lease.
+  const candidate = `SELECT id FROM refs WHERE (status = 'queued' AND coalesce(capture_control, '') != 'paused') OR (${STALE_CAPTURE}) ORDER BY created_at LIMIT 1`
+  // D1 batches are transactions. Record the old namespace before the claim replaces the attempt.
   const results = await db.batch([
-    ...settleStopped(db, `${abandoned} AND capture_control = 'stop'`, stale, ts),
-    db.prepare(`UPDATE refs SET status = 'queued', capture_control = 'paused', progress = 'Paused', claimed_at = NULL, capture_lease = NULL, updated_at = ? WHERE ${abandoned} AND capture_control = 'pause'`).bind(ts, stale),
-    db.prepare(`UPDATE refs SET status = 'failed', progress = NULL, error = ?, crawl_state = NULL, capture_lease = NULL, updated_at = ? WHERE ${abandoned} AND stale_reclaims >= ${MAX_STALE_RECLAIMS}`).bind(ABANDONED, ts, stale),
+    ...settleAbandoned(db, ts),
     db.prepare(`INSERT OR IGNORE INTO capture_cleanup (prefix) SELECT 'refs/' || id || '/' || coalesce(capture_attempt || '/', 'p') FROM refs WHERE id = (${candidate}) AND NOT ${HAS_PAGES}`).bind(stale),
     // Every claim, a stale reclaim and a resume included, issues a new lease: the attempt only names the files.
     db.prepare(`UPDATE refs SET stale_reclaims = stale_reclaims + (status = 'capturing'), status = 'capturing', claimed_at = ?2, updated_at = ?2, capture_lease = ?4,
@@ -677,12 +694,13 @@ export async function failJob(db: D1Database, id: string, lease: string, error: 
 // The agent finishes the page it is on, then asks for its control before the next one.
 
 
-/** Pause a capture. A queued one pauses now; a running one pauses after its current page. */
+/** Pause a capture. A queued one pauses now; a running one pauses after its current page, or now when its agent is already gone. */
 export async function requestPause(db: D1Database, id: string) {
   const ts = now()
   const [queued, running] = await db.batch([
     db.prepare(`UPDATE refs SET capture_control = 'paused', progress = 'Paused', updated_at = ? WHERE id = ? AND status = 'queued' AND capture_control IS NULL`).bind(ts, id),
     db.prepare(`UPDATE refs SET capture_control = 'pause', updated_at = ? WHERE id = ? AND status = 'capturing' AND capture_control IS NULL`).bind(ts, id),
+    ...settleAbandoned(db, ts, id),
   ])
   return !!(queued!.meta.changes || running!.meta.changes)
 }
@@ -699,13 +717,15 @@ export async function resumeReference(db: D1Database, id: string) {
 
 /**
  * Stop a capture and keep the pages it has. A running one stops after its current page.
- * A paused one (or one resumed but not picked up yet) finishes here, from the metadata and tokens saved when it paused.
+ * A paused one (or one resumed but not picked up yet) finishes here, from the metadata and tokens saved when it paused,
+ * and so does a running one whose agent is already gone.
  */
 export async function requestStop(db: D1Database, id: string) {
   const ts = now()
   const results = await db.batch([
-    ...settleStopped(db, `id = ? AND status = 'queued'`, id, ts),
+    ...settleStopped(db, `id = ? AND status = 'queued'`, [id], ts),
     db.prepare(`UPDATE refs SET capture_control = 'stop', updated_at = ? WHERE id = ? AND status = 'capturing'`).bind(ts, id),
+    ...settleAbandoned(db, ts, id),
   ])
   return results.some((r) => r.meta.changes > 0)
 }
