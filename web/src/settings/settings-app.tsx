@@ -147,6 +147,7 @@ export function SettingsApp() {
     cloud.error && !cloud.choice && !cloud.needed ? (
       <ErrorCard
         error={cloud.error}
+        canRetry={cloud.snapshot.canRetry === true}
         onRetry={retry}
         onRefresh={() => {
           cloud.clearError()
@@ -906,8 +907,10 @@ function HumanActionCard({ action, onOpen }: { action: NonNullable<ReturnType<ty
   )
 }
 
-function ErrorCard({ error, onRetry, onRefresh }: { error: NonNullable<ReturnType<typeof useCloud>["error"]>; onRetry: () => void; onRefresh: () => void }) {
+function ErrorCard({ error, canRetry, onRetry, onRefresh }: { error: NonNullable<ReturnType<typeof useCloud>["error"]>; canRetry: boolean; onRetry: () => void; onRefresh: () => void }) {
+  // The error text can outlive the command (an app restart); main says whether Retry has one to run.
   const action = errorAction(error)
+  const offered = action === "refresh" || (action === "retry" && canRetry)
   return (
     <div className="rounded-xl bg-(--red-3) px-4 py-3.5">
       <p className="flex items-center gap-2 text-sm leading-5 text-(--red-11)">
@@ -915,14 +918,14 @@ function ErrorCard({ error, onRetry, onRefresh }: { error: NonNullable<ReturnTyp
         {error.message}
       </p>
       {error.hint ? <p className="mt-1 text-xs leading-[1.5] text-ink-11">{error.hint}</p> : null}
-      {action === "none" ? null : (
+      {offered ? (
         <div className="mt-2.5">
           <Button size="sm" variant="outline" onClick={action === "refresh" ? onRefresh : onRetry}>
             <RefreshCwIcon data-icon="inline-start" />
             {action === "refresh" ? "Refresh" : "Retry"}
           </Button>
         </div>
-      )}
+      ) : null}
     </div>
   )
 }

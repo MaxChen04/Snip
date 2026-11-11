@@ -101,6 +101,8 @@ export interface CloudSnapshotState {
   state: CloudFile | null
   busy: boolean
   running: { command: string; step: string | null } | null
+  /** Whether main still holds a command Retry can run; the recorded error alone is not enough. Absent means no. */
+  canRetry?: boolean
   /** The last link minted on this Mac, while it is still worth anything. */
   link?: OwnerLink | null
   engine?: { available: boolean }

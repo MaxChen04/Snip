@@ -166,6 +166,8 @@ const STATES: Record<string, CloudSnapshotState> = {
     }),
     busy: false,
     running: null,
+    // An unfinished setup can always be resumed.
+    canRetry: true,
     engine: { available: true },
     local: { reachable: true, empty: false, refs: 42 },
     app: { version: "0.2.0", dataRoot: "/Users/max/Snip", captureEnv: ".env" },

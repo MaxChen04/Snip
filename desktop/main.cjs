@@ -435,6 +435,9 @@ async function cloudSignInMethods() {
     return null
   }
 }
+// What Retry would run, or null when there is nothing to repeat (an error recorded
+// before a restart has no failed command left in memory).
+const retryRun = () => retryArgs({ mode: mode(), failed: failedRun, answers: Object.fromEntries(cloudInput) })
 async function cloudSnapshotState() {
   // While the engine is writing, its own events are the freshest source; between runs
   // re-read so a change made by the CLI shows the next time Settings opens.
@@ -450,6 +453,8 @@ async function cloudSnapshotState() {
     // Minting a link is not a library operation, so it never drives that view.
     busy: !!cloudRun && !cloudRun.resultSeen && cloudRun.purpose !== "owner-link",
     running: cloudRun ? { command: cloudRun.command, step: cloudRun.step } : null,
+    // Settings offers Retry only when this is true: the error text can outlive the command.
+    canRetry: retryRun() !== null,
     // The owner link is for the person at the keyboard; it is never written to disk.
     link: ownerLink ? { url: ownerLink.url, note: LINK_NOTE, expiresAt: new Date(ownerLink.at + LINK_TTL_MS).toISOString() } : null,
     engine: { available: engineAvailable(__dirname) },
@@ -628,7 +633,8 @@ function registerCloudIpc() {
     return { error: "Unknown action." }
   }))
   ipcMain.handle("snip:cloud-retry-step", guard(() => {
-    const args = retryArgs({ mode: mode(), failed: failedRun, answers: Object.fromEntries(cloudInput) })
+    // Settings only offers Retry when canRetry is true; this refusal is the backstop.
+    const args = retryRun()
     return args ? startCloudRun(...args) : { error: "Nothing to retry." }
   }))
   ipcMain.handle("snip:cloud-cancel", guard(() => ({ cancelled: !!cloudRun?.cancel?.() })))

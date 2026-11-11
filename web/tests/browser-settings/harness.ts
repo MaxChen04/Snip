@@ -83,11 +83,12 @@ export interface Opened {
 
 /**
  * Opens /settings.html with the fake main process installed before any app script runs.
- * `mode` is what cloud.json says at start; `detached` adds a detached cloud copy to a local one.
+ * `mode` is what cloud.json says at start; `detached` adds a detached cloud copy to a local one;
+ * `recordedError` puts an error in cloud.json from before this session (main has no command to retry).
  * `search` is the page's query string; `awaitFirstPaint: false` returns before the first
  * state() reply has rendered anything.
  */
-export async function openSettings(browser: Browser, server: Server, config: { mode?: "local" | "enabling" | "cloud" | "unreadable"; detached?: boolean; stateDelayMs?: number; cancelKillMs?: number; search?: string; awaitFirstPaint?: boolean } = {}): Promise<Opened> {
+export async function openSettings(browser: Browser, server: Server, config: { mode?: "local" | "enabling" | "cloud" | "unreadable"; detached?: boolean; recordedError?: boolean; stateDelayMs?: number; cancelKillMs?: number; search?: string; awaitFirstPaint?: boolean } = {}): Promise<Opened> {
   const context = await browser.newContext({ viewport: { width: 900, height: 900 } })
   const page = await context.newPage()
   const pageErrors: string[] = []

@@ -5,7 +5,7 @@
 import { after, before, test } from "node:test"
 import assert from "node:assert/strict"
 import type { Browser } from "playwright"
-import { launch, openSettings, pageTextOutsideToasts, sim, startVite, toastTexts, type Server } from "./harness"
+import { calls, launch, openSettings, pageTextOutsideToasts, sim, startVite, toastTexts, type Server } from "./harness"
 
 let server: Server
 let browser: Browser
@@ -67,6 +67,32 @@ test("a refusal with no failed step shows the engine's own sentence from the res
     const main = page.locator("main")
     assert.equal(await main.getByText("Another Snip command holds the lock.").count(), 1)
     assert.equal(await main.getByRole("button", { name: "Retry" }).count(), 1)
+  } finally {
+    await close()
+  }
+})
+
+test("an error recorded before a restart shows no Retry, and a failure in this session does", async () => {
+  // cloud.json keeps the error text, but main forgot the command that failed.
+  const { page, close } = await openSettings(browser, server, { mode: "cloud", recordedError: true })
+  try {
+    const main = page.locator("main")
+    await main.getByText("Copy failed last time").waitFor()
+    assert.equal(await main.getByRole("button", { name: "Retry" }).count(), 0)
+    assert.equal((await calls(page, "retryStep")).length, 0)
+
+    await page.getByRole("button", { name: "Turn off cloud…" }).click()
+    await page.getByText("Bring the cloud library back to this Mac").click()
+    await page.getByRole("button", { name: "Copy back now" }).click()
+    await page.waitForFunction(() => (window as any).__sim.run?.command === "pull")
+    await sim(page, "step", "pull-files", "failed", { message: "Copy failed" })
+    await sim(page, "result", { ok: false, code: "FAILED", mode: "cloud", data: { step: "pull-files", message: "Copy failed" } })
+    await sim(page, "exit", { code: 1 })
+
+    // Main now holds the failed command, so the same card offers Retry and it works.
+    await main.getByRole("button", { name: "Retry" }).click()
+    await page.waitForFunction(() => (window as any).__sim.run?.command === "pull")
+    assert.equal((await calls(page, "retryStep")).length, 1)
   } finally {
     await close()
   }

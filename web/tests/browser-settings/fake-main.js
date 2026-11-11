@@ -12,7 +12,9 @@
 //  - cloudInput: answers are stored by key and enable/retry merge them into flags
 //    (`account`, `domain`, `login`, `adoptExisting`).
 //  - Retry re-runs the last library run that did not succeed, or resumes an unfinished
-//    setup; Delete cloud resources is refused while the cloud library is in use.
+//    setup. state().canRetry says whether main has such a command: a failure recorded in
+//    cloud.json before a restart (config.recordedError) has none. Delete cloud resources
+//    is refused while the cloud library is in use.
 //
 // Two things are deliberately harsher than main, so the window is proven not to lean on
 // them: a killed run ends with a log line only (main also sends a CANCELLED result), and
@@ -75,8 +77,15 @@
       snapshot: sim.mode === "cloud" ? snapshotRecord : null,
       transfer: null,
       steps: [],
-      error: null,
+      error: config.recordedError ? { step: "pull-files", code: "FAILED", message: "Copy failed last time", hint: null, at: "2026-11-07T09:00:00Z" } : null,
     }
+  }
+
+  // main.cjs retryRun: a failed run is repeated; with none, only an unfinished setup resumes.
+  function retryRun() {
+    const failed = sim.failed
+    if (failed ? failed[0] === "setup" : sim.mode === "enabling") return ["setup", Object.fromEntries(sim.cloudInput)]
+    return failed ?? null
   }
 
   async function snapshotState() {
@@ -90,6 +99,7 @@
       state: sim.mode === "unreadable" ? null : fileState(),
       busy: !!run && !run.resultSeen && run.purpose !== "owner-link",
       running: run ? { command: run.command, step: run.step } : null,
+      canRetry: retryRun() !== null,
       link: sim.ownerLink
         ? { url: sim.ownerLink.url, note: "One use. Expires in 10 minutes.", expiresAt: new Date(sim.ownerLink.at + LINK_TTL_MS).toISOString() }
         : null,
@@ -197,10 +207,8 @@
     },
     retryStep: async step => {
       record("retryStep", [step])
-      // main.cjs retryArgs
-      const failed = sim.failed
-      if (failed ? failed[0] === "setup" : sim.mode === "enabling") return startRun("setup", Object.fromEntries(sim.cloudInput))
-      return failed ? startRun(...failed) : { error: "Nothing to retry." }
+      const args = retryRun()
+      return args ? startRun(...args) : { error: "Nothing to retry." }
     },
     cancel: async () => { record("cancel", []); return { cancelled: cancelRun() } },
     abort: async () => {
