@@ -72,13 +72,3 @@ export function stepsFor(command: string): string[] {
 export function stepTitle(id: string, message?: string | null): string {
   return TITLES[id] ?? message ?? id
 }
-
-export const stepCopy: Record<string, string> = {
-  cancel: "Stop setup",
-  "progress-title": "Setting up your cloud library",
-  "progress-copy": "Keep this window open. Cloudflare asks for two approvals: your account, and R2 if it's off.",
-  "pull-title": "Bringing your cloud library back",
-  "pull-copy": "Snip downloads a fresh copy, checks it, then switches this Mac to it. Keep this window open.",
-  "detach-title": "Turning off cloud",
-  "detach-copy": "This Mac goes back to its local library. Your cloud copy stays live.",
-}
