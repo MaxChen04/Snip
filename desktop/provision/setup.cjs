@@ -569,15 +569,16 @@ function secretsStep() {
       // agent this run rewrites), and keep OWNER_LINK_SECRET and GitHub when present.
       if (!next.captureToken || adopted) next.captureToken = randomSecret();
       if (!next.ownerLinkSecret) next.ownerLinkSecret = randomSecret();
-      const values = {};
+      // A Worker secret cannot be read back, so this Mac's copy is the truth and
+      // the Worker's is rewritten from it on every run of this step.
+      const values = { CAPTURE_TOKEN: next.captureToken };
       if (!existing.has('SESSION_SECRET')) values.SESSION_SECRET = randomSecret();
-      if (adopted || !existing.has('CAPTURE_TOKEN')) values.CAPTURE_TOKEN = next.captureToken;
       // An owner secret can only be kept if this Mac has a copy to match it;
       // a Worker secret cannot be read back. Without a local copy the legacy
       // value is unusable, so it is replaced (owner links are new in this design,
       // so a legacy install has nothing to preserve).
       if (!existing.has('OWNER_LINK_SECRET') || !stored.ownerLinkSecret) values.OWNER_LINK_SECRET = next.ownerLinkSecret;
-      if (Object.keys(values).length) await ctx.deps.cloud.putSecrets(ctx.wrangler, { dataRoot: ctx.dataRoot, accountId, secrets: values, retry: retryOf(ctx) });
+      await ctx.deps.cloud.putSecrets(ctx.wrangler, { dataRoot: ctx.dataRoot, accountId, secrets: values, retry: retryOf(ctx) });
       ctx.saveSecrets(next);
 
       // TRANSFER_TOKEN is the engine's only cloud credential; it is set here and
@@ -618,7 +619,6 @@ function secretsStep() {
       }
       proof.ownerLinkSecret = status.ownerSecretHash === ownerSecretHash(next.ownerLinkSecret);
       if (proof.ownerLinkSecret === false) {
-        ctx.saveSecrets({ ...next });
         throw new StepError('SECRET_DRIFT', 'The deployed Worker is using a different owner secret than this Mac.', { hint: 'Run `owner rotate` to replace it.' });
       }
       ctx.setCloud({ secretsAt: new Date().toISOString(), workerVersion: status.version });
