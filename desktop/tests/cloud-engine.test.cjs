@@ -93,6 +93,21 @@ test("stdout is parsed per line, across chunks, and garbage is never echoed", as
   assert.equal(run.cancelled, false)
 })
 
+test("a child that ends without a result yields one FAILED result before onExit", () => {
+  const child = fakeChild()
+  const seen = []
+  runEngine({
+    appDir: APP, root: "/repo", dataRoot: "/library", command: "setup", baseEnv: {}, env: {},
+    spawnProcess: () => child,
+    onEvent: event => seen.push(event.event === "result" ? `result:${event.ok}:${event.code}` : event.event),
+    onExit: info => seen.push(`exit:${info.code}`),
+  })
+  child.stdout.emit("data", '{"v":1,"event":"step","step":"preflight","status":"started"}\n')
+  child.emit("close", 1, null)
+  child.emit("close", 1, null)
+  assert.deepEqual(seen, ["step", "result:false:FAILED", "exit:1"])
+})
+
 test("cancel sends SIGINT exactly once the child is alive", () => {
   const child = fakeChild()
   const run = runEngine({ appDir: APP, root: "/repo", dataRoot: "/library", command: "setup", baseEnv: {}, env: {}, spawnProcess: () => child, onEvent: () => {} })

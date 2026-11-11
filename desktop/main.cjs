@@ -534,7 +534,8 @@ async function enterLocalMode() {
   start("web")
   recreateWindow()
 }
-async function finishCloudRun(run, { cancelled, code }) {
+// runEngine always delivers a result before the exit, so `result` is the whole verdict.
+async function finishCloudRun(run, { code }) {
   const result = cloudResult
   cloudResult = null
   if (cloudRun === run) cloudRun = null
@@ -544,33 +545,33 @@ async function finishCloudRun(run, { cancelled, code }) {
     // to add: a link that was minted is already in Settings, and one that was not has
     // a sentence of its own.
     if (!run.link) {
-      const message = result?.code === "SECRET_MISSING"
+      const message = result.code === "SECRET_MISSING"
         ? "This Mac holds no owner secret for its cloud library. Turn cloud off and on again to replace it."
-        : cancelled
+        : result.code === "CANCELLED"
           ? "The sign-in link wasn’t created."
           : "Snip couldn’t create a sign-in link. Try again."
       // The codes are the only thing worth recording: the URL itself is never logged.
-      const detail = typeof result?.data?.code === "string" ? ` (${result.data.code})` : ""
-      makeLog("cloud").end(`${new Date().toISOString()} owner link exited ${code ?? "?"} ${result?.code ?? "no result"}${detail}\n`)
+      const detail = typeof result.data?.code === "string" ? ` (${result.data.code})` : ""
+      makeLog("cloud").end(`${new Date().toISOString()} owner link exited ${code ?? "?"} ${result.code}${detail}\n`)
       sendToSettings("snip:cloud-log", { level: "error", message })
     }
     refresh()
     return
   }
-  if (result?.ok) {
+  if (result.ok) {
     if (result.mode === "cloud") await enterCloudMode()
     else if (result.mode === "local") await enterLocalMode()
     sendToSettings("snip:cloud-log", { level: "info", message: result.mode === "cloud" ? "Snip is now using your cloud library." : "Snip is back on this Mac." })
-  } else if (cancelled || result?.code === "CANCELLED") {
+  } else if (result.code === "CANCELLED") {
     sendToSettings("snip:cloud-log", { level: "info", message: "Stopped. Nothing on Cloudflare was changed." })
   } else {
-    // A run that dies without a `result` still needs a sentence a person can act on.
+    // A run that died without its own result still needs a sentence a person can act on.
     const fallback = code === 2 ? "Snip needs one more choice before it can continue." : code === 3 ? "Another Snip setup is already running." : code === 4 ? "This build can’t run that part of cloud Snip." : "Setup stopped before it finished. Retry the step that failed."
     const byCode = { NEEDS_INPUT: fallback, UNSUPPORTED: "This build can’t run that part of cloud Snip.", LOCKED: "Another Snip setup is already running." }
-    const message = cloudState?.error?.message ?? byCode[result?.code] ?? fallback
+    const message = cloudState?.error?.message ?? byCode[result.code] ?? fallback
     sendToSettings("snip:cloud-log", { level: "error", message })
     // Main's log is the one place a failed run is recorded; the renderer only shows copy.
-    makeLog("cloud").end(`${new Date().toISOString()} ${run.command} exited ${code ?? "?"} ${result?.code ?? "no result"}\n`)
+    makeLog("cloud").end(`${new Date().toISOString()} ${run.command} exited ${code ?? "?"} ${result.code}\n`)
   }
   refresh()
 }
