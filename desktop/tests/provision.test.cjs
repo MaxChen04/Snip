@@ -448,6 +448,21 @@ test('a failed result carries its sentence in the JSON stream, a successful one 
   assert.equal('message' in events[1], false);
 });
 
+test('a build without the cleanup cron takes it from the tracked template', () => {
+  const template = fs.readFileSync(path.join(__dirname, '../../web/wrangler.jsonc'), 'utf8');
+  const triggers = lib.readTriggers(template);
+  assert.ok(triggers && triggers.crons.length, 'the tracked template declares a cron');
+  const base = { d1_databases: [{ binding: 'DB' }], kv_namespaces: [{ binding: 'OAUTH_KV' }] };
+  const options = { d1Id: 'd1-id', kvId: 'kv-id', login: 'tester', url: PROVIDED, triggers };
+  assert.deepEqual(lib.patchDeployConfig(base, options).triggers, triggers);
+  assert.deepEqual(lib.patchDeployConfig({ ...base, triggers: { crons: [] } }, options).triggers, triggers);
+  // A build that already has one keeps its own.
+  const own = { crons: ['*/30 * * * *'] };
+  assert.deepEqual(lib.patchDeployConfig({ ...base, triggers: own }, options).triggers, own);
+  assert.equal(lib.readTriggers('{ "name": "snip" }'), null);
+  assert.equal(lib.readTriggers('  // "triggers": { "crons": ["0 * * * *"] },'), null);
+});
+
 test('prepareDeployLayout copies snip, client and migrations and never touches the runtime', () => {
   const library = fakeLibrary();
   const result = deploy.prepareDeployLayout({ root: library.root, dataRoot: library.root, d1Id: 'd1-id', kvId: 'kv-id', login: 'tester', url: PROVIDED });

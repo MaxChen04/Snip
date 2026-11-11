@@ -7,7 +7,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { StepError } = require('./engine.cjs');
-const { patchDeployConfig, readRatelimits, BUCKET_NAME } = require('./lib.cjs');
+const { patchDeployConfig, readRatelimits, readTriggers, BUCKET_NAME } = require('./lib.cjs');
 
 const cloudDir = (dataRoot) => path.join(dataRoot, 'cloud');
 const configPath = (dataRoot) => path.join(cloudDir(dataRoot), 'snip/wrangler.json');
@@ -81,9 +81,9 @@ function prepareDeployLayout({ root, dataRoot, d1Id, kvId, login, url, now = new
   } catch (error) {
     throw new StepError('BAD_CONFIG', 'The built Worker config could not be read.', { hint: 'Reinstall Snip; the bundled build is incomplete.', data: { cause: error.message } });
   }
-  let ratelimits = null;
-  try { ratelimits = readRatelimits(fs.readFileSync(path.join(root, 'web/wrangler.jsonc'), 'utf8')); } catch { /* no template in this build */ }
-  const patched = patchDeployConfig(built, { d1Id, kvId, login, url, migrations: '../migrations', ratelimits });
+  let template = '';
+  try { template = fs.readFileSync(path.join(root, 'web/wrangler.jsonc'), 'utf8'); } catch { /* no template in this build */ }
+  const patched = patchDeployConfig(built, { d1Id, kvId, login, url, migrations: '../migrations', ratelimits: readRatelimits(template), triggers: readTriggers(template) });
   const temp = `${file}.${process.pid}.${Date.now()}.tmp`;
   fs.writeFileSync(temp, `${JSON.stringify(patched, null, 2)}\n`, { mode: 0o600 });
   fs.renameSync(temp, file);

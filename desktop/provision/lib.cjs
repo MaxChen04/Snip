@@ -92,8 +92,22 @@ function readRatelimits(text) {
   }
 }
 
-function patchDeployConfig(config, { d1Id, kvId, login, url, migrations = '../migrations', ratelimits = null }) {
+/** The `triggers` object from a wrangler.jsonc, or null. The tracked file keeps it on one line. */
+function readTriggers(text) {
+  const match = String(text || '').match(/^\s*"triggers"\s*:\s*(\{.*\})\s*,?\s*$/m);
+  if (!match) return null;
+  try {
+    const value = JSON.parse(match[1]);
+    return Array.isArray(value.crons) && value.crons.length ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function patchDeployConfig(config, { d1Id, kvId, login, url, migrations = '../migrations', ratelimits = null, triggers = null }) {
   const next = JSON.parse(JSON.stringify(config));
+  // The same older build has no cron either, and without it retired files are never swept.
+  if (!(next.triggers && Array.isArray(next.triggers.crons) && next.triggers.crons.length) && triggers) next.triggers = triggers;
   // A build from an older web/wrangler.local.jsonc has no rate-limit bindings, and the
   // hosted OAuth guards answer 503 without them, so take them from the tracked template.
   if ((!Array.isArray(next.ratelimits) || !next.ratelimits.length) && ratelimits) next.ratelimits = JSON.parse(JSON.stringify(ratelimits));
@@ -318,6 +332,7 @@ module.exports = {
   parseCreatedId,
   patchDeployConfig,
   readRatelimits,
+  readTriggers,
   publicUrlFrom,
   randomSecret,
   readValues,
