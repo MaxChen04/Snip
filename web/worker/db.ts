@@ -363,16 +363,19 @@ export async function createReference(
   return (await getReference(db, id))!.reference
 }
 
+/** Recapture a finished reference. False when it does not exist or its capture is still waiting, running or paused. */
 export async function requeueReference(db: D1Database, id: string) {
-  await db.batch([
-    db.prepare(`INSERT OR IGNORE INTO capture_cleanup (prefix) SELECT 'refs/' || id || '/' || coalesce(capture_attempt || '/', 'p') FROM refs WHERE id = ?`).bind(id),
-    db.prepare(`DELETE FROM pages WHERE reference_id = ?`).bind(id), // animations cascade
+  const finished = `id = ? AND status IN ('ready', 'failed')`
+  const results = await db.batch([
+    db.prepare(`INSERT OR IGNORE INTO capture_cleanup (prefix) SELECT 'refs/' || id || '/' || coalesce(capture_attempt || '/', 'p') FROM refs WHERE ${finished}`).bind(id),
+    db.prepare(`DELETE FROM pages WHERE reference_id IN (SELECT id FROM refs WHERE ${finished})`).bind(id), // animations cascade
     db
       .prepare(
-        `UPDATE refs SET status = 'queued', progress = 'Waiting for your Mac', error = NULL, page_count = 0, animation_count = 0, cover_key = NULL, favicon = NULL, tokens_json = NULL, claimed_at = NULL, capture_control = NULL, crawl_state = NULL, stale_reclaims = 0, capture_run = capture_run + 1, updated_at = ? WHERE id = ?`,
+        `UPDATE refs SET status = 'queued', progress = 'Waiting for your Mac', error = NULL, page_count = 0, animation_count = 0, cover_key = NULL, favicon = NULL, tokens_json = NULL, claimed_at = NULL, capture_control = NULL, crawl_state = NULL, stale_reclaims = 0, capture_run = capture_run + 1, updated_at = ? WHERE ${finished}`,
       )
       .bind(now(), id),
   ])
+  return results[2]!.meta.changes > 0
 }
 
 export async function deleteReference(db: D1Database, id: string) {

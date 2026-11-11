@@ -23,7 +23,9 @@ test("capture leases fence stale workers and isolate cleanup", async () => {
     const old = (await db.claimJob(database))!
     const oldKey = `refs/${ref.id}/${old.attempt}/p0/desktop.jpg`
     await files.put(oldKey, "old")
-    await db.requeueReference(database, ref.id)
+    // Only a finished capture can be recaptured.
+    assert.equal(await db.failJob(database, ref.id, old.attempt, "failed"), true)
+    assert.equal(await db.requeueReference(database, ref.id), true)
     const current = (await db.claimJob(database))!
     assert.notEqual(current.attempt, old.attempt)
     const currentKey = `refs/${ref.id}/${current.attempt}/p0/desktop.jpg`

@@ -194,6 +194,8 @@ test("recapture is refused for capturing, queued and paused references, and allo
     await database.prepare("UPDATE refs SET status = 'failed', error = 'boom' WHERE id = ?").bind(failed.id).run()
     assert.equal((await recapture(failed.id)).status, 200)
     assert.equal((await row(failed.id))!.status, "queued")
+
+    assert.equal((await recapture("0000000000000000")).status, 404)
   } finally {
     await mf.dispose()
   }

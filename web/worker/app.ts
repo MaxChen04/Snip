@@ -295,7 +295,9 @@ api.get("/references/:id", async (c) => {
 api.post("/references/:id/recapture", async (c) => {
   const id = c.req.param("id")
   // Retire the current file namespace and schedule its cleanup.
-  await db.requeueReference(c.env.DB, id)
+  if (!(await db.requeueReference(c.env.DB, id))) {
+    return (await db.getReferenceRecord(c.env.DB, id)) ? c.json({ error: "This capture is still in progress. Stop it or wait for it to finish, then recapture." }, 409) : c.json({ error: "not found" }, 404)
+  }
   c.executionCtx.waitUntil(db.cleanupRetiredFiles(c.env.DB, c.env.FILES))
   return c.json({ ok: true })
 })
