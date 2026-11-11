@@ -82,8 +82,8 @@ async function main() {
     await page.keyboard.press("Escape")
     await page.waitForTimeout(200)
 
-    await page.getByRole("button", { name: "Sign out all devices" }).click()
-    await page.waitForSelector("text=Sign out all devices?")
+    await page.getByRole("button", { name: "Sign out everywhere, including connected agents" }).click()
+    await page.waitForSelector("text=Sign out everywhere, including connected agents?")
     await shoot(page, `passkeys-sign-out-all-${scheme}`, { wait: 250 })
     await page.keyboard.press("Escape")
 

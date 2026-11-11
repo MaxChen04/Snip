@@ -552,8 +552,8 @@ function CloudPanels({
         />
         <Row
           icon={<ShieldCheckIcon className="size-4" />}
-          title="Sign out all devices"
-          body="Signs out browsers and this app. Agents keep access until their token expires, up to 7 days."
+          title="Sign out everywhere, including connected agents"
+          body="Signs out browsers, this app and connected agents. All of them have to sign in or reconnect again."
           action={
             <Button variant="outline" size="sm" onClick={onSignOut}>
               Sign out…

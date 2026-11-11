@@ -66,11 +66,11 @@ From a terminal, `owner link --no-handoff` mints the same link, which is the com
 
 **/passkeys** (also **Passkeys and devices** in the account menu) lists every passkey that can open the library:
 
-<img src="media/passkeys.png" alt="The Passkeys and devices page: Add this device, the device list, and Sign out all devices" width="620">
+<img src="media/passkeys.png" alt="The Passkeys and devices page: Add this device, the device list, and Sign out everywhere" width="620">
 
 - **Add this device** names the device and asks for Touch ID, your device PIN or a security key. The passkey stays on the device; Snip keeps only the public half.
-- **Remove** retires one device, which is the recovery path for a lost laptop or phone. If it was your only passkey, you sign in again with the owner link.
-- **Sign out all devices** ends every browser session and the app's session. Passkeys stay registered, and agents connected over MCP keep their own tokens until those expire.
+- **Remove** retires one device, which is the recovery path for a lost laptop or phone. It also signs out every other browser and the app, and connected agents have to reconnect. If it was your only passkey, you sign in again with the owner link.
+- **Sign out everywhere, including connected agents** ends every browser session, the app's session and every agent connected over MCP. Browsers and the app sign in again, agents reconnect, and the Mac's owner link is the way back in. Passkeys stay registered.
 
 **Connecting a cloud MCP client.** The client sends the browser to `/authorize`, which redirects to `/sign-in?next=<the authorize URL>`. Sign in with a passkey and you land back on that same URL, query included, so the client's authorization request survives the detour and its approval screen appears. Approve there and the client is connected; the grant is bound to the owner identity, not to the method that signed in.
 
@@ -228,11 +228,11 @@ Deleting the cloud copy is separate, destructive and never offered inside the tu
 
 The local library and any previous library on this Mac are not touched. Deleting cannot be undone; the next enable starts a new install and copies the local library up again.
 
-### Sign out all devices
+### Sign out everywhere
 
-**/passkeys → Sign out all devices** (also in Settings → Cloud) ends every browser session and the app's session for this install. Use it if a laptop or browser with access is lost.
+**/passkeys → Sign out everywhere, including connected agents** (also in Settings → Cloud) ends every browser session, the app's session and every connected agent's access for this install. Use it if a laptop, browser or agent with access is lost.
 
-The page says exactly what it does: passkeys stay registered, and agents connected over MCP keep their own tokens until those expire. A passkey is a credential, not a session, so removing one from the list is a separate action, and signing out never removes devices.
+The page says exactly what it does: browsers and the app have to sign in again, agents connected over MCP have to reconnect, and the Mac's owner link is the way back in. One counter decides whether a browser session or an agent's grant is still valid, so there is no way to disconnect a single agent. Passkeys stay registered. A passkey is a credential, not a session, so removing one from the list is a separate action, and signing out never removes devices.
 
 ## One Snip per Cloudflare account
 

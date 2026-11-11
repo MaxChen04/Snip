@@ -9,6 +9,7 @@ import {
   logout,
   requireCaptureToken,
   crossSiteWrite,
+  currentEpoch,
   requireSession,
   signOutAll,
   startLogin,
@@ -127,7 +128,9 @@ app.post("/authorize", async (c) => {
     userId: session.ownerId,
     metadata: { label: session.label },
     scope: approved.request.scope,
-    props: { ownerId: session.ownerId },
+    // The epoch is read from the database, not the session: a dev session reports -1 ("never
+    // checked"), and a grant must still stop working at the next sign-out everywhere.
+    props: { ownerId: session.ownerId, epoch: await currentEpoch(c.env.DB) },
   })
   const headers = new Headers(approved.headers)
   headers.set("location", redirectTo)
@@ -210,8 +213,8 @@ api.get("/me", (c) => {
   return c.json({ login: session.ownerId, ownerId: session.ownerId, method: session.method })
 })
 
-// Signs every device out: the counter in the owners row moves and every cookie minted before it
-// stops verifying. MCP tokens live in OAUTH_KV and are deliberately not affected.
+// Signs everything out: the counter in the owners row moves, and every cookie and every MCP
+// grant minted before it stops being accepted. Agents have to connect again.
 api.post("/sign-out-all", async (c) => c.json({ ok: true, epoch: await signOutAll(c.env, c.get("session")) }))
 
 // The owner's signed-in devices (passkeys only; GitHub sign-ins leave no device row).

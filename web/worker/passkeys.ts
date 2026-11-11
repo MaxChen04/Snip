@@ -179,7 +179,8 @@ export async function listDevices(c: Context<AppEnv>) {
 export async function removeDevice(c: Context<AppEnv>) {
   const session = c.get("session")
   if (!(await db.deletePasskey(c.env.DB, session.ownerId, c.req.param("id")!))) return c.json(badRequest("No such passkey"), 404)
-  // A session does not record which passkey signed it in, so a removed device is signed out by ending them all. This one is renewed.
+  // A session does not record which passkey signed it in, so a removed device is signed out by ending them all,
+  // connected agents included. This one is renewed.
   await setSessionCookie(c, { ...session, epoch: await signOutAll(c.env, session) })
   return c.json({ ok: true })
 }

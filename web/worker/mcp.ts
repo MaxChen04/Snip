@@ -2,7 +2,7 @@ import { createMcpHandler } from "agents/mcp/server"
 import { McpServer, ProtocolError, ProtocolErrorCode, type CallToolResult } from "@modelcontextprotocol/server"
 import { z } from "zod"
 import { isVideoKey, type Animation, type DesignTokens, type Page, type Reference } from "../shared/types"
-import { isLocalOrigin, signFileUrl } from "./auth"
+import { currentEpoch, isLocalOrigin, signFileUrl } from "./auth"
 import * as db from "./db"
 import { readText } from "./files"
 import { bounded, decodeCursor, encodeCursor } from "./mcp-bounds"
@@ -968,14 +968,18 @@ Scroll timing is synthetic playback; hover offsets are measured. Treat easing an
   return server
 }
 
-type McpProps = { ownerId?: unknown }
+type McpProps = { ownerId?: unknown; epoch?: unknown }
 
 export const mcpApiHandler = {
-  fetch(request: Request, env: Env, ctx: ExecutionContext) {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     // The OAuth provider only reaches this handler after validating a token; the grant must name
     // an owner, or a token minted before ownership existed would read the library as anyone.
-    const ownerId = (ctx as ExecutionContext & { props?: McpProps }).props?.ownerId
-    if (typeof ownerId !== "string" || !ownerId) return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: { "content-type": "application/json" } })
+    const props = (ctx as ExecutionContext & { props?: McpProps }).props
+    const unauthorized = () => new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: { "content-type": "application/json" } })
+    if (typeof props?.ownerId !== "string" || !props.ownerId) return unauthorized()
+    // "Sign out everywhere" moves the same counter browser sessions are checked against. A grant
+    // minted before grants carried an epoch counts as epoch 0: it works until the first sign-out.
+    if ((props.epoch ?? 0) !== (await currentEpoch(env.DB))) return unauthorized()
     const origin = new URL(request.url).origin
     const handler = createMcpHandler(() => buildServer(env, origin), { route: "/mcp" })
     return handler(request, env, ctx)

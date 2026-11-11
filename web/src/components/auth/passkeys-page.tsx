@@ -19,7 +19,7 @@ import { ALREADY_ADDED, registerPasskey } from "@/lib/passkeys"
 
 /**
  * The owner's devices. A passkey is per-device and owner-only: it is not an invite. Removing one
- * here is the recovery path for a lost device; "Sign out all devices" is the recovery path for a
+ * here is the recovery path for a lost device; "Sign out everywhere" is the recovery path for a
  * leaked session.
  */
 export function PasskeysPage() {
@@ -200,11 +200,11 @@ export function PasskeysPage() {
               Signed in somewhere you don't recognize?
             </h2>
             <p className="mt-0.5 text-[12.5px] leading-relaxed text-muted-foreground">
-              Signing out everywhere ends every browser session and this app's session. Passkeys stay registered, and agents connected over MCP keep their own tokens until those expire.
+              Signing out everywhere ends every browser session, the Snip app's session and every connected agent. Passkeys stay registered.
             </p>
             <Button variant="destructive" size="sm" className="mt-2.5" onClick={() => setSigningOut(true)}>
               <LogOutIcon className="size-3.5" />
-              Sign out all devices
+              Sign out everywhere, including connected agents
             </Button>
           </div>
         </div>
@@ -218,7 +218,7 @@ export function PasskeysPage() {
           <DialogHeader>
             <DialogTitle>Remove this passkey?</DialogTitle>
             <DialogDescription>
-              {removing?.label || "This device"} will no longer open Snip, and every other browser and the Snip app are signed out. If it's your only passkey you'll need a fresh owner link to sign in again.
+              {removing?.label || "This device"} will no longer open Snip. Every other browser and the Snip app are signed out, and connected agents have to reconnect. If it's your only passkey you'll need a fresh owner link to sign in again.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -233,9 +233,9 @@ export function PasskeysPage() {
       <Dialog open={signingOut} onOpenChange={setSigningOut}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle>Sign out all devices?</DialogTitle>
+            <DialogTitle>Sign out everywhere, including connected agents?</DialogTitle>
             <DialogDescription>
-              Every browser and this app are signed out immediately. Passkeys stay registered. Agents connected over MCP are not affected and keep working until their tokens expire.
+              Every browser, the Snip app and every connected agent stop working immediately. Browsers and the app have to sign in again, and agents have to reconnect. Passkeys stay registered, and the owner link from your Mac is the way back in.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

@@ -469,9 +469,10 @@ function TurningOffSection() {
           </p>
         </div>
         <div className="flex flex-col gap-1.5">
-          <p className="text-[15px] font-medium">Sign out all devices</p>
+          <p className="text-[15px] font-medium">Sign out everywhere, including connected agents</p>
           <p className="text-[15px] leading-[1.6] text-muted-foreground">
-            Ends every browser session and this app's session for the install. Passkeys stay registered, and agents connected over MCP keep their own tokens until those expire.
+            Ends every browser session, this app's session and every connected agent's access for the install. Browsers and the app sign in again, agents reconnect, and the owner link
+            from your Mac is the way back in. Passkeys stay registered.
             Removing a device is separate, on the Passkeys and devices page: a passkey is a credential, not a session.
           </p>
         </div>

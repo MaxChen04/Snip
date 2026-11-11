@@ -81,7 +81,7 @@ npm run setup:cloudflare -- delete-resources --confirm snip.<your-subdomain>.wor
 
 **Settings → Cloud → Turn off cloud** points this Mac back at its own local library, which stayed on disk the whole time. The cloud library is **not** deleted: it stays live at its address, and devices and agents signed in to it keep working. The dialog says that, and offers **Bring the cloud library back to this Mac** (or **Copy back now** later) to copy the cloud library down first.
 
-**Delete cloud resources** is separate and destructive. **Sign out all devices** ends every browser session and the app's session. Passkeys stay registered, and agents connected over MCP keep their own tokens until those expire.
+**Delete cloud resources** is separate and destructive. **Sign out everywhere, including connected agents** ends every browser session, the app's session and every agent connected over MCP; all of them sign in or reconnect again. Passkeys stay registered.
 
 ### One Snip per account, workers.dev only
 

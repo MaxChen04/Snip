@@ -164,17 +164,17 @@ export function SignOutDialog({ open, onOpenChange, onConfirm }: { open: boolean
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[440px]">
         <DialogHeader>
-          <DialogTitle>Sign out all devices?</DialogTitle>
+          <DialogTitle>Sign out everywhere, including connected agents?</DialogTitle>
           <DialogDescription>
-            Signs out browsers and this app. You'll sign in again with your passkey. Agents that already have access keep it until their token expires, up to 7
-            days.
+            Browsers, this app and connected agents all stop working immediately. Browsers and the app have to sign in again, and agents have to reconnect.
+            This Mac's owner link is the way back in.
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={onConfirm}>Sign out all devices</Button>
+          <Button onClick={onConfirm}>Sign out everywhere</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

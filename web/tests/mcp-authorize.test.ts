@@ -4,6 +4,7 @@ import { readdir, readFile } from "node:fs/promises"
 import { Miniflare, convertV4MiniflareOptions } from "miniflare"
 import { app } from "../worker/app"
 import { SESSION_COOKIE, STATE_COOKIE, sign, verify } from "../worker/auth"
+import { mcpApiHandler } from "../worker/mcp"
 import { safeNext, signInPath } from "../shared/safe-next"
 import { createAssertion, createCredential, type Credential } from "./helpers/webauthn"
 
@@ -147,7 +148,7 @@ test("an unauthenticated MCP client is sent to the passkey page and comes back t
     assert.equal(approved.headers.get("location"), "https://claude.ai/callback?code=abc123&state=xyz")
     assert.equal(ctx.calls.completed.length, 1)
     assert.deepEqual(ctx.calls.completed[0]!.userId, "max", "the grant belongs to the owner identity")
-    assert.deepEqual(ctx.calls.completed[0]!.props, { ownerId: "max" })
+    assert.deepEqual(ctx.calls.completed[0]!.props, { ownerId: "max", epoch: 0 }, "the grant records the sign-out epoch it was minted at")
   }))
 
 test("an already signed-in client skips the page and lands on consent directly", () =>
@@ -338,4 +339,63 @@ test("a half-configured install offers neither dead end", () =>
     const methods = (await (await ctx.call("/auth/methods", {}, { GITHUB_CLIENT_ID: "id" })).json()) as { github: boolean }
     assert.equal(methods.github, false)
     assert.equal((await ctx.call("/auth/login", {}, { GITHUB_CLIENT_ID: "id" })).status, 404)
+  }))
+
+/** One MCP request as the OAuth provider hands it over: the token is already validated and the grant's props ride on ctx. */
+function mcpCall(env: Env, props: Record<string, unknown>) {
+  const request = new Request(`${PUBLIC_URL}/mcp`, {
+    method: "POST",
+    // The MCP handler validates the Host header, which a bare Request does not populate.
+    headers: { host: RP_ID, "content-type": "application/json", accept: "application/json, text/event-stream" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "0" } } }),
+  })
+  return mcpApiHandler.fetch(request, env, { waitUntil() {}, props } as unknown as ExecutionContext)
+}
+
+const signOutEverywhere = (ctx: Ctx, cookie: string) => ctx.call("/api/sign-out-all", { method: "POST", body: "{}", headers: { cookie, "content-type": "application/json" } })
+const ownerCookie = async (ctx: Ctx, epoch: number) => `${SESSION_COOKIE}=${await sign(ctx.env.SESSION_SECRET, `owner:max|${Date.now() + 86_400_000}|owner|${epoch}`)}`
+
+test("sign out everywhere disconnects an agent that was already connected", () =>
+  withWorker(async (ctx) => {
+    const cookie = await ownerCookie(ctx, 0)
+    const approve = (headers: Record<string, string>) =>
+      ctx.call("/authorize", { method: "POST", body: new URLSearchParams({ handle: "handle-1", decision: "approve" }), headers: { ...headers, "content-type": "application/x-www-form-urlencoded" } })
+    assert.equal((await approve({ cookie })).status, 302)
+    const grant = ctx.calls.completed[0]!.props as Record<string, unknown>
+    assert.equal((await mcpCall(ctx.env, grant)).status, 200, "the agent is connected")
+
+    assert.equal((await signOutEverywhere(ctx, cookie)).status, 200)
+    const refused = await mcpCall(ctx.env, grant)
+    assert.equal(refused.status, 401, "the same grant is refused after sign out everywhere")
+    assert.deepEqual(await refused.json(), { error: "unauthorized" })
+
+    // Connecting again mints a grant at the new epoch, and that one works.
+    assert.equal((await approve({ cookie: await ownerCookie(ctx, 1) })).status, 302)
+    const again = ctx.calls.completed[1]!.props as Record<string, unknown>
+    assert.deepEqual(again, { ownerId: "max", epoch: 1 })
+    assert.equal((await mcpCall(ctx.env, again)).status, 200)
+  }))
+
+test("a grant minted before grants carried an epoch works until the first sign out everywhere", () =>
+  withWorker(async (ctx) => {
+    const legacy = { ownerId: "max" }
+    assert.equal((await mcpCall(ctx.env, legacy)).status, 200)
+    assert.equal((await signOutEverywhere(ctx, await ownerCookie(ctx, 0))).status, 200)
+    assert.equal((await mcpCall(ctx.env, legacy)).status, 401)
+  }))
+
+test("a dev session's grant records the real epoch, so it is revoked like any other", () =>
+  withWorker(async (ctx) => {
+    await ctx.db.prepare(`UPDATE owners SET sessions_epoch = 3`).run()
+    const approved = await ctx.local(
+      "/authorize",
+      { method: "POST", body: new URLSearchParams({ handle: "handle-1", decision: "approve" }), headers: { "content-type": "application/x-www-form-urlencoded" } },
+      { DEV_LOGIN: "max" },
+    )
+    assert.equal(approved.status, 302)
+    const grant = ctx.calls.completed[0]!.props as Record<string, unknown>
+    assert.deepEqual(grant, { ownerId: "max", epoch: 3 })
+    assert.equal((await mcpCall(ctx.env, grant)).status, 200)
+    await ctx.db.prepare(`UPDATE owners SET sessions_epoch = sessions_epoch + 1`).run()
+    assert.equal((await mcpCall(ctx.env, grant)).status, 401)
   }))
