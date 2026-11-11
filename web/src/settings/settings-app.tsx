@@ -706,7 +706,7 @@ function ProgressView({
 
       <div className="flex items-center justify-between gap-3 pt-1">
         <span className="text-2xs text-muted-foreground">
-          {cloud.note?.message ?? (cloud.busy ? "You can keep using Snip while this runs." : cloud.choice ? "Nothing has changed yet." : "Stopped. Nothing on Cloudflare was changed.")}
+          {cloud.note?.message ?? (cloud.busy ? "You can keep using Snip while this runs." : cloud.choice ? "Nothing has changed yet." : "Stopped.")}
         </span>
         <div className="flex items-center gap-1.5">
           {cloud.busy ? (
