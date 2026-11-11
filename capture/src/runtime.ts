@@ -1,4 +1,4 @@
-import { CaptureAuthenticationError, CaptureUpgradeError } from "./api"
+import { CaptureAuthenticationError, CaptureUpgradeError, JobGoneError } from "./api"
 import type { Job } from "../../web/shared/types"
 
 export type CaptureStatus = {
@@ -12,6 +12,9 @@ export type CaptureStatus = {
 export const idlePollDelay = (pollMs: number, emptyPolls: number) =>
   Math.min(30_000, pollMs * 2 ** Math.min(Math.max(0, emptyPolls - 1), 20))
 
+/** A capture that reports nothing for this long is hung: its job is failed and the worker takes the next one. */
+const STALL_MS = 5 * 60_000
+
 type Browser = { isConnected(): boolean; close(): Promise<void> }
 type Api = { claim(): Promise<Job | null>; heartbeat(id: string | null): Promise<void>; fail(id: string, error: string): Promise<void> }
 
@@ -24,11 +27,13 @@ export class CaptureRuntime<B extends Browser> {
   private browser: B | undefined
   private idleTimer: ReturnType<typeof setTimeout> | undefined
   private closing: Promise<void> | undefined
+  private abort: AbortController | undefined
 
   constructor(private options: {
     api: Api
     launch: (job: Job) => Promise<B>
-    capture: (browser: B, job: Job) => Promise<void>
+    /** `signal` aborts when the job should wind down (stop, lost lease, hung); `progress` says the capture is still moving. */
+    capture: (browser: B, job: Job, signal: AbortSignal, progress: () => void) => Promise<void>
     status: (status: CaptureStatus) => void
     pollMs: number
     idleMs: number
@@ -41,6 +46,7 @@ export class CaptureRuntime<B extends Browser> {
     if (this.stopping) return
     this.stopping = true
     this.emit({ state: "stopping" })
+    this.abort?.abort()
     this.wake?.()
   }
 
@@ -108,14 +114,39 @@ export class CaptureRuntime<B extends Browser> {
         if (job) {
           this.emptyPolls = 0
           if (!this.stopping) this.emit({ state: "busy", jobId: job.id })
-          const beat = setInterval(() => { void this.options.api.heartbeat(job.id) }, 30_000)
+          const abort = this.abort = new AbortController()
+          if (this.stopping) abort.abort()
+          let stall: ReturnType<typeof setTimeout> | undefined
+          let hung!: (error: Error) => void
+          const stalled = new Promise<never>((_, reject) => { hung = reject })
+          const progress = () => {
+            clearTimeout(stall)
+            stall = setTimeout(() => {
+              abort.abort()
+              // Closing the browser ends whatever the hung capture still holds.
+              void this.closeBrowser()
+              hung(new Error("Capture stopped making progress"))
+            }, STALL_MS)
+          }
+          const beat = setInterval(() => {
+            this.options.api.heartbeat(job.id).catch((e: unknown) => {
+              if (!(e instanceof JobGoneError)) return
+              clearInterval(beat)
+              abort.abort()
+            })
+          }, 30_000)
+          progress()
           try {
-            await this.options.capture(await this.getBrowser(job), job)
+            const capture = (async () => this.options.capture(await this.getBrowser(job), job, abort.signal, progress))()
+            capture.catch(() => {}) // a hung capture that fails later was already reported
+            await Promise.race([capture, stalled])
           } catch (e) {
             this.options.logError?.(`[${job.id}] capture failed`)
             await this.options.api.fail(job.id, (e instanceof Error ? e.message : "Capture failed").split("\n")[0] || "Capture failed")
           } finally {
             clearInterval(beat)
+            clearTimeout(stall)
+            this.abort = undefined
           }
           if (!this.stopping && this.browser) {
             this.idleTimer = setTimeout(() => { void this.closeBrowser() }, this.options.idleMs)

@@ -2,7 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import http from "node:http"
 import { chromium } from "playwright"
-import type { Job, JobComplete, PageUpload } from "../../web/shared/types"
+import type { CrawlState, Job, JobComplete, PageUpload } from "../../web/shared/types"
 import { captureJob } from "../src/capture"
 import { closeRenderer } from "../src/sheet"
 
@@ -146,6 +146,51 @@ test("a live clip uploaded for a page whose addPage failed is not reused by a la
       const referenced = stored[0]!.page!.sections?.flatMap((s) => s.live?.key ?? []) ?? []
       assert.ok(referenced.length > 0, "the stored page has a live clip")
       for (const key of referenced) assert.ok(keysOfStoredPages.has(key), `live clip ${key} was uploaded for the stored page, not only for a failed one`)
+    } finally {
+      await closeRenderer()
+      await browser.close()
+    }
+  })
+})
+
+test("an aborted crawl pauses at the next page boundary when the server accepts it, and otherwise stops with the pages it has", { timeout: 240_000 }, async () => {
+  await withServer((req, res) => {
+    res.writeHead(200, { "content-type": "text/html" })
+    res.end(req.url === "/b" ? plain("Page B") : req.url === "/c" ? plain("Page C") : plain("Page A", `<nav><a href="/b">B</a> <a href="/c">C</a></nav>`))
+  }, async (base) => {
+    const browser = await launch()
+    try {
+      const run = async (acceptsPause: boolean, abortAt: "start" | "first page") => {
+        const abort = new AbortController()
+        if (abortAt === "start") abort.abort()
+        const seen = { pages: [] as string[], paused: [] as CrawlState[], completed: 0, controls: 0 }
+        const api = {
+          control: async () => { seen.controls++; return null },
+          progress: async () => {},
+          upload: async (key: string) => key,
+          addPage: async (_id: string, page: PageUpload) => { seen.pages.push(page.path); abort.abort() },
+          pause: async (_id: string, state: CrawlState) => { seen.paused.push(state); return acceptsPause },
+          complete: async () => { seen.completed++ },
+        }
+        await captureJob(browser, api as never, { id: "abort", url: base, mode: "crawl", maxPages: 3, attempt, resume: null, options: null, features: [] } as unknown as Job, abort.signal)
+        return seen
+      }
+
+      const paused = await run(true, "first page")
+      assert.deepEqual(paused.pages, ["/"], "no page is started after the abort")
+      assert.equal(paused.paused.length, 1)
+      assert.equal(paused.paused[0]!.captured, 1)
+      assert.deepEqual(paused.paused[0]!.queue, [`${base}b`, `${base}c`], "the checkpoint holds the rest of the crawl")
+      assert.equal(paused.completed, 0, "a paused crawl is not completed")
+
+      const stopped = await run(false, "first page")
+      assert.deepEqual(stopped.pages, ["/"])
+      assert.equal(stopped.completed, 1, "the pages it has are kept")
+
+      // Aborted before its first page and the server will not pause it: one page is captured, so the job is not failed as empty.
+      const early = await run(false, "start")
+      assert.deepEqual(early.pages, ["/"])
+      assert.equal(early.completed, 1)
     } finally {
       await closeRenderer()
       await browser.close()

@@ -33,7 +33,7 @@ const runtime = new CaptureRuntime({
       onInstall: () => api.progress(job.id, "Installing the capture browser (one-time, about a minute)"),
     })
   },
-  capture: async (browser, job) => (await import("./capture")).captureJob(browser, api, job),
+  capture: async (browser, job, signal, progress) => (await import("./capture")).captureJob(browser, api, job, signal, progress),
   status: (status) => {
     if (process.connected && process.send) {
       try { process.send(status, () => {}) } catch { /* parent disconnected */ }
@@ -50,7 +50,7 @@ for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.on(sig, () => {
     if (interrupted) process.exit(1)
     interrupted = true
-    console.log("\nStopping after the current job (Ctrl+C again to force)…")
+    console.log("\nStopping after the current page (Ctrl+C again to force)…")
     runtime.stop()
   })
 }

@@ -1,7 +1,7 @@
 import { test, mock } from "node:test"
 import assert from "node:assert/strict"
 import type { Job } from "../../web/shared/types"
-import { SnipApi } from "../src/api"
+import { JobGoneError, SnipApi } from "../src/api"
 import { CaptureRuntime } from "../src/runtime"
 
 // Regression tests for runtime recovery bugs (hung capture, local stop, lost lease).
@@ -125,6 +125,47 @@ test("a 410 on heartbeat aborts the running capture's signal instead of being sw
     runtime.stop()
   } finally {
     globalThis.fetch = originalFetch
+    mock.timers.reset()
+  }
+})
+
+test("a lost lease stops the heartbeat for that job, and the capture reports progress to hold off the hang timeout", async () => {
+  mock.timers.enable({ apis: ["setTimeout", "setInterval"] })
+  try {
+    const heartbeats: (string | null)[] = []
+    const failed: string[] = []
+    let progress!: () => void
+    let finish!: () => void
+    const runtime = new CaptureRuntime({
+      api: {
+        claim: async () => (heartbeats.length ? null : job1),
+        heartbeat: async (id) => { heartbeats.push(id); if (heartbeats.length === 21) throw new JobGoneError() },
+        fail: async (id) => { failed.push(id) },
+      },
+      launch: async () => browser(),
+      capture: async (_browser, _job, _signal, report) => { progress = report; await new Promise<void>((resolve) => { finish = resolve }) },
+      status: () => {}, pollMs: 5, idleMs: 50, once: false,
+    })
+    const done = runtime.run()
+    await flush()
+    // Ten minutes in which the capture keeps reporting progress: it is not failed.
+    for (let elapsed = 0; elapsed < 600_000; elapsed += 30_000) {
+      mock.timers.tick(30_000)
+      progress()
+      await flush()
+    }
+    assert.deepEqual(failed, [])
+    assert.equal(heartbeats.length, 20)
+    // The next beat is answered "job is gone": no beat after it.
+    mock.timers.tick(30_000)
+    await flush()
+    mock.timers.tick(90_000)
+    await flush()
+    assert.equal(heartbeats.length, 21)
+    runtime.stop()
+    finish()
+    await done
+  } finally {
     mock.timers.reset()
   }
 })

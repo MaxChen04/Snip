@@ -67,7 +67,7 @@ export class SnipApi {
   }
 
   async heartbeat(jobId: string | null) {
-    await this.call("/agent/heartbeat", json({ jobId })).catch(() => {})
+    await this.call("/agent/heartbeat", json({ jobId })).catch((error: unknown) => { if (error instanceof JobGoneError) throw error })
   }
 
   async upload(key: string, body: Buffer | string, contentType: string) {

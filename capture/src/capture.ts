@@ -1164,7 +1164,8 @@ export function signedInState(env = process.env): string {
   return file
 }
 
-export async function captureJob(browser: Browser, api: SnipApi, job: Job) {
+/** `signal` asks the crawl to wind down at its next page boundary; `progress` tells the runtime the capture is still moving. */
+export async function captureJob(browser: Browser, api: SnipApi, job: Job, signal = new AbortController().signal, progress = () => {}) {
   await assertPublicUrl(job.url)
   const options = job.options ?? {}
   const colorScheme = options.colorScheme === "dark" ? "dark" : "light"
@@ -1178,14 +1179,16 @@ export async function captureJob(browser: Browser, api: SnipApi, job: Job) {
     const mobile = await browser.newContext({ ...common, viewport: MOBILE, deviceScaleFactor: MOBILE_DPR, isMobile: true, hasTouch: true, userAgent: MOBILE_UA })
     contexts.push(mobile)
     await Promise.all(contexts.flatMap((context) => [context.addInitScript(HOLD_RESIZE_JS), context.addInitScript(OBSERVED_JS)]))
-    await capturePages(browser, api, job, desktop, mobile, network)
+    // Every upload counts as progress, so a slow connection is not taken for a hung step.
+    const reporting: SnipApi = Object.create(api, { upload: { value: (...file: Parameters<SnipApi["upload"]>) => { progress(); return api.upload(...file) } } })
+    await capturePages(browser, reporting, job, desktop, mobile, network, signal, progress)
   } finally {
     await Promise.allSettled(contexts.map(context => context.close()))
     await network?.close()
   }
 }
 
-async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: BrowserContext, mobile: BrowserContext, network: CaptureNetwork) {
+async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: BrowserContext, mobile: BrowserContext, network: CaptureNetwork, signal: AbortSignal, progress: () => void) {
   const root = new URL(job.url)
   const prefix = `refs/${job.id}/${job.attempt}`
   // Protocol 3 predates video. Missing capabilities mean the Worker still renders recordings as GIF images.
@@ -1223,24 +1226,27 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
   const features = new Set(job.features ?? [])
   if (resume) log(`[${job.id}] resuming after ${captured} page(s)`)
 
-  /** Between pages: honour a pause or stop the user asked for. A pause hands back where the crawl is. */
+  const checkpoint = (): CrawlState => ({
+    version: 1,
+    queue: queue.slice(0, MAX_SAVED_QUEUE),
+    visited,
+    captured,
+    failures,
+    navLinksQueued,
+    hoverSeen: [...hoverSeen],
+    meta,
+    tokens: mergeTokens(allTokens),
+  })
+  /** Between pages: honour a pause or stop the user asked for, or a stop of this worker. A pause hands back where the crawl is. */
   const windDown = async (): Promise<"stop" | "paused" | null> => {
     try {
+      // A stopping worker pauses where the server lets the crawl resume later; otherwise it stops with the pages it has,
+      // after at least one, so a job claimed just before the stop is not failed as empty.
+      if (signal.aborted) return (await api.pause(job.id, checkpoint())) ? "paused" : captured ? "stop" : null
       for (let checks = 0; checks < 5; checks++) {
         const control = await api.control(job.id)
         if (control !== "pause") return control
-        const state: CrawlState = {
-          version: 1,
-          queue: queue.slice(0, MAX_SAVED_QUEUE),
-          visited,
-          captured,
-          failures,
-          navLinksQueued,
-          hoverSeen: [...hoverSeen],
-          meta,
-          tokens: mergeTokens(allTokens),
-        }
-        if (await api.pause(job.id, state)) return "paused"
+        if (await api.pause(job.id, checkpoint())) return "paused"
         // The pause was cancelled or replaced by a stop meanwhile: check again.
       }
     } catch (e) {
@@ -1253,6 +1259,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
 
   let stopped = false
   while (queue.length && captured < job.maxPages) {
+    progress()
     const next = await windDown()
     if (next === "paused") {
       log(`[${job.id}] paused after ${captured} page(s)`)
