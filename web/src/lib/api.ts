@@ -43,6 +43,12 @@ export type PageWithRef = Page & { reference: RefSummary }
 export type AnimationWithRef = Animation & { reference: RefSummary }
 
 export class UnauthorizedError extends Error {}
+/** Fired on window when any request is answered 401: the session is over. App reacts to it. */
+export const SIGNED_OUT = "snip:signed-out"
+function signedOut() {
+  window.dispatchEvent(new Event(SIGNED_OUT))
+  return new UnauthorizedError("Not signed in")
+}
 export class NotFoundError extends Error {}
 
 /** The URL is already in the library. */
@@ -57,7 +63,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
   })
-  if (res.status === 401) throw new UnauthorizedError("Not signed in")
+  if (res.status === 401) throw signedOut()
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as { error?: string; existing?: Reference }
     if (res.status === 409 && body.existing) throw new DuplicateError(body.existing)
@@ -118,7 +124,7 @@ export const api = {
     if (body.collectionId) form.set("collectionId", body.collectionId)
     // No content-type header: the browser sets the multipart boundary.
     const res = await fetch("/api/images", { method: "POST", body: form })
-    if (res.status === 401) throw new UnauthorizedError("Not signed in")
+    if (res.status === 401) throw signedOut()
     if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error ?? `Upload failed (${res.status})`)
     return (await res.json()) as SavedImage
   },
