@@ -96,7 +96,8 @@ export interface OwnerLink {
 }
 
 export interface CloudSnapshotState {
-  mode: CloudMode
+  /** "unreadable": cloud.json exists but cannot be read, so nothing may be started. */
+  mode: CloudMode | "unreadable"
   state: CloudFile | null
   busy: boolean
   running: { command: string; step: string | null } | null

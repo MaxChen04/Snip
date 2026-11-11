@@ -32,3 +32,16 @@ test("nothing actionable is shown until the first snapshot has loaded", async ()
     await close()
   }
 })
+
+// Main starts nothing for a library whose cloud.json it cannot read, and the engine would
+// refuse every command: the window says so instead of offering to enable cloud.
+test("an unreadable cloud record offers nothing to start", async () => {
+  const { page, close } = await openSettings(browser, server, { mode: "unreadable" })
+  try {
+    const main = page.locator("main")
+    await main.getByRole("heading", { name: "Snip can’t read this library’s cloud record" }).waitFor()
+    assert.equal(await main.getByRole("button").count(), 0)
+  } finally {
+    await close()
+  }
+})

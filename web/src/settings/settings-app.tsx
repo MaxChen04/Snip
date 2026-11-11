@@ -50,9 +50,11 @@ export function SettingsApp() {
       ? adopted
         ? "Your library lives in your Cloudflare account, and this Mac keeps its own copy. Captures still run on this Mac."
         : "Your library lives in your Cloudflare account. Captures still run on this Mac."
-      : cloud.cloud?.detachedAt
-        ? "Your library lives on this Mac. Your detached cloud copy is still live, so other devices and agents can still read it."
-        : "Your library lives on this Mac. Enabling cloud copies it to your own Cloudflare account, so other devices and agents can read it."
+      : mode === "unreadable"
+        ? "Snip hasn’t opened this library."
+        : cloud.cloud?.detachedAt
+          ? "Your library lives on this Mac. Your detached cloud copy is still live, so other devices and agents can still read it."
+          : "Your library lives on this Mac. Enabling cloud copies it to your own Cloudflare account, so other devices and agents can read it."
 
   // A screenshot or a support run may open a specific dialog; harmless in normal use.
   useEffect(() => {
@@ -178,7 +180,13 @@ export function SettingsApp() {
 
             {errorCard}
 
-            {mode === "cloud" ? (
+            {mode === "unreadable" ? (
+              // Main started nothing for this library; the engine would refuse every command.
+              <Panel
+                title="Snip can’t read this library’s cloud record"
+                description={`Repair or remove .snip/cloud.json in ${cloud.snapshot.app?.dataRoot ?? "your Snip library folder"}, or update Snip, then reopen it. Nothing can be changed here until then.`}
+              />
+            ) : mode === "cloud" ? (
               <CloudPanels
                 cloud={cloud}
                 onOpen={openCloud}

@@ -3,7 +3,7 @@
 //   ?fake=local | local-empty | enabling&step=4 | enabling-error | cloud | cloud-empty
 //         | detached | pulling
 // Actions advance the same NDJSON-shaped events the real engine emits.
-import type { CloudBridge, CloudFile, CloudSnapshotState, EngineEvent, OwnerLink } from "../types"
+import type { CloudBridge, CloudFile, CloudMode, CloudSnapshotState, EngineEvent, OwnerLink } from "../types"
 import { stepsFor } from "../steps"
 
 const params = new URLSearchParams(location.search)
@@ -214,6 +214,9 @@ const current = initial()
 let state = current.state
 const seededSteps = current.steps
 
+// The engine only ever reports its own three modes.
+const engineMode = (snapshot: CloudSnapshotState): CloudMode => (snapshot.mode === "unreadable" ? "local" : snapshot.mode)
+
 function set(next: CloudSnapshotState) {
   state = next
 }
@@ -327,7 +330,7 @@ export function createFixtureBridge(): CloudBridge {
     async cancel() {
       stopTimers()
       set({ ...state, busy: false })
-      emit({ v: 1, event: "result", ok: false, code: "CANCELLED", mode: state.mode })
+      emit({ v: 1, event: "result", ok: false, code: "CANCELLED", mode: engineMode(state) })
       return { cancelled: true }
     },
     async abort() {
@@ -365,7 +368,7 @@ export function createFixtureBridge(): CloudBridge {
       set({ ...state, busy: true, running: { command, step: null } })
       runCommand(command, () => {
         set(before)
-        emit({ v: 1, event: "result", ok: true, code: "OK", mode: before.mode })
+        emit({ v: 1, event: "result", ok: true, code: "OK", mode: engineMode(before) })
       })
       return { started: true }
     },
@@ -430,7 +433,7 @@ export function createFixtureBridge(): CloudBridge {
         cloud: "Snip is now using your cloud library.",
         enabling: "Setting up your cloud library.",
         local: "Your library is on this Mac.",
-      }[state.mode]
+      }[engineMode(state)]
       log("info", opening)
       return () => logListeners.delete(callback)
     },
