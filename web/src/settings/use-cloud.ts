@@ -67,15 +67,10 @@ export function useCloud(bridge = window.snipCloud) {
   const [link, setLink] = useState<OwnerLink | null>(null)
   const [linkPending, setLinkPending] = useState(false)
   const [linkError, setLinkError] = useState<string | null>(null)
-  // The log callback is installed once; this ref says whether a mint is waiting, so a
-  // failure can be shown in the sheet that asked for it instead of as a loose toast.
-  const minting = useRef(false)
-  // The link arrives on its own channel. These let the wait end the moment it does,
-  // rather than after the next `state()` round trip.
-  const linkSettled = useRef(false)
-  const linkLatest = useRef<OwnerLink | null>(null)
   const [note, setNote] = useState<{ level: "info" | "warn" | "error"; message: string; id: number } | null>(null)
-  // The bridge callbacks are installed once; this lets them read what is on screen.
+  // The bridge callbacks are installed once; these let them read what is on screen.
+  const minting = useRef(false)
+  minting.current = linkPending
   const asking = useRef(false)
   asking.current = choice !== null || needed !== null
   // `state()` replies can land out of order: one issued before the last applied is dropped.
@@ -205,7 +200,6 @@ export function useCloud(bridge = window.snipCloud) {
     const offLog = bridge.onLog(entry => {
       if (entry.level === "error" && minting.current) {
         // One reason, in the sheet that asked for it, next to its own Try again.
-        linkSettled.current = true
         setLinkError(entry.message)
         setLinkPending(false)
         return
@@ -219,8 +213,6 @@ export function useCloud(bridge = window.snipCloud) {
     // The link is not a "step" event: it arrives on its own channel so the window never
     // flips into the progress view for it.
     const offLink = bridge.onLink(next => {
-      linkLatest.current = next
-      linkSettled.current = true
       setLink(next)
       setLinkPending(false)
     })
@@ -231,41 +223,16 @@ export function useCloud(bridge = window.snipCloud) {
     }
   }, [bridge, refresh])
 
+  // Every mint ends on a channel main pushes: the link, or an error line in the log.
   const requestLink = useCallback(async () => {
-    if (!bridge) return null
+    // A mint already in flight is the one to wait for.
+    if (!bridge || minting.current) return
     minting.current = true
-    linkSettled.current = false
-    linkLatest.current = null
     setLinkPending(true)
     setLinkError(null)
-    try {
-      const reply = await bridge.ownerLink()
-      if (reply?.error) {
-        setLinkError(reply.error)
-        return null
-      }
-      // The mint lands on its own channel. This loop is the fallback for a link that
-      // arrived before anyone was listening, and the way to notice a run that ended
-      // without one. `settled` keeps it from waiting on a slow read it doesn't need.
-      for (let attempt = 0; attempt < 60; attempt++) {
-        if (linkSettled.current) return linkLatest.current
-        await new Promise(resolve => window.setTimeout(resolve, 250))
-        if (linkSettled.current) return linkLatest.current
-        const next = await bridge.state()
-        if (next?.link) {
-          linkLatest.current = next.link
-          setLink(next.link)
-          return next.link
-        }
-        if (!next?.running) {
-          // Main logs the reason; without one, say the plain thing.
-          setLinkError(current => current ?? "Snip couldn’t create a sign-in link. Try again.")
-          return null
-        }
-      }
-      return null
-    } finally {
-      minting.current = false
+    const reply = await bridge.ownerLink()
+    if (reply?.error) {
+      setLinkError(reply.error)
       setLinkPending(false)
     }
   }, [bridge])
@@ -318,7 +285,8 @@ export function useCloud(bridge = window.snipCloud) {
     // The file's error is from before the run in flight; a live one is newer than the file.
     error: busy ? null : error ?? snapshot.state?.error ?? null,
     note,
-    link,
+    // A link being replaced, or one whose replacement failed, is not offered again.
+    link: linkPending || linkError ? null : link,
     linkPending,
     linkError,
     requestLink,
