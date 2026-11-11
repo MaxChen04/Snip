@@ -117,7 +117,7 @@ async function quitApp() {
 }
 
 // Mirrors the app's own pre-migration backup so CLI and app upgrades are equally safe.
-function migrate() {
+export function migrate() {
   const wrangler = path.join(ROOT, "node_modules/wrangler/bin/wrangler.js")
   const env = { ...process.env, CI: "true", WRANGLER_SEND_METRICS: "false" }
   const web = path.join(ROOT, "web")

@@ -65,3 +65,9 @@ test("the cloud deploy runs only for a cloud install, and never on an unreadable
     fs.rmSync(root, { recursive: true, force: true })
   }
 })
+
+test("the standalone local migration is the update's backed-up one, not a second copy", () => {
+  const source = fs.readFileSync(new URL("../../scripts/migrate-local.mjs", import.meta.url), "utf8")
+  assert.match(source, /import \{ migrate \} from '\.\/update\.mjs'/)
+  assert.doesNotMatch(source, /wrangler|spawn/, "it runs no migration of its own")
+})
