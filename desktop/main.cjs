@@ -519,6 +519,8 @@ async function restartCaptureForMode() {
 async function enterCloudMode() {
   if (!layout) return
   try { keepLocalCaptureEnv({ dataRoot: layout.dataRoot }) } catch {}
+  // The local Worker has no place beside a cloud library, and the tray no longer offers to stop it.
+  if (services.web.proc) await stopWeb()
   await restartCaptureForMode()
   autoCapture = true
   recreateWindow()
@@ -846,8 +848,10 @@ function serviceItems(key) {
   const s = services[key]
   const items = [{ label: `${labels[key]}: ${STATUS[s.status]}`, enabled: false }]
   if (s.detail && s.status === "disconnected") items.push({ label: s.detail.slice(0, 100), enabled: false })
-  if (s.proc && !s.stopping) items.push({ label: `Stop ${labels[key].toLowerCase()}`, enabled: !shutdown && !quitting, click: () => key === "web" ? void stopWeb() : (autoCapture = false, void s.stop()) })
-  else if (!s.proc) items.push({ label: `Start ${labels[key].toLowerCase()}`, enabled: !!node && !shutdown && !quitting && (key === "web" || services.web.status === "running" || mode() === "cloud"), click: () => { autoCapture = true; start(key) } })
+  // A cloud run stops the local Worker itself and counts on it staying stopped.
+  const free = !shutdown && !quitting && !(key === "web" && cloudRun)
+  if (s.proc && !s.stopping) items.push({ label: `Stop ${labels[key].toLowerCase()}`, enabled: free, click: () => key === "web" ? void stopWeb() : (autoCapture = false, void s.stop()) })
+  else if (!s.proc) items.push({ label: `Start ${labels[key].toLowerCase()}`, enabled: !!node && free && (key === "web" || services.web.status === "running" || mode() === "cloud"), click: () => { autoCapture = true; start(key) } })
   if (key === "capture" && s.proc && !s.stopping) items.push({ label: "Check queue now", enabled: !quitting, click: () => s.send({ type: "snip:retry" }) })
   return items
 }
