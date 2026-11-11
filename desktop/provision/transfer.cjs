@@ -145,16 +145,26 @@ const DONE_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>Snip<
 <style>body{font-family:-apple-system,system-ui,sans-serif;background:#f6f5f2;color:#222;display:grid;place-items:center;min-height:100vh;margin:0}
 p{font-size:15px}</style></head><body><p id="s">Finishing sign-in…</p>
 <script>
-fetch('/store',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token:location.hash.replace(/^#token=/,'')})})
- .then(function(r){return r.json()}).then(function(){history.replaceState(null,'','/done');document.getElementById('s').textContent='You can close this tab and return to Snip.'})
- .catch(function(){document.getElementById('s').textContent='Sign-in could not be completed. Return to Snip and try again.'});
+var s=document.getElementById('s'),t=/[#&]token=([^&]*)/.exec(location.hash),n=/[#&]nonce=([^&]*)/.exec(location.hash);
+if(!n){s.textContent='Your cloud library is older than this Snip. Update cloud (npm run update), then sign in again.'}
+else fetch('/store',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token:t&&t[1],nonce:n[1]})})
+ .then(function(r){if(!r.ok)throw 0;history.replaceState(null,'','/done');s.textContent='You can close this tab and return to Snip.'})
+ .catch(function(){s.textContent='Sign-in could not be completed. Return to Snip and try again.'});
 </script></body></html>`;
 
 /**
  * The loopback the owner link redirects to. Binds 127.0.0.1 only, accepts one
  * token from its own page, closes after it is read or after the timeout.
+ *
+ * The link has to carry the port, so the loopback exists before the link does:
+ * it makes the link's nonce (`loopback.nonce`, passed to mintOwnerLink). The
+ * Worker puts that nonce in the redirect fragment, which only the browser
+ * reads, and /store takes a token only together with it. Another local process
+ * can reach the port but cannot know the nonce.
  */
 function startLoopback({ host = '127.0.0.1', port = 0, timeoutMs = 10 * 60_000, serverFactory = http.createServer } = {}) {
+  const nonce = crypto.randomBytes(16).toString('hex');
+  const expected = Buffer.from(nonce);
   let token = null;
   let resolveToken;
   let closed = false;
@@ -183,10 +193,17 @@ function startLoopback({ host = '127.0.0.1', port = 0, timeoutMs = 10 * 60_000, 
       let body = '';
       req.on('data', (chunk) => { if (body.length < 8192) body += chunk; });
       req.on('end', () => {
-        let value = null;
-        try { value = JSON.parse(body || '{}').token; } catch {}
-        if (typeof value !== 'string' || !value || token) {
-          res.writeHead(token ? 409 : 400, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+        let posted = {};
+        try { posted = JSON.parse(body || '{}') || {}; } catch {}
+        const value = posted.token;
+        const sent = Buffer.from(String(posted.nonce));
+        // A wrong or missing nonce is refused and the loopback keeps waiting for the real page.
+        let status = 0;
+        if (sent.length !== expected.length || !crypto.timingSafeEqual(sent, expected)) status = 403;
+        else if (typeof value !== 'string' || !value) status = 400;
+        else if (token) status = 409;
+        if (status) {
+          res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
           res.end(JSON.stringify({ ok: false }));
           return;
         }
@@ -235,6 +252,7 @@ function startLoopback({ host = '127.0.0.1', port = 0, timeoutMs = 10 * 60_000, 
   return {
     listening,
     token: tokenPromise,
+    nonce,
     close,
     get closed() { return closed; },
   };

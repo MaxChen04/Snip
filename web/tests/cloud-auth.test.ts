@@ -191,15 +191,18 @@ test("the owner link POST burns the nonce, creates the owner and hands the sessi
     const res = await call("/auth/owner", { method: "POST", body: new URLSearchParams({ t: token }), headers: { "content-type": "application/x-www-form-urlencoded" } })
     assert.equal(res.status, 302)
     const location = res.headers.get("location")!
-    assert.match(location, /^http:\/\/127\.0\.0\.1:43111\/done#token=/)
+    assert.match(location, /^http:\/\/127\.0\.0\.1:43111\/done#token=[^&]+&nonce=[0-9a-f]{32}$/)
     const cookie = cookieFrom(res)
     assert.ok(cookie, "POST sets the session")
     assert.match(res.headers.getSetCookie().join("\n"), /HttpOnly/i)
     assert.match(res.headers.getSetCookie().join("\n"), /SameSite=Lax/i)
     assert.equal(res.headers.get("referrer-policy"), "no-referrer")
 
+    // The fragment carries the link's own nonce, so the loopback can tell its page from another process.
+    const params = new URLSearchParams(new URL(location).hash.slice(1))
+    assert.equal(params.get("nonce"), nonce)
     // The fragment token is the same signed session the cookie holds.
-    const fragment = decodeURIComponent(location.split("#token=")[1]!)
+    const fragment = params.get("token")!
     assert.equal(decodeURIComponent(cookie!.split("=").slice(1).join("=")), fragment)
     // Electron injects the same value raw, without Hono's cookie serialiser.
     assert.equal((await call("/api/me", { headers: { cookie: `${SESSION_COOKIE}=${fragment}` } })).status, 200)

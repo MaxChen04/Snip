@@ -1079,7 +1079,7 @@ function ownerStep() {
         }
       }
       const ownerId = ctx.cloud.ownerId || 'owner';
-      const minted = mintOwnerLink({ secret: stored.ownerLinkSecret, url: ctx.cloud.url, ownerId, port });
+      const minted = mintOwnerLink({ secret: stored.ownerLinkSecret, url: ctx.cloud.url, ownerId, port, nonce: loopback?.nonce });
       ctx.setCloud({ ownerId, ownerLinkMintedAt: new Date().toISOString() });
 
       ctx.emit.human('owner', 'open_url', minted.link, 'Sign in to your Snip in the browser, then come back');

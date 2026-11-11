@@ -32,6 +32,8 @@ There are no IDs to copy, no secrets to paste and no dashboard steps besides tho
 
 When the Worker is up, Snip opens a **one-time owner link** in your browser. It signs Snip.app in: the browser hands the session back to the app over a loopback on this Mac and the tab says **You can close this tab and return to Snip.** The app arrives signed in without a second login.
 
+The handoff is tied to the link it came from. The Worker's redirect carries the link's one-time nonce in the address fragment, which never leaves the browser, and the app's loopback takes a session only together with that nonce. Another process on this Mac can reach the loopback port but cannot post a session to it.
+
 - The link works once and expires after ten minutes.
 - The link always signs in as the library's one owner. On a fresh install that identity is created; on a re-enabled or adopted library it is reused, so a second owner row never appears.
 - A passkey is what you use to sign in to the cloud library from another browser or device. You add one in a browser that opened a **Sign in another browser** link (below), or from **/passkeys** at any time. Registering one only adds a device: Snip never replaces or deletes an existing passkey, and adding the same device twice says **You already added a passkey on this device.**
@@ -177,7 +179,7 @@ The three destructive commands share one interlock. `--confirm` must equal the b
 npm run setup:cloudflare -- owner link --no-handoff
 ```
 
-It mints the link, prints it in a `human` event and in the step result, and stops. Nothing is opened, no handoff is attempted, and no `session` event is emitted, because this Mac has no session to receive. Open the printed link on the other device within ten minutes and register a passkey there. This is the same command Settings runs when you press **Sign in another browser**.
+It mints the link, prints it in a `human` event and in the step result, and stops. Nothing is opened, no handoff is attempted, and no `session` event is emitted, because this Mac has no session to receive. Open the printed link on the other device within ten minutes: that browser is signed in and offered a passkey. This is the same command Settings runs when you press **Sign in another browser**.
 
 ## Turning cloud off
 
@@ -301,6 +303,8 @@ Sharing a library with a second person is planned for later. When it ships, it w
 `npm run update` updates both halves when this Mac is in cloud mode: it fast-forwards, rebuilds, applies the remote database migrations, deploys the new Worker and then restarts capture. Existing captures and saved files are kept.
 
 A release build does the same on its first launch after a version change, before the window loads. If that deploy fails, Snip shows it as a blocking step instead of running a new app against an old Worker.
+
+The app's sign-in handoff needs the Worker to send that nonce, so a Worker older than the app cannot sign the app in. The tab that opens after the owner link then says **Your cloud library is older than this Snip. Update cloud (npm run update), then sign in again.**, and the app stays signed out until the Worker is redeployed. Nothing accepts a session without the nonce.
 
 Snip records the Worker version it deployed. If the deployed Worker no longer matches that record, Snip reports the deployment as changed outside Snip and asks you to deploy again; it does not redeploy on its own, because someone may have changed the Worker deliberately.
 

@@ -11,8 +11,12 @@ import {
   verifyOwnerLink,
 } from "./auth"
 
-/** The loopback address the engine listens on; the token rides the fragment, never the path. */
-export const connector = (port: number, token: string) => `http://127.0.0.1:${port}/done#token=${encodeURIComponent(token)}`
+/**
+ * The loopback address the engine listens on. The session and the link's nonce ride the fragment,
+ * never the path: the loopback only accepts a token that comes with the nonce of the link it minted.
+ */
+export const connector = (port: number, token: string, nonce: string) =>
+  `http://127.0.0.1:${port}/done#token=${encodeURIComponent(token)}&nonce=${encodeURIComponent(nonce)}`
 
 // The owner link is the app's own way in: the engine mints it after a deploy, the browser opens
 // it, and it does two jobs — it signs this browser in (for passkey registration and reading) and
@@ -141,7 +145,7 @@ export async function ownerLinkSubmit(c: Context<AppEnv>) {
   // reaches a server log; the browser page is what Electron cannot see into, which is why the app
   // gets the value itself rather than reading Safari's cookie jar.
   // A browser link has no listener to hand off to; the passkeys page offers this browser a passkey.
-  const location = link.port > 0 ? connector(link.port, token) : "/passkeys?new=1"
+  const location = link.port > 0 ? connector(link.port, token, link.nonce) : "/passkeys?new=1"
   // c.newResponse keeps the Set-Cookie set above; a bare Response would drop it.
   const headers = Object.fromEntries((await linkHeaders({ "content-type": "text/plain; charset=utf-8", location })).entries())
   return c.newResponse(null, 302, headers)

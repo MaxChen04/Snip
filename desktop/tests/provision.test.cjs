@@ -631,6 +631,9 @@ test('owner links are signed, scoped and single-shaped', () => {
   assert.equal(transfer.ownerSecretHash(secret), crypto.createHash('sha256').update(`snip-owner-hash-v1|${secret}`).digest('base64url').slice(0, 16));
 });
 
+/** POST /store the way the loopback's own page does. */
+const storeToken = (port, body) => fetch(`http://127.0.0.1:${port}/store`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+
 test('the loopback accepts exactly one token and drops the fragment', async () => {
   const loopback = transfer.startLoopback({ timeoutMs: 5000 });
   const port = await loopback.listening;
@@ -639,11 +642,47 @@ test('the loopback accepts exactly one token and drops the fragment', async () =
   const html = await page.text();
   assert.match(html, /location\.hash/);
   assert.match(html, /history\.replaceState/);
-  const stored = await fetch(`http://127.0.0.1:${port}/store`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: 'session-value' }) });
+  const stored = await storeToken(port, { token: 'session-value', nonce: loopback.nonce });
   assert.equal(stored.status, 200);
   assert.equal(await tokenPromise, 'session-value');
-  const second = await fetch(`http://127.0.0.1:${port}/store`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: 'other' }) }).catch(() => null);
+  const second = await storeToken(port, { token: 'other', nonce: loopback.nonce }).catch(() => null);
   assert.ok(!second || second.status !== 200);
+  loopback.close();
+});
+
+test('the loopback refuses a token posted without its nonce, or with another, and keeps waiting for the real one', async () => {
+  const loopback = transfer.startLoopback({ timeoutMs: 5000 });
+  const port = await loopback.listening;
+  assert.match(loopback.nonce, /^[0-9a-f]{32}$/);
+  const other = transfer.startLoopback({ timeoutMs: 5000 });
+  assert.notEqual(other.nonce, loopback.nonce, 'every loopback has its own nonce');
+  other.close();
+  let received = null;
+  loopback.token.then((value) => { received = value; }, () => {});
+
+  const refused = [
+    { token: 'forged' },
+    { token: 'forged', nonce: '' },
+    { token: 'forged', nonce: null },
+    { token: 'forged', nonce: 42 },
+    { token: 'forged', nonce: 'a'.repeat(32) },
+    { token: 'forged', nonce: loopback.nonce.slice(0, -1) },
+    { token: 'forged', nonce: `${loopback.nonce}0` },
+    { token: 'forged', nonce: loopback.nonce.toUpperCase() },
+    { nonce: loopback.nonce },
+  ];
+  for (const body of refused) {
+    const response = await storeToken(port, body);
+    assert.equal(response.status, body.token ? 403 : 400, `${JSON.stringify(body)} is refused`);
+  }
+  assert.equal((await fetch(`http://127.0.0.1:${port}/store`, { method: 'POST', body: 'not json' })).status, 403);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(received, null, 'nothing a wrong nonce posted was taken');
+  assert.equal(loopback.closed, false, 'the loopback is still waiting for the real page');
+
+  assert.equal((await storeToken(port, { token: 'real', nonce: loopback.nonce })).status, 200);
+  assert.equal(await loopback.token, 'real');
+  assert.equal((await storeToken(port, { token: 'again', nonce: loopback.nonce }).catch(() => ({ status: 0 }))).status === 200, false, 'the right nonce works once');
   loopback.close();
 });
 
@@ -652,7 +691,7 @@ test('the loopback refuses a token posted by another web page', async () => {
   const port = await loopback.listening;
   let received = null;
   loopback.token.then((value) => { received = value; }, () => {});
-  const post = (origin) => fetch(`http://127.0.0.1:${port}/store`, { method: 'POST', headers: { 'content-type': 'text/plain', origin }, body: JSON.stringify({ token: `from ${origin}` }) });
+  const post = (origin) => fetch(`http://127.0.0.1:${port}/store`, { method: 'POST', headers: { 'content-type': 'text/plain', origin }, body: JSON.stringify({ token: `from ${origin}`, nonce: loopback.nonce }) });
   for (const origin of ['https://evil.example', `http://localhost:${port}`, `http://127.0.0.1:${port + 1}`, 'null']) {
     assert.equal((await post(origin)).status, 403, `${origin} is refused`);
   }
@@ -2054,6 +2093,11 @@ function ownerLinkPort(link) {
   return Number(payload.split('|').pop());
 }
 
+/** The nonce an owner link carries, read back out of the signed payload (payload|ownerId|exp|nonce|port). */
+function ownerLinkNonce(link) {
+  return new URL(link).searchParams.get('t').split('.')[0].split('|')[3];
+}
+
 function ownerLibrary({ ownerId = 'tester' } = {}) {
   const library = fakeLibrary();
   stateModule.writeSecrets(library.root, { version: 1, ownerLinkSecret: crypto.randomBytes(32).toString('hex'), captureToken: 'c' });
@@ -2114,7 +2158,10 @@ test('owner link --managed still hands off when --no-handoff is absent', async (
   assert.ok(link, 'the link is emitted before the run waits on the token');
   const port = ownerLinkPort(link);
   assert.ok(port > 0, 'the app\'s own link still carries a live loopback port');
-  const stored = await fetch(`http://127.0.0.1:${port}/store`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: 'session-value' }) });
+  // The loopback only takes the nonce of the link it minted: a process that has the port but not the link is refused.
+  assert.equal((await storeToken(port, { token: 'forged' })).status, 403);
+  assert.equal((await storeToken(port, { token: 'forged', nonce: 'f'.repeat(32) })).status, 403);
+  const stored = await storeToken(port, { token: 'session-value', nonce: ownerLinkNonce(link) });
   assert.equal(stored.status, 200);
 
   const settled = await Promise.race([pending, new Promise((resolve) => setTimeout(() => resolve('timeout'), 5000))]);
@@ -2135,9 +2182,7 @@ test('setup ignores --no-handoff: its owner step is how this Mac signs itself in
       if (step !== 'owner') return;
       const port = ownerLinkPort(url);
       ports.push(port);
-      if (port > 0) {
-        fetch(`http://127.0.0.1:${port}/store`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: 'app-session' }) }).catch(() => {});
-      }
+      if (port > 0) storeToken(port, { token: 'app-session', nonce: ownerLinkNonce(url) }).catch(() => {});
     },
   });
   assert.deepEqual(ports.length, 1);

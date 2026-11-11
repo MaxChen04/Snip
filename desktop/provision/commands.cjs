@@ -1051,7 +1051,7 @@ async function commandOwner(ctx) {
         }
       }
       const stored = ctx2.secrets();
-      const minted = mintOwnerLink({ secret: stored.ownerLinkSecret, url: record.url, ownerId: record.ownerId || 'owner', port });
+      const minted = mintOwnerLink({ secret: stored.ownerLinkSecret, url: record.url, ownerId: record.ownerId || 'owner', port, nonce: loopback?.nonce });
       ctx2.setWork({ ownerLink: minted.link, ownerLoopback: loopback });
       // `url` is also on the step result's top level because the step event
       // carries that object as its `data` (§1.4.1): a client that reads steps
