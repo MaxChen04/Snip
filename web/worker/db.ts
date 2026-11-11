@@ -536,34 +536,50 @@ export async function cleanupRetiredFiles(db: D1Database, files: R2Bucket) {
   }
 }
 
+/** Whether a refs row has saved pages. A capture with pages is resumed in its attempt; one without starts fresh. */
+const HAS_PAGES = `EXISTS (SELECT 1 FROM pages WHERE reference_id = refs.id)`
+
+/** Ends the captures matching `where` (one bound value) with what they have: ready with their pages, stopped-empty without. */
+const settleStopped = (db: D1Database, where: string, arg: unknown, ts: string) => [
+  db.prepare(`UPDATE refs SET status = 'ready', progress = NULL, error = NULL, capture_control = NULL,
+    title = coalesce(json_extract(crawl_state, '$.meta.title'), title), description = coalesce(json_extract(crawl_state, '$.meta.description'), description),
+    favicon = CASE WHEN instr(json_extract(crawl_state, '$.meta.favicon'), 'refs/' || id || '/' || capture_attempt || '/') = 1 THEN json_extract(crawl_state, '$.meta.favicon') ELSE favicon END,
+    tokens_json = json_extract(crawl_state, '$.tokens'), crawl_state = NULL, updated_at = ?
+    WHERE ${where} AND ${HAS_PAGES}`).bind(ts, arg),
+  db.prepare(`UPDATE refs SET status = 'failed', progress = NULL, error = ?, capture_control = NULL, crawl_state = NULL, updated_at = ? WHERE ${where}`).bind(STOPPED_EMPTY, ts, arg),
+]
+
+/** The last checkpoint brought up to the pages saved since: they count as captured and are not visited again. */
+function resumeState(checkpoint: CrawlState | null, pageUrls: string[]): CrawlState {
+  const base = checkpoint ?? { version: 1, queue: [], visited: [], captured: 0, failures: 0, navLinksQueued: false, hoverSeen: [], meta: null, tokens: null }
+  const since = pageUrls.slice(base.captured)
+  return { ...base, queue: base.queue.filter((url) => !since.includes(url)), visited: [...base.visited, ...since], captured: pageUrls.length }
+}
+
 export async function claimJob(db: D1Database): Promise<Job | null> {
   const stale = new Date(Date.now() - STALE_MINUTES * 60_000).toISOString()
   const ts = now()
   const attempt = crypto.randomUUID().replace(/-/g, "")
-  const candidate = `SELECT id FROM refs WHERE (status = 'queued' AND coalesce(capture_control, '') != 'paused') OR (status = 'capturing' AND claimed_at < ?) ORDER BY created_at LIMIT 1`
-  // A resumed crawl (crawl_state set) keeps its attempt, pages and files. Anything else starts over.
-  const fresh = (yes: string, no: string) => `CASE WHEN crawl_state IS NULL OR capture_attempt IS NULL THEN ${yes} ELSE ${no} END`
-  // D1 batches are transactions. Record the old namespace before replacing the lease,
-  // and remove old pages within the same transaction as the claim.
+  const abandoned = `status = 'capturing' AND claimed_at < ?`
+  const candidate = `SELECT id FROM refs WHERE (status = 'queued' AND coalesce(capture_control, '') != 'paused') OR (${abandoned}) ORDER BY created_at LIMIT 1`
+  // D1 batches are transactions. Record the old namespace before replacing the lease.
   const results = await db.batch([
-    db.prepare(`INSERT OR IGNORE INTO capture_cleanup (prefix) SELECT 'refs/' || id || '/' || coalesce(capture_attempt || '/', 'p') FROM refs WHERE id = (${candidate}) AND (crawl_state IS NULL OR capture_attempt IS NULL)`).bind(stale),
-    db.prepare(`SELECT crawl_state FROM refs WHERE id = (${candidate}) AND capture_attempt IS NOT NULL`).bind(stale),
-    db.prepare(`UPDATE refs SET status = 'capturing', capture_attempt = ${fresh("?1", "capture_attempt")}, claimed_at = ?2, updated_at = ?2,
-      progress = ${fresh("'Starting capture'", "'Resuming capture'")}, cover_key = ${fresh("NULL", "cover_key")}, page_count = ${fresh("0", "page_count")},
-      animation_count = ${fresh("0", "animation_count")}, tokens_json = NULL, capture_control = NULL, crawl_state = NULL
-      WHERE id = (${candidate.replace("?", "?3")}) RETURNING id, url, mode, max_pages, capture_attempt, capture_options`).bind(attempt, ts, stale),
-    db.prepare(`DELETE FROM pages WHERE reference_id IN (SELECT id FROM refs WHERE capture_attempt = ? AND status = 'capturing')`).bind(attempt),
+    db.prepare(`INSERT OR IGNORE INTO capture_cleanup (prefix) SELECT 'refs/' || id || '/' || coalesce(capture_attempt || '/', 'p') FROM refs WHERE id = (${candidate}) AND NOT ${HAS_PAGES}`).bind(stale),
+    db.prepare(`UPDATE refs SET status = 'capturing', claimed_at = ?2, updated_at = ?2,
+      capture_attempt = CASE WHEN ${HAS_PAGES} THEN capture_attempt ELSE ?1 END, progress = CASE WHEN ${HAS_PAGES} THEN 'Resuming capture' ELSE 'Starting capture' END
+      WHERE id = (${candidate.replace("?", "?3")}) RETURNING id, url, mode, max_pages, capture_attempt, capture_options, crawl_state,
+      (SELECT json_group_array(url) FROM (SELECT url FROM pages WHERE reference_id = refs.id ORDER BY ord)) AS page_urls`).bind(attempt, ts, stale),
   ])
-  const r = results[2]?.results[0] as Row | undefined
+  const r = results[results.length - 1]?.results[0] as Row | undefined
   if (!r) return null
-  const state = (results[1]?.results[0] as Row | undefined)?.crawl_state
+  const pageUrls = parse<string[]>(r.page_urls) ?? []
   return {
     id: r.id as string,
     url: r.url as string,
     mode: r.mode as CaptureMode,
     maxPages: r.max_pages as number,
     attempt: r.capture_attempt as string,
-    resume: parse<CrawlState>(state),
+    resume: pageUrls.length ? resumeState(parse<CrawlState>(r.crawl_state), pageUrls) : null,
     options: parse<CaptureOptions>(r.capture_options),
   }
 }
@@ -641,7 +657,7 @@ export async function addPage(db: D1Database, referenceId: string, attempt: stri
 export async function completeJob(db: D1Database, id: string, attempt: string, c: JobComplete) {
   const result = await db
     .prepare(
-      `UPDATE refs SET status = 'ready', progress = NULL, error = NULL, capture_control = NULL, title = coalesce(?, title), description = coalesce(?, description),
+      `UPDATE refs SET status = 'ready', progress = NULL, error = NULL, capture_control = NULL, crawl_state = NULL, title = coalesce(?, title), description = coalesce(?, description),
         favicon = coalesce(?, favicon), cover_key = coalesce(?, cover_key), tokens_json = ?, updated_at = ? WHERE id = ? AND status = 'capturing' AND capture_attempt = ?`,
     )
     .bind(c.title, c.description, c.favicon, c.coverKey, c.tokens ? JSON.stringify(c.tokens) : null, now(), id, attempt)
@@ -650,7 +666,7 @@ export async function completeJob(db: D1Database, id: string, attempt: string, c
 }
 
 export async function failJob(db: D1Database, id: string, attempt: string, error: string) {
-  const result = await db.prepare(`UPDATE refs SET status = 'failed', progress = NULL, error = ?, capture_control = NULL, updated_at = ? WHERE id = ? AND status = 'capturing' AND capture_attempt = ?`).bind(error.slice(0, 1000), now(), id, attempt).run()
+  const result = await db.prepare(`UPDATE refs SET status = 'failed', progress = NULL, error = ?, capture_control = NULL, crawl_state = NULL, updated_at = ? WHERE id = ? AND status = 'capturing' AND capture_attempt = ?`).bind(error.slice(0, 1000), now(), id, attempt).run()
   return result.meta.changes > 0
 }
 
@@ -685,13 +701,7 @@ export async function resumeReference(db: D1Database, id: string) {
 export async function requestStop(db: D1Database, id: string) {
   const ts = now()
   const results = await db.batch([
-    db.prepare(`UPDATE refs SET status = 'ready', progress = NULL, error = NULL, capture_control = NULL,
-      title = coalesce(json_extract(crawl_state, '$.meta.title'), title), description = coalesce(json_extract(crawl_state, '$.meta.description'), description),
-      favicon = CASE WHEN instr(json_extract(crawl_state, '$.meta.favicon'), 'refs/' || id || '/' || capture_attempt || '/') = 1 THEN json_extract(crawl_state, '$.meta.favicon') ELSE favicon END,
-      tokens_json = json_extract(crawl_state, '$.tokens'), crawl_state = NULL, updated_at = ?
-      WHERE id = ? AND status = 'queued' AND crawl_state IS NOT NULL AND page_count > 0`).bind(ts, id),
-    db.prepare(`UPDATE refs SET status = 'failed', progress = NULL, error = ?, capture_control = NULL, crawl_state = NULL, updated_at = ?
-      WHERE id = ? AND status = 'queued'`).bind(STOPPED_EMPTY, ts, id),
+    ...settleStopped(db, `id = ? AND status = 'queued'`, id, ts),
     db.prepare(`UPDATE refs SET capture_control = 'stop', updated_at = ? WHERE id = ? AND status = 'capturing'`).bind(ts, id),
   ])
   return results.some((r) => r.meta.changes > 0)
