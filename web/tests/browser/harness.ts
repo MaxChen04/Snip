@@ -225,7 +225,8 @@ export async function startApp() {
       ({ method }) => (method !== "GET" ? { json: { ok: true, changed: 1 } } : undefined),
     ]
 
-    await page.route(/\/(api|auth)\//, async (route, request) => {
+    // By path, so a source file under src/components/auth/ is still served.
+    await page.route((url) => /^\/(api|auth)\//.test(url.pathname), async (route, request) => {
       const u = new URL(request.url())
       let body: any = null
       try {

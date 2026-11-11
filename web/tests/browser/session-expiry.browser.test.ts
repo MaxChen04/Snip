@@ -7,12 +7,7 @@ let app: App
 before(async () => void (app = await startApp()))
 after(async () => app?.stop())
 
-async function open(state: Parameters<App["session"]>[0] = {}) {
-  const t = await app.session(state)
-  // The harness mocks every URL containing /auth/, which also catches the sign-in page's own source file.
-  await t.page.route(/\/src\//, (route) => route.continue())
-  return t
-}
+const open = (state: Parameters<App["session"]>[0] = {}) => app.session(state)
 
 const where = (page: { url(): string }) => new URL(page.url()).pathname + new URL(page.url()).search
 
