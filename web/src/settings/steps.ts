@@ -60,10 +60,9 @@ const TITLES: Record<string, string> = {
   "abort-cleanup": "Remove what setup created",
 }
 
-export function commandFor(running: string | null, mode: string | null): string {
-  if (running && ORDER[running]) return running
-  if (mode === "disabling") return "pull"
-  return "setup"
+// With no run to name, the view is up for an unfinished setup or one of its questions.
+export function commandFor(running: string | null): string {
+  return running && ORDER[running] ? running : "setup"
 }
 
 export function stepsFor(command: string): string[] {

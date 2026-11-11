@@ -15,13 +15,6 @@ export interface HumanAction {
   url?: string
   message?: string
 }
-export interface Progress {
-  step: string
-  message?: string
-  current?: number
-  total?: number
-  unit?: string
-}
 export interface NeededInput {
   key: string
   label: string
@@ -60,7 +53,6 @@ export function useCloud(bridge = window.snipCloud) {
   const [loaded, setLoaded] = useState(false)
   const [steps, setSteps] = useState<Record<string, LiveStep>>({})
   const [action, setAction] = useState<HumanAction | null>(null)
-  const [progress, setProgress] = useState<Progress | null>(null)
   const [error, setError] = useState<CloudError | null>(null)
   const [choice, setChoice] = useState<EngineChoiceEvent | null>(null)
   const [needed, setNeeded] = useState<NeededInput[] | null>(null)
@@ -152,10 +144,6 @@ export function useCloud(bridge = window.snipCloud) {
         setAction(null)
         return
       }
-      if (event.event === "progress") {
-        setProgress({ step: event.step, message: event.message, current: event.current, total: event.total, unit: event.unit })
-        return
-      }
       if (event.event === "needs_input") {
         // Terminal: the engine never reads stdin. Collect the value here and re-invoke.
         const keys = (event.keys ?? [])
@@ -174,7 +162,6 @@ export function useCloud(bridge = window.snipCloud) {
       if (event.event === "result") {
         setSnapshot(current => ({ ...current, busy: false }))
         setAction(null)
-        setProgress(null)
         // NEEDS_INPUT is a question, already on screen as a choice or an input card.
         if (!event.ok && event.code !== "CANCELLED" && event.code !== "NEEDS_INPUT") {
           const retryable = event.retryable !== false
@@ -245,7 +232,6 @@ export function useCloud(bridge = window.snipCloud) {
     reads.current.applied = ++reads.current.issued
     setSteps({})
     setAction(null)
-    setProgress(null)
     setError(null)
     setChoice(null)
     setNeeded(null)
@@ -264,7 +250,6 @@ export function useCloud(bridge = window.snipCloud) {
   }, [refresh])
 
   const busy = snapshot.busy
-
   return {
     bridge,
     snapshot,
@@ -281,7 +266,6 @@ export function useCloud(bridge = window.snipCloud) {
     action,
     choice,
     needed,
-    progress,
     // The file's error is from before the run in flight; a live one is newer than the file.
     error: busy ? null : error ?? snapshot.state?.error ?? null,
     note,

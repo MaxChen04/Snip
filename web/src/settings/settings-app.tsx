@@ -42,7 +42,7 @@ export function SettingsApp() {
   const [turnOffChoice, setTurnOffChoice] = useState<TurnOffChoice>("stay")
   const [linkCopied, setLinkCopied] = useState(false)
   const mode = cloud.mode
-  const working = cloud.busy || mode === "enabling" || mode === "disabling"
+  const working = cloud.busy || mode === "enabling"
   const adopted = cloud.file?.move?.status === "skipped"
   // Say where the library actually is, not where it started.
   const intro =
@@ -116,6 +116,9 @@ export function SettingsApp() {
     await cloud.begin("abort", () => cloud.bridge!.abort())
   }
 
+  // Main decides what a retry runs: the unfinished setup, or the command that last failed.
+  const retry = () => void cloud.begin(null, () => cloud.bridge!.retryStep(""))
+
   const openCloud = () => {
     if (cloud.cloud?.url) void cloud.bridge!.openUrl(cloud.cloud.url)
   }
@@ -137,9 +140,6 @@ export function SettingsApp() {
     setDialog("owner-link")
     if (!cloud.link) createLink()
   }
-
-  // Main decides what a retry runs: the unfinished setup, or the command that last failed.
-  const retry = () => void cloud.begin(null, () => cloud.bridge!.retryStep(""))
 
   const errorCard =
     cloud.error && !cloud.choice && !cloud.needed ? (
@@ -410,22 +410,8 @@ function CloudPanels({
   const label = snapshotLabel(snapshot)
   const detached = cloud.cloud?.detachedAt
   const adopted = cloud.file?.move?.status === "skipped" && cloud.file?.move?.reason === "adopted-existing"
-  const deployed = cloud.cloud?.workerVersion
-  const expected = cloud.cloud?.expectedWorkerVersion
-  const changedOutside = !!deployed && !!expected && deployed !== expected
   return (
     <>
-      {changedOutside ? (
-        <section className="flex items-start gap-3 rounded-xl bg-fill-2 px-4 py-3.5 text-sm leading-[1.55]">
-          <InfoIcon className="mt-0.5 size-4 shrink-0 text-ink-10" />
-          <p>
-            Your cloud copy was changed outside Snip.{" "}
-            <span className="text-ink-11">
-              It runs {deployed}; this Mac expects {expected}. Reading and capturing still work.
-            </span>
-          </p>
-        </section>
-      ) : null}
       {adopted ? (
         <section className="flex items-start gap-3 rounded-xl bg-fill-2 px-4 py-3.5 text-sm leading-[1.55]">
           <InfoIcon className="mt-0.5 size-4 shrink-0 text-ink-10" />
@@ -632,7 +618,7 @@ function ProgressView({
   onResume: () => void
   onUndo: () => void
 }) {
-  const command = commandFor(cloud.running?.command ?? null, cloud.mode)
+  const command = commandFor(cloud.running?.command ?? null)
   const ids = useMemo(() => stepsFor(command), [command])
   const doneCount = ids.filter(id => {
     const status = cloud.steps[id]?.status

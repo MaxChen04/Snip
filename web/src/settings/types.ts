@@ -1,7 +1,7 @@
 // Shapes shared with desktop/main.cjs and proposals/cloud-contracts.md. The renderer
 // never reads cloud.json itself: every value here arrives over the preload bridge.
 
-export type CloudMode = "local" | "enabling" | "cloud" | "disabling"
+export type CloudMode = "local" | "enabling" | "cloud"
 
 export interface CloudRecord {
   url: string
@@ -17,7 +17,6 @@ export interface CloudRecord {
   lastVerifiedAt: string | null
   /** Deployed Worker version, when the engine recorded it. */
   workerVersion?: string | null
-  expectedWorkerVersion?: string | null
 }
 
 export interface SnapshotRecord {
@@ -136,16 +135,6 @@ export interface EngineHumanEvent {
   message?: string
 }
 
-export interface EngineProgressEvent {
-  v: 1
-  event: "progress"
-  step: string
-  message?: string
-  current?: number
-  total?: number
-  unit?: string
-}
-
 export interface EngineResultEvent {
   v: 1
   event: "result"
@@ -186,7 +175,6 @@ export interface EngineInputEvent {
 export type EngineEvent =
   | EngineStepEvent
   | EngineHumanEvent
-  | EngineProgressEvent
   | EngineChoiceEvent
   | EngineResultEvent
   | EngineLogEvent
@@ -217,7 +205,6 @@ export interface CloudReply {
   started?: true
   cancelled?: boolean
   error?: string
-  code?: string
 }
 
 declare global {

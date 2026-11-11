@@ -165,26 +165,28 @@ const STATES: Record<string, CloudSnapshotState> = {
       },
     }),
     busy: false,
-    running: { command: "setup", step: "import" },
+    running: null,
     engine: { available: true },
     local: { reachable: true, empty: false, refs: 42 },
     app: { version: "0.2.0", dataRoot: "/Users/max/Snip", captureEnv: ".env" },
   },
 }
 
-function seeded(command: string, index: number, error = false): { state: CloudSnapshotState; steps: Record<string, { id: string; status: "done" | "running" | "pending" | "waiting" | "failed"; message: string }> } {
+// `stopped`: the run has ended (a choice is terminal), so nothing is busy or running.
+function seeded(command: string, index: number, stopped = false): { state: CloudSnapshotState; steps: Record<string, { id: string; status: "done" | "running" | "pending" | "waiting" | "failed"; message: string }> } {
   const order = stepsFor(command)
   const steps: Record<string, { id: string; status: "done" | "running" | "pending" | "waiting" | "failed"; message: string }> = {}
   order.forEach((id, i) => {
-    steps[id] = { id, status: i < index ? "done" : i === index ? (error ? "failed" : "running") : "pending", message: "" }
+    steps[id] = { id, status: i < index ? "done" : i === index ? "running" : "pending", message: "" }
   })
   return {
     steps,
     state: {
-      mode: command === "setup" ? "enabling" : "disabling",
-      state: file(command === "setup" ? "enabling" : "disabling", { cloud }),
-      busy: !error,
-      running: { command, step: order[index] ?? null },
+      // Only setup has a mode of its own; every other command runs in the mode it started in.
+      mode: command === "setup" ? "enabling" : "cloud",
+      state: file(command === "setup" ? "enabling" : "cloud", { cloud }),
+      busy: !stopped,
+      running: stopped ? null : { command, step: order[index] ?? null },
       engine: { available: true },
       local: { reachable: true, empty: false, refs: 42 },
       app: { version: "0.2.0", dataRoot: "/Users/max/Snip", captureEnv: ".env" },
@@ -201,7 +203,7 @@ function initial(): { state: CloudSnapshotState; steps: Record<string, { id: str
   }
   if (scenario === "pulling") return seeded("pull", 4)
   // A terminal decision from guard, shown before anything is copied.
-  if (scenario === "choice") return seeded("setup", 5)
+  if (scenario === "choice") return seeded("setup", 5, true)
   if (scenario === "link") return { state: { ...STATES.cloud, link: fakeLink() }, steps: {} }
   // A link can only be minted in cloud mode, so the failed variant sits on that too.
   if (scenario === "link-error") return { state: { ...STATES.cloud, link: null }, steps: {} }
@@ -330,8 +332,11 @@ export function createFixtureBridge(): CloudBridge {
     },
     async abort() {
       stopTimers()
-      set({ mode: "local", state: file("local"), busy: false, running: null, engine: { available: true }, local: { reachable: true, empty: false, refs: 42 } })
-      emit({ v: 1, event: "result", ok: true, code: "OK", mode: "local" })
+      set({ ...state, busy: true, running: { command: "abort", step: null } })
+      runCommand("abort", () => {
+        set({ mode: "local", state: file("local"), busy: false, running: null, engine: { available: true }, local: { reachable: true, empty: false, refs: 42 } })
+        emit({ v: 1, event: "result", ok: true, code: "OK", mode: "local" })
+      })
       return { started: true }
     },
     async answer() {
@@ -347,9 +352,21 @@ export function createFixtureBridge(): CloudBridge {
       return { ok: true, epoch: 2 }
     },
     async deleteResources() {
+      set({ ...state, busy: true, running: { command: "delete-resources", step: null } })
+      runCommand("delete-resources", () => {
+        set({ mode: "local", state: file("local"), busy: false, running: null, engine: { available: true }, local: { reachable: true, empty: false, refs: 42 } })
+        emit({ v: 1, event: "result", ok: true, code: "OK", mode: "local" })
+      })
       return { started: true }
     },
-    async snapshot() {
+    async snapshot(action) {
+      const command = `snapshot ${action}`
+      const before = state
+      set({ ...state, busy: true, running: { command, step: null } })
+      runCommand(command, () => {
+        set(before)
+        emit({ v: 1, event: "result", ok: true, code: "OK", mode: before.mode })
+      })
       return { started: true }
     },
     async ownerLink() {
@@ -389,11 +406,8 @@ export function createFixtureBridge(): CloudBridge {
             message: id === "r2" ? "Turn on R2 in the Cloudflare dashboard, then come back." : "Approve Snip in your browser, then come back.",
           })
           emit({ v: 1, event: "step", step: id, status: "waiting", message: "" })
-        } else if (id) {
-          emit({ v: 1, event: "progress", step: id, message: "Copying your library", current: 420, total: 812, unit: "MB" })
         }
       }
-      if (scenario === "pulling") emit({ v: 1, event: "progress", step: "pull-files", message: "Downloading screenshots", current: 180, total: 311, unit: "files" })
       if (scenario === "choice") {
         emit({
           v: 1,
@@ -415,7 +429,6 @@ export function createFixtureBridge(): CloudBridge {
       const opening = {
         cloud: "Snip is now using your cloud library.",
         enabling: "Setting up your cloud library.",
-        disabling: "Reading your cloud library.",
         local: "Your library is on this Mac.",
       }[state.mode]
       log("info", opening)
