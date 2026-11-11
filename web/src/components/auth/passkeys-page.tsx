@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react"
-import { Link } from "wouter"
+import { Link, useSearch } from "wouter"
+import { navigate } from "wouter/use-browser-location"
 import { CheckIcon, KeyRound, LaptopIcon, LogOutIcon, PlusIcon, ShieldCheckIcon, SmartphoneIcon, Trash2Icon } from "@/components/icons"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -15,7 +16,7 @@ import {
 import { AuthError, AuthShell } from "@/components/auth/auth-shell"
 import { notify } from "@/components/notify"
 import { api, type Me, type PasskeyDevice } from "@/lib/api"
-import { ALREADY_ADDED, registerPasskey } from "@/lib/passkeys"
+import { ALREADY_ADDED, passkeyUnsupported, registerPasskey } from "@/lib/passkeys"
 
 /**
  * The owner's devices. A passkey is per-device and owner-only: it is not an invite. Removing one
@@ -24,6 +25,8 @@ import { ALREADY_ADDED, registerPasskey } from "@/lib/passkeys"
  * could not be reached), so `me` is null only after a real 401.
  */
 export function PasskeysPage({ me }: { me: Me | null }) {
+  // The owner link sends a browser it just signed in here with ?new=1.
+  const fresh = new URLSearchParams(useSearch()).get("new") === "1"
   const [devices, setDevices] = useState<PasskeyDevice[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [label, setLabel] = useState("")
@@ -54,6 +57,7 @@ export function PasskeysPage({ me }: { me: Me | null }) {
       // excludeCredentials cannot catch. Both paths say the same thing.
       notify(duplicate ? ALREADY_ADDED : "Passkey added")
       await load()
+      if (fresh) navigate("/passkeys", { replace: true })
     } catch (e) {
       setAddError((e as Error).message)
     } finally {
@@ -82,11 +86,52 @@ export function PasskeysPage({ me }: { me: Me | null }) {
     }
   }
 
+  const addForm = (
+    <>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <Input
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+          placeholder={defaultLabel()}
+          maxLength={60}
+          aria-label="Device name"
+          size="lg"
+          className="flex-1"
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !adding) void add()
+          }}
+        />
+        <Button size="lg" disabled={adding} onClick={add} className="shrink-0">
+          {adding ? <span className="size-3.5 animate-spin rounded-full border-[1.5px] border-current border-t-transparent" /> : <PlusIcon className="size-4" />}
+          {adding ? "Waiting…" : "Add passkey"}
+        </Button>
+      </div>
+      <AuthError>{addError}</AuthError>
+    </>
+  )
+
   if (!me) {
     return (
       <AuthShell title="Sign in to manage passkeys" description="This page belongs to the owner of this Snip library." footer={<Link href="/">Back to the library</Link>}>
         <Button size="xl" className="w-full" render={<Link href="/sign-in" />} nativeButton={false}>
           Sign in
+        </Button>
+      </AuthShell>
+    )
+  }
+
+  // Offered once, right after the owner link: not to a session that already came from a passkey, and
+  // not in a browser that cannot make one.
+  if (fresh && me.method !== "passkey" && !passkeyUnsupported()) {
+    return (
+      <AuthShell
+        wide
+        title="Add a passkey for this device"
+        description="Next time this device signs in with Touch ID, your device PIN or a security key, with no owner link. Name it so you can tell it apart later."
+      >
+        {addForm}
+        <Button variant="ghost" size="lg" className="mt-3 w-full" render={<Link href="/" />} nativeButton={false}>
+          Not now
         </Button>
       </AuthShell>
     )
@@ -106,25 +151,7 @@ export function PasskeysPage({ me }: { me: Me | null }) {
         <p className="mt-0.5 text-[12.5px] leading-relaxed text-muted-foreground">
           You'll be asked for Touch ID, your device PIN or a security key. Name it so you can tell it apart later.
         </p>
-        <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
-          <Input
-            value={label}
-            onChange={(e) => setLabel(e.target.value)}
-            placeholder={defaultLabel()}
-            maxLength={60}
-            aria-label="Device name"
-            size="lg"
-            className="flex-1"
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !adding) void add()
-            }}
-          />
-          <Button size="lg" disabled={adding} onClick={add} className="shrink-0">
-            {adding ? <span className="size-3.5 animate-spin rounded-full border-[1.5px] border-current border-t-transparent" /> : <PlusIcon className="size-4" />}
-            {adding ? "Waiting…" : "Add passkey"}
-          </Button>
-        </div>
-        <AuthError>{addError}</AuthError>
+        <div className="mt-3">{addForm}</div>
       </section>
 
       <section aria-labelledby="device-list" className="mt-6">

@@ -30,11 +30,11 @@ There are no IDs to copy, no secrets to paste and no dashboard steps besides tho
 
 ### The owner link and passkey
 
-When the Worker is up, Snip opens a **one-time owner link** in your browser. It registers a passkey there (Touch ID on a Mac) and hands the signed-in session back to Snip.app, so the app arrives signed in without a second login.
+When the Worker is up, Snip opens a **one-time owner link** in your browser. It signs Snip.app in: the browser hands the session back to the app over a loopback on this Mac and the tab says **You can close this tab and return to Snip.** The app arrives signed in without a second login.
 
 - The link works once and expires after ten minutes.
 - The link always signs in as the library's one owner. On a fresh install that identity is created; on a re-enabled or adopted library it is reused, so a second owner row never appears.
-- The passkey is what you use to sign in to the cloud library from another browser or device. Registering one only adds a device: Snip never replaces or deletes an existing passkey, and adding the same device twice says **You already added a passkey on this device.**
+- A passkey is what you use to sign in to the cloud library from another browser or device. You add one in a browser that opened a **Sign in another browser** link (below), or from **/passkeys** at any time. Registering one only adds a device: Snip never replaces or deletes an existing passkey, and adding the same device twice says **You already added a passkey on this device.**
 - The app stores the secret that mints these links on this Mac. If it is ever lost, `owner rotate` sets a new one and mints a fresh link.
 
 ### Signing in later
@@ -61,6 +61,8 @@ The sheet is titled **Sign in another browser**, and says **Open this link in th
 > Works once and expires in 10 minutes. The browser that opens it is signed in and can add a passkey.
 
 Three buttons: **Copy** (which becomes **Copied**), **Open in browser**, and **Create a new link**. A failed mint shows the error and offers **Try again** instead. Nothing is claimed about the other device until it opens the link and registers a passkey.
+
+The browser that opens the link is signed in and lands on **Add a passkey for this device**: a device name and **Add passkey** (Touch ID, your device PIN or a security key), or **Not now**, which goes to the library. The offer appears only right after a link sign-in, and not in a browser that cannot make passkeys. A skipped browser stays signed in and can add one later at **/passkeys**.
 
 From a terminal, `owner link --no-handoff` mints the same link, which is the command that button runs.
 
@@ -270,7 +272,7 @@ The local library is listed as **This Mac's library · 312 references**, with th
 
 <img src="media/settings-adopted.png" alt="Settings after adopting an existing library: the adopted status line, and This Mac's library with Switch back to it" width="620">
 
-The owner link on an adopted library signs in as the **same owner** and adds this device's passkey. It never replaces or deletes a passkey that was already there, so a re-enabled install keeps every device it had. Adding a device that already has a passkey shows **You already added a passkey on this device.**
+The owner link on an adopted library signs in as the **same owner**, and a browser that opens it is offered this device's passkey. It never replaces or deletes a passkey that was already there, so a re-enabled install keeps every device it had. Adding a device that already has a passkey shows **You already added a passkey on this device.**
 
 ### When the account has something else
 

@@ -140,7 +140,8 @@ export async function ownerLinkSubmit(c: Context<AppEnv>) {
   // The desktop app listens on a loopback port. The session travels in the fragment so it never
   // reaches a server log; the browser page is what Electron cannot see into, which is why the app
   // gets the value itself rather than reading Safari's cookie jar.
-  const location = link.port > 0 ? connector(link.port, token) : "/"
+  // A browser link has no listener to hand off to; the passkeys page offers this browser a passkey.
+  const location = link.port > 0 ? connector(link.port, token) : "/passkeys?new=1"
   // c.newResponse keeps the Set-Cookie set above; a bare Response would drop it.
   const headers = Object.fromEntries((await linkHeaders({ "content-type": "text/plain; charset=utf-8", location })).entries())
   return c.newResponse(null, 302, headers)

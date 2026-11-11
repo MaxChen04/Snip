@@ -26,7 +26,7 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   return data as T
 }
 
-const passkeyUnsupported = () =>
+export const passkeyUnsupported = () =>
   !window.PublicKeyCredential || !window.isSecureContext
     ? new PasskeyError(
         window.isSecureContext

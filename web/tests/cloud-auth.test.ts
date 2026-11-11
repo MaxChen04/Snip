@@ -259,12 +259,13 @@ test("the owner link POST accepts the null origin Chromium sends with no-referre
     assert.equal(crossSite.status, 403, "a cross-site fetch is refused even without an origin")
   }))
 
-test("an owner link without a port redirects home instead of to a listener", () =>
+test("an owner link without a port signs a browser in and sends it to the passkey offer, not to a listener", () =>
   withWorker(async ({ env, call }) => {
     const { token } = await mintOwnerLink(env, { ownerId: "max", port: 0 })
     const res = await call("/auth/owner", { method: "POST", body: new URLSearchParams({ t: token }), headers: { "content-type": "application/x-www-form-urlencoded" } })
     assert.equal(res.status, 302)
-    assert.equal(res.headers.get("location"), "/")
+    assert.equal(res.headers.get("location"), "/passkeys?new=1")
+    assert.ok(cookieFrom(res), "the browser is signed in before it is offered a passkey")
   }))
 
 // ---------- Transfer ----------

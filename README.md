@@ -39,7 +39,7 @@ In Snip.app, open **Settings → Cloud → Enable cloud**. The app says what wil
 1. **Sign in and Allow.** Your browser opens on Cloudflare. Pick the account that should own the library.
 2. **Turn on R2** if it has never been used there. Cloudflare asks for a card once; storage is still free up to 10 GB. Snip waits while you do it.
 
-Snip creates the Worker, database, key-value store and bucket, deploys, copies the library and checks the result. A one-time owner link then opens in your browser and registers a passkey (Touch ID), which signs Snip.app back in. There are no IDs to copy and no secrets to paste.
+Snip creates the Worker, database, key-value store and bucket, deploys, copies the library and checks the result. A one-time owner link then opens in your browser and signs Snip.app in. There are no IDs to copy and no secrets to paste.
 
 After that, every other browser or device signs in at **/sign-in** with its passkey; **Passkeys and devices** in the account menu adds or removes them.
 
@@ -49,7 +49,7 @@ A browser with no passkey yet opens **Settings → Cloud → Sign in another bro
 
 Capture stays on this Mac. A capture started from another device waits in the queue and shows **Waiting for your Mac** until this Mac's capture agent checks in. The gallery card and every agent status use those exact words, whether the agent is busy or the Mac is asleep.
 
-Already deployed Snip before this button existed? The setup recognises your own library. An empty one is adopted silently; one with references asks first and offers **Use that library** or **Stop**. Choosing to use it switches this Mac to the cloud library and leaves your local one on disk, listed as **This Mac's library** with a single **Switch back to it** action. The owner link signs in as the same owner and only adds this device's passkey; existing devices keep theirs. [Cloud mode](docs/deploy.md) covers the copy, the two approvals, adoption, the command-line path, turning cloud off and the free-tier limits.
+Already deployed Snip before this button existed? The setup recognises your own library. An empty one is adopted silently; one with references asks first and offers **Use that library** or **Stop**. Choosing to use it switches this Mac to the cloud library and leaves your local one on disk, listed as **This Mac's library** with a single **Switch back to it** action. The owner link signs in as the same owner; existing devices keep their passkeys. [Cloud mode](docs/deploy.md) covers the copy, the two approvals, adoption, the command-line path, turning cloud off and the free-tier limits.
 
 ### Command line and agents
 
