@@ -52,8 +52,9 @@ function resultMessage(code: string): string {
 const CONFIRM_CODES = new Set(["CONFIRM_MISSING", "CONFIRM_MISMATCH"])
 
 /**
- * One source of truth for Settings: a disk snapshot plus the live engine events.
- * The renderer never inspects the engine's files; everything arrives over the bridge.
+ * One source of truth for Settings: main's `state()` snapshot plus the live engine events
+ * of the run in flight. Main never pushes state, so this re-reads it whenever main says
+ * something happened. The renderer never inspects the engine's files.
  */
 export function useCloud(bridge = window.snipCloud) {
   const [snapshot, setSnapshot] = useState<CloudSnapshotState>(EMPTY)
@@ -64,7 +65,6 @@ export function useCloud(bridge = window.snipCloud) {
   const [error, setError] = useState<CloudError | null>(null)
   const [choice, setChoice] = useState<EngineChoiceEvent | null>(null)
   const [needed, setNeeded] = useState<NeededInput[] | null>(null)
-  const [busy, setBusy] = useState(false)
   const [link, setLink] = useState<OwnerLink | null>(null)
   const [linkPending, setLinkPending] = useState(false)
   const [linkError, setLinkError] = useState<string | null>(null)
@@ -76,7 +76,8 @@ export function useCloud(bridge = window.snipCloud) {
   const linkSettled = useRef(false)
   const linkLatest = useRef<OwnerLink | null>(null)
   const [note, setNote] = useState<{ level: "info" | "warn" | "error"; message: string; id: number } | null>(null)
-  const runId = useRef(0)
+  // `state()` replies can land out of order: one issued before the last applied is dropped.
+  const reads = useRef({ issued: 0, applied: 0 })
 
   // A snapshot read can be older than the link event; keep a link that is still valid
   // rather than blanking it, and drop one that has run out.
@@ -84,24 +85,22 @@ export function useCloud(bridge = window.snipCloud) {
     next ?? (current && Date.parse(current.expiresAt) > Date.now() ? current : null), [])
 
   const refresh = useCallback(async () => {
-    if (!bridge) return
+    const ticket = ++reads.current.issued
     try {
-      const next = await bridge.state()
-      if (next) {
-        setSnapshot(next)
-        setBusy(next.busy)
-        setLink(current => keepLink(current, next.link))
-        setError(next.state?.error ?? null)
-        if (!next.busy) {
-          setSteps(previous => {
-            // A cold read wins only when no engine is running; live events are fresher otherwise.
-            const seeded: Record<string, LiveStep> = {}
-            for (const step of next.state?.steps ?? []) {
-              seeded[step.id] = { id: step.id, status: step.status === "running" ? "running" : step.status, detail: step.detail ?? undefined }
-            }
-            return Object.keys(previous).length && next.busy ? previous : seeded
-          })
+      const next = await bridge?.state()
+      if (!next || ticket < reads.current.applied) return
+      reads.current.applied = ticket
+      setSnapshot(next)
+      setLink(current => keepLink(current, next.link))
+      setError(next.state?.error ?? null)
+      if (!next.busy) {
+        // A cold read wins only when no engine is running; live events are fresher otherwise.
+        const seeded: Record<string, LiveStep> = {}
+        for (const step of next.state?.steps ?? []) {
+          seeded[step.id] = { id: step.id, status: step.status, detail: step.detail ?? undefined }
         }
+        setSteps(seeded)
+        setAction(null)
       }
     } finally {
       setLoaded(true)
@@ -124,7 +123,6 @@ export function useCloud(bridge = window.snipCloud) {
     if (!bridge) return
     const offProgress = bridge.onProgress((event: EngineEvent) => {
       if (event.event === "step") {
-        setBusy(true)
         setSteps(previous => ({
           ...previous,
           [event.step]: {
@@ -155,7 +153,6 @@ export function useCloud(bridge = window.snipCloud) {
         // Terminal: the engine stopped so a consequence is never inferred from a default.
         setChoice(event)
         setAction(null)
-        setBusy(false)
         return
       }
       if (event.event === "progress") {
@@ -175,11 +172,10 @@ export function useCloud(bridge = window.snipCloud) {
         } else {
           setNeeded(keys.length ? keys : null)
         }
-        setBusy(false)
         return
       }
       if (event.event === "result") {
-        setBusy(false)
+        setSnapshot(current => ({ ...current, busy: false }))
         setAction(null)
         setProgress(null)
         if (!event.ok && event.code !== "CANCELLED") {
@@ -201,8 +197,6 @@ export function useCloud(bridge = window.snipCloud) {
           }
         }
         void refresh()
-        // The child may still be exiting when the result lands; read the final mode once more.
-        window.setTimeout(() => void refresh(), 400)
       }
     })
     const offLog = bridge.onLog(entry => {
@@ -215,6 +209,8 @@ export function useCloud(bridge = window.snipCloud) {
       }
       setNote({ level: entry.level, message: entry.message, id: Date.now() })
       if (entry.level === "error") toast.error(entry.message)
+      // Main logs when a run starts and when its child has exited, with or without a result.
+      void refresh()
     })
     // The link is not a "step" event: it arrives on its own channel so the window never
     // flips into the progress view for it.
@@ -271,17 +267,18 @@ export function useCloud(bridge = window.snipCloud) {
   }, [bridge])
 
   const begin = useCallback(async (call: () => Promise<{ started?: true; error?: string }>) => {
-    const ticket = ++runId.current
+    // A read from before this run must not land on top of it.
+    reads.current.applied = ++reads.current.issued
     setSteps({})
     setAction(null)
     setProgress(null)
     setError(null)
     setChoice(null)
     setNeeded(null)
-    setBusy(true)
+    setSnapshot(current => ({ ...current, busy: true }))
     const reply = await call()
     if (reply?.error) {
-      if (ticket === runId.current) setBusy(false)
+      setSnapshot(current => ({ ...current, busy: false }))
       toast.error(reply.error)
       return false
     }
@@ -298,7 +295,7 @@ export function useCloud(bridge = window.snipCloud) {
     snapshotRecord: snapshot.state?.snapshot ?? null,
     local: snapshot.local ?? null,
     engineAvailable: snapshot.engine?.available !== false,
-    busy: busy || snapshot.busy,
+    busy: snapshot.busy,
     running: snapshot.running,
     steps,
     action,
