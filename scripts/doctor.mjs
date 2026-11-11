@@ -18,6 +18,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const require = createRequire(import.meta.url)
 // One shape definition for cloud.json: the engine that writes it also reads it.
 const readCloudState = require(path.join(ROOT, "desktop/provision/state.cjs")).readState
+// The app's own choice of capture env file, so the doctor checks the file the agent loads.
+const { cloudModeFor, selectCaptureEnvFile } = require(path.join(ROOT, "desktop/cloud-state.cjs"))
 const at = (...p) => path.join(ROOT, ...p)
 
 /** KEY=value lines, ignoring comments. */
@@ -156,13 +158,15 @@ export async function checks(options = {}) {
     else if (!placeholder(web.SESSION_SECRET) && !placeholder(web.CAPTURE_TOKEN)) ok("web/.dev.vars")
   }
 
-  const captureFile = options.captureEnvFile || process.env.SNIP_CAPTURE_ENV_FILE || at("capture/.env")
+  const dataRoot = options.dataRoot ?? root
+  const captureFile = options.captureEnvFile || process.env.SNIP_CAPTURE_ENV_FILE || selectCaptureEnvFile({ dataRoot, mode: cloudModeFor(dataRoot) }).path
+  const captureName = path.relative(root, captureFile)
   const capture = readEnv(captureFile)
-  if (!capture) bad(`${path.relative(root, captureFile)} is missing`, "cp capture/.env.example capture/.env, then set SNIP_URL and CAPTURE_TOKEN.")
-  else if (placeholder(capture.SNIP_URL) || !capture.CAPTURE_TOKEN) bad("capture/.env: SNIP_URL or CAPTURE_TOKEN is not set", "Use http://localhost:5173 and web/.dev.vars' CAPTURE_TOKEN locally, or your Worker URL and its CAPTURE_TOKEN secret.")
+  if (!capture) bad(`${captureName} is missing`, "cp capture/.env.example capture/.env, then set SNIP_URL and CAPTURE_TOKEN.")
+  else if (placeholder(capture.SNIP_URL) || !capture.CAPTURE_TOKEN) bad(`${captureName}: SNIP_URL or CAPTURE_TOKEN is not set`, "Use http://localhost:5173 and web/.dev.vars' CAPTURE_TOKEN locally, or your Worker URL and its CAPTURE_TOKEN secret.")
   else {
-    if (isLocal(capture.SNIP_URL) && web && capture.CAPTURE_TOKEN !== web.CAPTURE_TOKEN) bad("capture/.env and web/.dev.vars have different CAPTURE_TOKENs", "Copy CAPTURE_TOKEN from web/.dev.vars into capture/.env.")
-    else ok(`capture/.env points at ${capture.SNIP_URL}`)
+    if (isLocal(capture.SNIP_URL) && web && capture.CAPTURE_TOKEN !== web.CAPTURE_TOKEN) bad(`${captureName} and web/.dev.vars have different CAPTURE_TOKENs`, `Copy CAPTURE_TOKEN from web/.dev.vars into ${captureName}.`)
+    else ok(`${captureName} points at ${capture.SNIP_URL}`)
 
     try {
       const res = await fetchImpl(new URL("/agent/ping", capture.SNIP_URL), {
@@ -170,7 +174,7 @@ export async function checks(options = {}) {
         signal: AbortSignal.timeout(5000),
       })
       if (res.ok) ok("The Worker accepts the capture token")
-      else if (res.status === 401) bad("The Worker rejected CAPTURE_TOKEN", "Make capture/.env's CAPTURE_TOKEN match the Worker's (web/.dev.vars locally, `wrangler secret put CAPTURE_TOKEN` when deployed).")
+      else if (res.status === 401) bad("The Worker rejected CAPTURE_TOKEN", `Make ${captureName}'s CAPTURE_TOKEN match the Worker's (web/.dev.vars locally, \`wrangler secret put CAPTURE_TOKEN\` when deployed).`)
       else if (res.status === 426) bad("Capture agent and Worker versions do not match", "Update and restart every capture agent, and deploy the matching Worker (capture protocol 3).")
       else if (res.status === 404) warn(`The Worker at ${capture.SNIP_URL} is older than this checkout`, "Deploy (npm run deploy) or restart the local app to pick up the latest Worker.")
       else bad(`The Worker answered ${res.status}`, "Check the Worker's logs.")
@@ -182,7 +186,7 @@ export async function checks(options = {}) {
 
   if (capture?.CHROMIUM_PATH) {
     if (fs.existsSync(capture.CHROMIUM_PATH)) ok("Capture browser (CHROMIUM_PATH)")
-    else bad(`CHROMIUM_PATH doesn't exist: ${capture.CHROMIUM_PATH}`, "Fix the path in capture/.env or remove it to use Playwright's Chromium.")
+    else bad(`CHROMIUM_PATH doesn't exist: ${capture.CHROMIUM_PATH}`, `Fix the path in ${captureName} or remove it to use Playwright's Chromium.`)
   } else {
     try {
       const { chromium } = createRequire(at("capture/package.json"))("playwright")
@@ -195,7 +199,6 @@ export async function checks(options = {}) {
 
   // Cloud is reported only for an install that is actually using it, read from
   // cloud.json alone. `--check` adds the one probe `status --check` makes.
-  const dataRoot = options.dataRoot ?? root
   results.push(...await cloudChecks({ dataRoot, check: Boolean(options.check), fetchImpl }))
 
   const status = options.gitStatus
