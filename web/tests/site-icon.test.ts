@@ -21,15 +21,15 @@ test("a website's icon is saved with its capture and served from Snip's files; a
     }
     const ctx = { waitUntil(p: Promise<unknown>) { pending.push(p) }, passThroughOnException() {}, props: { ownerId: "max" } } as unknown as ExecutionContext
     const env = { DB: database, FILES: files, SESSION_SECRET: "test-secret", DEV_LOGIN: "max", CAPTURE_TOKEN: "test-token" } as unknown as Env
-    const agent = (path: string, attempt: string | null, init: RequestInit = {}) =>
-      app.request(`http://localhost/agent${path}`, { ...init, headers: { authorization: "Bearer test-token", "x-snip-capture-protocol": "3", ...(attempt ? { "x-snip-capture-attempt": attempt } : {}), ...(init.headers ?? {}) } }, env, ctx)
+    const agent = (path: string, lease: string | null, init: RequestInit = {}) =>
+      app.request(`http://localhost/agent${path}`, { ...init, headers: { authorization: "Bearer test-token", "x-snip-capture-protocol": "4", ...(lease ? { "x-snip-capture-lease": lease } : {}), ...(init.headers ?? {}) } }, env, ctx)
     const capture = async (favicon: (prefix: string) => string, svg = false) => {
       const ref = await db.createReference(database, { url: "https://example.com", mode: "single" })
       const job = (await (await agent("/jobs/claim", null, { method: "POST" })).json()) as Job
       assert.ok(job.features?.includes("icon"), "the Worker says it saves icons")
       const prefix = `refs/${ref.id}/${job.attempt}`
       if (svg) await files.put(`${prefix}/icon.svg`, "<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>", { httpMetadata: { contentType: "image/svg+xml" } })
-      const done = await agent(`/jobs/${ref.id}/complete`, job.attempt, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ title: null, description: null, favicon: favicon(prefix), coverKey: null, tokens: null }) })
+      const done = await agent(`/jobs/${ref.id}/complete`, job.lease, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ title: null, description: null, favicon: favicon(prefix), coverKey: null, tokens: null }) })
       assert.equal(done.status, 200)
       return { ref, prefix }
     }

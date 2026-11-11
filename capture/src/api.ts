@@ -6,7 +6,7 @@ export class CaptureAuthenticationError extends Error {
   constructor() { super("Snip rejected the capture token (401)") }
 }
 
-/** The reference was deleted or recaptured while this capture ran; stop the job. */
+/** The reference was deleted or recaptured, or another agent claimed the job, while this capture ran; stop the job. */
 export class JobGoneError extends Error {
   constructor() { super("The reference was deleted or recaptured during capture") }
 }
@@ -16,7 +16,7 @@ export class CaptureUpgradeError extends Error {
 }
 
 export class SnipApi {
-  private attempt: string | null = null
+  private lease: string | null = null
   constructor(
     private base: string,
     private token: string,
@@ -30,7 +30,7 @@ export class SnipApi {
     const res = await fetch(`${this.base}${path}`, {
       ...init,
       signal: init.signal ?? AbortSignal.timeout(path === "/agent/jobs/claim" ? this.claimTimeoutMs : this.requestTimeoutMs),
-      headers: { authorization: `Bearer ${this.token}`, "x-snip-capture-protocol": "3", ...(this.attempt ? { "x-snip-capture-attempt": this.attempt } : {}), ...(init.headers ?? {}) },
+      headers: { authorization: `Bearer ${this.token}`, "x-snip-capture-protocol": "4", ...(this.lease ? { "x-snip-capture-lease": this.lease } : {}), ...(init.headers ?? {}) },
     })
     if (res.status === 401) {
       await res.body?.cancel()
@@ -58,7 +58,7 @@ export class SnipApi {
   async claim(): Promise<Job | null> {
     const res = await this.call("/agent/jobs/claim", { method: "POST" })
     const job = res!.status === 204 ? null : ((await res!.json()) as Job)
-    this.attempt = job?.attempt ?? null
+    this.lease = job?.lease ?? null
     return job
   }
 

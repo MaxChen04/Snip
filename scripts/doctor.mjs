@@ -170,12 +170,12 @@ export async function checks(options = {}) {
 
     try {
       const res = await fetchImpl(new URL("/agent/ping", capture.SNIP_URL), {
-        headers: { authorization: `Bearer ${capture.CAPTURE_TOKEN}`, "x-snip-capture-protocol": "3" },
+        headers: { authorization: `Bearer ${capture.CAPTURE_TOKEN}`, "x-snip-capture-protocol": "4" },
         signal: AbortSignal.timeout(5000),
       })
       if (res.ok) ok("The Worker accepts the capture token")
       else if (res.status === 401) bad("The Worker rejected CAPTURE_TOKEN", `Make ${captureName}'s CAPTURE_TOKEN match the Worker's (web/.dev.vars locally, \`wrangler secret put CAPTURE_TOKEN\` when deployed).`)
-      else if (res.status === 426) bad("Capture agent and Worker versions do not match", "Update and restart every capture agent, and deploy the matching Worker (capture protocol 3).")
+      else if (res.status === 426) bad("Capture agent and Worker versions do not match", "Update and restart every capture agent, and deploy the matching Worker (capture protocol 4).")
       else if (res.status === 404) warn(`The Worker at ${capture.SNIP_URL} is older than this checkout`, "Deploy (npm run deploy) or restart the local app to pick up the latest Worker.")
       else bad(`The Worker answered ${res.status}`, "Check the Worker's logs.")
     } catch {

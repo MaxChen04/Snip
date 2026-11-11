@@ -4,7 +4,7 @@ import { Miniflare, convertV4MiniflareOptions } from "miniflare"
 import { app } from "../worker/app"
 import * as db from "../worker/db"
 import { applyMigrations } from "./helpers/d1"
-import type { CrawlState, PageUpload } from "../shared/types"
+import type { CrawlState, Job, PageUpload } from "../shared/types"
 import { STOPPED_EMPTY, diagnoseCaptureError } from "../shared/capture-errors"
 
 // Regression tests for capture-queue recovery bugs found by a code audit. Each asserts the CORRECT behaviour,
@@ -36,8 +36,8 @@ async function setup() {
   const env = { DB: database, FILES: files, SESSION_SECRET: "test-secret", DEV_LOGIN: "max", CAPTURE_TOKEN: "test-token" } as unknown as Env
   /** Simulates an agent that died 40 minutes ago: its lease is older than STALE_MINUTES. */
   const makeStale = (id: string) => database.prepare("UPDATE refs SET claimed_at = ? WHERE id = ?").bind(new Date(Date.now() - 40 * 60_000).toISOString(), id).run()
-  const row = (id: string) => database.prepare("SELECT status, capture_control, capture_attempt, capture_run, crawl_state, page_count, error FROM refs WHERE id = ?").bind(id).first<{
-    status: string; capture_control: string | null; capture_attempt: string | null; capture_run: number; crawl_state: string | null; page_count: number; error: string | null }>()
+  const row = (id: string) => database.prepare("SELECT status, capture_control, capture_attempt, capture_lease, capture_run, crawl_state, page_count, error FROM refs WHERE id = ?").bind(id).first<{
+    status: string; capture_control: string | null; capture_attempt: string | null; capture_lease: string | null; capture_run: number; crawl_state: string | null; page_count: number; error: string | null }>()
   const pageCount = async (id: string) => (await database.prepare("SELECT count(*) AS n FROM pages WHERE reference_id = ?").bind(id).first<{ n: number }>())!.n
   /** Waits for background work (file cleanup) so it never outlives the test's storage. */
   const settle = async () => { await Promise.allSettled(pending) }
@@ -50,13 +50,13 @@ test("a resumed crawl whose agent dies keeps its pages when the stale lease is r
   try {
     const ref = await db.createReference(database, { url: "https://example.com", mode: "crawl", maxPages: 5 })
     const first = (await db.claimJob(database))!
-    assert.ok(await db.addPage(database, ref.id, first.attempt, page(ref.id, first.attempt, 0)))
+    assert.ok(await db.addPage(database, ref.id, first.lease, page(ref.id, first.attempt, 0)))
     assert.equal(await db.requestPause(database, ref.id), true)
-    assert.equal(await db.pauseJob(database, ref.id, first.attempt, state(1)), "paused")
+    assert.equal(await db.pauseJob(database, ref.id, first.lease, state(1)), "paused")
     assert.equal(await db.resumeReference(database, ref.id), true)
     const resumed = (await db.claimJob(database))!
     assert.equal(resumed.attempt, first.attempt)
-    assert.ok(await db.addPage(database, ref.id, resumed.attempt, page(ref.id, resumed.attempt, 1)))
+    assert.ok(await db.addPage(database, ref.id, resumed.lease, page(ref.id, resumed.attempt, 1)))
     assert.equal(await pageCount(ref.id), 2)
 
     // The agent dies without finishing; its lease goes stale and the job is claimed again.
@@ -77,8 +77,8 @@ test("a stop requested on a capturing row whose agent is gone is honoured, and k
   try {
     const ref = await db.createReference(database, { url: "https://example.com", mode: "crawl", maxPages: 5 })
     const job = (await db.claimJob(database))!
-    assert.ok(await db.addPage(database, ref.id, job.attempt, page(ref.id, job.attempt, 0)))
-    assert.ok(await db.addPage(database, ref.id, job.attempt, page(ref.id, job.attempt, 1)))
+    assert.ok(await db.addPage(database, ref.id, job.lease, page(ref.id, job.attempt, 0)))
+    assert.ok(await db.addPage(database, ref.id, job.lease, page(ref.id, job.attempt, 1)))
     await makeStale(ref.id)
 
     assert.equal(await db.requestStop(database, ref.id), true)
@@ -99,8 +99,8 @@ test("a pause requested on a capturing row whose agent is gone does not delete i
   try {
     const ref = await db.createReference(database, { url: "https://example.com", mode: "crawl", maxPages: 5 })
     const job = (await db.claimJob(database))!
-    assert.ok(await db.addPage(database, ref.id, job.attempt, page(ref.id, job.attempt, 0)))
-    assert.ok(await db.addPage(database, ref.id, job.attempt, page(ref.id, job.attempt, 1)))
+    assert.ok(await db.addPage(database, ref.id, job.lease, page(ref.id, job.attempt, 0)))
+    assert.ok(await db.addPage(database, ref.id, job.lease, page(ref.id, job.attempt, 1)))
     await makeStale(ref.id)
 
     assert.equal(await db.requestPause(database, ref.id), true)
@@ -126,7 +126,7 @@ test("a stop or pause left pending by a dead agent is applied by the next claim:
 
     const ref = await db.createReference(database, { url: "https://example.com", mode: "crawl", maxPages: 5 })
     const job = (await db.claimJob(database))!
-    assert.ok(await db.addPage(database, ref.id, job.attempt, page(ref.id, job.attempt, 0)))
+    assert.ok(await db.addPage(database, ref.id, job.lease, page(ref.id, job.attempt, 0)))
     assert.equal(await db.requestPause(database, ref.id), true)
     await makeStale(ref.id)
     assert.equal(await db.claimJob(database), null, "a paused capture waits for the user")
@@ -152,7 +152,7 @@ test("recapture is refused for capturing, queued and paused references, and allo
     // Capturing: the running agent's pages and lease must not be wiped.
     const capturing = await db.createReference(database, { url: "https://capturing.example", mode: "crawl" })
     const job = (await db.claimJob(database))!
-    assert.ok(await db.addPage(database, capturing.id, job.attempt, page(capturing.id, job.attempt, 0)))
+    assert.ok(await db.addPage(database, capturing.id, job.lease, page(capturing.id, job.attempt, 0)))
     const before = (await row(capturing.id))!
     assert.equal((await recapture(capturing.id)).status, 409)
     const after = (await row(capturing.id))!
@@ -160,15 +160,15 @@ test("recapture is refused for capturing, queued and paused references, and allo
     assert.equal(after.capture_attempt, before.capture_attempt)
     assert.equal(after.capture_run, before.capture_run)
     assert.equal(await pageCount(capturing.id), 1)
-    assert.equal(await db.setProgress(database, capturing.id, job.attempt, "still mine"), true, "the agent's lease survives")
+    assert.equal(await db.setProgress(database, capturing.id, job.lease, "still mine"), true, "the agent's lease survives")
 
     // Paused: the saved pages and checkpoint must survive.
     const paused = await db.createReference(database, { url: "https://paused.example", mode: "crawl" })
     const pjob = (await db.claimJob(database))!
     assert.equal(pjob.id, paused.id)
-    assert.ok(await db.addPage(database, paused.id, pjob.attempt, page(paused.id, pjob.attempt, 0)))
+    assert.ok(await db.addPage(database, paused.id, pjob.lease, page(paused.id, pjob.attempt, 0)))
     await db.requestPause(database, paused.id)
-    assert.equal(await db.pauseJob(database, paused.id, pjob.attempt, state(1)), "paused")
+    assert.equal(await db.pauseJob(database, paused.id, pjob.lease, state(1)), "paused")
     const pausedBefore = (await row(paused.id))!
     assert.ok(pausedBefore.crawl_state)
     assert.equal((await recapture(paused.id)).status, 409)
@@ -245,7 +245,7 @@ test("an agent upload whose R2 write fails leaves no capture_uploads pin behind"
     let status: number | null = null
     try {
       status = (await app.request(`https://snip.test/agent/files/${key}`, { method: "PUT", body: "bytes",
-        headers: { authorization: "Bearer test-token", "x-snip-capture-protocol": "3", "x-snip-capture-attempt": job.attempt } }, { ...env, FILES: failingFiles }, ctx)).status
+        headers: { authorization: "Bearer test-token", "x-snip-capture-protocol": "4", "x-snip-capture-lease": job.lease } }, { ...env, FILES: failingFiles }, ctx)).status
     } catch { /* the failure may surface as a thrown error rather than a 5xx */ }
     assert.ok(status === null || status >= 500, `the failed write is not reported as success (got ${status})`)
     const pins = (await database.prepare("SELECT count(*) AS n FROM capture_uploads").first<{ n: number }>())!.n
@@ -288,13 +288,13 @@ test("a stale reclaim never hands the agent an ord, or a file prefix, that a sav
   try {
     const ref = await db.createReference(database, { url: "https://example.com", mode: "crawl", maxPages: 9 })
     const first = (await db.claimJob(database))!
-    assert.ok(await db.addPage(database, ref.id, first.attempt, page(ref.id, first.attempt, 0)))
+    assert.ok(await db.addPage(database, ref.id, first.lease, page(ref.id, first.attempt, 0)))
     await db.requestPause(database, ref.id)
-    assert.equal(await db.pauseJob(database, ref.id, first.attempt, state(1)), "paused")
+    assert.equal(await db.pauseJob(database, ref.id, first.lease, state(1)), "paused")
     await db.resumeReference(database, ref.id)
     const resumed = (await db.claimJob(database))!
     // After the pause the agent visits three more URLs: two are skipped (ords 1 and 2), the third is saved as ord 3.
-    assert.ok(await db.addPage(database, ref.id, resumed.attempt, page(ref.id, resumed.attempt, 3)))
+    assert.ok(await db.addPage(database, ref.id, resumed.lease, page(ref.id, resumed.attempt, 3)))
     await makeStale(ref.id)
     const again = (await db.claimJob(database))!
     assert.equal(again.resume!.captured, 2)
@@ -311,12 +311,12 @@ test("an agent that is stopping hands its crawl back to the queue, and the next 
   try {
     const ref = await db.createReference(database, { url: "https://example.com", mode: "crawl", maxPages: 9 })
     const first = (await db.claimJob(database))!
-    assert.ok(await db.addPage(database, ref.id, first.attempt, page(ref.id, first.attempt, 0)))
+    assert.ok(await db.addPage(database, ref.id, first.lease, page(ref.id, first.attempt, 0)))
     // Nobody asked for a pause: the agent itself is winding down.
-    assert.equal(await db.pauseJob(database, ref.id, first.attempt, state(1)), "changed", "an ordinary pause still needs a request")
-    assert.equal(await db.pauseJob(database, ref.id, first.attempt, state(1), true), "paused")
+    assert.equal(await db.pauseJob(database, ref.id, first.lease, state(1)), "changed", "an ordinary pause still needs a request")
+    assert.equal(await db.pauseJob(database, ref.id, first.lease, state(1), true), "paused")
     assert.deepEqual({ status: (await row(ref.id))!.status, control: (await row(ref.id))!.capture_control }, { status: "queued", control: null })
-    assert.equal(await db.setProgress(database, ref.id, first.attempt, "late"), false, "the lease is released")
+    assert.equal(await db.setProgress(database, ref.id, first.lease, "late"), false, "the lease is released")
     const next = (await db.claimJob(database))!
     assert.equal(next.attempt, first.attempt)
     assert.deepEqual(next.resume!.queue, ["https://example.com/next"])
@@ -325,7 +325,7 @@ test("an agent that is stopping hands its crawl back to the queue, and the next 
 
     // A stop the user asked for still wins over the hand-back.
     await db.requestStop(database, ref.id)
-    assert.equal(await db.pauseJob(database, ref.id, next.attempt, state(1), true), "changed")
+    assert.equal(await db.pauseJob(database, ref.id, next.lease, state(1), true), "changed")
   } finally {
     await mf.dispose()
   }
@@ -336,20 +336,152 @@ test("a crawl whose agent dies without ever pausing carries on from its last sav
   try {
     const ref = await db.createReference(database, { url: "https://example.com", mode: "crawl", maxPages: 9 })
     const first = (await db.claimJob(database))!
-    assert.ok(await db.addPage(database, ref.id, first.attempt, { ...page(ref.id, first.attempt, 0), state: state(1) }))
+    assert.ok(await db.addPage(database, ref.id, first.lease, { ...page(ref.id, first.attempt, 0), state: state(1) }))
     await makeStale(ref.id)
     const again = (await db.claimJob(database))!
     assert.equal(again.attempt, first.attempt)
     assert.deepEqual(again.resume, state(1), "the rest of the crawl, its title and its tokens are still known")
 
     // An older agent sends no state with its pages: the last one saved stays.
-    assert.ok(await db.addPage(database, ref.id, again.attempt, page(ref.id, again.attempt, 1)))
+    assert.ok(await db.addPage(database, ref.id, again.lease, page(ref.id, again.attempt, 1)))
     assert.deepEqual(JSON.parse((await row(ref.id))!.crawl_state!), state(1))
     // A stop finds the title and tokens there too.
     await db.requestStop(database, ref.id)
     await makeStale(ref.id)
     assert.equal(await db.claimJob(database), null)
     assert.equal((await db.getReference(database, ref.id))!.reference.title, "Example")
+  } finally {
+    await mf.dispose()
+  }
+})
+
+test("two agents on one library: the agent that reclaims a stale capture fences out the first, and their pages never collide", async () => {
+  const { mf, database, files, ctx, env, makeStale, row, pageCount } = await setup()
+  try {
+    // The local R2 wants a body of known length; a request stream has none until it is read.
+    const storage = new Proxy(files, { get(target, name) {
+      if (name === "put") return async (key: string, body: ReadableStream, options: R2PutOptions) => target.put(key, await new Response(body).arrayBuffer(), options)
+      const value = Reflect.get(target, name, target)
+      return typeof value === "function" ? value.bind(target) : value
+    } })
+    const call = (path: string, lease: string | null, init: RequestInit = {}) => app.request(`https://snip.test/agent${path}`, { method: "POST", ...init,
+      headers: { authorization: "Bearer test-token", "content-type": "application/json", "x-snip-capture-protocol": "4", ...(lease ? { "x-snip-capture-lease": lease } : {}) } }, { ...env, FILES: storage }, ctx)
+    const claim = async (): Promise<Job> => (await call("/jobs/claim", null)).json() as Promise<Job>
+    const ref = await db.createReference(database, { url: "https://example.com", mode: "crawl", maxPages: 9 })
+    const refused = async (lease: string | null, id = ref.id) => {
+      const attempt = (await row(id))!.capture_attempt!
+      const key = `refs/${id}/${attempt}/p9/late.jpg`
+      const results = {
+        heartbeat: await call("/heartbeat", lease, { body: JSON.stringify({ jobId: id }) }),
+        progress: await call(`/jobs/${id}/progress`, lease, { body: JSON.stringify({ message: "late" }) }),
+        control: await call(`/jobs/${id}/control`, lease, { method: "GET", body: undefined }),
+        pause: await call(`/jobs/${id}/pause?release`, lease, { body: JSON.stringify(state(1)) }),
+        upload: await call(`/files/${key}`, lease, { method: "PUT", body: "late" }),
+        page: await call(`/jobs/${id}/pages`, lease, { body: JSON.stringify(page(id, attempt, 9)) }),
+        complete: await call(`/jobs/${id}/complete`, lease, { body: JSON.stringify(done) }),
+        fail: await call(`/jobs/${id}/fail`, lease, { body: JSON.stringify({ error: "late" }) }),
+      }
+      assert.deepEqual(Object.fromEntries(Object.entries(results).map(([name, response]) => [name, response.status])),
+        { heartbeat: 410, progress: 410, control: 410, pause: 410, upload: 410, page: 410, complete: 410, fail: 410 })
+      assert.equal(await files.get(key), null, "a refused upload stores nothing")
+    }
+
+    const first = await claim()
+    assert.match(first.lease, /^[a-f0-9]{32}$/)
+    assert.notEqual(first.lease, first.attempt, "the lease is its own token, not the file namespace")
+    const firstKey = `refs/${ref.id}/${first.attempt}/p0/desktop.jpg`
+    assert.equal((await call(`/files/${firstKey}`, first.lease, { method: "PUT", body: "first" })).status, 200)
+    assert.equal((await call(`/jobs/${ref.id}/pages`, first.lease, { body: JSON.stringify(page(ref.id, first.attempt, 0)) })).status, 200)
+
+    // The first agent is alive but silent for 30 minutes; a second one reclaims the capture in the same file namespace.
+    await makeStale(ref.id)
+    const second = await claim()
+    assert.equal(second.id, ref.id)
+    assert.equal(second.attempt, first.attempt, "pages and files continue in the same namespace")
+    assert.notEqual(second.lease, first.lease, "a reclaim issues a new lease")
+    assert.equal(second.resume?.captured, 1)
+
+    // Everything the first agent still sends is refused with "job is gone", whatever it presents as the lease.
+    await refused(first.lease)
+    await refused(first.attempt)
+    await refused(null)
+    await refused("f".repeat(32))
+    const held = (await row(ref.id))!
+    assert.deepEqual({ status: held.status, lease: held.capture_lease, error: held.error }, { status: "capturing", lease: second.lease, error: null }, "the refused fail and pause did not touch the second agent's job")
+    assert.equal(await pageCount(ref.id), 1)
+
+    // The second agent's calls go through and its pages land after the first agent's.
+    const ord = second.resume!.visited.length
+    assert.equal((await call("/heartbeat", second.lease, { body: JSON.stringify({ jobId: ref.id }) })).status, 200)
+    assert.equal((await call(`/jobs/${ref.id}/control`, second.lease, { method: "GET", body: undefined })).status, 200)
+    const secondKey = `refs/${ref.id}/${second.attempt}/p${ord}/desktop.jpg`
+    assert.equal((await call(`/files/${secondKey}`, second.lease, { method: "PUT", body: "second" })).status, 200)
+    assert.equal((await call(`/jobs/${ref.id}/pages`, second.lease, { body: JSON.stringify(page(ref.id, second.attempt, ord)) })).status, 200)
+    const saved = (await db.getReference(database, ref.id))!.pages
+    assert.deepEqual(saved.map((p) => p.ord), [0, ord])
+    assert.equal(new Set(saved.map((p) => p.desktopKey)).size, 2, "no two pages share a file")
+    assert.equal(await (await files.get(firstKey))!.text(), "first", "the second agent did not overwrite the first agent's file")
+    assert.equal(await (await files.get(secondKey))!.text(), "second")
+    assert.equal((await call(`/jobs/${ref.id}/complete`, second.lease, { body: JSON.stringify(done) })).status, 200)
+    const finished = (await row(ref.id))!
+    assert.deepEqual({ status: finished.status, lease: finished.capture_lease }, { status: "ready", lease: null }, "the lease is cleared when the capture ends")
+    await refused(second.lease)
+  } finally {
+    await mf.dispose()
+  }
+})
+
+test("the lease is issued on every claim and cleared whenever the capture leaves capturing", async () => {
+  const { mf, database, makeStale, row } = await setup()
+  try {
+    const lease = async (id: string) => (await row(id))!.capture_lease
+    const crawl = (url: string) => db.createReference(database, { url, mode: "crawl", maxPages: 5 })
+
+    // A fresh claim, a pause and resume, and a stale reclaim each hand out a lease nobody held before.
+    const a = await crawl("https://a.example")
+    const claimed = (await db.claimJob(database))!
+    assert.equal(await lease(a.id), claimed.lease)
+    assert.ok(await db.addPage(database, a.id, claimed.lease, page(a.id, claimed.attempt, 0)))
+    await db.requestPause(database, a.id)
+    assert.equal(await db.pauseJob(database, a.id, claimed.lease, state(1)), "paused")
+    assert.equal(await lease(a.id), null, "a pause releases it")
+    await db.resumeReference(database, a.id)
+    const resumed = (await db.claimJob(database))!
+    assert.equal(resumed.attempt, claimed.attempt)
+    await makeStale(a.id)
+    const reclaimed = (await db.claimJob(database))!
+    assert.equal(reclaimed.attempt, claimed.attempt)
+    assert.equal(new Set([claimed.lease, resumed.lease, reclaimed.lease]).size, 3)
+    assert.equal(await db.renewLease(database, a.id, resumed.lease), false, "the replaced holder cannot renew")
+    assert.equal(await db.renewLease(database, a.id, reclaimed.lease), true)
+    assert.equal(await db.renewLease(database, a.id, reclaimed.attempt), false, "the attempt is not a lease")
+    assert.equal(await db.failJob(database, a.id, reclaimed.lease, "boom"), true)
+    assert.equal(await lease(a.id), null, "a failure releases it")
+
+    // Stop and a stale pause release it too, and so does a capture whose agents keep dying.
+    const b = await crawl("https://b.example")
+    const stopping = (await db.claimJob(database))!
+    await db.requestStop(database, b.id)
+    await makeStale(b.id)
+    assert.equal(await db.claimJob(database), null)
+    assert.equal(await lease(b.id), null, "a stop settled for a dead agent releases it")
+    assert.equal(await db.setProgress(database, b.id, stopping.lease, "late"), false)
+
+    const c = await crawl("https://c.example")
+    assert.ok(await db.claimJob(database))
+    await db.requestPause(database, c.id)
+    await makeStale(c.id)
+    assert.equal(await db.claimJob(database), null)
+    assert.equal(await lease(c.id), null, "a pause parked for a dead agent releases it")
+
+    const d = await crawl("https://d.example")
+    for (let claims = 0; claims < 4; claims++) { // the claim and three reclaims
+      assert.ok(await db.claimJob(database), `claim ${claims + 1} of the budget`)
+      await makeStale(d.id)
+    }
+    assert.equal(await db.claimJob(database), null)
+    assert.equal((await row(d.id))!.status, "failed")
+    assert.equal(await lease(d.id), null, "an abandoned capture releases it")
   } finally {
     await mf.dispose()
   }

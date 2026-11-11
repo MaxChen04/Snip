@@ -373,12 +373,12 @@ app.route("/api", api)
 const agent = new Hono<AppEnv>()
 agent.use("*", requireCaptureToken)
 agent.use("*", async (c, next) => {
-  if (c.req.header("x-snip-capture-protocol") !== "3") return c.json({ error: "Capture agent upgrade required. Install the latest Snip capture agent." }, 426)
+  if (c.req.header("x-snip-capture-protocol") !== "4") return c.json({ error: "Capture agent upgrade required. Install the latest Snip capture agent." }, 426)
   await next()
 })
 
-const attemptFrom = (c: { req: { header(name: string): string | undefined } }) => c.req.header("x-snip-capture-attempt") ?? ""
-const validAttempt = (attempt: string) => /^[a-f0-9]{32}$/.test(attempt)
+// The lease a claim issued. One agent holds a job at a time; a missing or replaced lease matches no job, so the call is answered "job is gone".
+const leaseFrom = (c: { req: { header(name: string): string | undefined } }) => c.req.header("x-snip-capture-lease") ?? ""
 
 // Lets `npm run doctor` check the URL and token without claiming a job or touching presence.
 agent.get("/ping", (c) => c.json({ ok: true }))
@@ -393,32 +393,27 @@ agent.post("/jobs/claim", async (c) => {
 
 agent.post("/heartbeat", async (c) => {
   const { jobId } = await c.req.json<{ jobId?: string | null }>().catch(() => ({ jobId: null }))
-  const attempt = attemptFrom(c)
-  if (jobId && (!validAttempt(attempt) || !(await db.renewLease(c.env.DB, jobId, attempt)))) return c.json({ error: "job is gone" }, 410)
+  if (jobId && !(await db.renewLease(c.env.DB, jobId, leaseFrom(c)))) return c.json({ error: "job is gone" }, 410)
   await db.touchPresence(c.env.DB, jobId ? "busy" : "idle", jobId ?? null)
   return c.json({ ok: true })
 })
 
 agent.post("/jobs/:id/progress", async (c) => {
-  const attempt = attemptFrom(c)
   const { message } = await c.req.json<{ message: string }>()
-  if (!validAttempt(attempt) || !(await db.setProgress(c.env.DB, c.req.param("id"), attempt, message))) return c.json({ error: "job is gone" }, 410)
+  if (!(await db.setProgress(c.env.DB, c.req.param("id"), leaseFrom(c), message))) return c.json({ error: "job is gone" }, 410)
   await db.touchPresence(c.env.DB, "busy", c.req.param("id"))
   return c.json({ ok: true })
 })
 
 agent.get("/jobs/:id/control", async (c) => {
-  const attempt = attemptFrom(c)
-  const result = validAttempt(attempt) ? await db.getControl(c.env.DB, c.req.param("id"), attempt) : null
+  const result = await db.getControl(c.env.DB, c.req.param("id"), leaseFrom(c))
   return result ? c.json(result) : c.json({ error: "job is gone" }, 410)
 })
 
 agent.post("/jobs/:id/pause", async (c) => {
-  const attempt = attemptFrom(c)
-  if (!validAttempt(attempt)) return c.json({ error: "job is gone" }, 410)
   const state = await c.req.json<CrawlState>()
   // ?release: the agent is stopping and hands the crawl back whether or not a pause was asked for.
-  const result = await db.pauseJob(c.env.DB, c.req.param("id"), attempt, state, c.req.query("release") !== undefined)
+  const result = await db.pauseJob(c.env.DB, c.req.param("id"), leaseFrom(c), state, c.req.query("release") !== undefined)
   if (result === "gone") return c.json({ error: "job is gone" }, 410)
   if (result === "changed") return c.json({ error: "pause no longer requested" }, 409)
   await db.touchPresence(c.env.DB, "idle", null)
@@ -427,11 +422,13 @@ agent.post("/jobs/:id/pause", async (c) => {
 
 agent.put("/files/*", async (c) => {
   const key = c.req.path.slice("/agent/files/".length)
-  const attempt = attemptFrom(c)
+  const lease = leaseFrom(c)
   if (!KEY_RE.test(key) || key.includes("..")) return c.json({ error: "bad key" }, 400)
   const parts = key.split("/")
-  if (!validAttempt(attempt) || parts[2] !== attempt) return c.json({ error: "job is gone" }, 410)
-  const upload = await db.beginUpload(c.env.DB, parts[1]!, attempt, key)
+  // The file goes in the namespace of the capture this lease holds.
+  const attempt = await db.leasedAttempt(c.env.DB, parts[1]!, lease)
+  if (!attempt || parts[2] !== attempt) return c.json({ error: "job is gone" }, 410)
+  const upload = await db.beginUpload(c.env.DB, parts[1]!, lease, key)
   if (!upload) return c.json({ error: "job is gone" }, 410)
   const contentType = c.req.header("content-type") ?? "application/octet-stream"
   // The pin outlives a failed postcheck or stale-key deletion, where the object may exist. A failed write stored nothing, so its pin goes.
@@ -441,7 +438,7 @@ agent.put("/files/*", async (c) => {
     await db.finishUpload(c.env.DB, upload)
     throw error
   }
-  if (!(await db.isCapturing(c.env.DB, parts[1]!, attempt))) {
+  if (!(await db.isCapturing(c.env.DB, parts[1]!, lease))) {
     await c.env.FILES.delete(key)
     await db.finishUpload(c.env.DB, upload)
     return c.json({ error: "job is gone" }, 410)
@@ -461,8 +458,9 @@ function validSections(sections: unknown): sections is NonNullable<PageUpload["s
 
 agent.post("/jobs/:id/pages", async (c) => {
   const id = c.req.param("id")
-  const attempt = attemptFrom(c)
-  if (!validAttempt(attempt)) return c.json({ error: "job is gone" }, 410)
+  const lease = leaseFrom(c)
+  const attempt = await db.leasedAttempt(c.env.DB, id, lease)
+  if (!attempt) return c.json({ error: "job is gone" }, 410)
   const page = await c.req.json<PageUpload>()
   const prefix = `refs/${id}/${attempt}/`
   if (page.sections !== undefined && !validSections(page.sections)) return c.json({ error: "bad sections" }, 400)
@@ -472,27 +470,28 @@ agent.post("/jobs/:id/pages", async (c) => {
     return c.json({ error: "bad altScheme" }, 400)
   const keys = [page.desktopKey, page.desktopThumbKey, page.mobileKey, page.mobileThumbKey, page.snapshotKey, page.stylesKey, ...(page.sections ?? []).flatMap((s) => [s.key, s.live?.key]), alt?.desktopKey, alt?.desktopThumbKey, ...(alt?.sectionKeys ?? []), ...page.animations.flatMap((a) => [a.gifKey, a.sheetKey])]
   if (keys.some((key) => key && !key.startsWith(prefix))) return c.json({ error: "bad file key" }, 400)
-  const pageId = await db.addPage(c.env.DB, id, attempt, page)
+  const pageId = await db.addPage(c.env.DB, id, lease, page)
   return pageId ? c.json({ id: pageId }) : c.json({ error: "job is gone" }, 410)
 })
 
 agent.post("/jobs/:id/complete", async (c) => {
   const id = c.req.param("id")
-  const attempt = attemptFrom(c)
+  const lease = leaseFrom(c)
+  const attempt = await db.leasedAttempt(c.env.DB, id, lease)
+  if (!attempt) return c.json({ error: "job is gone" }, 410)
   const body = await c.req.json<JobComplete>()
   const prefix = `refs/${id}/${attempt}/`
   if (body.coverKey && !body.coverKey.startsWith(prefix)) return c.json({ error: "bad file key" }, 400)
   // Only an icon saved with this capture is kept. An older agent sends the site's icon URL instead, which Snip never loads.
   if (!body.favicon?.startsWith(prefix)) body.favicon = null
-  if (!validAttempt(attempt) || !(await db.completeJob(c.env.DB, id, attempt, body))) return c.json({ error: "job is gone" }, 410)
+  if (!(await db.completeJob(c.env.DB, id, lease, body))) return c.json({ error: "job is gone" }, 410)
   await db.touchPresence(c.env.DB, "idle", null)
   return c.json({ ok: true })
 })
 
 agent.post("/jobs/:id/fail", async (c) => {
-  const attempt = attemptFrom(c)
   const { error } = await c.req.json<{ error: string }>()
-  if (!validAttempt(attempt) || !(await db.failJob(c.env.DB, c.req.param("id"), attempt, error))) return c.json({ error: "job is gone" }, 410)
+  if (!(await db.failJob(c.env.DB, c.req.param("id"), leaseFrom(c), error))) return c.json({ error: "job is gone" }, 410)
   await db.touchPresence(c.env.DB, "idle", null)
   return c.json({ ok: true })
 })

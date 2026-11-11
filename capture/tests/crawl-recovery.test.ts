@@ -3,6 +3,7 @@ import assert from "node:assert/strict"
 import http from "node:http"
 import { chromium } from "playwright"
 import type { CrawlState, Job, JobComplete, PageUpload } from "../../web/shared/types"
+import { JobGoneError } from "../src/api"
 import { captureJob } from "../src/capture"
 import { closeRenderer } from "../src/sheet"
 
@@ -220,6 +221,37 @@ test("a resumed crawl does not reuse an ord stored before the pause, when a fail
       const resume: CrawlState = { version: 1, queue: [`${base}d`], visited: [base, `${base}b`, `${base}c`], captured: 2, failures: 1, navLinksQueued: true, hoverSeen: [], meta: null, tokens: null }
       await captureJob(browser, api as never, { id: "resumed", url: base, mode: "crawl", maxPages: 3, attempt, resume, options: null, features: [] } as unknown as Job)
       assert.deepEqual(ords, [3])
+    } finally {
+      await closeRenderer()
+      await browser.close()
+    }
+  })
+})
+
+test("a capture whose job another agent took stops at the first refused call: no more pages, and nothing is completed or paused", { timeout: 300_000 }, async () => {
+  await withServer((req, res) => {
+    res.writeHead(200, { "content-type": "text/html" })
+    res.end(req.url === "/b" ? plain("Page B") : req.url === "/c" ? plain("Page C") : plain("Page A", `<nav><a href="/b">B</a> <a href="/c">C</a></nav>`))
+  }, async (base) => {
+    const browser = await launch()
+    try {
+      // Where the Worker's "job is gone" lands: the first file upload, the first page save, or the check between pages.
+      for (const refused of ["upload", "addPage", "control"] as const) {
+        const seen = { uploads: 0, pages: [] as string[], controls: 0, completed: 0, paused: 0 }
+        const gone = () => { throw new JobGoneError() }
+        const api = {
+          control: async () => { if (refused === "control" && ++seen.controls === 2) gone(); return null },
+          progress: async () => {},
+          upload: async (key: string) => { if (refused === "upload") gone(); seen.uploads++; return key },
+          addPage: async (_id: string, page: PageUpload) => { if (refused === "addPage") gone(); seen.pages.push(page.path) },
+          pause: async () => { seen.paused++; return true },
+          complete: async () => { seen.completed++ },
+        }
+        await assert.rejects(captureJob(browser, api as never, { id: "taken", url: base, mode: "crawl", maxPages: 3, attempt, resume: null, options: null, features: [] } as unknown as Job), JobGoneError, refused)
+        assert.deepEqual({ completed: seen.completed, paused: seen.paused }, { completed: 0, paused: 0 }, `${refused}: a replaced agent neither finishes nor hands back the job`)
+        assert.deepEqual(seen.pages, refused === "control" ? ["/"] : [], `${refused}: no page is started after the refusal`)
+        if (refused === "upload") assert.equal(seen.uploads, 0, "nothing more is uploaded")
+      }
     } finally {
       await closeRenderer()
       await browser.close()

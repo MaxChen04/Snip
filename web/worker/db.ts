@@ -526,12 +526,12 @@ const MAX_STALE_RECLAIMS = 3
 
 /** Ends the captures matching `where` (one bound value) with what they have: ready with their pages, stopped-empty without. */
 const settleStopped = (db: D1Database, where: string, arg: unknown, ts: string) => [
-  db.prepare(`UPDATE refs SET status = 'ready', progress = NULL, error = NULL, capture_control = NULL,
+  db.prepare(`UPDATE refs SET status = 'ready', progress = NULL, error = NULL, capture_control = NULL, capture_lease = NULL,
     title = coalesce(json_extract(crawl_state, '$.meta.title'), title), description = coalesce(json_extract(crawl_state, '$.meta.description'), description),
     favicon = CASE WHEN instr(json_extract(crawl_state, '$.meta.favicon'), 'refs/' || id || '/' || capture_attempt || '/') = 1 THEN json_extract(crawl_state, '$.meta.favicon') ELSE favicon END,
     tokens_json = json_extract(crawl_state, '$.tokens'), crawl_state = NULL, updated_at = ?
     WHERE ${where} AND ${HAS_PAGES}`).bind(ts, arg),
-  db.prepare(`UPDATE refs SET status = 'failed', progress = NULL, error = ?, capture_control = NULL, crawl_state = NULL, updated_at = ? WHERE ${where}`).bind(STOPPED_EMPTY, ts, arg),
+  db.prepare(`UPDATE refs SET status = 'failed', progress = NULL, error = ?, capture_control = NULL, capture_lease = NULL, crawl_state = NULL, updated_at = ? WHERE ${where}`).bind(STOPPED_EMPTY, ts, arg),
 ]
 
 /**
@@ -550,20 +550,21 @@ function resumeState(checkpoint: CrawlState | null, pages: [url: string, ord: nu
 export async function claimJob(db: D1Database): Promise<Job | null> {
   const stale = new Date(Date.now() - STALE_MINUTES * 60_000).toISOString()
   const ts = now()
-  const attempt = crypto.randomUUID().replace(/-/g, "")
+  const token = () => crypto.randomUUID().replace(/-/g, "")
   // A stale lease means the agent is gone, so nobody is left to act on a pause or stop: apply it here.
   const abandoned = `status = 'capturing' AND claimed_at < ?`
   const candidate = `SELECT id FROM refs WHERE (status = 'queued' AND coalesce(capture_control, '') != 'paused') OR (${abandoned}) ORDER BY created_at LIMIT 1`
   // D1 batches are transactions. Record the old namespace before replacing the lease.
   const results = await db.batch([
     ...settleStopped(db, `${abandoned} AND capture_control = 'stop'`, stale, ts),
-    db.prepare(`UPDATE refs SET status = 'queued', capture_control = 'paused', progress = 'Paused', claimed_at = NULL, updated_at = ? WHERE ${abandoned} AND capture_control = 'pause'`).bind(ts, stale),
-    db.prepare(`UPDATE refs SET status = 'failed', progress = NULL, error = ?, crawl_state = NULL, updated_at = ? WHERE ${abandoned} AND stale_reclaims >= ${MAX_STALE_RECLAIMS}`).bind(ABANDONED, ts, stale),
+    db.prepare(`UPDATE refs SET status = 'queued', capture_control = 'paused', progress = 'Paused', claimed_at = NULL, capture_lease = NULL, updated_at = ? WHERE ${abandoned} AND capture_control = 'pause'`).bind(ts, stale),
+    db.prepare(`UPDATE refs SET status = 'failed', progress = NULL, error = ?, crawl_state = NULL, capture_lease = NULL, updated_at = ? WHERE ${abandoned} AND stale_reclaims >= ${MAX_STALE_RECLAIMS}`).bind(ABANDONED, ts, stale),
     db.prepare(`INSERT OR IGNORE INTO capture_cleanup (prefix) SELECT 'refs/' || id || '/' || coalesce(capture_attempt || '/', 'p') FROM refs WHERE id = (${candidate}) AND NOT ${HAS_PAGES}`).bind(stale),
-    db.prepare(`UPDATE refs SET stale_reclaims = stale_reclaims + (status = 'capturing'), status = 'capturing', claimed_at = ?2, updated_at = ?2,
+    // Every claim, a stale reclaim and a resume included, issues a new lease: the attempt only names the files.
+    db.prepare(`UPDATE refs SET stale_reclaims = stale_reclaims + (status = 'capturing'), status = 'capturing', claimed_at = ?2, updated_at = ?2, capture_lease = ?4,
       capture_attempt = CASE WHEN ${HAS_PAGES} THEN capture_attempt ELSE ?1 END, progress = CASE WHEN ${HAS_PAGES} THEN 'Resuming capture' ELSE 'Starting capture' END
-      WHERE id = (${candidate.replace("?", "?3")}) RETURNING id, url, mode, max_pages, capture_attempt, capture_options, crawl_state,
-      (SELECT json_group_array(json_array(url, ord)) FROM (SELECT url, ord FROM pages WHERE reference_id = refs.id ORDER BY ord)) AS pages`).bind(attempt, ts, stale),
+      WHERE id = (${candidate.replace("?", "?3")}) RETURNING id, url, mode, max_pages, capture_attempt, capture_lease, capture_options, crawl_state,
+      (SELECT json_group_array(json_array(url, ord)) FROM (SELECT url, ord FROM pages WHERE reference_id = refs.id ORDER BY ord)) AS pages`).bind(token(), ts, stale, token()),
   ])
   const r = results[results.length - 1]?.results[0] as Row | undefined
   if (!r) return null
@@ -574,17 +575,18 @@ export async function claimJob(db: D1Database): Promise<Job | null> {
     mode: r.mode as CaptureMode,
     maxPages: r.max_pages as number,
     attempt: r.capture_attempt as string,
+    lease: r.capture_lease as string,
     resume: pages.length ? resumeState(parse<CrawlState>(r.crawl_state), pages) : null,
     options: parse<CaptureOptions>(r.capture_options),
   }
 }
 
 // Admission and reference state are checked atomically, before any R2 write.
-export async function beginUpload(db: D1Database, id: string, attempt: string, key: string) {
+export async function beginUpload(db: D1Database, id: string, lease: string, key: string) {
   const upload = crypto.randomUUID()
   const result = await db.prepare(`INSERT INTO capture_uploads (id, object_key)
-    SELECT ?, ? WHERE EXISTS (SELECT 1 FROM refs WHERE id = ? AND status = 'capturing' AND capture_attempt = ?)`)
-    .bind(upload, key, id, attempt).run()
+    SELECT ?, ? WHERE EXISTS (SELECT 1 FROM refs WHERE id = ? AND status = 'capturing' AND capture_lease = ?)`)
+    .bind(upload, key, id, lease).run()
   return result.meta.changes ? upload : null
 }
 
@@ -592,21 +594,27 @@ export async function finishUpload(db: D1Database, upload: string) {
   await db.prepare(`DELETE FROM capture_uploads WHERE id = ?`).bind(upload).run()
 }
 
-export async function isCapturing(db: D1Database, id: string, attempt: string) {
-  return !!(await db.prepare(`SELECT 1 FROM refs WHERE id = ? AND status = 'capturing' AND capture_attempt = ?`).bind(id, attempt).first())
+export async function isCapturing(db: D1Database, id: string, lease: string) {
+  return !!(await db.prepare(`SELECT 1 FROM refs WHERE id = ? AND status = 'capturing' AND capture_lease = ?`).bind(id, lease).first())
 }
 
-export async function setProgress(db: D1Database, id: string, attempt: string, progress: string) {
-  const result = await db.prepare(`UPDATE refs SET progress = ?, claimed_at = ?, updated_at = ? WHERE id = ? AND status = 'capturing' AND capture_attempt = ?`).bind(progress.slice(0, 300), now(), now(), id, attempt).run()
+/** The file namespace of the capture this lease holds; null once another claim or a finish has taken it. */
+export async function leasedAttempt(db: D1Database, id: string, lease: string) {
+  const r = await db.prepare(`SELECT capture_attempt FROM refs WHERE id = ? AND status = 'capturing' AND capture_lease = ?`).bind(id, lease).first<Row>()
+  return (r?.capture_attempt as string | undefined) ?? null
+}
+
+export async function setProgress(db: D1Database, id: string, lease: string, progress: string) {
+  const result = await db.prepare(`UPDATE refs SET progress = ?, claimed_at = ?, updated_at = ? WHERE id = ? AND status = 'capturing' AND capture_lease = ?`).bind(progress.slice(0, 300), now(), now(), id, lease).run()
   return result.meta.changes > 0
 }
 
-export async function renewLease(db: D1Database, id: string, attempt: string) {
-  const result = await db.prepare(`UPDATE refs SET claimed_at = ? WHERE id = ? AND status = 'capturing' AND capture_attempt = ?`).bind(now(), id, attempt).run()
+export async function renewLease(db: D1Database, id: string, lease: string) {
+  const result = await db.prepare(`UPDATE refs SET claimed_at = ? WHERE id = ? AND status = 'capturing' AND capture_lease = ?`).bind(now(), id, lease).run()
   return result.meta.changes > 0
 }
 
-export async function addPage(db: D1Database, referenceId: string, attempt: string, p: PageUpload) {
+export async function addPage(db: D1Database, referenceId: string, lease: string, p: PageUpload) {
   const pageId = newId()
   const ts = now()
   const stmts = [
@@ -614,13 +622,13 @@ export async function addPage(db: D1Database, referenceId: string, attempt: stri
       .prepare(
         `INSERT INTO pages (id, reference_id, url, path, title, ord, desktop_key, desktop_thumb_key, desktop_width, desktop_height,
           mobile_key, mobile_thumb_key, mobile_width, mobile_height, snapshot_key, styles_key, tokens_json, sections_json, alt_scheme_json, created_at)
-         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM refs WHERE id = ? AND status = 'capturing' AND capture_attempt = ?)`,
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM refs WHERE id = ? AND status = 'capturing' AND capture_lease = ?)`,
       )
       .bind(
         pageId, referenceId, p.url, p.path, p.title, p.ord,
         p.desktopKey, p.desktopThumbKey, p.desktopWidth, p.desktopHeight,
         p.mobileKey, p.mobileThumbKey, p.mobileWidth, p.mobileHeight,
-        p.snapshotKey, p.stylesKey, p.tokens ? JSON.stringify(p.tokens) : null, Array.isArray(p.sections) ? JSON.stringify(p.sections) : null, p.altScheme ? JSON.stringify(p.altScheme) : null, ts, referenceId, attempt,
+        p.snapshotKey, p.stylesKey, p.tokens ? JSON.stringify(p.tokens) : null, Array.isArray(p.sections) ? JSON.stringify(p.sections) : null, p.altScheme ? JSON.stringify(p.altScheme) : null, ts, referenceId, lease,
       ),
   ]
   for (const a of p.animations) {
@@ -641,27 +649,27 @@ export async function addPage(db: D1Database, referenceId: string, attempt: stri
       .prepare(
         `UPDATE refs SET page_count = (SELECT count(*) FROM pages WHERE reference_id = ?1),
           animation_count = (SELECT count(*) FROM animations WHERE reference_id = ?1),
-          cover_key = coalesce(cover_key, ?2), crawl_state = coalesce(?5, crawl_state), updated_at = ?3 WHERE id = ?1 AND status = 'capturing' AND capture_attempt = ?4`,
+          cover_key = coalesce(cover_key, ?2), crawl_state = coalesce(?5, crawl_state), updated_at = ?3 WHERE id = ?1 AND status = 'capturing' AND capture_lease = ?4`,
       )
-      .bind(referenceId, p.desktopThumbKey, ts, attempt, p.state ? JSON.stringify(p.state) : null),
+      .bind(referenceId, p.desktopThumbKey, ts, lease, p.state ? JSON.stringify(p.state) : null),
   )
   const results = await db.batch(stmts)
   return results[0]?.meta.changes ? pageId : null
 }
 
-export async function completeJob(db: D1Database, id: string, attempt: string, c: JobComplete) {
+export async function completeJob(db: D1Database, id: string, lease: string, c: JobComplete) {
   const result = await db
     .prepare(
-      `UPDATE refs SET status = 'ready', progress = NULL, error = NULL, capture_control = NULL, crawl_state = NULL, title = coalesce(?, title), description = coalesce(?, description),
-        favicon = coalesce(?, favicon), cover_key = coalesce(?, cover_key), tokens_json = ?, updated_at = ? WHERE id = ? AND status = 'capturing' AND capture_attempt = ?`,
+      `UPDATE refs SET status = 'ready', progress = NULL, error = NULL, capture_control = NULL, capture_lease = NULL, crawl_state = NULL, title = coalesce(?, title), description = coalesce(?, description),
+        favicon = coalesce(?, favicon), cover_key = coalesce(?, cover_key), tokens_json = ?, updated_at = ? WHERE id = ? AND status = 'capturing' AND capture_lease = ?`,
     )
-    .bind(c.title, c.description, c.favicon, c.coverKey, c.tokens ? JSON.stringify(c.tokens) : null, now(), id, attempt)
+    .bind(c.title, c.description, c.favicon, c.coverKey, c.tokens ? JSON.stringify(c.tokens) : null, now(), id, lease)
     .run()
   return result.meta.changes > 0
 }
 
-export async function failJob(db: D1Database, id: string, attempt: string, error: string) {
-  const result = await db.prepare(`UPDATE refs SET status = 'failed', progress = NULL, error = ?, capture_control = NULL, crawl_state = NULL, updated_at = ? WHERE id = ? AND status = 'capturing' AND capture_attempt = ?`).bind(error.slice(0, 1000), now(), id, attempt).run()
+export async function failJob(db: D1Database, id: string, lease: string, error: string) {
+  const result = await db.prepare(`UPDATE refs SET status = 'failed', progress = NULL, error = ?, capture_control = NULL, capture_lease = NULL, crawl_state = NULL, updated_at = ? WHERE id = ? AND status = 'capturing' AND capture_lease = ?`).bind(error.slice(0, 1000), now(), id, lease).run()
   return result.meta.changes > 0
 }
 
@@ -703,8 +711,8 @@ export async function requestStop(db: D1Database, id: string) {
 }
 
 /** What the agent should do before its next page. Null means the job is gone. */
-export async function getControl(db: D1Database, id: string, attempt: string): Promise<{ control: CaptureControl | null } | null> {
-  const r = await db.prepare(`SELECT capture_control FROM refs WHERE id = ? AND status = 'capturing' AND capture_attempt = ?`).bind(id, attempt).first<Row>()
+export async function getControl(db: D1Database, id: string, lease: string): Promise<{ control: CaptureControl | null } | null> {
+  const r = await db.prepare(`SELECT capture_control FROM refs WHERE id = ? AND status = 'capturing' AND capture_lease = ?`).bind(id, lease).first<Row>()
   if (!r) return null
   return { control: r.capture_control === "pause" || r.capture_control === "stop" ? r.capture_control : null }
 }
@@ -714,12 +722,12 @@ export async function getControl(db: D1Database, id: string, attempt: string): P
  * still requested, so a stop or resume that arrived meanwhile wins: "changed" tells the agent to check again.
  * With `release` the agent itself is stopping: when nothing is requested the capture goes back to the queue, to be resumed by the next claim.
  */
-export async function pauseJob(db: D1Database, id: string, attempt: string, state: CrawlState, release = false): Promise<"paused" | "changed" | "gone"> {
-  const result = await db.prepare(`UPDATE refs SET status = 'queued', crawl_state = ?1, claimed_at = NULL, updated_at = ?2,
+export async function pauseJob(db: D1Database, id: string, lease: string, state: CrawlState, release = false): Promise<"paused" | "changed" | "gone"> {
+  const result = await db.prepare(`UPDATE refs SET status = 'queued', crawl_state = ?1, claimed_at = NULL, capture_lease = NULL, updated_at = ?2,
     progress = CASE WHEN capture_control = 'pause' THEN 'Paused' ELSE 'Waiting for your Mac' END, capture_control = CASE WHEN capture_control = 'pause' THEN 'paused' END
-    WHERE id = ?3 AND status = 'capturing' AND capture_attempt = ?4 AND (capture_control = 'pause' OR (?5 AND capture_control IS NULL))`).bind(JSON.stringify(state), now(), id, attempt, release ? 1 : 0).run()
+    WHERE id = ?3 AND status = 'capturing' AND capture_lease = ?4 AND (capture_control = 'pause' OR (?5 AND capture_control IS NULL))`).bind(JSON.stringify(state), now(), id, lease, release ? 1 : 0).run()
   if (result.meta.changes) return "paused"
-  return (await isCapturing(db, id, attempt)) ? "changed" : "gone"
+  return (await isCapturing(db, id, lease)) ? "changed" : "gone"
 }
 
 // ---------- Capture worker presence ----------

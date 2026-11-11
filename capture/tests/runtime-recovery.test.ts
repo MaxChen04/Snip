@@ -1,6 +1,6 @@
 import { test, mock } from "node:test"
 import assert from "node:assert/strict"
-import type { Job } from "../../web/shared/types"
+import type { CrawlState, Job, JobComplete, PageUpload } from "../../web/shared/types"
 import { JobGoneError, SnipApi } from "../src/api"
 import { CaptureRuntime } from "../src/runtime"
 
@@ -200,6 +200,105 @@ test("a hung capture is failed before its browser is closed, and a slow browser 
     runtime.stop()
     await done
   } finally {
+    mock.timers.reset()
+  }
+})
+
+/** A Worker that issues a new lease on every claim and answers 410 to any call about the job that does not present the current one. */
+function fakeWorker() {
+  const worker = {
+    open: true,
+    lease: "",
+    claims: 0,
+    seen: [] as { path: string; lease: string | null; attempt: string | null; protocol: string | null }[],
+    fetch: (async (input: string | URL | Request, init: RequestInit = {}) => {
+      const path = new URL(String(input instanceof Request ? input.url : input)).pathname
+      const headers = new Headers(init.headers)
+      worker.seen.push({ path, lease: headers.get("x-snip-capture-lease"), attempt: headers.get("x-snip-capture-attempt"), protocol: headers.get("x-snip-capture-protocol") })
+      if (path === "/agent/jobs/claim") {
+        if (!worker.open) return new Response(null, { status: 204 })
+        worker.lease = `lease-${++worker.claims}`
+        return Response.json({ id: "job-1", url: "https://example.com", mode: "crawl", maxPages: 3, attempt: "a".repeat(32), lease: worker.lease, resume: null, options: null })
+      }
+      const idle = path === "/agent/heartbeat" && JSON.parse(String(init.body)).jobId === null
+      return !idle && headers.get("x-snip-capture-lease") !== worker.lease ? new Response("gone", { status: 410 }) : Response.json({ control: null })
+    }) as typeof fetch,
+  }
+  return worker
+}
+
+test("an agent whose job another agent claimed is refused on every call, and the agent that holds it is not", async () => {
+  const worker = fakeWorker()
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = worker.fetch
+  try {
+    const first = new SnipApi("http://example.test", "token")
+    const second = new SnipApi("http://example.test", "token")
+    await first.heartbeat(null)
+    assert.equal(worker.seen[0]!.lease, null, "between jobs an agent presents no lease")
+    const a = (await first.claim())!
+    const b = (await second.claim())!
+    assert.notEqual(a.lease, b.lease, "a reclaim of the same job issues a new lease")
+
+    const calls = (api: SnipApi) => [
+      () => api.heartbeat("job-1"),
+      () => api.progress("job-1", "Capturing 2/3"),
+      () => api.control("job-1"),
+      () => api.upload("refs/job-1/aaaa/p0/desktop.jpg", Buffer.from("x"), "image/jpeg"),
+      () => api.addPage("job-1", {} as PageUpload),
+      () => api.pause("job-1", {} as CrawlState, true),
+      () => api.complete("job-1", {} as JobComplete),
+    ]
+    for (const call of calls(first)) await assert.rejects(call(), JobGoneError)
+    for (const call of calls(second)) await call()
+    worker.seen.length = 0
+    await first.fail("job-1", "late")
+    assert.deepEqual(worker.seen.map((s) => [s.path, s.lease]), [["/agent/jobs/job-1/fail", a.lease]], "a late failure report is sent with the old lease, so the Worker refuses it")
+    await second.heartbeat("job-1")
+    assert.ok(worker.seen.every((s) => s.protocol === "4" && s.attempt === null), "the attempt is not sent: the lease is the only fence")
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test("when another agent claims its job, the runtime aborts the capture and its late failure report leaves the new holder alone", async () => {
+  mock.timers.enable({ apis: ["setTimeout", "setInterval"] })
+  const worker = fakeWorker()
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = worker.fetch
+  try {
+    let signal: AbortSignal | undefined
+    const runtime = new CaptureRuntime({
+      api: new SnipApi("http://example.test", "token"),
+      launch: async () => browser(),
+      // Like a capture that finds its next call refused: it ends once the signal says the lease is gone.
+      capture: async (...args: unknown[]) => {
+        signal = signalOf(args.slice(2))
+        await new Promise<void>((_, reject) => signal!.addEventListener("abort", () => reject(new JobGoneError())))
+      },
+      status: () => {}, pollMs: 5, idleMs: 50, once: false,
+    } as ConstructorParameters<typeof CaptureRuntime<ReturnType<typeof browser>>>[0])
+    void runtime.run()
+    for (let i = 0; i < 100 && !signal; i++) await flush()
+    assert.ok(signal, "the capture started")
+    const firstLease = worker.lease
+
+    // The first agent went silent for half an hour; a second one claims the same job.
+    const second = new SnipApi("http://example.test", "token")
+    const taken = (await second.claim())!
+    assert.notEqual(taken.lease, firstLease)
+    worker.open = false // no more jobs: the first agent's runtime goes back to polling once its capture ends
+
+    mock.timers.tick(30_000)
+    for (let i = 0; i < 20; i++) await flush()
+    assert.equal(signal!.aborted, true, "the refused heartbeat aborts the capture")
+    const fails = worker.seen.filter((s) => s.path === "/agent/jobs/job-1/fail")
+    assert.deepEqual(fails.map((s) => s.lease), [firstLease], "the runtime reports the failure with the lease it held, which the Worker refused")
+    assert.equal(worker.lease, taken.lease, "the new holder still holds the job")
+    await second.heartbeat("job-1")
+    runtime.stop()
+  } finally {
+    globalThis.fetch = originalFetch
     mock.timers.reset()
   }
 })

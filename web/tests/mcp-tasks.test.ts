@@ -56,8 +56,8 @@ async function setup() {
       mobileKey: null, mobileThumbKey: null, mobileWidth: null, mobileHeight: null,
       snapshotKey: null, stylesKey: null, tokens: null, animations: [],
     }
-    assert.ok(await db.addPage(DB, id, job.attempt, page))
-    assert.ok(await db.completeJob(DB, id, job.attempt, { title: "Example", description: null, favicon: null, coverKey: key, tokens: null }))
+    assert.ok(await db.addPage(DB, id, job.lease, page))
+    assert.ok(await db.completeJob(DB, id, job.lease, { title: "Example", description: null, favicon: null, coverKey: key, tokens: null }))
   }
   return { mf, DB, call, task, rpc, finish }
 }
@@ -147,7 +147,7 @@ test("a failed capture completes its task with a tool error, not a failed task",
     await db.touchPresence(DB, "idle", null)
     const created = (await call("add_reference", { url: "https://example.com" })).result!
     const job = (await db.claimJob(DB))!
-    await db.failJob(DB, refOf(created.taskId), job.attempt, "Navigation timeout")
+    await db.failJob(DB, refOf(created.taskId), job.lease, "Navigation timeout")
     const done = (await task("tasks/get", created.taskId)).result!
     assert.equal(done.status, "completed")
     assert.equal(done.result.isError, true)

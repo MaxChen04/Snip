@@ -239,8 +239,10 @@ export interface Job {
   url: string
   mode: CaptureMode
   maxPages: number
-  /** Server-issued capture lease and file namespace. */
+  /** The file namespace and page numbering of this capture. A stalled capture that is claimed again keeps it. */
   attempt: string
+  /** Who holds this job: issued on every claim and sent with every call for it. Once another claim replaces it, the old holder's calls are refused. */
+  lease: string
   /** Where a paused crawl left off. Pages already captured are kept; continue from here. */
   resume: CrawlState | null
   options: CaptureOptions | null

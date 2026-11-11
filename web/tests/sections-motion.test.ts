@@ -18,7 +18,7 @@ test("page sections and logged motion are stored, checked and described over MCP
     const ctx = { waitUntil(p: Promise<unknown>) { pending.push(p) }, passThroughOnException() {}, props: { ownerId: "max" } } as unknown as ExecutionContext
     const env = { DB: database, FILES: files, SESSION_SECRET: "test-secret", DEV_LOGIN: "max", CAPTURE_TOKEN: "test-token" } as unknown as Env
     const agent = (path: string, init: RequestInit = {}) =>
-      app.request(`http://localhost/agent${path}`, { ...init, headers: { authorization: "Bearer test-token", "x-snip-capture-protocol": "3", "content-type": "application/json", ...init.headers } }, env, ctx)
+      app.request(`http://localhost/agent${path}`, { ...init, headers: { authorization: "Bearer test-token", "x-snip-capture-protocol": "4", "content-type": "application/json", ...init.headers } }, env, ctx)
 
     const ref = await db.createReference(database, { url: "https://example.com", mode: "single" })
     const job = await (await agent("/jobs/claim", { method: "POST" })).json() as Job
@@ -39,7 +39,7 @@ test("page sections and logged motion are stored, checked and described over MCP
       altScheme: { scheme: "dark", desktopKey: `${p}/desktop-dark.jpg`, desktopThumbKey: `${p}/desktop-dark-thumb.jpg`, desktopWidth: 1440, desktopHeight: 1700, sectionKeys: [`${p}/section-0-dark.jpg`, null] },
       animations: [{ kind: "hover", label: "card", selector: "#card", viewport: "desktop", gifKey: `${p}/hover-0.webm`, width: 300, height: 200, sheetKey: null, meta }],
     }
-    const addPage = (body: unknown) => agent(`/jobs/${ref.id}/pages`, { method: "POST", headers: { "x-snip-capture-attempt": job.attempt }, body: JSON.stringify(body) })
+    const addPage = (body: unknown) => agent(`/jobs/${ref.id}/pages`, { method: "POST", headers: { "x-snip-capture-lease": job.lease }, body: JSON.stringify(body) })
     const outside = (await addPage({ ...page, sections: [{ ...page.sections[0], key: "refs/other/a/p0/x.jpg" }] }))
     assert.equal(outside.status, 400, "a section file outside this job's folder is refused")
     assert.equal((await addPage({ ...page, sections: "nope" })).status, 400)
@@ -111,7 +111,7 @@ test("pages captured before sections and motion existed say so", async () => {
     await applyMigrations(database)
     const ref = await db.createReference(database, { url: "https://example.com", mode: "single" })
     const job = (await db.claimJob(database))!
-    await db.addPage(database, ref.id, job.attempt, {
+    await db.addPage(database, ref.id, job.lease, {
       url: "https://example.com/", path: "/", title: null, ord: 0, desktopKey: null, desktopThumbKey: null, desktopWidth: null, desktopHeight: null,
       mobileKey: null, mobileThumbKey: null, mobileWidth: null, mobileHeight: null, snapshotKey: null, stylesKey: null, tokens: null, animations: [],
     })
@@ -121,7 +121,7 @@ test("pages captured before sections and motion existed say so", async () => {
     const job2 = (await db.claimJob(database))
     const ref2 = await db.createReference(database, { url: "https://example.org", mode: "single" })
     const claimed = job2 ?? (await db.claimJob(database))!
-    await db.addPage(database, ref2.id, claimed.attempt, {
+    await db.addPage(database, ref2.id, claimed.lease, {
       url: "https://example.org/", path: "/", title: null, ord: 0, desktopKey: null, desktopThumbKey: null, desktopWidth: null, desktopHeight: null,
       mobileKey: null, mobileThumbKey: null, mobileWidth: null, mobileHeight: null, snapshotKey: null, stylesKey: null, tokens: null, sections: [], animations: [],
     })

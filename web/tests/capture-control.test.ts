@@ -38,21 +38,21 @@ test("a paused crawl keeps its pages and resumes where it left off", async () =>
     const ref = await db.createReference(database, { url: "https://example.com", mode: "crawl", maxPages: 5 })
     const job = (await db.claimJob(database))!
     assert.equal(job.resume, null)
-    assert.ok(await db.addPage(database, ref.id, job.attempt, page(ref.id, job.attempt, 0)))
+    assert.ok(await db.addPage(database, ref.id, job.lease, page(ref.id, job.attempt, 0)))
 
     // The request waits for the agent; the page in progress is not interrupted.
-    assert.deepEqual(await db.getControl(database, ref.id, job.attempt), { control: null })
+    assert.deepEqual(await db.getControl(database, ref.id, job.lease), { control: null })
     assert.equal(await db.requestPause(database, ref.id), true)
     assert.equal((await db.getReference(database, ref.id))!.reference.control, "pause")
-    assert.deepEqual(await db.getControl(database, ref.id, job.attempt), { control: "pause" })
+    assert.deepEqual(await db.getControl(database, ref.id, job.lease), { control: "pause" })
 
-    assert.equal(await db.pauseJob(database, ref.id, job.attempt, state(1)), "paused")
+    assert.equal(await db.pauseJob(database, ref.id, job.lease, state(1)), "paused")
     const paused = (await db.getReference(database, ref.id))!
     assert.equal(paused.reference.status, "paused")
     assert.equal(paused.reference.control, null)
     assert.equal(paused.pages.length, 1)
     assert.equal(await db.claimJob(database), null, "paused captures stay out of the queue")
-    assert.equal(await db.setProgress(database, ref.id, job.attempt, "late"), false, "the old lease is released")
+    assert.equal(await db.setProgress(database, ref.id, job.lease, "late"), false, "the old lease is released")
     assert.equal((await db.listReferences(database, { status: "paused" })).items.length, 1)
     assert.equal((await db.listReferences(database, { status: "queued" })).items.length, 0)
 
@@ -69,8 +69,8 @@ test("a paused crawl keeps its pages and resumes where it left off", async () =>
     assert.equal(during.pages.length, 1)
     assert.equal(await cleanups(), retiredBefore, "resuming retires no files")
 
-    assert.ok(await db.addPage(database, ref.id, resumed.attempt, page(ref.id, resumed.attempt, 1)))
-    assert.ok(await db.completeJob(database, ref.id, resumed.attempt, { title: "Example", description: null, favicon: null, coverKey: null, tokens: null }))
+    assert.ok(await db.addPage(database, ref.id, resumed.lease, page(ref.id, resumed.attempt, 1)))
+    assert.ok(await db.completeJob(database, ref.id, resumed.lease, { title: "Example", description: null, favicon: null, coverKey: null, tokens: null }))
     const done = (await db.getReference(database, ref.id))!
     assert.equal(done.reference.status, "ready")
     assert.equal(done.pages.length, 2)
@@ -85,12 +85,12 @@ test("stop winds down a running crawl, a paused one and a queued one", async () 
     // Running: the agent sees the stop before its next page and completes with what it has.
     const running = await db.createReference(database, { url: "https://running.example", mode: "crawl" })
     const job = (await db.claimJob(database))!
-    assert.ok(await db.addPage(database, running.id, job.attempt, page(running.id, job.attempt, 0)))
+    assert.ok(await db.addPage(database, running.id, job.lease, page(running.id, job.attempt, 0)))
     assert.equal(await db.requestPause(database, running.id), true)
     assert.equal(await db.requestStop(database, running.id), true, "stop replaces a pending pause")
-    assert.deepEqual(await db.getControl(database, running.id, job.attempt), { control: "stop" })
-    assert.equal(await db.pauseJob(database, running.id, job.attempt, state(1)), "changed", "a stale pause loses to the stop")
-    assert.ok(await db.completeJob(database, running.id, job.attempt, { title: null, description: null, favicon: null, coverKey: null, tokens: null }))
+    assert.deepEqual(await db.getControl(database, running.id, job.lease), { control: "stop" })
+    assert.equal(await db.pauseJob(database, running.id, job.lease, state(1)), "changed", "a stale pause loses to the stop")
+    assert.ok(await db.completeJob(database, running.id, job.lease, { title: null, description: null, favicon: null, coverKey: null, tokens: null }))
     const stopped = (await db.getReference(database, running.id))!.reference
     assert.equal(stopped.status, "ready")
     assert.equal(stopped.control, null)
@@ -98,9 +98,9 @@ test("stop winds down a running crawl, a paused one and a queued one", async () 
     // Paused: finishes on the server from the saved metadata and tokens.
     const paused = await db.createReference(database, { url: "https://paused.example", mode: "crawl" })
     const pjob = (await db.claimJob(database))!
-    assert.ok(await db.addPage(database, paused.id, pjob.attempt, { ...page(paused.id, pjob.attempt, 0), tokens: state(1).tokens }))
+    assert.ok(await db.addPage(database, paused.id, pjob.lease, { ...page(paused.id, pjob.attempt, 0), tokens: state(1).tokens }))
     await db.requestPause(database, paused.id)
-    assert.equal(await db.pauseJob(database, paused.id, pjob.attempt, state(1)), "paused")
+    assert.equal(await db.pauseJob(database, paused.id, pjob.lease, state(1)), "paused")
     assert.equal(await db.requestStop(database, paused.id), true)
     const finished = (await db.getReference(database, paused.id))!
     assert.equal(finished.reference.status, "ready")
@@ -116,9 +116,9 @@ test("stop winds down a running crawl, a paused one and a queued one", async () 
     // Resumed but not picked up yet: still finishes with its pages.
     const waiting = await db.createReference(database, { url: "https://waiting.example", mode: "crawl" })
     const wjob = (await db.claimJob(database))!
-    assert.ok(await db.addPage(database, waiting.id, wjob.attempt, page(waiting.id, wjob.attempt, 0)))
+    assert.ok(await db.addPage(database, waiting.id, wjob.lease, page(waiting.id, wjob.attempt, 0)))
     await db.requestPause(database, waiting.id)
-    assert.equal(await db.pauseJob(database, waiting.id, wjob.attempt, state(1)), "paused")
+    assert.equal(await db.pauseJob(database, waiting.id, wjob.lease, state(1)), "paused")
     await db.resumeReference(database, waiting.id)
     assert.equal(await db.requestStop(database, waiting.id), true)
     const kept = (await db.getReference(database, waiting.id))!
@@ -146,7 +146,7 @@ test("stop winds down a running crawl, a paused one and a queued one", async () 
     // Cancelling a pause before it takes effect.
     assert.equal(await db.requestPause(database, later.id), true)
     assert.equal(await db.resumeReference(database, later.id), true)
-    assert.deepEqual(await db.getControl(database, later.id, fresh.attempt), { control: null })
+    assert.deepEqual(await db.getControl(database, later.id, fresh.lease), { control: null })
   } finally {
     await mf.dispose()
   }
@@ -159,15 +159,15 @@ test("agent control and pause routes are fenced by the capture lease", async () 
     const job = (await db.claimJob(database))!
     const ctx = { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext
     const env = { DB: database, CAPTURE_TOKEN: "test-token" } as Env
-    const headers = (attempt: string) => ({ authorization: "Bearer test-token", "content-type": "application/json", "x-snip-capture-protocol": "3", "x-snip-capture-attempt": attempt })
-    const req = (path: string, attempt: string, init: RequestInit = {}) => app.request(`https://snip.test${path}`, { ...init, headers: headers(attempt) }, env, ctx)
+    const headers = (lease: string) => ({ authorization: "Bearer test-token", "content-type": "application/json", "x-snip-capture-protocol": "4", "x-snip-capture-lease": lease })
+    const req = (path: string, lease: string, init: RequestInit = {}) => app.request(`https://snip.test${path}`, { ...init, headers: headers(lease) }, env, ctx)
 
     assert.equal((await req(`/agent/jobs/${ref.id}/control`, "f".repeat(32))).status, 410)
-    assert.deepEqual(await (await req(`/agent/jobs/${ref.id}/control`, job.attempt)).json(), { control: null })
-    const pause = () => req(`/agent/jobs/${ref.id}/pause`, job.attempt, { method: "POST", body: JSON.stringify(state(0)) })
+    assert.deepEqual(await (await req(`/agent/jobs/${ref.id}/control`, job.lease)).json(), { control: null })
+    const pause = () => req(`/agent/jobs/${ref.id}/pause`, job.lease, { method: "POST", body: JSON.stringify(state(0)) })
     assert.equal((await pause()).status, 409, "no pause was requested")
     await db.requestPause(database, ref.id)
-    assert.deepEqual(await (await req(`/agent/jobs/${ref.id}/control`, job.attempt)).json(), { control: "pause" })
+    assert.deepEqual(await (await req(`/agent/jobs/${ref.id}/control`, job.lease)).json(), { control: "pause" })
     assert.equal((await pause()).status, 200)
     assert.equal((await pause()).status, 410, "the lease ends at the pause")
   } finally {
@@ -180,51 +180,51 @@ test("a website's saved icon survives pause, resume and stop, and only an icon f
   try {
     const ctx = { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext
     const env = { DB: database, CAPTURE_TOKEN: "test-token" } as Env
-    const finish = (id: string, attempt: string, favicon: string | null) => app.request(`https://snip.test/agent/jobs/${id}/complete`, {
+    const finish = (id: string, lease: string, favicon: string | null) => app.request(`https://snip.test/agent/jobs/${id}/complete`, {
       method: "POST", body: JSON.stringify({ title: null, description: null, favicon, coverKey: null, tokens: null }),
-      headers: { authorization: "Bearer test-token", "content-type": "application/json", "x-snip-capture-protocol": "3", "x-snip-capture-attempt": attempt },
+      headers: { authorization: "Bearer test-token", "content-type": "application/json", "x-snip-capture-protocol": "4", "x-snip-capture-lease": lease },
     }, env, ctx)
     const icon = async (id: string) => (await db.getReference(database, id))!.reference.favicon
     const withIcon = (favicon: string | null): CrawlState => ({ ...state(1), meta: { title: "Example", description: null, favicon } })
     const crawl = async (url: string) => {
       const ref = await db.createReference(database, { url, mode: "crawl", maxPages: 5 })
       const job = (await db.claimJob(database))!
-      assert.ok(await db.addPage(database, ref.id, job.attempt, page(ref.id, job.attempt, 0)))
+      assert.ok(await db.addPage(database, ref.id, job.lease, page(ref.id, job.attempt, 0)))
       return { ref, job, key: `refs/${ref.id}/${job.attempt}/icon.png` }
     }
-    const pause = async (id: string, attempt: string, favicon: string | null) => {
+    const pause = async (id: string, lease: string, favicon: string | null) => {
       await db.requestPause(database, id)
-      assert.equal(await db.pauseJob(database, id, attempt, withIcon(favicon)), "paused")
+      assert.equal(await db.pauseJob(database, id, lease, withIcon(favicon)), "paused")
     }
 
     // Pause, resume, finish: the checkpoint hands the saved key back, and it is still under the capture's own prefix
     // because a resumed crawl keeps its attempt.
     const a = await crawl("https://resume.example")
-    await pause(a.ref.id, a.job.attempt, a.key)
+    await pause(a.ref.id, a.job.lease, a.key)
     assert.equal(await icon(a.ref.id), null, "nothing is shown until the capture ends")
     assert.ok(await db.resumeReference(database, a.ref.id))
     const resumed = (await db.claimJob(database))!
     assert.equal(resumed.attempt, a.job.attempt)
     assert.equal(resumed.resume!.meta!.favicon, a.key, "the resumed agent reuses the saved icon instead of fetching again")
-    assert.equal((await finish(a.ref.id, resumed.attempt, resumed.resume!.meta!.favicon)).status, 200)
+    assert.equal((await finish(a.ref.id, resumed.lease, resumed.resume!.meta!.favicon)).status, 200)
     assert.equal(await icon(a.ref.id), a.key)
 
     // Pause, stop: the server finishes the crawl from the checkpoint, icon included.
     const b = await crawl("https://stop.example")
-    await pause(b.ref.id, b.job.attempt, b.key)
+    await pause(b.ref.id, b.job.lease, b.key)
     assert.equal(await db.requestStop(database, b.ref.id), true)
     assert.equal((await db.getReference(database, b.ref.id))!.reference.status, "ready")
     assert.equal(await icon(b.ref.id), b.key)
     // ...and the same when the pause was resumed but not picked up yet.
     const c = await crawl("https://waiting.example")
-    await pause(c.ref.id, c.job.attempt, c.key)
+    await pause(c.ref.id, c.job.lease, c.key)
     await db.resumeReference(database, c.ref.id)
     assert.equal(await db.requestStop(database, c.ref.id), true)
     assert.equal(await icon(c.ref.id), c.key)
 
     // A checkpoint whose icon was not saved yet still holds the site's URL: nothing is kept, and the stop still finishes.
     const d = await crawl("https://unsaved.example")
-    await pause(d.ref.id, d.job.attempt, "https://unsaved.example/favicon.ico")
+    await pause(d.ref.id, d.job.lease, "https://unsaved.example/favicon.ico")
     assert.equal(await db.requestStop(database, d.ref.id), true)
     assert.equal(await icon(d.ref.id), null)
     assert.equal((await db.getReference(database, d.ref.id))!.reference.status, "ready")
@@ -234,13 +234,13 @@ test("a website's saved icon survives pause, resume and stop, and only an icon f
     const e = await crawl("https://other.example")
     let live = e.job
     for (const wrong of [b.key, `refs/${e.ref.id}/${"0".repeat(32)}/icon.png`, "https://other.example/favicon.ico"]) {
-      assert.equal((await finish(e.ref.id, live.attempt, wrong)).status, 200)
+      assert.equal((await finish(e.ref.id, live.lease, wrong)).status, 200)
       assert.equal(await icon(e.ref.id), null)
       await db.requeueReference(database, e.ref.id)
       live = (await db.claimJob(database))!
     }
     const f = await crawl("https://wrong.example")
-    await pause(f.ref.id, f.job.attempt, b.key)
+    await pause(f.ref.id, f.job.lease, b.key)
     await db.requestStop(database, f.ref.id)
     assert.equal(await icon(f.ref.id), null, "a checkpoint cannot point the website at another capture's file")
 
@@ -252,7 +252,7 @@ test("a website's saved icon survives pause, resume and stop, and only an icon f
     const next = (await db.claimJob(database))!
     assert.notEqual(next.attempt, b.job.attempt)
     assert.equal(next.resume, null, "a recapture starts over, with no checkpoint to restore an icon from")
-    assert.equal((await finish(b.ref.id, next.attempt, b.key)).status, 200)
+    assert.equal((await finish(b.ref.id, next.lease, b.key)).status, 200)
     assert.equal(await icon(b.ref.id), null)
   } finally {
     await mf.dispose()
