@@ -2941,6 +2941,27 @@ test('a deploy that stays broken reports retryable in the CLI result', async () 
   assert.equal(last.retryable, true, 'a step failure that names itself retryable now says so');
 });
 
+test('a failed setup --check and a failed status --check write nothing', async () => {
+  const io = { stdout: { write: () => true }, stderr: { write: () => true } };
+  const empty = tempDir();
+  const check = await cli.main(['setup', '--check', '--root', empty, '--data-root', empty, '--json'], io);
+  assert.equal(check.code, 4, 'harness check: the preflight failed');
+  assert.deepEqual(fs.readdirSync(empty), [], 'no journal, no lock, nothing');
+
+  const library = fakeLibrary();
+  fs.writeFileSync(path.join(library.root, 'web/.dev.vars'), 'PUBLIC_URL=http://127.0.0.1:1\n');
+  const status = await cli.main(['status', '--check', '--root', library.root, '--data-root', library.root, '--json'], io);
+  assert.equal(status.code, 1, 'harness check: the status check failed');
+  assert.equal(fs.existsSync(path.join(library.root, '.snip')), false);
+});
+
+test('a mode this engine never writes reads as local', () => {
+  const library = fakeLibrary();
+  stateModule.writeState(library.root, { ...stateModule.emptyState(), mode: 'disabling' });
+  assert.equal(stateModule.readState(library.root).mode, 'local');
+  assert.throws(() => stateModule.setMode(library.root, 'disabling'), (error) => error.code === 'STATE_INVALID');
+});
+
 test('setup --resume behaves exactly like setup', async () => {
   // `--resume` is accepted for compatibility but never read: every step
   // re-verifies, so a run always resumes where the last one stopped. The two

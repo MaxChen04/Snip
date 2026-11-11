@@ -300,7 +300,8 @@ async function main(argv, io = {}) {
     const code = exitCodeFor(error);
     if (code !== 2) {
       try {
-        if (ctx) {
+        // Only a run that holds the lock writes cloud.json; --check and status change nothing.
+        if (ctx && lock) {
           ctx.recordError({
             step: error.step || null,
             code: error.code || 'FAILED',

@@ -40,7 +40,6 @@ async function commandSetup(ctx, { steps = setupSteps.setupSteps() } = {}) {
       const data = (await preflight.run(ctx)) || {};
       ctx.emit.step(preflight.id, 'ok', data.message || 'Ready', { progress: { done: 1, total: steps.length }, data });
     } catch (error) {
-      ctx.journal(preflight.id, 'failed', error.message);
       ctx.emit.step(preflight.id, 'failed', error.message, { data: error.data || {} });
       throw error;
     }
