@@ -549,7 +549,7 @@ async function finishCloudRun(run, { code }) {
   }
   // Answers belong to the run they were given for; this is the one place they are dropped.
   cloudInput.clear()
-  failedRun = result.ok ? null : run
+  failedRun = result.ok ? null : run.args
   if (result.ok) {
     await applyMode()
     sendToSettings("snip:cloud-log", { level: "info", message: mode() === "cloud" ? "Snip is now using your cloud library." : "Snip is back on this Mac." })
@@ -628,7 +628,7 @@ function registerCloudIpc() {
     return { error: "Unknown action." }
   }))
   ipcMain.handle("snip:cloud-retry-step", guard(() => {
-    const args = retryArgs({ mode: mode(), failed: failedRun?.args, answers: Object.fromEntries(cloudInput) })
+    const args = retryArgs({ mode: mode(), failed: failedRun, answers: Object.fromEntries(cloudInput) })
     return args ? startCloudRun(...args) : { error: "Nothing to retry." }
   }))
   ipcMain.handle("snip:cloud-cancel", guard(() => ({ cancelled: !!cloudRun?.cancel?.() })))
