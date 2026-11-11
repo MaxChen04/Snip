@@ -196,7 +196,8 @@ export function DeleteResourcesDialog({
   useEffect(() => {
     if (open) setValue("")
   }, [open])
-  const matches = value.trim().toLowerCase() === host.toLowerCase()
+  // With no cloud library on record there is nothing to name, so nothing to confirm.
+  const matches = host !== "" && value.trim().toLowerCase() === host.toLowerCase()
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[460px]">
