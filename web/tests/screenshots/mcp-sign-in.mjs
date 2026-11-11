@@ -1,6 +1,8 @@
 import { chromium } from "playwright"
 import { createHash } from "node:crypto"
 import { mkdirSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { sign } from "../../worker/auth.ts"
 
 const base64url = (bytes) => Buffer.from(bytes).toString("base64url")
@@ -11,10 +13,11 @@ const base64url = (bytes) => Buffer.from(bytes).toString("base64url")
 //   node --import tsx web/tests/screenshots/mcp-sign-in.mjs
 
 const BASE = process.env.BASE ?? "http://localhost:5199"
-const OUT = process.env.OUT ?? "/Users/Maxsc/.factory/worktrees/98cfc78f/screenshots/worker"
+const OUT = process.env.OUT ?? join(tmpdir(), "snip-screenshots/worker")
 const OWNER_LINK_SECRET = process.env.OWNER_LINK_SECRET ?? "dev-owner-link-secret"
 
 mkdirSync(OUT, { recursive: true })
+console.log(`Screenshots: ${OUT}`)
 
 async function ownerLink({ port = 0, ownerId = "max" } = {}) {
   const exp = Math.floor(Date.now() / 1000) + 600

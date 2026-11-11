@@ -14,7 +14,7 @@ import { chromium } from "playwright"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(here, "../..")
-const out = path.resolve(process.argv[2] ?? "/Users/Maxsc/.factory/worktrees/98cfc78f/screenshots/desktop")
+const out = path.resolve(process.argv[2] ?? path.join(os.tmpdir(), "snip-screenshots/desktop"))
 const run = promisify(execFile)
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 

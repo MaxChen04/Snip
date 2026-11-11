@@ -1,14 +1,17 @@
 import { chromium } from "playwright"
 import { mkdirSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 
 // The sign-in page as a client finds a passkeys-only install that has no passkey yet, reached the
 // way `/authorize` sends one, so the copy that says how to get in is visible in the shot.
 //   node --import tsx web/tests/screenshots/mcp-sign-in-empty.mjs
 
 const BASE = process.env.BASE ?? "http://localhost:5199"
-const OUT = process.env.OUT ?? "/Users/Maxsc/.factory/worktrees/98cfc78f/screenshots/worker"
+const OUT = process.env.OUT ?? join(tmpdir(), "snip-screenshots/worker")
 
 mkdirSync(OUT, { recursive: true })
+console.log(`Screenshots: ${OUT}`)
 
 const clientId = async () => {
   const res = await fetch(`${BASE}/register`, {
