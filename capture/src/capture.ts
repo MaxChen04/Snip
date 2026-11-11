@@ -1271,8 +1271,8 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       break
     }
     const url = queue.shift()!
-    visited.push(url)
-    const ord = captured
+    // A page's ord and file prefix are its place in `visited`: every attempt takes its own, and a pause saves `visited`, so a resumed crawl carries on from it.
+    const ord = visited.push(url) - 1
     const path = new URL(url).pathname || "/"
     await api.progress(job.id, `Capturing ${captured + 1}/${job.mode === "crawl" ? `${Math.min(job.maxPages, captured + 1 + queue.length)}` : 1}: ${path}`)
     log(`[${job.id}] ${url}`)

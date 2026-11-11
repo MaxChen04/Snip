@@ -197,3 +197,29 @@ test("an aborted crawl pauses at the next page boundary when the server accepts 
     }
   })
 })
+
+test("a resumed crawl does not reuse an ord stored before the pause, when a failed page had taken one", { timeout: 240_000 }, async () => {
+  await withServer((_req, res) => {
+    res.writeHead(200, { "content-type": "text/html" })
+    res.end(plain("Page D"))
+  }, async (base) => {
+    const browser = await launch()
+    try {
+      const ords: number[] = []
+      const api = {
+        control: async () => null,
+        progress: async () => {},
+        upload: async (key: string) => key,
+        addPage: async (_id: string, page: PageUpload) => { ords.push(page.ord) },
+        complete: async () => {},
+      }
+      // Before the pause: / stored as 0, /b failed as 1, /c stored as 2.
+      const resume: CrawlState = { version: 1, queue: [`${base}d`], visited: [base, `${base}b`, `${base}c`], captured: 2, failures: 1, navLinksQueued: true, hoverSeen: [], meta: null, tokens: null }
+      await captureJob(browser, api as never, { id: "resumed", url: base, mode: "crawl", maxPages: 3, attempt, resume, options: null, features: [] } as unknown as Job)
+      assert.deepEqual(ords, [3])
+    } finally {
+      await closeRenderer()
+      await browser.close()
+    }
+  })
+})
