@@ -430,8 +430,13 @@ agent.put("/files/*", async (c) => {
   const upload = await db.beginUpload(c.env.DB, parts[1]!, attempt, key)
   if (!upload) return c.json({ error: "job is gone" }, 410)
   const contentType = c.req.header("content-type") ?? "application/octet-stream"
-  // Keep the durable intent if the write, postcheck or stale-key deletion fails.
-  await c.env.FILES.put(key, c.req.raw.body, { httpMetadata: { contentType } })
+  // The pin outlives a failed postcheck or stale-key deletion, where the object may exist. A failed write stored nothing, so its pin goes.
+  try {
+    await c.env.FILES.put(key, c.req.raw.body, { httpMetadata: { contentType } })
+  } catch (error) {
+    await db.finishUpload(c.env.DB, upload)
+    throw error
+  }
   if (!(await db.isCapturing(c.env.DB, parts[1]!, attempt))) {
     await c.env.FILES.delete(key)
     await db.finishUpload(c.env.DB, upload)
