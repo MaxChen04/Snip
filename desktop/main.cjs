@@ -844,8 +844,8 @@ function serviceItems(key) {
   const s = services[key]
   const items = [{ label: `${labels[key]}: ${STATUS[s.status]}`, enabled: false }]
   if (s.detail && s.status === "disconnected") items.push({ label: s.detail.slice(0, 100), enabled: false })
-  // A cloud run stops the local Worker itself and counts on it staying stopped.
-  const free = !shutdown && !quitting && !(key === "web" && cloudRun)
+  // A cloud run stops the local Worker and the capture agent itself and counts on them staying stopped.
+  const free = !shutdown && !quitting && !cloudRun
   if (s.proc && !s.stopping) items.push({ label: `Stop ${labels[key].toLowerCase()}`, enabled: free, click: () => key === "web" ? void stopWeb() : (autoCapture = false, void s.stop()) })
   else if (!s.proc) items.push({ label: `Start ${labels[key].toLowerCase()}`, enabled: !!node && free && (key === "web" || services.web.status === "running" || mode() === "cloud"), click: () => { autoCapture = true; start(key) } })
   if (key === "capture" && s.proc && !s.stopping) items.push({ label: "Check queue now", enabled: !quitting, click: () => s.send({ type: "snip:retry" }) })
