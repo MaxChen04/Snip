@@ -194,7 +194,6 @@ export function SettingsApp() {
                 onDeleteExport={() => setDialog("export-delete")}
                 onSignOut={() => setDialog("sign-out")}
                 onOwnerLink={showOwnerLink}
-                onDeleteResources={() => setDialog("delete")}
                 onCopyPrompt={copyPrompt}
                 onPasskeys={() => void cloud.bridge!.openUrl(`${cloud.cloud?.url?.replace(/\/$/, "")}/passkeys`)}
               />
@@ -208,6 +207,7 @@ export function SettingsApp() {
                   await cloud.begin("snapshot restore", () => cloud.bridge!.snapshot("restore"))
                 }}
                 onDeleteSnapshot={() => setDialog("snapshot-delete")}
+                onDeleteResources={() => setDialog("delete")}
               />
             )}
           </>
@@ -299,6 +299,7 @@ function LocalPanels({
   onCopyPrompt,
   onRestorePrevious,
   onDeleteSnapshot,
+  onDeleteResources,
 }: {
   cloud: ReturnType<typeof useCloud>
   onEnable: () => void
@@ -306,6 +307,7 @@ function LocalPanels({
   onCopyPrompt: (kind: "setup" | "pull") => Promise<void>
   onRestorePrevious: () => void
   onDeleteSnapshot: () => void
+  onDeleteResources: () => void
 }) {
   const detached = cloud.cloud?.detachedAt ? cloud.cloud : null
   const local = cloud.local
@@ -375,6 +377,26 @@ function LocalPanels({
           }
         />
       </Panel>
+
+      {/* Only a detached copy can be deleted: while this Mac uses the cloud library it is the only current copy. */}
+      {detached ? (
+        <section className="rounded-xl px-5 py-4 shadow-[inset_0_0_0_1px_var(--red-6)]">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <h2 className="flex items-center gap-2 text-sm font-medium text-(--red-11)">
+                <TriangleAlertIcon className="size-3.5" />
+                Delete cloud resources
+              </h2>
+              <p className="mt-1 text-xs leading-[1.5] text-muted-foreground">
+                Removes the Worker, database, KV and stored screenshots from Cloudflare. Devices and agents lose access, and it can’t be undone.
+              </p>
+            </div>
+            <Button variant="destructive" size="sm" onClick={onDeleteResources}>
+              Delete…
+            </Button>
+          </div>
+        </section>
+      ) : null}
     </>
   )
 }
@@ -388,7 +410,6 @@ function CloudPanels({
   onDeleteExport,
   onSignOut,
   onOwnerLink,
-  onDeleteResources,
   onCopyPrompt,
   onPasskeys,
 }: {
@@ -400,7 +421,6 @@ function CloudPanels({
   onDeleteExport: () => void
   onSignOut: () => void
   onOwnerLink: () => void
-  onDeleteResources: () => void
   onCopyPrompt: (kind: "setup" | "pull") => Promise<void>
   onPasskeys: () => void
 }) {
@@ -560,23 +580,6 @@ function CloudPanels({
           }
         />
       </Panel>
-
-      <section className="rounded-xl px-5 py-4 shadow-[inset_0_0_0_1px_var(--red-6)]">
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <h2 className="flex items-center gap-2 text-sm font-medium text-(--red-11)">
-              <TriangleAlertIcon className="size-3.5" />
-              Delete cloud resources
-            </h2>
-            <p className="mt-1 text-xs leading-[1.5] text-muted-foreground">
-              Removes the Worker, database, KV and stored screenshots from Cloudflare. Devices and agents lose access, and it can’t be undone.
-            </p>
-          </div>
-          <Button variant="destructive" size="sm" onClick={onDeleteResources}>
-            Delete…
-          </Button>
-        </div>
-      </section>
 
       <Meta>
         {cloud.snapshotRecord?.takenAt ? "Turn off cloud to restore the snapshot, or copy the cloud library back first." : "This library started empty, so there is no snapshot to restore."}
