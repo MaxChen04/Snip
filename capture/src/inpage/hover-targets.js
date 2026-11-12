@@ -3,7 +3,6 @@
 // with data-rs-hover and returns their boxes.
 (opts) => {
   const max = (opts && opts.max) || 6
-  const limitY = (opts && opts.limitY) || innerHeight * 4
   const candidates = new Map()
   const add = (el, score) => {
     if (!(el instanceof Element)) return
@@ -50,7 +49,7 @@
     if (picked.length >= max) break
     const r = el.getBoundingClientRect()
     const y = r.top + scrollY
-    if (r.width < 24 || r.height < 16 || r.width > 900 || r.height > 640 || y > limitY || y < 0) continue
+    if (r.width < 24 || r.height < 16 || r.width > 900 || r.height > 640 || y > innerHeight * 4 || y < 0) continue
     const cs = getComputedStyle(el)
     if (cs.visibility === "hidden" || cs.display === "none" || parseFloat(cs.opacity) === 0) continue
     // Skip nested picks and visually identical siblings.

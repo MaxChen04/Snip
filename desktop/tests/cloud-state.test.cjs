@@ -11,12 +11,9 @@ const {
   normalizeCloudState,
   readCloudState,
   cloudMode,
-  usesCloud,
   captureEnvFiles,
   selectCaptureEnvFile,
   keepLocalCaptureEnv,
-  formatBytes,
-  describeSnapshot,
 } = require("../cloud-state.cjs")
 
 function library(t) {
@@ -33,7 +30,6 @@ test("a missing cloud.json is a local library", t => {
   const root = library(t)
   assert.equal(readCloudState(root), null)
   assert.equal(cloudMode(null), "local")
-  assert.equal(usesCloud(null), false)
 })
 
 test("modes other than the four known values fall back to local", () => {
@@ -42,13 +38,6 @@ test("modes other than the four known values fall back to local", () => {
   assert.equal(cloudMode(normalizeCloudState({ mode: "self-destruct" })), "local")
   assert.equal(cloudMode(normalizeCloudState({})), "local")
   assert.equal(normalizeCloudState("nope"), null)
-})
-
-test("cloud mode needs a usable cloud url", () => {
-  const state = normalizeCloudState({ mode: "cloud", cloud: { url: "https://snip.max.workers.dev" } })
-  assert.equal(usesCloud(state), true)
-  assert.equal(usesCloud(normalizeCloudState({ mode: "cloud", cloud: null })), false)
-  assert.equal(usesCloud(normalizeCloudState({ mode: "enabling", cloud: { url: "https://snip.max.workers.dev" } })), false)
 })
 
 test("unknown fields and step order survive normalization", () => {
@@ -115,19 +104,6 @@ test("keepLocalCaptureEnv copies .env once and never overwrites", t => {
 test("keepLocalCaptureEnv does nothing without a live .env", t => {
   const root = library(t)
   assert.equal(keepLocalCaptureEnv({ dataRoot: root }), false)
-})
-
-test("snapshot and size copy use the engine's numbers", () => {
-  assert.equal(formatBytes(812_000_000), "812 MB")
-  assert.equal(formatBytes(999), "999 B")
-  assert.equal(formatBytes(1_500_000_000_000), "1.5 TB")
-  assert.equal(formatBytes(null), null)
-  // A local-time value: the label shows this Mac's clock, not UTC.
-  assert.equal(
-    describeSnapshot({ takenAt: "2026-11-06T10:12:00", bytes: 812_000_000 }, "en-GB"),
-    "Snapshot from 6 Nov, 10:12 — 812 MB",
-  )
-  assert.equal(describeSnapshot(null), null)
 })
 
 test("a live snapshot is this Mac's library, a backup is a real second copy", () => {

@@ -139,4 +139,19 @@ function runEngine({ executable = process.execPath, appDir, root, dataRoot, comm
   }
 }
 
-module.exports = { enginePath, engineAvailable, engineArgs, engineEnv, runEngine, safeEvent, CANCELLATION_GRACE_MS }
+/** Engine flags for `setup`. Keys match the engine's needs_input keys (`account`, `domain`), so an answer stored under its key reaches its flag. */
+function cloudFlags(options = {}) {
+  const text = (value, limit) => (typeof value === "string" && value.trim() ? value.trim().slice(0, limit) : undefined)
+  return {
+    account: text(options.account, 64),
+    domain: text(options.domain, 253),
+    login: text(options.login, 64),
+    // Set only when the person picked "Use that library" in the choice screen.
+    "adopt-existing": options.adoptExisting === true ? true : undefined,
+    // The app always keeps the local capture settings as .env.local and points the
+    // agent at the cloud queue; that is the "replace" behaviour from the contracts.
+    "capture-env": "replace",
+  }
+}
+
+module.exports = { cloudFlags, enginePath, engineAvailable, engineArgs, engineEnv, runEngine, safeEvent, CANCELLATION_GRACE_MS }

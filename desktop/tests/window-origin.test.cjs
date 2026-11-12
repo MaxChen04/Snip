@@ -3,7 +3,7 @@
 // and the cloud window that deliberately has no bridge at all.
 const { test } = require("node:test")
 const assert = require("node:assert/strict")
-const { parse, originOf, isAppRoute, isGallery, isCloudUi, isSettingsUrl, allowsNavigation, trustedSender } = require("../window-origin.cjs")
+const { parse, originOf, isAppRoute, isGallery, isSettingsUrl, allowsNavigation, trustedSender } = require("../window-origin.cjs")
 
 const LOCAL = "http://localhost:5173"
 const CLOUD = "https://snip.max.workers.dev"
@@ -31,8 +31,6 @@ test("only the gallery routes are the local UI", () => {
   assert.equal(isGallery(`http://localhost:9999/`, LOCAL), false)
   assert.equal(isGallery(`${LOCAL}/`, null), false)
   assert.equal(isAppRoute(`${CLOUD}/r/ab12`, CLOUD), true)
-  assert.equal(isCloudUi(`${CLOUD}/anything`, CLOUD), true)
-  assert.equal(isCloudUi(`${CLOUD}/`, LOCAL), false)
   assert.equal(isSettingsUrl("snip://settings/index.html"), true)
   assert.equal(isSettingsUrl(`${LOCAL}/`), false)
 })

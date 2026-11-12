@@ -120,8 +120,6 @@ function createContext({ root, dataRoot, flags = {}, emit, api, wrangler, releas
       }
       return libraryFactsPromise;
     },
-    runningStep: null,
-    setCurrentStep(id) { ctx.runningStep = id; },
     journal(id, status, detail = '') { current = state.journalStep(dataRoot, id, status, detail); return current; },
     stepStatus(id) {
       const step = (current.steps || []).find((entry) => entry && entry.id === id);
@@ -220,11 +218,6 @@ async function runSetup(ctx, steps) {
   return result;
 }
 
-function pendingStepIds(all, done) {
-  const finished = new Set((done || []).filter((step) => step && (step.status === 'done' || step.status === 'skipped')).map((step) => step.id));
-  return all.filter((id) => !finished.has(id));
-}
-
 /**
  * The retry policy a mutating step passes to deploy/cloud: real backoff through
  * the injected clock, and one warning line per attempt so a slow step explains
@@ -240,4 +233,4 @@ function retryOf(ctx) {
   };
 }
 
-module.exports = { createContext, pendingStepIds, retryOf, runSetup };
+module.exports = { createContext, retryOf, runSetup };

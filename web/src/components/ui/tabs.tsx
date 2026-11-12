@@ -1,6 +1,5 @@
 "use client"
 
-import * as React from "react"
 import { Tabs as TabsPrimitive } from "@base-ui/react/tabs"
 import { cva, type VariantProps } from "class-variance-authority"
 import { cn } from "cn"
@@ -136,40 +135,6 @@ function TabsTrigger({
   )
 }
 
-/** A secondary line in a trigger: an eyebrow above the label or a description under it. */
-function TabsTriggerDescription({
-  className,
-  ...props
-}: React.ComponentProps<"span">) {
-  return (
-    <span
-      data-slot="tabs-trigger-description"
-      className={cn(
-        "text-2xs font-normal text-muted-foreground group-data-[variant=primary]/tabs-list:group-data-active/tabs-trigger:text-primary-foreground/70",
-        className
-      )}
-      {...props}
-    />
-  )
-}
-
-/** A count after the label. */
-function TabsTriggerCount({
-  className,
-  ...props
-}: React.ComponentProps<"span">) {
-  return (
-    <span
-      data-slot="tabs-trigger-count"
-      className={cn(
-        "font-normal text-muted-foreground tabular-nums group-data-[variant=primary]/tabs-list:group-data-active/tabs-trigger:text-primary-foreground/70",
-        className
-      )}
-      {...props}
-    />
-  )
-}
-
 function TabsContent({ className, ...props }: TabsPrimitive.Panel.Props) {
   return (
     <TabsPrimitive.Panel
@@ -184,8 +149,6 @@ export {
   Tabs,
   TabsList,
   TabsTrigger,
-  TabsTriggerDescription,
-  TabsTriggerCount,
   TabsContent,
   tabsListVariants,
 }

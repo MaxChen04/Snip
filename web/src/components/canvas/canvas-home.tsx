@@ -14,10 +14,9 @@ import { ZoomControls } from "@/components/canvas/zoom-controls"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useDesktopState } from "@/hooks/use-desktop-state"
 import { api, type Filters, type LibraryTypeCounts, type Paged } from "@/lib/api"
-import { useCollections } from "@/lib/collections"
 
 const FILTERS: CanvasFilter[] = ["all", "websites", "pages", "sections", "animations", "images"]
-const keyOf = (it: CanvasItem) => `${it.kind}:${it.id}`
+export const keyOf = (it: CanvasItem) => `${it.kind}:${it.id}`
 
 // ponytail: each feed loads up to CAP items up front and is laid out once. Loading more as the user pans would
 // reshuffle the repeating block under them; add it with a layout that appends instead of re-flowing.
@@ -52,15 +51,15 @@ const FEEDS: Record<CanvasFilter, (f: Filters) => Promise<CanvasItem[]>> = {
     Promise.all([FEEDS.pages(f), FEEDS.sections(f), FEEDS.images(f)]).then((lists) => lists.flat().sort((a, b) => createdAt(b).localeCompare(createdAt(a)))),
 }
 
-/** The current feed; items is null until the first load for this filter, search and board. Refetches on RELOAD_EVENT. */
-function useFeed(filter: CanvasFilter, q: string, boardId?: string) {
-  const key = `${filter}|${q}|${boardId ?? ""}`
+/** The current feed; items is null until the first load for this filter and search. Refetches on RELOAD_EVENT. */
+function useFeed(filter: CanvasFilter, q: string) {
+  const key = `${filter}|${q}`
   const [state, setState] = useState<{ key: string; items: CanvasItem[] | null; error?: string }>()
   useEffect(() => {
     let latest = 0
     const load = () => {
       const n = ++latest
-      FEEDS[filter]({ q: q || undefined, collection: boardId }).then(
+      FEEDS[filter]({ q: q || undefined }).then(
         (items) => n === latest && setState({ key, items }),
         (e: Error) => n === latest && setState((s) => ({ key, items: s?.key === key ? s.items : null, error: e.message })),
       )
@@ -71,17 +70,17 @@ function useFeed(filter: CanvasFilter, q: string, boardId?: string) {
       latest = -1
       window.removeEventListener(RELOAD_EVENT, load)
     }
-  }, [filter, q, boardId, key])
+  }, [filter, q, key])
   return state?.key === key ? state : { items: null, error: undefined }
 }
 
 /** Counts for the dock: undefined while the first request is out, null if it failed. */
-function useCounts(q: string, boardId?: string) {
+function useCounts(q: string) {
   const [counts, setCounts] = useState<LibraryTypeCounts | null>()
   useEffect(() => {
     let alive = true
     const load = () =>
-      api.counts({ q: q || undefined, collection: boardId }).then(
+      api.counts({ q: q || undefined }).then(
         (c) => alive && setCounts(c),
         () => alive && setCounts((c) => c ?? null),
       )
@@ -91,7 +90,7 @@ function useCounts(q: string, boardId?: string) {
       alive = false
       window.removeEventListener(RELOAD_EVENT, load)
     }
-  }, [q, boardId])
+  }, [q])
   return counts
 }
 
@@ -145,8 +144,11 @@ export function Zoom({ canvas, sink }: { canvas: RefObject<InfiniteCanvasHandle 
   )
 }
 
-/** Home (All saves) and, until the board canvas lands, a board's material: an infinite canvas around the capture card. */
-export function CanvasHome({ login, boardId }: { login: string; boardId?: string }) {
+/**
+ * What a canvas route shares: ?filter=, the inspector's ?open=<kind>:<id> (pushed so Back closes it, prev/next replace
+ * it), the page title, and no trackpad-swipe bounce over the chrome.
+ */
+export function useCanvasRoute(title: string) {
   const search = useSearch()
   const [location, navigate] = useLocation()
   const params = new URLSearchParams(search)
@@ -163,16 +165,6 @@ export function CanvasHome({ login, boardId }: { login: string; boardId?: string
   const setParamsRef = useRef(setParams)
   setParamsRef.current = setParams
 
-  const [query, setQuery] = useDesktopState("snip:gallery:query", "")
-  const [q, setQ] = useState(query.trim())
-  useEffect(() => {
-    const t = setTimeout(() => setQ(query.trim()), 250)
-    return () => clearTimeout(t)
-  }, [query])
-
-  const { collections } = useCollections()
-  const board = boardId ? collections.find((c) => c.id === boardId) : undefined
-  const title = boardId ? (board?.name ?? "Board") : "All saves"
   useEffect(() => {
     document.title = `${title} · Snip`
     return () => {
@@ -186,12 +178,38 @@ export function CanvasHome({ login, boardId }: { login: string; boardId?: string
     return () => document.documentElement.classList.remove("overscroll-none")
   }, [])
 
-  const counts = useCounts(q, boardId)
+  const pushed = useRef(false)
+  const onOpen = useCallback((item: CanvasItem) => {
+    pushed.current = true
+    setParamsRef.current({ open: keyOf(item) }, false)
+  }, [])
+  const close = () => {
+    if (pushed.current) {
+      pushed.current = false
+      history.back()
+    } else setParams({ open: null })
+  }
+  return { filter, open, navigate, setParams, onOpen, close }
+}
+
+/** Home (All saves): an infinite canvas around the capture card. */
+export function CanvasHome({ login }: { login: string }) {
+  const title = "All saves"
+  const { filter, open, setParams, onOpen, close } = useCanvasRoute(title)
+
+  const [query, setQuery] = useDesktopState("snip:gallery:query", "")
+  const [q, setQ] = useState(query.trim())
+  useEffect(() => {
+    const t = setTimeout(() => setQ(query.trim()), 250)
+    return () => clearTimeout(t)
+  }, [query])
+
+  const counts = useCounts(q)
   const total = counts ? countOf(counts, "all") : null
-  const firstRun = !q && !boardId && !!counts && counts.websites + total! === 0
+  const firstRun = !q && !!counts && counts.websites + total! === 0
   // The dock and zoom wait for the counts, so a first run doesn't flash them.
   const chrome = counts !== undefined && !firstRun
-  const { items, error } = useFeed(filter, q, boardId)
+  const { items, error } = useFeed(filter, q)
   // The plaza hugs the capture card: its measured height, in 40-px steps so small text changes don't relayout the field.
   const [plazaH, setPlazaH] = useState(PLAZA.h)
   const measurePlaza = useCallback((el: HTMLDivElement | null) => {
@@ -211,27 +229,15 @@ export function CanvasHome({ login, boardId }: { login: string; boardId?: string
   const zoomSink = useRef<((zoom: number) => void) | null>(null)
   const onViewChange = useCallback((v: CanvasView) => zoomSink.current?.(v.zoom), [])
 
-  // Inspector: ?open=<kind>:<id>, pushed so Back closes it; prev/next replace it.
-  const pushed = useRef(false)
-  const onOpen = useCallback((item: CanvasItem) => {
-    pushed.current = true
-    setParamsRef.current({ open: keyOf(item) }, false)
-  }, [])
   const list = items ?? []
   // Each feed stops at CAP items. Say so, or a big library looks like it lost its older saves.
-  const inFilter = counts && !boardId ? countOf(counts, filter) : 0
+  const inFilter = counts ? countOf(counts, filter) : 0
   const caption =
     firstRun || q || !total ? undefined
     : list.length >= CAP && list.length < inFilter ? `Showing the newest ${list.length} of ${inFilter}. Search to find older saves.`
     : `${total} saved`
   const index = open ? list.findIndex((it) => keyOf(it) === open) : -1
   const openItem = index >= 0 && list[index]!.kind !== "website" ? list[index] : undefined
-  const close = () => {
-    if (pushed.current) {
-      pushed.current = false
-      history.back()
-    } else setParams({ open: null })
-  }
   // The open item left the list (deleted from the inspector, or filtered away): close, so ?open= and the
   // history entry don't outlive it.
   const closeRef = useRef(close)
@@ -243,7 +249,7 @@ export function CanvasHome({ login, boardId }: { login: string; boardId?: string
   const plaza = useMemo(
     () => (
       <div ref={measurePlaza} className="absolute top-0 left-0 flex w-max -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-4">
-        <CaptureCard boardId={boardId} firstRun={firstRun} caption={caption} />
+        <CaptureCard firstRun={firstRun} caption={caption} />
         {error ? (
           <p className="flex items-center gap-2 text-xs text-ink-11" role="alert">
             Couldn't load your saves.
@@ -265,7 +271,7 @@ export function CanvasHome({ login, boardId }: { login: string; boardId?: string
         ) : null}
       </div>
     ),
-    [boardId, firstRun, q, caption, error, items, setQuery, measurePlaza],
+    [firstRun, q, caption, error, items, setQuery, measurePlaza],
   )
   const ghosts = useMemo(() => (!items || (items.length === 0 && !q) ? <Ghosts loading={!items && !error} plazaH={plazaH} /> : null), [items, q, error, plazaH])
   const tileOpen = filter === "websites" ? undefined : onOpen
@@ -285,7 +291,7 @@ export function CanvasHome({ login, boardId }: { login: string; boardId?: string
     // overflow-clip, not hidden: a hidden box still scrolls to reveal a focused tile, which would shift the whole page.
     <div className="relative h-svh overflow-clip overscroll-none bg-background">
       {/* Chrome first in the DOM so Tab reaches it before hundreds of tiles; z-50 keeps it over the drop scrim (z-40). */}
-      <TopBar floating login={login} query={query} onQuery={setQuery} boardId={boardId} />
+      <TopBar floating login={login} query={query} onQuery={setQuery} />
       <div className="pointer-events-none absolute inset-x-0 top-16 z-50 flex justify-center">
         <div className="pointer-events-auto w-full max-w-xl">
           <AgentBanner />
@@ -298,7 +304,6 @@ export function CanvasHome({ login, boardId }: { login: string; boardId?: string
             value={filter}
             onChange={(f) => setParams({ filter: f === "all" ? null : f, open: null })}
             counts={counts}
-            boardId={boardId}
           />
           <Zoom canvas={canvas} sink={zoomSink} />
         </>
@@ -315,7 +320,7 @@ export function CanvasHome({ login, boardId }: { login: string; boardId?: string
       {/* Fades from the ground so the chrome floats over the field. */}
       <div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 z-10 h-20 bg-linear-to-b from-background to-transparent" />
       <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-24 bg-linear-to-t from-background to-transparent" />
-      <DropOverlay boardId={boardId} />
+      <DropOverlay />
       {openItem && (
         <ItemInspector
           item={openItem}
