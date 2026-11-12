@@ -308,11 +308,33 @@ export function cleanOptions(input: unknown): CaptureOptions | null {
 
 const cleanNotes = (notes: unknown) => (typeof notes === "string" && notes.trim() ? notes.trim().slice(0, MAX_NOTES) : null)
 
-/** The most recent reference already saved for this URL, if any. */
+/** The site a URL belongs to: its host in lower case without a leading www. */
+const domainOf = (url: URL) => url.hostname.replace(/^www\./, "")
+
+/**
+ * What makes two URLs the same site URL, for the duplicate check only (the stored URL stays as the user gave it).
+ * Ignored: the scheme (http or https), a leading www., the fragment, a trailing slash on the path, the order of the query,
+ * and the tracking parameters utm_*, gclid, fbclid and ref.
+ */
+function siteKey(url: URL): string {
+  const query = [...url.searchParams]
+    .filter(([name]) => !/^(utm_.*|gclid|fbclid|ref)$/i.test(name))
+    .map(([name, value]) => `${encodeURIComponent(name)}=${encodeURIComponent(value)}`)
+    .sort()
+    .join("&")
+  return `${domainOf(url)}${url.port && `:${url.port}`}${url.pathname.replace(/\/$/, "")}?${query}`
+}
+
+/**
+ * The most recent reference already saved for this site URL, if any. The key is computed here, on both sides, so it needs
+ * no stored column and covers references saved before it existed: the SQL only narrows to the same site.
+ */
 export async function findReferenceByUrl(db: D1Database, input: string): Promise<Reference | null> {
-  const url = normalizeUrl(input).toString()
-  const r = await db.prepare(`${REF_SELECT} WHERE r.url = ? ORDER BY r.created_at DESC LIMIT 1`).bind(url).first<Row>()
-  return r ? toReference(r) : null
+  const url = normalizeUrl(input)
+  const key = siteKey(url)
+  const { results } = await db.prepare(`SELECT id, url FROM refs WHERE domain = ? ORDER BY created_at DESC`).bind(domainOf(url)).all<{ id: string; url: string }>()
+  const match = results.find((r) => siteKey(new URL(r.url)) === key)
+  return match ? getReferenceRecord(db, match.id) : null
 }
 
 export async function setNotes(db: D1Database, id: string, notes: unknown) {
@@ -334,7 +356,7 @@ export async function createReference(
       .prepare(
         `INSERT INTO refs (id, url, domain, mode, max_pages, status, progress, notes, capture_options, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'queued', 'Waiting for your Mac', ?, ?, ?, ?)`,
       )
-      .bind(id, url.toString(), url.hostname.replace(/^www\./, ""), input.mode, maxPages, cleanNotes(input.notes), options ? JSON.stringify(options) : null, ts, ts),
+      .bind(id, url.toString(), domainOf(url), input.mode, maxPages, cleanNotes(input.notes), options ? JSON.stringify(options) : null, ts, ts),
   ]
   for (const cid of input.collectionIds ?? []) {
     stmts.push(
