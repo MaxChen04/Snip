@@ -12,6 +12,7 @@ import {
   type DesignTokens,
   type Job,
   type JobComplete,
+  MAX_NAME,
   type Page,
   type PageSection,
   type AltScheme,
@@ -452,6 +453,12 @@ export const toCollection = (r: Row): Collection => ({
 export async function listCollections(db: D1Database): Promise<Collection[]> {
   const { results } = await db.prepare(`${COLLECTION_SELECT} ORDER BY lower(c.name)`).all<Row>()
   return results.map(toCollection)
+}
+
+/** The one check for a board's name, when it is created and when it is renamed: the sentence to refuse it with, or null. */
+export function nameError(name: unknown): string | null {
+  if (typeof name !== "string" || !name.trim()) return "name is required"
+  return name.trim().length > MAX_NAME ? `name must be at most ${MAX_NAME} characters` : null
 }
 
 export async function createCollection(db: D1Database, name: string, description?: string | null) {

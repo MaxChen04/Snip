@@ -601,6 +601,31 @@ test("notes are created, edited and deleted on their board only", async () => {
   }
 })
 
+test("a board name has one limit, on create and on rename", async () => {
+  const { mf, call, get, board } = await setup()
+  try {
+    const names = async () => (await get<Collection[]>("/api/collections")).map((b) => b.name)
+    const max = "x".repeat(120)
+    const id = await board(max)
+    assert.deepEqual(await names(), [max], "120 characters is allowed")
+    assert.equal((await call("/api/collections", "POST", { name: `${max}y` })).status, 400)
+    const long = await call("/api/collections", "POST", { name: "y".repeat(170) })
+    assert.deepEqual([long.status, await long.json()], [400, { error: "name must be at most 120 characters" }])
+    assert.equal((await call("/api/collections", "POST", { name: `  ${max}  ` })).status, 201, "spaces around a name are not counted")
+    for (const name of ["", "   ", undefined, 7]) assert.equal((await call("/api/collections", "POST", { name })).status, 400, `create with ${JSON.stringify(name)}`)
+
+    // Rename holds to the same rule, and a refused rename changes nothing.
+    assert.equal((await call(`/api/collections/${id}`, "PATCH", { name: `${max}y` })).status, 400)
+    assert.equal((await call(`/api/collections/${id}`, "PATCH", { name: "y".repeat(170) })).status, 400)
+    for (const name of ["", "   ", undefined, 7]) assert.equal((await call(`/api/collections/${id}`, "PATCH", { name })).status, 400, `rename to ${JSON.stringify(name)}`)
+    assert.deepEqual((await names()).sort(), [max, max].sort())
+    assert.deepEqual(await get(`/api/collections/${id}`, "PATCH", { name: `  ${"z".repeat(120)}  ` }), { ok: true })
+    assert.ok((await names()).includes("z".repeat(120)), "a name of exactly 120 characters is a valid rename")
+  } finally {
+    await mf.dispose()
+  }
+})
+
 test("groups frame items, move and rename, and leave their items in place when deleted", async () => {
   const { mf, database, call, get, uploaded, board } = await setup()
   try {

@@ -259,3 +259,27 @@ test("a capture only the user can move is input_required for tasks/get exactly w
     await mf.dispose()
   }
 })
+
+test("add_reference and create_collection refuse what the API refuses, with the same sentences", async () => {
+  const { mf, DB, call } = await setup()
+  try {
+    const refused = (await call("add_reference", { url: "https://user:pw@example.com" })).result!
+    assert.equal(refused.isError, true)
+    assert.match(refused.content[0].text, /^A web address cannot contain a username or password\. Pass a full http\(s\) URL/)
+    assert.equal((await call("add_reference", { url: "file:///etc/passwd" })).result!.isError, true)
+
+    // The same site URL written another way is the saved one, not a new capture.
+    const first = (await call("add_reference", { url: "ando.so" }, { tasks: false })).result!
+    const again = (await call("add_reference", { url: "https://www.ando.so/?utm_source=x" }, { tasks: false })).result!
+    assert.equal(JSON.parse(again.content[0].text).alreadySaved, true)
+    assert.equal(JSON.parse(again.content[0].text).id, JSON.parse(first.content[0].text).id)
+
+    const long = (await call("create_collection", { name: "x".repeat(121) })).result!
+    assert.deepEqual([long.isError, long.content[0].text], [true, "name must be at most 120 characters"])
+    assert.equal((await call("create_collection", { name: "   " })).result!.isError, true)
+    assert.ok(JSON.parse((await call("create_collection", { name: "x".repeat(120) })).result!.content[0].text).id)
+    assert.equal((await DB.prepare("SELECT count(*) AS n FROM collections").first<{ n: number }>())!.n, 1)
+  } finally {
+    await mf.dispose()
+  }
+})

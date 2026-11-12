@@ -867,10 +867,13 @@ Scroll timing is synthetic playback; hover offsets are measured. Treat easing an
     {
       title: "Create a collection",
       description: "Create a new collection to organize references. Returns its id for set_collection_membership or set_page_collection_membership.",
-      inputSchema: z.object({ name: z.string().min(1), description: z.string().optional() }),
+      inputSchema: z.object({ name: z.string(), description: z.string().optional() }),
       annotations: { destructiveHint: false },
     },
-    async ({ name, description }) => ok({ id: await db.createCollection(env.DB, name, description) }),
+    async ({ name, description }) => {
+      const invalid = db.nameError(name)
+      return invalid ? fail(invalid) : ok({ id: await db.createCollection(env.DB, name, description) })
+    },
   )
 
   server.registerTool(

@@ -350,11 +350,14 @@ api.post("/collections/:cid/pages", async (c) => {
 api.get("/collections", async (c) => c.json(await db.listCollections(c.env.DB)))
 api.post("/collections", async (c) => {
   const { name, description } = await c.req.json<{ name: string; description?: string }>()
-  if (!name?.trim()) return c.json({ error: "name is required" }, 400)
+  const invalid = db.nameError(name)
+  if (invalid) return c.json({ error: invalid }, 400)
   return c.json({ id: await db.createCollection(c.env.DB, name, description) }, 201)
 })
 api.patch("/collections/:id", async (c) => {
   const { name, description } = await c.req.json<{ name: string; description?: string }>()
+  const invalid = db.nameError(name)
+  if (invalid) return c.json({ error: invalid }, 400)
   await db.updateCollection(c.env.DB, c.req.param("id"), name, description)
   return c.json({ ok: true })
 })

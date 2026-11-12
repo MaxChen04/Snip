@@ -17,6 +17,9 @@ export interface CaptureOptions {
 
 export const DESKTOP_WIDTHS = [1280, 1440, 1920] as const
 
+/** The longest name a board, or a frame on a board, may have. */
+export const MAX_NAME = 120
+
 export interface DesignTokens {
   colors: { value: string; count: number }[]
   fonts: { family: string; count: number }[]

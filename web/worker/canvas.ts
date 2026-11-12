@@ -1,5 +1,5 @@
 import { Hono, type Context } from "hono"
-import type { BoardCanvas, BoardGroup, BoardItem, BoardItemKind, BoardItemStyle, LibraryTypeCounts, PageSection, Paged, SavedImage, SectionItem } from "../shared/types"
+import { MAX_NAME, type BoardCanvas, type BoardGroup, type BoardItem, type BoardItemKind, type BoardItemStyle, type LibraryTypeCounts, type PageSection, type Paged, type SavedImage, type SectionItem } from "../shared/types"
 import type { AppEnv } from "./auth"
 import * as db from "./db"
 
@@ -257,7 +257,6 @@ canvas.get("/counts", async (c) => {
 // ---------- Boards ----------
 
 const MAX_BOARD_ITEMS = 200
-const MAX_GROUP_NAME = 120
 const KINDS: readonly BoardItemKind[] = ["reference", "page", "image", "note"]
 const coord = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && Math.abs(v) <= 1e6
 const extent = (v: unknown): v is number => coord(v) && v >= 1
@@ -461,11 +460,11 @@ canvas.delete("/boards/:id/notes/:noteId", async (c) => {
 
 // ---------- Groups ----------
 
-const groupName = (v: unknown): v is string => typeof v === "string" && v.trim().length <= MAX_GROUP_NAME
+const groupName = (v: unknown): v is string => typeof v === "string" && v.trim().length <= MAX_NAME
 
 canvas.post("/boards/:id/groups", async (c) => {
   const { name, x, y, w, h, items = [] } = await jsonBody(c)
-  if (!groupName(name)) return bad(c, `name is required, at most ${MAX_GROUP_NAME} characters`)
+  if (!groupName(name)) return bad(c, `name is required, at most ${MAX_NAME} characters`)
   if (!coord(x) || !coord(y)) return bad(c, "x and y must be numbers within 1,000,000 of the origin")
   if (!extent(w) || !extent(h)) return bad(c, "w and h must be positive numbers")
   if (!Array.isArray(items) || items.length > MAX_BOARD_ITEMS || !items.every(itemRef)) return bad(c, `items must be at most ${MAX_BOARD_ITEMS} { kind, id }`)
@@ -496,7 +495,7 @@ canvas.patch("/boards/:id/groups/:groupId", async (c) => {
   const set: string[] = []
   const args: unknown[] = []
   if ("name" in body) {
-    if (!groupName(body.name)) return bad(c, `name must be at most ${MAX_GROUP_NAME} characters`)
+    if (!groupName(body.name)) return bad(c, `name must be at most ${MAX_NAME} characters`)
     set.push("name = ?")
     args.push(body.name.trim())
   }
