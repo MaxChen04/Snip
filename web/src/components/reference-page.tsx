@@ -239,6 +239,7 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
   const hoverRecordings = animations.filter((a) => a.kind === "hover")
 
   const inCollections = collections.filter((c) => r.collectionIds.includes(c.id))
+  const quiet = !!r.quietSince
   // The capture agent reports "Capturing 7/25: /enterprise" while it works on a page.
   const capturing = r.progress?.match(/^Capturing (\d+)\/(\d+): (.+)$/)
   const capturingPath = capturing?.[3]
@@ -345,10 +346,17 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
           <CaptureFailure id={r.id} error={r.error} onRetried={load} />
         ) : r.status !== "ready" && (
           <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
-            <div className="flex h-7 items-center gap-2 rounded-full bg-control px-3 text-xs shadow-button">
-              {r.status === "paused" ? <PauseIcon className="size-3.5 text-ink-10" /> : <Spinner className="size-3.5 text-ink-10" />}
-              <span>{captureLabel(r) ?? r.progress ?? WAITING}</span>
-            </div>
+            {quiet ? (
+              // The agent has gone quiet: plain words instead of a spinner, which would say it is working.
+              <p role="status" className="max-w-md text-xs text-balance text-ink-11">
+                {captureLabel(r)}
+              </p>
+            ) : (
+              <div className="flex h-7 items-center gap-2 rounded-full bg-control px-3 text-xs shadow-button">
+                {r.status === "paused" ? <PauseIcon className="size-3.5 text-ink-10" /> : <Spinner className="size-3.5 text-ink-10" />}
+                <span>{captureLabel(r) ?? r.progress ?? WAITING}</span>
+              </div>
+            )}
             <CaptureControls r={r} onChange={load} />
           </div>
         )}
@@ -427,7 +435,7 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
                 </button>
                 </div>
               ))}
-              {busy && (
+              {busy && !quiet && (
                 <ImageGeneration
                   status={r.status === "queued" ? "queued" : "generating"}
                   label={progressText}
@@ -440,7 +448,7 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
                 />
               )}
             </Masonry>
-            {!pages.length && !busy && <p className="py-16 text-center text-sm text-muted-foreground">No pages captured yet.</p>}
+            {!pages.length && (!busy || quiet) && <p className="py-16 text-center text-sm text-muted-foreground">No pages captured yet.</p>}
           </>
         )}
 

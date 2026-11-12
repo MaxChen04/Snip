@@ -147,7 +147,7 @@ export function CaptureCard({
   const r = view?.reference
   const running = !!cur && (!r || RUNNING.includes(r.status))
   // The pill beside the field names what the capture is doing, as the reference's status says.
-  const pill = !r ? { label: "Starting…", Glyph: Loader2Icon } : r.status === "paused" ? { label: "Paused", Glyph: PauseIcon } : r.status === "queued" ? { label: "Queued", Glyph: Clock } : { label: "Capturing", Glyph: Loader2Icon }
+  const pill = !r ? { label: "Starting…", Glyph: Loader2Icon } : r.quietSince ? { label: captureLabel(r, true)!, Glyph: Clock } : r.status === "paused" ? { label: "Paused", Glyph: PauseIcon } : r.status === "queued" ? { label: "Queued", Glyph: Clock } : { label: "Capturing", Glyph: Loader2Icon }
 
   /** Reload the canvas when a capture lands a page or finishes; drop finished older captures from the card. */
   const note = (ref: Reference) => {
@@ -480,6 +480,18 @@ function Status({
     )
   }
 
+  // The agent has gone quiet: no spinner and no bar, which would say it is working.
+  if (r.quietSince) {
+    return (
+      <div className="flex items-start gap-2 px-1.5 py-1">
+        <p role="status" className="min-w-0 flex-1 py-1 text-xs text-ink-11">
+          {captureLabel(r)} {moreNote}
+        </p>
+        <CaptureControls r={r} onChange={onChange} className="gap-1" />
+      </div>
+    )
+  }
+
   const p = parseProgress(r)
   const paused = r.status === "paused"
   const title =
@@ -518,7 +530,7 @@ function Landing({ r, pages }: { r: Reference; pages: Page[] }) {
   const landed = pages.filter((pg) => pg.desktopThumbKey ?? pg.mobileThumbKey).slice(-2)
   const p = parseProgress(r)
   const queued = r.mode === "crawl" && p ? p.total - p.n : 0
-  const capturing = r.status === "capturing" && r.control !== "stop"
+  const capturing = r.status === "capturing" && r.control !== "stop" && !r.quietSince
   if (!landed.length && !capturing && !queued) return null
   // Three of these and their gaps come to the card's 520 px, so the row stays between the canvas columns.
   const tile = "h-[105px] w-[168px] shrink-0 rounded-md"
