@@ -79,7 +79,6 @@ export function InfiniteCanvas({
     let frame = 0
     let tween = 0
     let glide = 0
-    let raster = 0
     // Zoom an animation is heading to, so repeated zoom clicks compound from it rather than from mid-flight.
     let targetK: number | null = null
 
@@ -100,19 +99,6 @@ export function InfiniteCanvas({
     }
     const schedule = () => {
       if (!frame) frame = requestAnimationFrame(flush)
-    }
-
-    // While the zoom moves, will-change keeps the compositor scaling the bitmap it has instead of rasterizing the world
-    // again at every step. Once the zoom has been still for 200 ms it is dropped, which rasterizes once at the final
-    // scale and keeps text and images sharp. It must not stay on: the layer keeps the raster scale it had when the
-    // zoom began, so tiles that mount while panning at 25% were rasterized for 100%. The same pan measured 4.5 s of
-    // raster time that way and 0.56 s without, and every frame that added tiles waited for it.
-    const sharpen = () => {
-      const el = world.current
-      if (!el) return
-      el.style.willChange = "transform"
-      clearTimeout(raster)
-      raster = window.setTimeout(() => (el.style.willChange = ""), 200)
     }
 
     const stop = () => {
@@ -139,7 +125,6 @@ export function InfiniteCanvas({
       v.ty = sy - (sy - v.ty) * (next / v.k)
       v.k = next
       schedule()
-      sharpen()
     }
 
     /** Move to a centre world point and zoom, optionally with a short ease-out. */
@@ -156,7 +141,6 @@ export function InfiniteCanvas({
       }
       if (!animate || reducedMotion()) {
         set(cx, cy, k)
-        sharpen()
         return
       }
       const from = getView()
@@ -165,12 +149,8 @@ export function InfiniteCanvas({
         const p = Math.min(1, (now - t0) / 320)
         const e = 1 - (1 - p) ** 4
         set(from.x + (cx - from.x) * e, from.y + (cy - from.y) * e, from.zoom + (k - from.zoom) * e)
-        if (k !== from.zoom) sharpen()
         if (p < 1) tween = requestAnimationFrame(step)
-        else {
-          targetK = null
-          sharpen()
-        }
+        else targetK = null
       }
       tween = requestAnimationFrame(step)
     }
@@ -212,7 +192,7 @@ export function InfiniteCanvas({
       },
       getView,
     }
-    return { handle, flush, schedule, sharpen, stop, local, panBy, zoomAt, fling, cancel: () => cancelAnimationFrame(frame) }
+    return { handle, flush, schedule, stop, local, panBy, zoomAt, fling, cancel: () => cancelAnimationFrame(frame) }
   }
   api.current ??= makeApi()
   const a = api.current
@@ -346,7 +326,6 @@ export function InfiniteCanvas({
       v.k = k
       Object.assign(g, next)
       a.schedule()
-      a.sharpen()
     }
   }
 
@@ -430,6 +409,9 @@ export function InfiniteCanvas({
       onKeyDown={onKeyDown}
       onFocus={onFocus}
     >
+      {/* No will-change: the 3D transform already keeps the world on its own layer, and the hint locks the layer's raster
+          scale. Panning at 25% then rasterized for 100% (4.5 s of raster time for drags that take 0.56 s without), and
+          the first step of a zoom-in with 1,000 tiles mounted stalled for 0.8 s instead of 0.2. */}
       <div ref={world} className="absolute top-0 left-0 origin-top-left">
         {children(visible)}
       </div>
