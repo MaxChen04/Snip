@@ -626,6 +626,31 @@ test("a board name has one limit, on create and on rename", async () => {
   }
 })
 
+test("renaming a board keeps its description unless the request says to clear it", async () => {
+  const { mf, get, board } = await setup()
+  try {
+    const id = await board("Moodboard")
+    const current = async () => (await get<Collection[]>("/api/collections")).find((b) => b.id === id)!
+    await get(`/api/collections/${id}`, "PATCH", { name: "Moodboard", description: "Warm and grainy" })
+    assert.equal((await current()).description, "Warm and grainy")
+
+    await get(`/api/collections/${id}`, "PATCH", { name: "Renamed" })
+    assert.deepEqual([(await current()).name, (await current()).description], ["Renamed", "Warm and grainy"], "an omitted description is kept")
+
+    await get(`/api/collections/${id}`, "PATCH", { name: "Renamed", description: "Cool and flat" })
+    assert.equal((await current()).description, "Cool and flat", "a new description replaces it")
+
+    await get(`/api/collections/${id}`, "PATCH", { name: "Renamed", description: "" })
+    assert.equal((await current()).description, null, "an empty string clears it")
+
+    await get(`/api/collections/${id}`, "PATCH", { name: "Renamed", description: "Back again" })
+    await get(`/api/collections/${id}`, "PATCH", { name: "Renamed", description: null })
+    assert.equal((await current()).description, null, "an explicit null clears it")
+  } finally {
+    await mf.dispose()
+  }
+})
+
 test("groups frame items, move and rename, and leave their items in place when deleted", async () => {
   const { mf, database, call, get, uploaded, board } = await setup()
   try {

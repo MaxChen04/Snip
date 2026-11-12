@@ -469,8 +469,10 @@ export async function createCollection(db: D1Database, name: string, description
   return id
 }
 
+/** An omitted description keeps the stored one; null or an empty string clears it. */
 export async function updateCollection(db: D1Database, id: string, name: string, description?: string | null) {
-  await db.prepare(`UPDATE collections SET name = ?, description = ? WHERE id = ?`).bind(name.trim(), description ?? null, id).run()
+  if (description === undefined) await db.prepare(`UPDATE collections SET name = ? WHERE id = ?`).bind(name.trim(), id).run()
+  else await db.prepare(`UPDATE collections SET name = ?, description = ? WHERE id = ?`).bind(name.trim(), description || null, id).run()
 }
 
 export async function deleteCollection(db: D1Database, id: string) {
