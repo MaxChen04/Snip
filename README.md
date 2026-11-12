@@ -154,7 +154,7 @@ Snip is one Worker in two places. Locally, Snip.app runs it from this checkout t
 
 Capture runs locally because the free plans can't crawl sites: Cloudflare's free Browser Rendering allows 10 browser-minutes a day, and Vercel Hobby functions stop after 5 minutes. Queued references wait until the agent is running.
 
-Cloud mode deploys the same Worker to your own Cloudflare account and copies the library into it, so other devices and cloud agents can reach it. Capture still runs on a Mac: the app points its capture agent at the cloud library after the move, and captures queued while the Mac is off show **Waiting for your Mac**. See [SECURITY.md](SECURITY.md) for the full trust model.
+Cloud mode deploys the same Worker to your own Cloudflare account and copies the library into it, so other devices and cloud agents can reach it. Capture still runs on a Mac: the app points its capture agent at the cloud library after the move, and captures queued while the Mac is off show **Waiting for the capture agent**. See [SECURITY.md](SECURITY.md) for the full trust model.
 
 ## Connect your agent (MCP)
 
