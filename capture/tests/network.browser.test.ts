@@ -48,6 +48,7 @@ test("capture rejects a private stylesheet instead of publishing its response", 
   let uploads = 0
   try {
     const routedBrowser = {
+      isConnected: () => browser.isConnected(),
       async newContext(options:any) {
         const context = await browser.newContext(options)
         await context.route("http://8.8.8.8/**", route => route.fulfill({contentType:"text/html",
@@ -142,6 +143,7 @@ test("a private icon or unused font loses that file, not the capture", {timeout:
   let pages = 0
   try {
     const routedBrowser = {
+      isConnected: () => browser.isConnected(),
       async newContext(options:any) {
         const context = await browser.newContext(options)
         await context.route("http://8.8.8.8/", route => route.fulfill({contentType:"text/html",
