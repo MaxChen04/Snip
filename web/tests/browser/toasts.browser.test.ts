@@ -1,6 +1,7 @@
-// Toasts: removing several items and creating a board in the popover say so.
+// Toasts: removing several items and creating a board in the popover say so, and the same news twice replaces its toast.
+import assert from "node:assert/strict"
 import { after, before, test } from "node:test"
-import { boardOf, noteItem, reference, sleep, startApp, type App } from "./harness.ts"
+import { boardOf, noteItem, reference, sleep, startApp, until, type App } from "./harness.ts"
 
 let app: App
 before(async () => void (app = await startApp()))
@@ -30,4 +31,36 @@ test("creating a board in the Organize popover says so", async () => {
   await popover.getByRole("textbox", { name: "Board name" }).fill("Fresh board")
   await popover.getByRole("button", { name: "Create", exact: true }).click()
   await page.getByText("Created board “Fresh board”").waitFor()
+})
+
+test("asking to add a saved site again replaces its Already saved toast", async () => {
+  const saved = reference({ id: "ref1", title: "Example Domain" })
+  const t = await app.session({ state: { references: { ref1: saved } } })
+  const { page } = t
+  t.on("POST", "/api/references", () => ({ status: 409, json: { error: "This URL is already saved", existing: saved } }))
+  await t.goto("/")
+  const field = page.getByRole("textbox", { name: "Link to capture" })
+  for (let i = 1; i <= 3; i++) {
+    await field.fill("example.com")
+    await field.press("Enter")
+    await until("POST sent", () => t.count("POST", "/api/references") === i)
+    await page.getByText("Already saved").first().waitFor()
+  }
+  await sleep(500)
+  assert.equal(await page.getByText("Already saved").count(), 1, "the toasts stacked")
+})
+
+test("the same confirmation twice is one toast", async () => {
+  const t = await app.session()
+  const { page } = t
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"])
+  await t.goto("/")
+  await page.getByRole("button", { name: "Connect MCP" }).click()
+  const copy = page.getByRole("dialog").getByRole("button", { name: /^Copy / }).first()
+  for (let i = 0; i < 3; i++) {
+    await copy.click()
+    await page.getByText(/^Copied /).first().waitFor()
+  }
+  await sleep(500)
+  assert.equal(await page.getByText(/^Copied /).count(), 1, "the toasts stacked")
 })

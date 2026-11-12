@@ -79,7 +79,9 @@ export async function captureLink(url: URL, opts: CaptureOpts): Promise<Referenc
   } catch (err) {
     if (!(err instanceof DuplicateError)) throw err
     const existing = err.existing
+    // One id per saved site, so asking again replaces the toast rather than stacking another.
     toast("Already saved", {
+      id: `saved-${existing.id}`,
       description: existing.title ?? existing.domain,
       action: { label: "Open", onClick: () => navigate(`/r/${existing.id}`) },
       cancel: {
