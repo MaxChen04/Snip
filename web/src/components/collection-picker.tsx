@@ -1,6 +1,7 @@
 import { useState } from "react"
 import { CheckIcon, PlusIcon, SearchIcon } from "@/components/icons"
 import { toast } from "sonner"
+import { notify } from "@/components/notify"
 import { api, fileUrl, type Collection } from "@/lib/api"
 import { useCollections } from "@/lib/collections"
 import { cn } from "@/lib/utils"
@@ -76,6 +77,7 @@ export function CollectionPicker({
       // The board exists now; a list that fails to reload is not a failed create.
       await refresh().catch(() => {})
       onToggle(id, true)
+      notify(`Created board “${n}”`)
       setName("")
       setQ("")
       setCreating(false)

@@ -608,6 +608,7 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
     try {
       await sent(Promise.all([setMembers(id, gone, false), ...notes.map((n) => api.deleteBoardNote(id, n.id))]))
       void refresh().catch(() => {})
+      if (gone.length > 1) notify(`Removed ${gone.length} items`)
     } catch (e) {
       toast.error(message(e))
       void load()
