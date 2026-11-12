@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react"
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type RefObject } from "react"
 import { useLocation, useSearch } from "wouter"
 import { AgentBanner } from "@/components/agent-banner"
 import { TopBar } from "@/components/top-bar"
@@ -97,18 +97,30 @@ function useCounts(q: string, boardId?: string) {
 
 const at = (t: Pick<Placement, "x" | "y" | "w" | "h">) => ({ left: t.x, top: t.y, width: t.w, height: t.h })
 
-/** The tiles in (and near) view. Re-renders only when the visible rect or the items change. */
+/**
+ * The tiles in (and near) view. Re-renders only when the visible rect or the items change, and reuses the element of
+ * every tile that stays in view: a new rect then costs React the tiles that came into view, not all of them.
+ */
 const Field = memo(function Field({ layout, items, rect, onOpen }: { layout: HomeLayout; items: CanvasItem[]; rect: WorldRect; onOpen?: (item: CanvasItem) => void }) {
-  return visibleTiles(layout, rect).map((t) => {
-    // Repeated copies of the block are clickable but not tabbable or announced: otherwise Tab never ends (each
-    // focus pans to the next copy) and screen readers read every item many times.
-    const copy = t.key.includes("@") && !t.key.endsWith("@0,0")
-    return (
-      <div key={t.key} className="absolute" style={at(t)} aria-hidden={copy || undefined}>
-        <CanvasTile item={items[t.index]!} onOpen={onOpen} tabIndex={copy ? -1 : undefined} />
-      </div>
-    )
+  const cache = useMemo(() => ({ elements: new Map<string, ReactElement>() }), [layout, items, onOpen])
+  const kept = new Map<string, ReactElement>()
+  const tiles = visibleTiles(layout, rect).map((t) => {
+    let el = cache.elements.get(t.key)
+    if (!el) {
+      // Repeated copies of the block are clickable but not tabbable or announced: otherwise Tab never ends (each
+      // focus pans to the next copy) and screen readers read every item many times.
+      const copy = t.key.includes("@") && !t.key.endsWith("@0,0")
+      el = (
+        <div key={t.key} className="absolute" style={at(t)} aria-hidden={copy || undefined}>
+          <CanvasTile item={items[t.index]!} onOpen={onOpen} tabIndex={copy ? -1 : undefined} />
+        </div>
+      )
+    }
+    kept.set(t.key, el)
+    return el
   })
+  cache.elements = kept
+  return tiles
 })
 
 // Slots around the plaza: skeletons while loading, dashed placeholders when there's nothing to show yet.
