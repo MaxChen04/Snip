@@ -92,3 +92,12 @@ test("a website tile on a board says Not responding for a quiet capture", async 
   await t.goto("/b/board1")
   assert.match(await t.page.getByRole("button", { name: "Quiet Site" }).innerText(), /Not responding/)
 })
+
+test("a quiet crawl shows no tile for pages waiting behind it, which a running one does", async () => {
+  const running = await home(reference({ status: "capturing", mode: "crawl", maxPages: 10, progress: "Capturing 4/10: /pricing" }))
+  await running.page.getByText("6 more queued").waitFor()
+
+  const silent = await home(quiet({ mode: "crawl", maxPages: 10, progress: "Capturing 4/10: /pricing" }))
+  await silent.page.locator("form").getByText(QUIET).waitFor()
+  assert.equal(await silent.page.getByText(/more queued/).count(), 0)
+})

@@ -535,8 +535,10 @@ function Status({
 function Landing({ r, pages }: { r: Reference; pages: Page[] }) {
   const landed = pages.filter((pg) => pg.desktopThumbKey ?? pg.mobileThumbKey).slice(-2)
   const p = parseProgress(r)
-  const queued = r.mode === "crawl" && p?.total ? p.total - p.n : 0
-  const capturing = r.status === "capturing" && r.control !== "stop" && !r.quietSince
+  // Nothing is capturing or waiting behind a page while the agent is quiet.
+  const quiet = !!r.quietSince
+  const queued = r.mode === "crawl" && p?.total && !quiet ? p.total - p.n : 0
+  const capturing = r.status === "capturing" && r.control !== "stop" && !quiet
   if (!landed.length && !capturing && !queued) return null
   // Three of these and their gaps come to the card's 520 px, so the row stays between the canvas columns.
   const tile = "h-[105px] w-[168px] shrink-0 rounded-md"
