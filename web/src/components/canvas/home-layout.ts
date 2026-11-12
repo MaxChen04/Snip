@@ -165,18 +165,31 @@ export function layoutHome(items: { key: string; aspect: number }[], plaza: Plaz
 
 const intersects = (a: Rect, x: number, y: number, w: number, h: number) => x < a.x + a.w && x + w > a.x && y < a.y + a.h && y + h > a.y
 
+type Bounds = { minX: number; minY: number; maxX: number; maxY: number }
+// A layout never changes once made, and visibleTiles runs on every visible-rect change (every frame of a zoom).
+const boundsOf = new WeakMap<HomeLayout, Bounds>()
+function bounds(layout: HomeLayout): Bounds {
+  let b = boundsOf.get(layout)
+  if (!b) {
+    b = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity }
+    for (const list of [layout.tiles, layout.fill])
+      for (const t of list) {
+        b.minX = Math.min(b.minX, t.x)
+        b.minY = Math.min(b.minY, t.y)
+        b.maxX = Math.max(b.maxX, t.x + t.w)
+        b.maxY = Math.max(b.maxY, t.y + t.h)
+      }
+    boundsOf.set(layout, b)
+  }
+  return b
+}
+
 /** Tiles (with copies of a repeating block) that intersect a world rect, origin copy first, newest first within a copy. */
 export function visibleTiles(layout: HomeLayout, r: Rect): Placement[] {
   const { tiles, fill, period } = layout
   if (!period) return tiles.filter((t) => intersects(r, t.x, t.y, t.w, t.h))
 
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
-  for (const t of [...tiles, ...fill]) {
-    minX = Math.min(minX, t.x)
-    minY = Math.min(minY, t.y)
-    maxX = Math.max(maxX, t.x + t.w)
-    maxY = Math.max(maxY, t.y + t.h)
-  }
+  const { minX, minY, maxX, maxY } = bounds(layout)
   const copies: [number, number][] = []
   for (let i = Math.floor((r.x - maxX) / period.w); i <= Math.ceil((r.x + r.w - minX) / period.w); i++)
     for (let j = Math.floor((r.y - maxY) / period.h); j <= Math.ceil((r.y + r.h - minY) / period.h); j++) copies.push([i, j])
@@ -186,8 +199,11 @@ export function visibleTiles(layout: HomeLayout, r: Rect): Placement[] {
   for (const [i, j] of copies) {
     const dx = i * period.w
     const dy = j * period.h
-    for (const t of i === 0 && j === 0 ? tiles : [...tiles, ...fill]) {
-      if (intersects(r, t.x + dx, t.y + dy, t.w, t.h)) out.push({ ...t, key: `${t.key}@${i},${j}`, x: t.x + dx, y: t.y + dy })
+    // The origin copy keeps the plaza clear; the others fill it.
+    for (const list of i === 0 && j === 0 ? [tiles] : [tiles, fill]) {
+      for (const t of list) {
+        if (intersects(r, t.x + dx, t.y + dy, t.w, t.h)) out.push({ ...t, key: `${t.key}@${i},${j}`, x: t.x + dx, y: t.y + dy })
+      }
     }
   }
   return out
