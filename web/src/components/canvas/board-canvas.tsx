@@ -29,7 +29,7 @@ import { LIVE_POLL, usePoll } from "@/hooks/use-poll"
 import { api, type BoardGroup, type BoardItem, type BoardItemKind, type BoardItemPlacement, type Collection, type LibraryTypeCounts, type SavedImage } from "@/lib/api"
 import { useCollections } from "@/lib/collections"
 import { cn } from "@/lib/utils"
-import type { BoardItemStyle } from "../../../shared/types"
+import { MAX_NAME, type BoardItemStyle } from "../../../shared/types"
 
 // ponytail: only the layer menu and the canvas handles are undoable (a 50-step history behind the toast's Undo).
 // Everything else saves straight away; removing an item only takes it off the board.
@@ -220,7 +220,7 @@ function BoardHeader({ board, onRename, onAddNote, onAddWebsite, onDelete }: { b
           autoFocus
           defaultValue={board.name}
           aria-label="Board name"
-          maxLength={120}
+          maxLength={MAX_NAME}
           onFocus={(e) => e.currentTarget.select()}
           onBlur={(e) => {
             setEditing(false)

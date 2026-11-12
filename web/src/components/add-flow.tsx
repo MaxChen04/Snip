@@ -9,6 +9,7 @@ import { notify } from "@/components/notify"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
 import { api } from "@/lib/api"
 import { useCollections } from "@/lib/collections"
+import { MAX_NAME } from "../../shared/types"
 
 // One place that owns the "Create" dialogs so the top bar, board views and empty
 // states on any page open the same flow.
@@ -136,6 +137,7 @@ function NewCollectionDialog({ open, onOpenChange }: { open: boolean; onOpenChan
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. Pricing pages"
               aria-label="Board name"
+              maxLength={MAX_NAME}
               className="well h-10 w-full rounded-lg px-3 text-sm outline-none placeholder:text-ink-10 focus:bg-ink-4 pointer-coarse:text-base"
             />
           </div>

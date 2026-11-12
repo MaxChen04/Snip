@@ -4,6 +4,7 @@ import { toast } from "sonner"
 import { api, fileUrl, type Collection } from "@/lib/api"
 import { useCollections } from "@/lib/collections"
 import { cn } from "@/lib/utils"
+import { MAX_NAME } from "../../shared/types"
 
 /** Square cover for a board: newest cover, or a soft 2x2 placeholder. */
 export function CollectionThumb({ c, className }: { c?: Collection; className?: string }) {
@@ -121,6 +122,7 @@ export function CollectionPicker({
               }}
               placeholder="Board name"
               aria-label="Board name"
+              maxLength={MAX_NAME}
               className="well h-8 min-w-0 flex-1 rounded-lg px-2.5 text-xs outline-none focus:bg-ink-4"
             />
             <button type="button" disabled={busy} onClick={() => void create()} className="press h-8 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground shadow-primary hover:bg-(--primary-hover) disabled:opacity-60">

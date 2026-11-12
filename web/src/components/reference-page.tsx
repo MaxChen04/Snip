@@ -252,8 +252,8 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
 
       <div className="flex flex-col items-center gap-3 px-4 pt-8 pb-2 text-center">
         {r.favicon && <img src={fileUrl(r.favicon)} alt="" className="size-8 rounded-md shadow-button" onError={(e) => (e.currentTarget.style.display = "none")} />}
-        <div className="max-w-2xl">
-          <p className="text-xs text-ink-10">
+        <div className="w-full max-w-2xl">
+          <p className="truncate text-xs text-ink-10">
             <Link href="/" className="hover:text-foreground">
               All saves
             </Link>
