@@ -1,4 +1,4 @@
-import { memo, useState, type CSSProperties } from "react"
+import { memo, useRef, useState, type CSSProperties, type FocusEvent, type PointerEvent, type Ref } from "react"
 import { Link } from "wouter"
 import { ArrowUpRightIcon } from "@/components/icons"
 import { captureLabel } from "@/components/capture-controls"
@@ -42,19 +42,21 @@ export function tileLabel(item: CanvasItem) {
 }
 
 const img = "size-full object-cover"
-const Img = ({ src, className }: { src: string | null | undefined; className?: string }) =>
-  src ? <img src={fileUrl(src)} alt="" loading="lazy" decoding="async" draggable={false} className={cn(img, className)} /> : null
+// A function, not a component: hundreds of tiles each skip a fiber for it. `fit` is the whole object-fit and position.
+const thumb = (src: string | null | undefined, fit = "object-cover") =>
+  src ? <img src={fileUrl(src)} alt="" loading="lazy" decoding="async" draggable={false} className={`size-full ${fit}`} /> : null
 
 /** A recording's still; its video plays while the tile is hovered or focused. */
 function AnimationMedia({ a, live }: { a: Extract<CanvasItem, { kind: "animation" }>["animation"]; live: boolean }) {
   // Hover recordings are small element crops: letterbox them instead of upscaling.
   const small = a.kind === "hover" && a.width < 480
   const fit = small ? "object-contain p-4" : "object-top"
+  const stillFit = small ? fit : "object-cover object-top"
   const still = a.meta?.frames[0]?.key ?? (isVideoKey(a.gifKey) ? null : a.gifKey)
   return (
     <>
       {still ? (
-        <Img src={still} className={fit} />
+        thumb(still, stillFit)
       ) : (
         <video src={fileUrl(a.gifKey)} muted playsInline preload="metadata" className={cn(img, fit)} />
       )}
@@ -66,13 +68,13 @@ function AnimationMedia({ a, live }: { a: Extract<CanvasItem, { kind: "animation
 function Media({ item, live }: { item: CanvasItem; live: boolean }) {
   switch (item.kind) {
     case "page":
-      return <Img src={item.page.desktopThumbKey ?? item.page.mobileThumbKey} className="object-top" />
+      return thumb(item.page.desktopThumbKey ?? item.page.mobileThumbKey, "object-cover object-top")
     case "section":
-      return <Img src={item.section.key} className="object-top" />
+      return thumb(item.section.key, "object-cover object-top")
     case "animation":
       return <AnimationMedia a={item.animation} live={live} />
     case "image":
-      return <Img src={item.image.thumbKey} />
+      return thumb(item.image.thumbKey)
     case "website": {
       const r = item.reference
       const cover = r.coverKey ?? r.previewKeys[0]
@@ -80,7 +82,7 @@ function Media({ item, live }: { item: CanvasItem; live: boolean }) {
       return (
         <>
           {cover ? (
-            <Img src={cover} className="object-top" />
+            thumb(cover, "object-cover object-top")
           ) : (
             <span className="grid size-full place-items-center bg-ink-2">
               <SiteIcon domain={r.domain} icon={r.favicon} className="size-6 rounded-md" />
@@ -158,24 +160,113 @@ export const CanvasTile = memo(function CanvasTile({
           doubled the DOM and image requests when zoomed out. */}
       {src && live && (
         <div className="pointer-events-none absolute inset-x-2 bottom-2 flex motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-bottom-1 motion-safe:duration-200">
-          <a
-            href={src.href}
-            target="_blank"
-            rel="noreferrer"
-            tabIndex={-1}
-            draggable={false}
-            title={`Open ${src.domain}`}
-            className="tactile press pointer-events-auto flex h-7 max-w-full items-center gap-1.5 rounded-full pr-2.5 pl-1.5 text-2xs font-medium"
-          >
-            <SiteIcon domain={src.domain} icon={src.icon} />
-            <span className="truncate">
-              {src.domain}
-              {src.path && <span className="text-ink-10"> / {src.path}</span>}
-            </span>
-            <ArrowUpRightIcon className="size-3 shrink-0 text-ink-10" />
-          </a>
+          <SourceChip src={src} />
         </div>
       )}
     </div>
+  )
+})
+
+/** The hover chip: where an item came from, with a link to it. Shared by every kind of tile. */
+function SourceChip({ src, ref, onLeave }: { src: NonNullable<ReturnType<typeof source>>; ref?: Ref<HTMLAnchorElement>; onLeave?: (e: PointerEvent | FocusEvent) => void }) {
+  return (
+    <a
+      ref={ref}
+      href={src.href}
+      target="_blank"
+      rel="noreferrer"
+      tabIndex={-1}
+      draggable={false}
+      title={`Open ${src.domain}`}
+      onPointerLeave={onLeave}
+      onBlur={onLeave}
+      className="tactile press pointer-events-auto flex h-7 max-w-full items-center gap-1.5 rounded-full pr-2.5 pl-1.5 text-2xs font-medium"
+    >
+      <SiteIcon domain={src.domain} icon={src.icon} />
+      <span className="truncate">
+        {src.domain}
+        {src.path && <span className="text-ink-10"> / {src.path}</span>}
+      </span>
+      <ArrowUpRightIcon className="size-3 shrink-0 text-ink-10" />
+    </a>
+  )
+}
+
+// The home tile's face. `in-data-far` is set on the canvas's world layer while zoomed far out (see FAR_ZOOM): there a
+// tile is a few dozen px wide, so its three blurred shadows, hover wash and transitions are paid for and unseen.
+const HOME_FACE =
+  "absolute cursor-pointer overflow-hidden rounded-md bg-ink-3 text-left shadow-card select-none transition-[scale,opacity,box-shadow] duration-150 ease-out active:scale-[0.99] motion-reduce:active:scale-100 " +
+  "after:pointer-events-none after:absolute after:inset-0 after:bg-black/0 after:transition-colors after:duration-150 after:ease-out hover:after:bg-black/[0.03] " +
+  "in-data-far:shadow-[0_0_0_1px_var(--ink-5)] in-data-far:transition-none in-data-far:after:hidden in-data-far:rounded-none in-data-far:overflow-visible"
+
+/**
+ * A tile of the home field. It positions itself and is a link or button holding just its image: two DOM elements
+ * (the hover chip is mounted only for the tile under the pointer or focus), so a zoomed-out field of a thousand tiles
+ * stays light. Repeated copies of the block are clickable but neither focusable nor announced: otherwise Tab never
+ * ends (each focus pans to the next copy) and screen readers read every item many times.
+ */
+export const HomeTile = memo(function HomeTile({
+  item,
+  x,
+  y,
+  w,
+  h,
+  copy,
+  onOpen,
+}: {
+  item: CanvasItem
+  /** Position and size in world px. */
+  x: number
+  y: number
+  w: number
+  h: number
+  /** A repeat of the block, not the origin copy. */
+  copy: boolean
+  /** Click opens it (onOpen), except websites, which go to their page unless onOpen is given. */
+  onOpen?: (item: CanvasItem) => void
+}) {
+  const [live, setLive] = useState(false)
+  const face = useRef<HTMLElement>(null)
+  const chip = useRef<HTMLAnchorElement>(null)
+  const name = tileLabel(item)
+  // Pointer or focus moving between the tile and its chip (a sibling element) keeps the chip.
+  const leave = (e: PointerEvent | FocusEvent) => {
+    const to = e.relatedTarget as Node | null
+    if (!to || !(face.current?.contains(to) || chip.current?.contains(to))) setLive(false)
+  }
+  const shared = {
+    "aria-label": name,
+    "aria-hidden": copy || undefined,
+    tabIndex: copy ? -1 : undefined,
+    style: { left: x, top: y, width: w, height: h },
+    className: HOME_FACE,
+    onPointerEnter: (e: PointerEvent) => e.pointerType === "mouse" && setLive(true),
+    onPointerLeave: leave,
+    onFocus: () => setLive(true),
+    onBlur: leave,
+  }
+  // Called, not rendered as <Media />: one fewer element and fiber for each of hundreds of tiles.
+  const media = Media({ item, live })
+  const tile =
+    item.kind === "website" && !onOpen ? (
+      <Link ref={face as Ref<HTMLAnchorElement>} href={`/r/${item.id}`} draggable={false} {...shared}>
+        {media}
+      </Link>
+    ) : (
+      <button ref={face as Ref<HTMLButtonElement>} type="button" onClick={() => onOpen?.(item)} {...shared}>
+        {media}
+      </button>
+    )
+  const src = live ? source(item) : null
+  if (!src) return tile
+  return (
+    <>
+      {tile}
+      <div className="pointer-events-none absolute in-data-far:hidden" style={{ left: x, top: y, width: w, height: h }}>
+        <div className="absolute inset-x-2 bottom-2 flex motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-bottom-1 motion-safe:duration-200">
+          <SourceChip src={src} ref={chip} onLeave={leave} />
+        </div>
+      </div>
+    </>
   )
 })

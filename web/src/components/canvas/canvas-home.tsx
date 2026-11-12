@@ -8,7 +8,7 @@ import { countOf, FilterDock } from "@/components/canvas/filter-dock"
 import { GAP, layoutHome, PLAZA, visibleTiles, type HomeLayout, type Placement } from "@/components/canvas/home-layout"
 import { InfiniteCanvas, type CanvasView, type InfiniteCanvasHandle, type WorldRect } from "@/components/canvas/infinite-canvas"
 import { ItemInspector } from "@/components/canvas/item-inspector"
-import { CanvasTile } from "@/components/canvas/tiles"
+import { HomeTile } from "@/components/canvas/tiles"
 import { itemAspect, RELOAD_EVENT, reloadCanvas, type CanvasFilter, type CanvasItem } from "@/components/canvas/types"
 import { ZoomControls } from "@/components/canvas/zoom-controls"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -107,14 +107,9 @@ const Field = memo(function Field({ layout, items, rect, onOpen }: { layout: Hom
   const tiles = visibleTiles(layout, rect).map((t) => {
     let el = cache.elements.get(t.key)
     if (!el) {
-      // Repeated copies of the block are clickable but not tabbable or announced: otherwise Tab never ends (each
-      // focus pans to the next copy) and screen readers read every item many times.
+      // Repeated copies of the block are not tabbable or announced (see HomeTile).
       const copy = t.key.includes("@") && !t.key.endsWith("@0,0")
-      el = (
-        <div key={t.key} className="absolute" style={at(t)} aria-hidden={copy || undefined}>
-          <CanvasTile item={items[t.index]!} onOpen={onOpen} tabIndex={copy ? -1 : undefined} />
-        </div>
-      )
+      el = <HomeTile key={t.key} item={items[t.index]!} x={t.x} y={t.y} w={t.w} h={t.h} copy={copy} onOpen={onOpen} />
     }
     kept.set(t.key, el)
     return el
