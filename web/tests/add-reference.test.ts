@@ -153,3 +153,30 @@ test("adding several URLs one by one reports each failure and keeps the valid on
     await mf.dispose()
   }
 })
+
+test("a queued capture says it is waiting for the capture agent, however it came to be queued", async () => {
+  const { mf, database, add } = await setup()
+  try {
+    const waiting = "Waiting for the capture agent"
+    const ref = await add("https://queued.example")
+    assert.equal(ref.body.progress, waiting)
+    const status = await db.getCaptureStatus(database, ref.body)
+    assert.ok(status.advice.startsWith(`${waiting}: `), status.advice)
+    assert.doesNotMatch(status.advice, /your Mac/)
+
+    // Paused and resumed, handed back by a stopping agent, and recaptured: the same words each time.
+    assert.equal(await db.requestPause(database, ref.body.id), true)
+    assert.equal((await db.getReference(database, ref.body.id))!.reference.progress, "Paused")
+    assert.equal(await db.resumeReference(database, ref.body.id), true)
+    assert.equal((await db.getReference(database, ref.body.id))!.reference.progress, waiting)
+    const job = (await db.claimJob(database))!
+    const state = { version: 1 as const, queue: [], visited: [], captured: 0, failures: 0, navLinksQueued: false, hoverSeen: [], meta: null, tokens: null }
+    assert.equal(await db.pauseJob(database, ref.body.id, job.lease, state, true), "paused")
+    assert.equal((await db.getReference(database, ref.body.id))!.reference.progress, waiting)
+    await db.failJob(database, ref.body.id, (await db.claimJob(database))!.lease, "x")
+    assert.equal(await db.requeueReference(database, ref.body.id), true)
+    assert.equal((await db.getReference(database, ref.body.id))!.reference.progress, waiting)
+  } finally {
+    await mf.dispose()
+  }
+})

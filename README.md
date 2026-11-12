@@ -47,7 +47,7 @@ A browser with no passkey yet opens **Settings → Cloud → Sign in another bro
 
 **One owner in this version.** The person who enabled cloud is the only person who can sign in, on their own devices. Sharing a library with a second person is planned for later, so there is no invitation, no allowlist and no second account to set up. Nothing in the setup asks for GitHub.
 
-Capture stays on this Mac. A capture started from another device waits in the queue and shows **Waiting for your Mac** until this Mac's capture agent checks in. The gallery card and every agent status use those exact words, whether the agent is busy or the Mac is asleep.
+Capture stays on this Mac. A capture started from another device waits in the queue and shows **Waiting for the capture agent** until this Mac's capture agent checks in. The gallery card and every agent status use those exact words, whether the agent is busy or the Mac is asleep.
 
 Already deployed Snip before this button existed? The setup recognises your own library. An empty one is adopted silently; one with references asks first and offers **Use that library** or **Stop**. Choosing to use it switches this Mac to the cloud library and leaves your local one on disk, listed as **This Mac's library** with a single **Switch back to it** action. The owner link signs in as the same owner; existing devices keep their passkeys. [Cloud mode](docs/deploy.md) covers the copy, the two approvals, adoption, the command-line path, turning cloud off and the free-tier limits.
 
@@ -115,7 +115,7 @@ The app is an infinite gallery (Websites / Pages / Animations) with search and s
 - **Export** a website as a .zip (screenshots, HTML, styles, recordings, tokens) from its **More** menu.
 - **Connect MCP** in the top bar shows copy-ready setup for Claude, Codex, OpenCode, Cursor and other clients.
 - Press <kbd>/</kbd> to search. A banner tells you when captures are waiting on an offline capture agent, and the account menu shows how much storage your captures use: bytes on disk in the local app, and R2 usage against the 10 GB free tier in cloud mode.
-- In cloud mode a capture started elsewhere shows **Waiting for your Mac** until this Mac's capture agent picks it up.
+- In cloud mode a capture started elsewhere shows **Waiting for the capture agent** until this Mac's capture agent picks it up.
 
 **Page viewer.** Drag the sidebar to resize it, switch between Tokens, HTML and CSS, and flip between desktop and mobile captures.
 

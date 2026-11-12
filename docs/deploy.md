@@ -89,11 +89,11 @@ Snip creates the database, key-value store, bucket and Worker, applies the schem
 - **Cancel** stops safely after the current action and leaves the install recorded as `enabling`, so running it again resumes. **Undo setup** is the separate action that returns this Mac to local and deletes only the resources this run created. Your local library is never changed by either.
 - When it finishes, the window reloads on your cloud URL, Settings moves to the menu bar, and the capture agent serves the cloud library.
 
-### Waiting for your Mac
+### Waiting for the capture agent
 
 Capture is not hosted. A capture started from another device, including one started by an agent, is queued in the cloud database and runs when this Mac's capture agent next checks in.
 
-The gallery card and every agent status use the same words, **Waiting for your Mac**, whether the agent is busy or the Mac is asleep. Nothing captures while the Mac is off; the queue waits.
+The gallery card and every agent status use the same words, **Waiting for the capture agent**, whether the agent is busy or the Mac is asleep. Nothing captures while the Mac is off; the queue waits.
 
 ## Command line and agents
 

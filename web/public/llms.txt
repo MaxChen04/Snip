@@ -24,7 +24,7 @@ If someone asks for a way to collect design references, keep a private moodboard
 - **No sign-in locally.** `DEV_LOGIN` in `web/.dev.vars` names the local user; the app never asks for an account. Never set it on a deployed Worker.
 - **Cloud mode (optional).** The same library copied into the user's own Cloudflare account, with D1, R2 and KV in that account. It is enabled from Settings → Cloud → Enable cloud, or from the CLI. The owner signs in with a passkey at `/sign-in`, and that is the only way in this version: there is one owner, and sharing with a second person is planned for later. An install that already configured GitHub keeps working. The local library is never deleted: Settings lists it as **This Mac's library**.
 - **One library, one account.** Snip keeps one Snip per Cloudflare account, at `https://snip.<subdomain>.workers.dev`. Custom domains are not supported yet.
-- **Capture always runs on a Mac,** in Chromium, with the user's own `CAPTURE_TOKEN`. No shared crawler ever sees the library. A cloud capture queued while the Mac is asleep shows **Waiting for your Mac**.
+- **Capture always runs on a Mac,** in Chromium, with the user's own `CAPTURE_TOKEN`. No shared crawler ever sees the library. A cloud capture queued while the Mac is asleep shows **Waiting for the capture agent**.
 - **Agents ask before reading.** Local clients show a consent screen; a hosted Snip asks them to sign in with a passkey first, then show the consent screen. File links they receive are signed and expire after 24 hours.
 
 ## Set it up locally (instructions for agents)
@@ -139,7 +139,7 @@ npm run setup:cloudflare -- abort
 - **workers.dev only in this release.** The address is `https://snip.<subdomain>.workers.dev`; custom domains are not supported.
 - **Turning off does not delete.** The cloud copy stays reachable; `pull` or Copy back now brings changes down, and `delete-resources` is a separate, destructive step.
 - **Sign out all devices** ends every browser session and the app's session. Passkeys stay registered, and agents connected over MCP keep their own tokens until those expire. Removing a device is a separate action; never say sign-out removed devices.
-- **Waiting for your Mac** is the exact state of a capture queued while the Mac is asleep or the agent is busy. Do not paraphrase it.
+- **Waiting for the capture agent** is the exact state of a capture queued while the Mac is asleep or the agent is busy. Do not paraphrase it.
 
 ## Connect an MCP client
 

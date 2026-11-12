@@ -544,7 +544,7 @@ test("transfer resume un-pauses through db.resumeReference and is idempotent", (
     assert.deepEqual(await first.json(), { resumed: 2, skipped: ["ffffffffffffffff"] })
 
     const row = await database.prepare(`SELECT status, capture_control, progress FROM refs WHERE id = ?`).bind(paused.id).first<{ status: string; capture_control: string | null; progress: string }>()
-    assert.deepEqual(row, { status: "queued", capture_control: null, progress: "Waiting for your Mac" })
+    assert.deepEqual(row, { status: "queued", capture_control: null, progress: "Waiting for the capture agent" })
 
     const second = await json("/transfer/resume", { ids: [paused.id, running.id, "ffffffffffffffff"] }, { headers: bearer, overrides: transfer })
     assert.deepEqual(await second.json(), { resumed: 0, skipped: [paused.id, running.id, "ffffffffffffffff"] }, "a second call changes nothing")

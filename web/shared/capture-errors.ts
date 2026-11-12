@@ -1,6 +1,9 @@
 /** A plain-language reading of a capture error and what Retry will do about it. */
 export type CaptureDiagnosis = { summary: string; fix: string }
 
+/** The progress text of a capture that is queued: nothing is capturing it, whether the agent is busy, asleep or not running. */
+export const WAITING = "Waiting for the capture agent"
+
 /** Error recorded when a capture is stopped before its first page finished. */
 export const STOPPED_EMPTY = "Stopped before any pages were captured"
 

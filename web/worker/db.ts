@@ -21,7 +21,7 @@ import {
   type Reference,
   type StorageUsage,
 } from "../shared/types"
-import { ABANDONED, STOPPED_EMPTY } from "../shared/capture-errors"
+import { ABANDONED, STOPPED_EMPTY, WAITING } from "../shared/capture-errors"
 
 // Data access shared by the HTTP API and the MCP server.
 
@@ -370,7 +370,7 @@ export async function createReference(
   const stmts = [
     db
       .prepare(
-        `INSERT INTO refs (id, url, domain, mode, max_pages, status, progress, notes, capture_options, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'queued', 'Waiting for your Mac', ?, ?, ?, ?)`,
+        `INSERT INTO refs (id, url, domain, mode, max_pages, status, progress, notes, capture_options, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'queued', '${WAITING}', ?, ?, ?, ?)`,
       )
       .bind(id, url.toString(), domainOf(url), input.mode, maxPages, cleanNotes(input.notes), options ? JSON.stringify(options) : null, ts, ts),
   ]
@@ -391,7 +391,7 @@ export async function requeueReference(db: D1Database, id: string) {
     db.prepare(`DELETE FROM pages WHERE reference_id IN (SELECT id FROM refs WHERE ${finished})`).bind(id), // animations cascade
     db
       .prepare(
-        `UPDATE refs SET status = 'queued', progress = 'Waiting for your Mac', error = NULL, page_count = 0, animation_count = 0, cover_key = NULL, favicon = NULL, tokens_json = NULL, claimed_at = NULL, capture_control = NULL, crawl_state = NULL, stale_reclaims = 0, capture_run = capture_run + 1, updated_at = ? WHERE ${finished}`,
+        `UPDATE refs SET status = 'queued', progress = '${WAITING}', error = NULL, page_count = 0, animation_count = 0, cover_key = NULL, favicon = NULL, tokens_json = NULL, claimed_at = NULL, capture_control = NULL, crawl_state = NULL, stale_reclaims = 0, capture_run = capture_run + 1, updated_at = ? WHERE ${finished}`,
       )
       .bind(now(), id),
   ])
@@ -753,7 +753,7 @@ export async function requestPause(db: D1Database, id: string) {
 export async function resumeReference(db: D1Database, id: string) {
   const ts = now()
   const [paused, pending] = await db.batch([
-    db.prepare(`UPDATE refs SET capture_control = NULL, progress = 'Waiting for your Mac', updated_at = ? WHERE id = ? AND status = 'queued' AND capture_control = 'paused'`).bind(ts, id),
+    db.prepare(`UPDATE refs SET capture_control = NULL, progress = '${WAITING}', updated_at = ? WHERE id = ? AND status = 'queued' AND capture_control = 'paused'`).bind(ts, id),
     db.prepare(`UPDATE refs SET capture_control = NULL, updated_at = ? WHERE id = ? AND status = 'capturing' AND capture_control = 'pause'`).bind(ts, id),
   ])
   return !!(paused!.meta.changes || pending!.meta.changes)
@@ -788,7 +788,7 @@ export async function getControl(db: D1Database, id: string, lease: string): Pro
  */
 export async function pauseJob(db: D1Database, id: string, lease: string, state: CrawlState, release = false): Promise<"paused" | "changed" | "gone"> {
   const result = await db.prepare(`UPDATE refs SET status = 'queued', crawl_state = ?1, claimed_at = NULL, capture_lease = NULL, updated_at = ?2,
-    progress = CASE WHEN capture_control = 'pause' THEN 'Paused' ELSE 'Waiting for your Mac' END, capture_control = CASE WHEN capture_control = 'pause' THEN 'paused' END
+    progress = CASE WHEN capture_control = 'pause' THEN 'Paused' ELSE '${WAITING}' END, capture_control = CASE WHEN capture_control = 'pause' THEN 'paused' END
     WHERE id = ?3 AND status = 'capturing' AND capture_lease = ?4 AND (capture_control = 'pause' OR (?5 AND capture_control IS NULL))`).bind(JSON.stringify(state), now(), id, lease, release ? 1 : 0).run()
   if (result.meta.changes) return "paused"
   return (await isCapturing(db, id, lease)) ? "changed" : "gone"
@@ -868,19 +868,19 @@ export async function getCaptureStatus(db: D1Database, ref: Reference): Promise<
       advice = `Capture failed${ref.error ? `: ${ref.error}` : ""}. Tell the user; they can recapture from the Snip app.`
       break
     case "queued":
-      // Queued means "waiting for this Mac", whether the agent is busy or absent.
+      // Queued means waiting for the capture agent, whether it is busy or absent.
       // The phrase matches the gallery card, so an agent relays it verbatim.
       if (freshness === "recent") {
         advice =
           activity === "busy"
-            ? "Waiting for your Mac: the capture agent is finishing another job and will pick this up next."
-            : "Waiting for your Mac: the capture agent is online and should pick this up shortly."
+            ? `${WAITING}: it is finishing another job and will pick this up next.`
+            : `${WAITING}: it is online and should pick this up shortly.`
         pollAfterSeconds = activity === "busy" ? 60 : 15
       } else {
         advice =
           freshness === "never"
-            ? "Waiting for your Mac: no capture agent has ever contacted Snip. Ask the user to run `npm run capture` on their Mac. Stop polling until they do."
-            : `Waiting for your Mac: the capture agent was last seen ${secondsSinceSeen}s ago and is probably not running. Ask the user to start \`npm run capture\`. Stop polling until they do.`
+            ? `${WAITING}: none has ever contacted Snip. Ask the user to run \`npm run capture\` on their Mac. Stop polling until they do.`
+            : `${WAITING}: it was last seen ${secondsSinceSeen}s ago and is probably not running. Ask the user to start \`npm run capture\`. Stop polling until they do.`
       }
       break
     case "capturing": {

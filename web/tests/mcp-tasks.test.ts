@@ -81,7 +81,7 @@ test("add_reference becomes a task that completes with thumbnails and a gallery 
     assert.equal(created.status, "working")
     assert.equal(created.ttlMs, null)
     assert.ok(created.pollIntervalMs > 0)
-    assert.equal(created.statusMessage.match(/Waiting for your Mac/g)?.length, 1)
+    assert.equal(created.statusMessage.match(/Waiting for the capture agent/g)?.length, 1)
     const id = refOf(created.taskId)
     assert.equal(created.taskId, `${id}.1`)
 
