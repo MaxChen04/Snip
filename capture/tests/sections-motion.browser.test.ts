@@ -454,6 +454,33 @@ test("a section that ends at the bottom of a fractional-DPR viewport is patched,
   }
 })
 
+test("likelyInView reads the page under tsx instead of falling back to every section", async () => {
+  // tsx wraps a named function in a __name() call that does not exist in the page. A helper declared inside the evaluated
+  // callback then throws, the catch marks every section as likely, and the patch-only pass visits them all.
+  const { likelyInViewForTest, OBSERVED_FOR_TEST } = await import("../src/capture")
+  const browser = await launch()
+  try {
+    const context = await browser.newContext({ viewport: { width: 800, height: 600 } })
+    await context.addInitScript(OBSERVED_FOR_TEST)
+    await context.route("http://snip.test/", (route) => route.fulfill({ contentType: "text/html", body: `<!doctype html><title>Likely</title><style>
+      body { margin: 0 } section { display: block; position: relative; height: 600px } .box { position: absolute; top: 200px; width: 100%; height: 100px; background: teal }
+      @keyframes grow { to { transform: scaleX(2) } } .scrolled { animation: grow 1s linear both; animation-timeline: scroll() }
+    </style>
+      <section>nothing moves</section>
+      <section><div class="box" id="watched"></div></section>
+      <section><div class="box scrolled"></div></section>
+      <section><div class="box" style="opacity: 0.05"></div></section>
+      <section>still end</section>
+      <script>new IntersectionObserver(() => {}).observe(document.getElementById("watched"))</script>` }))
+    const page = await context.newPage()
+    await page.goto("http://snip.test/")
+    const cuts = [0, 600, 1200, 1800, 2400].map((y, i) => ({ kind: "section" as const, label: `Part ${i}`, y, height: 600 }))
+    assert.deepEqual(await likelyInViewForTest(page, cuts), [false, true, true, true, false], "observed, scroll-driven and faded sections only")
+  } finally {
+    await browser.close()
+  }
+})
+
 test("a crawl page past the clip limit and the mobile shot still get in-view patches", { timeout: 180_000 }, async () => {
   const http = await import("node:http")
   const sharp = (await import("sharp")).default

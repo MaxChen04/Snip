@@ -500,22 +500,24 @@ export async function patchInView(shot: Buffer, patches: InViewPatch[], dpr = 1)
  * that is hidden by opacity (a reveal's starting state). The rest are skipped by the patch-only pass.
  */
 const likelyInView = (page: PwPage, cuts: Omit<PageSection, "key">[]) =>
+  // No named function inside the callback: tsx wraps one in a __name() call the page does not have, and the evaluate throws.
   page.evaluate((bands) => {
+    const els: Element[] = []
+    const observed = (window as unknown as { __snipObserved?: Set<Element> }).__snipObserved
+    observed?.forEach((el) => el.isConnected && els.push(el))
+    for (const a of document.getAnimations()) {
+      const target = (a.effect as KeyframeEffect | null)?.target
+      if (target && a.timeline && !(a.timeline instanceof DocumentTimeline)) els.push(target)
+    }
+    for (const el of document.querySelectorAll("body *")) if (parseFloat(getComputedStyle(el).opacity) < 0.1) els.push(el)
     const hit = bands.map(() => false)
-    const mark = (el: Element) => {
+    for (const el of els) {
       const r = el.getBoundingClientRect()
-      if (r.width < 1 || r.height < 1) return
+      if (r.width < 1 || r.height < 1) continue
       const top = r.top + scrollY
       const bottom = r.bottom + scrollY
       bands.forEach((b, i) => { if (top < b.y + b.height && bottom > b.y) hit[i] = true })
     }
-    const observed = (window as unknown as { __snipObserved?: Set<Element> }).__snipObserved
-    observed?.forEach((el) => el.isConnected && mark(el))
-    for (const a of document.getAnimations()) {
-      const target = (a.effect as KeyframeEffect | null)?.target
-      if (target && a.timeline && !(a.timeline instanceof DocumentTimeline)) mark(target)
-    }
-    for (const el of document.querySelectorAll("body *")) if (parseFloat(getComputedStyle(el).opacity) < 0.1) mark(el)
     return hit
   }, cuts.map(({ y, height }) => ({ y, height }))).catch(() => cuts.map(() => true))
 
@@ -1596,4 +1598,5 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
 export const fullPageShotForTest = (page: PwPage) => fullPageShot(page, 1)
 export const HOLD_RESIZE_FOR_TEST = HOLD_RESIZE_JS
 export const OBSERVED_FOR_TEST = OBSERVED_JS
+export const likelyInViewForTest = likelyInView
 export const fullPageShotAtForTest = fullPageShot
