@@ -313,6 +313,7 @@ export function CanvasHome({ login, boardId }: { login: string; boardId?: string
 
       <InfiniteCanvas
         ref={canvas}
+        tiled
         className="absolute inset-0"
         aria-label={`${title}. Drag or use the arrow keys to move, plus and minus to zoom, 0 to recenter.`}
         onViewChange={onViewChange}

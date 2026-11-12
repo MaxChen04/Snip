@@ -35,9 +35,7 @@ const within = (target: EventTarget | null, selector: string) => target instance
 /**
  * A pan and zoom viewport. Children render in world space; the world layer moves with a CSS transform written
  * straight to the DOM, so panning never re-renders. `children` receives the visible world rect (with a margin,
- * snapped to a grid; see cullRect) and re-renders only when that rect changes, which is when to cull. Below FAR_ZOOM
- * the world layer carries a `data-far` attribute, so children can drop detail with CSS (`in-data-far:`) without
- * re-rendering.
+ * snapped to a grid; see cullRect) and re-renders only when that rect changes, which is when to cull.
  *
  * Drag anywhere to pan (mouse, touch, pen; a 3–6 px threshold keeps clicks working and the click ending a pan is
  * swallowed). Wheel pans, ctrl/⌘+wheel and pinch zoom around the pointer. With focus: arrows pan, +/- zoom,
@@ -48,6 +46,7 @@ export function InfiniteCanvas({
   home = { x: 0, y: 0, zoom: 1 },
   onViewChange,
   inertia = true,
+  tiled = false,
   className,
   "aria-label": label,
   ref,
@@ -59,6 +58,21 @@ export function InfiniteCanvas({
   onViewChange?: (view: CanvasView) => void
   /** Glide a little after a fling. Always off under prefers-reduced-motion. */
   inertia?: boolean
+  /**
+   * The children are many light tiles that mount and unmount as the view moves (the home gallery), not a few hundred
+   * heavy items that stay mounted (a board). The canvas then differs in three ways, all measured with 200 to 1,000
+   * tiles:
+   * - The world is not pinned to a compositor layer with will-change: transform and re-rasterized after each zoom.
+   *   Pinned, the layer keeps the raster scale it had before the zoom, so tiles that mount while panning at 25% are
+   *   rasterized for 100% (4.5 s of raster time for drags that take 0.56 s without), and the first step of a zoom-in
+   *   stalls for 0.8 s instead of 0.2. For a board the pin is what keeps zooming in smooth (no frame over 17 ms, against
+   *   330 ms without).
+   * - Below FAR_ZOOM the margin and the grid of the mounted rect are about half as wide (see cullRect). A board would
+   *   only mount its items again sooner, which costs more than it saves.
+   * - Below FAR_ZOOM the world carries a `data-far` attribute, so tiles can drop detail with CSS (`in-data-far:`)
+   *   without re-rendering.
+   */
+  tiled?: boolean
   className?: string
   "aria-label"?: string
   ref?: Ref<InfiniteCanvasHandle>
@@ -70,6 +84,8 @@ export function InfiniteCanvas({
   const [visible, setVisible] = useState<WorldRect>(() => ({ x: home.x - 1200, y: home.y - 800, w: 2400, h: 1600 }))
   const homeRef = useRef(home)
   homeRef.current = home
+  const tiledRef = useRef(tiled)
+  tiledRef.current = tiled
   const onViewRef = useRef(onViewChange)
   onViewRef.current = onViewChange
 
@@ -79,6 +95,7 @@ export function InfiniteCanvas({
     let frame = 0
     let tween = 0
     let glide = 0
+    let raster = 0
     // Zoom an animation is heading to, so repeated zoom clicks compound from it rather than from mid-flight.
     let targetK: number | null = null
 
@@ -92,13 +109,26 @@ export function InfiniteCanvas({
       frame = 0
       const { tx, ty, k } = view.current
       if (world.current) world.current.style.transform = `translate3d(${tx}px, ${ty}px, 0) scale(${k})`
-      world.current?.toggleAttribute("data-far", k < FAR_ZOOM)
-      const next = cullRect(view.current)
+      if (tiledRef.current) world.current?.toggleAttribute("data-far", k < FAR_ZOOM)
+      const next = cullRect(view.current, tiledRef.current)
       setVisible((r) => (r.x === next.x && r.y === next.y && r.w === next.w && r.h === next.h ? r : next))
       onViewRef.current?.(getView())
     }
     const schedule = () => {
       if (!frame) frame = requestAnimationFrame(flush)
+    }
+
+    // will-change keeps the world on one GPU layer but rasterizes it at the zoom it started with. Dropping and
+    // restoring it after zooming settles re-rasterizes, so text and images stay sharp.
+    const sharpen = () => {
+      if (tiledRef.current) return
+      clearTimeout(raster)
+      raster = window.setTimeout(() => {
+        const el = world.current
+        if (!el) return
+        el.style.willChange = "auto"
+        requestAnimationFrame(() => (el.style.willChange = "transform"))
+      }, 200)
     }
 
     const stop = () => {
@@ -125,6 +155,7 @@ export function InfiniteCanvas({
       v.ty = sy - (sy - v.ty) * (next / v.k)
       v.k = next
       schedule()
+      sharpen()
     }
 
     /** Move to a centre world point and zoom, optionally with a short ease-out. */
@@ -141,6 +172,7 @@ export function InfiniteCanvas({
       }
       if (!animate || reducedMotion()) {
         set(cx, cy, k)
+        sharpen()
         return
       }
       const from = getView()
@@ -150,7 +182,10 @@ export function InfiniteCanvas({
         const e = 1 - (1 - p) ** 4
         set(from.x + (cx - from.x) * e, from.y + (cy - from.y) * e, from.zoom + (k - from.zoom) * e)
         if (p < 1) tween = requestAnimationFrame(step)
-        else targetK = null
+        else {
+          targetK = null
+          sharpen()
+        }
       }
       tween = requestAnimationFrame(step)
     }
@@ -409,10 +444,7 @@ export function InfiniteCanvas({
       onKeyDown={onKeyDown}
       onFocus={onFocus}
     >
-      {/* No will-change: the 3D transform already keeps the world on its own layer, and the hint locks the layer's raster
-          scale. Panning at 25% then rasterized for 100% (4.5 s of raster time for drags that take 0.56 s without), and
-          the first step of a zoom-in with 1,000 tiles mounted stalled for 0.8 s instead of 0.2. */}
-      <div ref={world} className="absolute top-0 left-0 origin-top-left">
+      <div ref={world} className={cn("absolute top-0 left-0 origin-top-left", !tiled && "will-change-transform")}>
         {children(visible)}
       </div>
     </div>
