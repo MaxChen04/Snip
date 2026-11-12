@@ -1,4 +1,5 @@
 import { useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type ReactNode, type Ref } from "react"
+import { cullRect, FAR_ZOOM } from "@/components/canvas/cull"
 import { cn } from "@/lib/utils"
 
 /** A rectangle in world px. */
@@ -34,7 +35,9 @@ const within = (target: EventTarget | null, selector: string) => target instance
 /**
  * A pan and zoom viewport. Children render in world space; the world layer moves with a CSS transform written
  * straight to the DOM, so panning never re-renders. `children` receives the visible world rect (with a margin,
- * snapped to a grid) and re-renders only when that rect changes, which is when to cull.
+ * snapped to a grid; see cullRect) and re-renders only when that rect changes, which is when to cull. Below FAR_ZOOM
+ * the world layer carries a `data-far` attribute, so children can drop detail with CSS (`in-data-far:`) without
+ * re-rendering.
  *
  * Drag anywhere to pan (mouse, touch, pen; a 3–6 px threshold keeps clicks working and the click ending a pan is
  * swallowed). Wheel pans, ctrl/⌘+wheel and pinch zoom around the pointer. With focus: arrows pan, +/- zoom,
@@ -88,15 +91,10 @@ export function InfiniteCanvas({
     const flush = () => {
       cancelAnimationFrame(frame)
       frame = 0
-      const { tx, ty, k, w, h } = view.current
+      const { tx, ty, k } = view.current
       if (world.current) world.current.style.transform = `translate3d(${tx}px, ${ty}px, 0) scale(${k})`
-      // Visible rect plus a quarter-screen margin, snapped outward to a grid about 256 screen px wide, so children
-      // re-render only when it crosses a grid line.
-      const step = 256 * 2 ** Math.max(0, Math.round(Math.log2(1 / k)))
-      const m = (Math.max(w, h) * 0.25) / k
-      const x = Math.floor((-tx / k - m) / step) * step
-      const y = Math.floor((-ty / k - m) / step) * step
-      const next = { x, y, w: Math.ceil(((w - tx) / k + m) / step) * step - x, h: Math.ceil(((h - ty) / k + m) / step) * step - y }
+      world.current?.toggleAttribute("data-far", k < FAR_ZOOM)
+      const next = cullRect(view.current)
       setVisible((r) => (r.x === next.x && r.y === next.y && r.w === next.w && r.h === next.h ? r : next))
       onViewRef.current?.(getView())
     }
