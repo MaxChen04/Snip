@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs"
 import sharp from "sharp"
 import type { Browser, BrowserContext, BrowserContextOptions, CDPSession, Page as PwPage } from "playwright"
-import type { CrawlState, DesignTokens, Job, MotionEntry, PageSection, PageUpload } from "../../web/shared/types"
+import type { CrawlState, DesignTokens, Job, MotionEntry, PageSection, PageUpload, PageWarning } from "../../web/shared/types"
 import { JobGoneError, uploadText, type SnipApi } from "./api"
 import { imageSize, type Frame } from "./gif"
 import { allowPrivateUrls, assertPublicUrl, createCaptureNetwork, PrivateAddressError } from "./network-guard"
@@ -52,6 +52,8 @@ const MAX_SHOT_PX = 16000 // Chromium texture limit for full-page screenshots
 // Gallery thumbnails render 230-600 css px wide (950 device px at 2x on the large grid); the mobile one is a ~210 css px tall inset.
 const THUMB_WIDTH = { desktop: 960, mobile: 320 }
 const thumbnail = (jpeg: Buffer, width: number) => sharp(jpeg).resize({ width, withoutEnlargement: true }).jpeg({ quality: 75 }).toBuffer()
+/** A shot is flat when no channel strays more than this from one level, such as a page of background and film grain. Any text or picture on it strays far more. */
+const FLAT_RANGE = 32
 // Scroll recording: frames are captured at fixed scroll increments and played back at a fixed rate,
 // so playback is smooth no matter how long each screenshot took.
 const SCROLL_FPS = Math.min(50, Math.max(5, Number(process.env.SCROLL_FPS ?? 30)))
@@ -929,6 +931,11 @@ const HOLD_RESIZE_JS = `(() => {
   window.visualViewport?.addEventListener("resize", hold, true)
 })()`
 
+/** Whether a screenshot is flat: one color, give or take noise. See FLAT_RANGE. */
+export async function isFlat(shot: Buffer) {
+  return (await sharp(shot).stats()).channels.every((c) => c.max - c.min <= FLAT_RANGE)
+}
+
 async function fullPageShot(page: PwPage, dpr: number) {
   const height = await docHeight(page)
   const width = page.viewportSize()!.width
@@ -947,7 +954,7 @@ async function fullPageShot(page: PwPage, dpr: number) {
   }).catch(() => {})
   try {
     const buf = await page.screenshot({ type: "jpeg", quality: 80, fullPage: true, clip: { x: 0, y: 0, width, height: clipH } })
-    return { buf, width: Math.round(width * dpr), height: Math.round(clipH * dpr) }
+    return { buf, width: Math.round(width * dpr), height: Math.round(clipH * dpr), truncated: height > clipH }
   } finally {
     // Late resize events from restoring the viewport are held too: wait two frames before letting them through.
     await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -1317,6 +1324,10 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
     try {
       // ---- Desktop ----
       const dPage = await newPage(desktop)
+      // Files the page itself (not an embed) could not load: with a flat shot they say the page came out blank for lack of them.
+      let failedLoads = 0
+      dPage.on("requestfailed", (r) => { if (!r.isNavigationRequest() && r.failure()?.errorText !== "net::ERR_ABORTED" && r.frame() === dPage.mainFrame()) failedLoads++ })
+      dPage.on("response", (r) => { if (r.status() >= 400 && !r.request().isNavigationRequest() && r.frame() === dPage.mainFrame()) failedLoads++ })
       const status = await load(dPage, url, network)
       const pageMeta = await run<{ canonical: string | null; title: string | null; description: string | null; favicon: string | null; links: { href: string; nav: boolean }[] }>(dPage, META_JS)
       // Both checks run before any screenshots or recordings. A skipped URL stays in `visited`, so it is not queued again, and it is not counted as captured.
@@ -1399,6 +1410,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       const styles = await run<{ tokens: DesignTokens }>(dPage, STYLES_JS, { maxElements: 3000 })
       const html = await buildSnapshot(dPage, desktop, sidecar)
       const hovers = await recordHovers(dPage, hoverSeen, recordingFormat)
+      const empty = await dPage.evaluate(() => !document.body?.innerText.trim() && !document.querySelector("img, picture, video, canvas, svg, iframe, object, embed")).catch(() => false)
       await dPage.close()
       const mobileShots = await mobileTask
       const mobileShot = mobileShots?.shot ?? null
@@ -1509,6 +1521,11 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
           return undefined
         }
       }
+      // Blank: nothing on the page but one flat color, and either files it needed failed to load or the page holds no text or picture.
+      // A real minimal page has text, which no flat shot has. Truncated: the page is taller than the shot.
+      const warnings: PageWarning[] = []
+      if ((failedLoads > 0 || empty) && await isFlat(desktopShot.buf)) warnings.push("blank")
+      if (desktopShot.truncated) warnings.push("truncated")
       const upload: PageUpload = {
         url,
         path,
@@ -1527,6 +1544,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
         tokens: styles.tokens,
         sections: await uploadSections(),
         altScheme: await uploadOtherScheme(),
+        ...(warnings.length ? { warnings } : {}),
         animations,
         // Saved with the page, so a crawl whose agent dies is resumed from its last saved page.
         state: { ...checkpoint(), captured: captured + 1, tokens: mergeTokens([...allTokens, styles.tokens]) },
@@ -1537,7 +1555,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       allTokens.push(styles.tokens)
       captured++
       titles.set(url, pageMeta.title)
-      log(`  ✓ ${path} (${animations.length} recordings, ${upload.sections?.length ?? 0} sections, ${new Set(liveClips.filter(Boolean)).size} live clips${other ? `, ${other.scheme} scheme` : ""}${inView.patches.length ? `, ${inView.patches.length} in-view patches` : ""}${mobileShots?.patches ? `, ${mobileShots.patches} mobile in-view patches` : ""})`)
+      log(`  ✓ ${path} (${animations.length} recordings, ${upload.sections?.length ?? 0} sections, ${new Set(liveClips.filter(Boolean)).size} live clips${other ? `, ${other.scheme} scheme` : ""}${inView.patches.length ? `, ${inView.patches.length} in-view patches` : ""}${mobileShots?.patches ? `, ${mobileShots.patches} mobile in-view patches` : ""}${warnings.length ? `, ${warnings.join(" and ")}` : ""})`)
     } catch (e) {
       network?.assertAllowed()
       if (e instanceof JobGoneError || e instanceof PrivateAddressError) throw e

@@ -418,3 +418,44 @@ test("SIGTERM during a page lets the agent finish it, then hand the crawl back",
     await new Promise<void>((resolve) => worker.close(() => resolve()))
   }
 })
+
+test("a page that came out blank and a page taller than its shot are flagged on the page; real minimal pages are not", { timeout: 300_000 }, async () => {
+  const pages: Record<string, string> = {
+    // Nothing rendered: the app's script is missing, or there is no app at all.
+    "/blank-missing": `<!doctype html><title>Missing script</title><body style="background: #f4f4f2"><div id="root"></div><script src="/missing.js"></script>`,
+    "/blank-empty": `<!doctype html><title>Empty</title><body style="background: #f4f4f2">`,
+    // Small but real: text on a plain page, with or without a file that failed to load.
+    "/hello": `<!doctype html><title>Hello</title><body style="background: #f4f4f2"><p>Hello</p>`,
+    "/hello-missing": `<!doctype html><title>Hello missing</title><body style="background: #f4f4f2"><p>Hello</p><script src="/missing.js"></script>`,
+    "/tall": `<!doctype html><title>Tall</title><body style="margin: 0"><div style="height: 16500px; background: linear-gradient(red, blue)"></div>`,
+  }
+  await withServer((req, res) => {
+    const body = pages[req.url!]
+    res.writeHead(body ? 200 : req.url === "/missing.js" ? 404 : 200, { "content-type": "text/html" })
+    res.end(body ?? plain("Home", `<nav>${Object.keys(pages).map((p) => `<a href="${p}">${p}</a>`).join(" ")}</nav>`))
+  }, async (base) => {
+    const browser = await launch()
+    try {
+      const warned = new Map<string, PageUpload["warnings"]>()
+      const api = {
+        control: async () => null,
+        progress: async () => {},
+        upload: async (key: string) => key,
+        addPage: async (_id: string, page: PageUpload) => { warned.set(page.path, page.warnings) },
+        complete: async () => {},
+      }
+      await captureJob(browser, api as never, { id: "warn", url: base, mode: "crawl", maxPages: 6, attempt, resume: null, options: null, features: [] } as unknown as Job)
+      assert.deepEqual(Object.fromEntries(warned), {
+        "/": undefined,
+        "/blank-missing": ["blank"],
+        "/blank-empty": ["blank"],
+        "/hello": undefined,
+        "/hello-missing": undefined,
+        "/tall": ["truncated"],
+      })
+    } finally {
+      await closeRenderer()
+      await browser.close()
+    }
+  })
+})
