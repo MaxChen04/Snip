@@ -329,6 +329,50 @@ test("only bars pinned to the viewport edges are hidden: fixed backgrounds and p
   }
 })
 
+test("a fixed header and a stuck sticky sub-nav do not repeat in the stitched shot, and a sticky one in its place stays", async () => {
+  const { recordLiveSections, patchInView, fullPageShotAtForTest, OBSERVED_FOR_TEST, HOLD_RESIZE_FOR_TEST } = await import("../src/capture")
+  const { closeRenderer } = await import("../src/sheet")
+  const sharp = (await import("sharp")).default
+  const browser = await launch()
+  try {
+    const context = await browser.newContext({ viewport: { width: 800, height: 600 } })
+    await context.addInitScript(HOLD_RESIZE_FOR_TEST)
+    await context.addInitScript(OBSERVED_FOR_TEST)
+    // The header is a fixed wrapper with no height; the bar overflows it, and its child sets visibility again (sites do both). Every
+    // section reveals a box on scroll, so each gets an in-view frame. The sub-nav sticks to the top of the tall middle section, and it
+    // transitions, as bars do. It starts the section, so it also sits at the top of the viewport when that section is shown first.
+    await context.route("http://snip.test/", (route) => route.fulfill({ contentType: "text/html", body: `<!doctype html><title>Bars</title><style>
+      body { margin: 0 } section { height: 600px; position: relative }
+      #top { position: fixed; top: 0; left: 0; right: 0; height: 0 }
+      #top nav { position: absolute; top: 0; left: 0; right: 0; height: 40px; transition: all 0.5s } #top b { display: block; height: 40px; background: rgb(255, 0, 0); visibility: visible }
+      #sub { position: sticky; top: 0; height: 40px; background: rgb(0, 0, 255); transition: all 0.5s }
+      .box { position: absolute; left: 0; width: 100%; height: 100px; background: rgb(0, 128, 128); opacity: 0 } .box.in { opacity: 1 }
+    </style><div id="top"><nav><b></b></nav></div>
+      <section><div class="box" style="top: 300px"></div></section>
+      <section style="height: 1200px"><div id="sub"></div><div class="box" style="top: 300px"></div><div class="box" style="top: 900px"></div></section>
+      <section><div class="box" style="top: 300px"></div></section>
+      <script>const io = new IntersectionObserver((es) => es.forEach((e) => e.target.classList.toggle("in", e.isIntersecting))); document.querySelectorAll(".box").forEach((b) => io.observe(b))</script>` }))
+    const page = await context.newPage()
+    await page.goto("http://snip.test/")
+    const shot = await fullPageShotAtForTest(page, 1)
+    const cuts = [{ y: 0, height: 600 }, { y: 600, height: 1200 }, { y: 1800, height: 600 }].map((c, i) => ({ kind: "section" as const, label: `Part ${i}`, ...c }))
+    const inView = { shot: shot.buf, patches: [] as { y: number; height: number; jpeg: Buffer }[] }
+    await recordLiveSections(page, cuts, "gif", new Map(), inView)
+    assert.ok(inView.patches.some((p) => p.y >= 1200), `the tall middle section is patched below its first screen, got ${inView.patches.map((p) => p.y)}`)
+    const { data, info } = await sharp(await patchInView(shot.buf, inView.patches)).extract({ left: 400, top: 0, width: 1, height: shot.height }).raw().toBuffer({ resolveWithObject: true })
+    const rows = (match: (r: number, g: number, b: number) => boolean) => Array.from({ length: info.height }, (_, y) => y).filter((y) => match(data[y * info.channels]!, data[y * info.channels + 1]!, data[y * info.channels + 2]!))
+    const red = rows((r, g, b) => r > 200 && g < 60 && b < 60)
+    const blue = rows((r, g, b) => b > 200 && r < 60 && g < 60)
+    assert.ok(red.length > 0 && red.every((y) => y < 40), `the header shows once, at the top, got rows ${red.at(0)}-${red.at(-1)} (${red.length} px)`)
+    assert.ok(blue.length > 0 && blue.every((y) => y >= 600 && y < 640), `the sub-nav shows once, at the top of its section, got rows ${blue.at(0)}-${blue.at(-1)} (${blue.length} px)`)
+    assert.equal(await page.evaluate(() => document.querySelectorAll("[data-snip-live-hidden]").length), 0, "everything is restored afterwards")
+    assert.equal(await page.evaluate(() => (document.querySelector("#top nav") as HTMLElement).style.cssText + (document.querySelector("#sub") as HTMLElement).style.cssText), "", "no style is left behind")
+  } finally {
+    await closeRenderer()
+    await browser.close()
+  }
+})
+
 // A page whose reveals undo themselves out of view, so a full-page shot taken from the top shows them hidden.
 // The teal box sits at document y 1000-1300, below the first viewport on desktop and mobile alike.
 const REVEAL_PAGE = (title: string, link = "") => `<!doctype html><title>${title}</title><meta name="viewport" content="width=device-width">

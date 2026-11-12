@@ -555,30 +555,47 @@ export async function recordLiveSections(
   /**
    * Hide the page's bars while it is scrolled away from the top: the full-page shot shows a fixed header only at
    * the top, so a clip or in-view frame must not show it over another section. A bar is a fixed element, or a
-   * sticky one that is currently stuck, that is less than half the viewport tall and sits in the top or bottom
-   * quarter of it. Fixed backgrounds and pinned content inside a section (a sticky image column) are larger or
+   * sticky one that is currently stuck (a sticky one still in its place in the flow is part of the page), that is
+   * less than half the viewport tall and sits in the top or bottom quarter of it. A fixed wrapper with no height
+   * of its own stands for what it holds, which is tested instead.
+   * Fixed backgrounds and pinned content inside a section (a sticky image column) are larger or
    * not stuck, so they stay. "all" hides top and bottom bars; "bottom" only bottom ones (chat bubbles, cookie bars).
+   * A bar is clipped away at once (no transition), not made invisible: its children can set visibility again.
+   * Call it once the page has settled at its scroll position: what is stuck, and what has faded in, depends on it.
    */
   const bars = (hide: "none" | "bottom" | "all") => page.evaluate((hide) => {
     document.querySelectorAll<HTMLElement>("[data-snip-live-hidden]").forEach((el) => {
-      el.style.visibility = el.dataset.snipLiveHidden!
+      const [clipPath, transition] = JSON.parse(el.dataset.snipLiveHidden!) as string[]
+      el.style.clipPath = clipPath!
+      el.style.transition = transition!
       delete el.dataset.snipLiveHidden
     })
     if (hide === "none") return
     for (const el of document.querySelectorAll<HTMLElement>("body *")) {
       const cs = getComputedStyle(el)
       if (cs.position !== "fixed" && cs.position !== "sticky") continue
-      const r = el.getBoundingClientRect()
-      if (r.height < 1 || r.width < 1 || r.height > innerHeight / 2) continue
       if (cs.position === "sticky") {
-        const stuck = Math.abs(r.top - parseFloat(cs.top)) < 2 || Math.abs(innerHeight - r.bottom - parseFloat(cs.bottom)) < 2
-        if (!stuck) continue
+        // Stuck means off the place the flow gives it. Measured against that place, not against `top`: a transform moves both alike.
+        const at = el.getBoundingClientRect().top
+        const inline = el.style.position
+        el.style.position = "static"
+        const flow = el.getBoundingClientRect().top
+        el.style.position = inline
+        if (Math.abs(at - flow) < 2) continue
       }
-      const top = r.top < innerHeight / 4
-      const bottom = r.bottom > (innerHeight * 3) / 4
-      if (hide === "all" ? top || bottom : bottom) {
-        el.dataset.snipLiveHidden = el.style.visibility
-        el.style.visibility = "hidden"
+      const todo: Element[] = [el]
+      while (todo.length) {
+        const bar = todo.pop() as HTMLElement
+        const r = bar.getBoundingClientRect()
+        if (r.height < 1) todo.push(...bar.children)
+        if (r.width < 1 || r.height < 1 || r.height > innerHeight / 2 || bar.dataset.snipLiveHidden !== undefined) continue
+        const top = r.top < innerHeight / 4
+        const bottom = r.bottom > (innerHeight * 3) / 4
+        if (hide === "all" ? top || bottom : bottom) {
+          bar.dataset.snipLiveHidden = JSON.stringify([bar.style.clipPath, bar.style.transition])
+          bar.style.clipPath = "inset(100%)"
+          bar.style.transition = "none"
+        }
       }
     }
   }, hide)
@@ -587,7 +604,6 @@ export async function recordLiveSections(
    * Returns where y landed in the viewport.
    */
   const showAt = async (y: number) => {
-    await bars(y > 0 ? "all" : "bottom")
     await page.evaluate((top) => window.scrollTo({ top, behavior: "instant" as ScrollBehavior }), y)
     // Reveal observers fire on the next frames, and the animations they start begin a frame or two later.
     await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))).catch(() => {})
@@ -602,6 +618,7 @@ export async function recordLiveSections(
       return Number(t.endTime) - Number(t.localTime ?? 0)
     }))).catch(() => 0)
     await sleep(Math.min(LIVE_SETTLE_MS, left))
+    await bars(y > 0 ? "all" : "bottom")
     return y - (await page.evaluate(() => Math.round(window.scrollY)))
   }
   /** Screencast frames (JPEG, viewport size) for `ms`, with when each arrived. */
