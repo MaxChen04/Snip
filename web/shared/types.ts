@@ -62,8 +62,9 @@ export interface Reference {
   /** Last claim, heartbeat or progress time while capturing. */
   claimedAt: string | null
   /**
-   * Set while capturing when the agent's last heartbeat (that time) is older than the stale window of 3 minutes: the agent
-   * has gone quiet, and the next agent that asks for work is given this capture. Null while it keeps beating and when not capturing.
+   * Set while capturing when the agent's last heartbeat (that time) is older than 90 seconds, the same threshold at which
+   * `AgentPresence.freshness` turns stale: the agent has gone quiet, and the next agent that asks for work is given this capture.
+   * Null while it keeps beating and when not capturing.
    * Worked out when the reference is read, so a page that wants it to appear on time has to read again.
    */
   quietSince: string | null

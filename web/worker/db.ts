@@ -532,10 +532,12 @@ export async function setPageCollection(db: D1Database, collectionId: string, pa
 // Capture queue
 
 /**
- * The heartbeat (every 30 s, and every progress report) is the one sign an agent is alive: a capture whose last one is older
- * than this is the agent's no more. Six missed beats. Safe to be short because every claim issues a new lease, so a replaced agent is refused.
+ * The heartbeat (every 30 s, and every progress report) is the one sign an agent is alive, and this is how old the last one may be:
+ * three missed beats. Everything that asks whether the agent is there answers from it, so they flip together: the offline banner
+ * (presence), a capture's `quietSince`, its reclaim by the next agent that asks, and the settling of a Stop or Pause.
+ * Safe to be short because every claim issues a new lease, so a replaced agent is refused, and a page saved starts the reclaim count again.
  */
-const STALE_MINUTES = 3
+const AGENT_ALIVE_SECONDS = 90
 
 export async function cleanupRetiredFiles(db: D1Database, files: R2Bucket) {
   const tasks = await db.prepare(`SELECT prefix, attempts FROM capture_cleanup WHERE next_attempt IS NULL OR next_attempt <= ? LIMIT 20`)
@@ -575,7 +577,8 @@ const settleStopped = (db: D1Database, where: string, args: unknown[], ts: strin
 
 /** A capture whose agent has not renewed its claim since the bound time. */
 const STALE_CAPTURE = `status = 'capturing' AND claimed_at < ?`
-const staleBefore = (ts: string) => new Date(Date.parse(ts) - STALE_MINUTES * 60_000).toISOString()
+/** The time a heartbeat has to be later than, at `ts`, for the agent to count as alive. */
+const staleBefore = (ts: string) => new Date(Date.parse(ts) - AGENT_ALIVE_SECONDS * 1000).toISOString()
 
 /**
  * Settles what an agent that went silent left behind: a stop it never acted on ends the capture with its pages, a pause it never
@@ -793,9 +796,14 @@ export async function pauseJob(db: D1Database, id: string, lease: string, state:
 
 const PRESENCE_ID = "capture"
 const PRESENCE_WRITE_SECONDS = 20
-const RECENT_SECONDS = 90
 
-/** Record that the capture worker contacted the server. Throttled so idle polling costs at most a few writes a minute. */
+/** The agent's contact as the offline banner reads it, by the same threshold and comparison as a capture's `quietSince`. */
+const freshnessOf = (lastSeenAt: string | null): AgentPresence["freshness"] => (!lastSeenAt ? "never" : lastSeenAt < staleBefore(now()) ? "stale" : "recent")
+
+/**
+ * Record that the capture worker contacted the server. Idle polling is throttled to a few writes a minute. A busy touch is
+ * always written, so presence is never older than the capture's own heartbeat (claimed_at) and the two go quiet together.
+ */
 export async function touchPresence(db: D1Database, activity: "idle" | "busy", jobId: string | null) {
   const ts = now()
   const before = new Date(Date.now() - PRESENCE_WRITE_SECONDS * 1000).toISOString()
@@ -803,7 +811,7 @@ export async function touchPresence(db: D1Database, activity: "idle" | "busy", j
     .prepare(
       `INSERT INTO worker_presence (id, last_seen_at, activity, job_id) VALUES (?1, ?2, ?3, ?4)
        ON CONFLICT (id) DO UPDATE SET last_seen_at = ?2, activity = ?3, job_id = ?4
-       WHERE worker_presence.last_seen_at < ?5 OR worker_presence.activity != ?3 OR coalesce(worker_presence.job_id, '') != coalesce(?4, '')`,
+       WHERE ?3 = 'busy' OR worker_presence.last_seen_at < ?5 OR worker_presence.activity != ?3 OR coalesce(worker_presence.job_id, '') != coalesce(?4, '')`,
     )
     .bind(PRESENCE_ID, ts, activity, jobId, before)
     .run()
@@ -812,10 +820,9 @@ export async function touchPresence(db: D1Database, activity: "idle" | "busy", j
 export async function getPresence(db: D1Database): Promise<AgentPresence> {
   const w = await db.prepare(`SELECT * FROM worker_presence WHERE id = ?`).bind(PRESENCE_ID).first<Row>()
   const lastSeenAt = (w?.last_seen_at as string) ?? null
-  const seconds = lastSeenAt ? (Date.now() - Date.parse(lastSeenAt)) / 1000 : null
   return {
     lastSeenAt,
-    freshness: seconds == null ? "never" : seconds <= RECENT_SECONDS ? "recent" : "stale",
+    freshness: freshnessOf(lastSeenAt),
     activity: (w?.activity as "idle" | "busy") ?? null,
   }
 }
@@ -847,7 +854,7 @@ export async function getCaptureStatus(db: D1Database, ref: Reference): Promise<
   const w = await db.prepare(`SELECT * FROM worker_presence WHERE id = ?`).bind(PRESENCE_ID).first<Row>()
   const lastSeenAt = (w?.last_seen_at as string) ?? null
   const secondsSinceSeen = lastSeenAt ? Math.max(0, Math.round((Date.now() - Date.parse(lastSeenAt)) / 1000)) : null
-  const freshness = secondsSinceSeen == null ? "never" : secondsSinceSeen <= RECENT_SECONDS ? "recent" : "stale"
+  const freshness = freshnessOf(lastSeenAt)
   const activity = (w?.activity as "idle" | "busy") ?? null
   const currentJobId = (w?.job_id as string) ?? null
   let advice: string
@@ -885,7 +892,7 @@ export async function getCaptureStatus(db: D1Database, ref: Reference): Promise<
         advice = "The worker is online but busy with a different job; this capture may have been interrupted and will be retried."
         pollAfterSeconds = 60
       } else {
-        // A heartbeat renews claimed_at, so a worker that is online never leaves its capture silent past the stale window.
+        // A heartbeat renews claimed_at, so a worker that is online never leaves its capture quiet.
         advice = "Capturing. Progress shows the current page."
         pollAfterSeconds = 20
       }

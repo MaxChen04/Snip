@@ -34,9 +34,9 @@ async function setup() {
   const pending: Promise<unknown>[] = []
   const ctx = { waitUntil(p: Promise<unknown>) { pending.push(p) }, passThroughOnException() {} } as unknown as ExecutionContext
   const env = { DB: database, FILES: files, SESSION_SECRET: "test-secret", DEV_LOGIN: "max", CAPTURE_TOKEN: "test-token" } as unknown as Env
-  /** Sets the capture's last heartbeat to `seconds` ago. The stale window is 3 minutes. */
+  /** Sets the capture's last heartbeat to `seconds` ago. The agent counts as gone after 90 seconds, three missed beats. */
   const quietFor = (id: string, seconds: number) => database.prepare("UPDATE refs SET claimed_at = ? WHERE id = ?").bind(new Date(Date.now() - seconds * 1000).toISOString(), id).run()
-  /** Simulates an agent that died long ago: its last heartbeat is far older than the stale window. */
+  /** Simulates an agent that died long ago: its last heartbeat is far older than 90 seconds. */
   const makeStale = (id: string) => quietFor(id, 40 * 60)
   const row = (id: string) => database.prepare("SELECT status, capture_control, capture_attempt, capture_lease, capture_run, crawl_state, page_count, error FROM refs WHERE id = ?").bind(id).first<{
     status: string; capture_control: string | null; capture_attempt: string | null; capture_lease: string | null; capture_run: number; crawl_state: string | null; page_count: number; error: string | null }>()
@@ -549,8 +549,8 @@ test("nothing settles a live capture: a stop or pause waits for its agent, whoev
     const pauseJob = (await db.claimJob(database))!
     const idle = await crawl("https://idle.example")
     const idleJob = (await db.claimJob(database))!
-    // Just short of the stale window: a heartbeat 2 minutes 50 seconds ago still holds the capture.
-    for (const id of [stopping.id, pausing.id, idle.id]) await quietFor(id, 170)
+    // Just short of 90 seconds: a heartbeat 85 seconds ago still holds the capture.
+    for (const id of [stopping.id, pausing.id, idle.id]) await quietFor(id, 85)
 
     assert.equal(await db.requestStop(database, stopping.id), true)
     assert.equal(await db.requestPause(database, pausing.id), true)
@@ -568,20 +568,20 @@ test("nothing settles a live capture: a stop or pause waits for its agent, whoev
   }
 })
 
-test("a capture goes to a new agent once its heartbeat is 3 minutes old, and the old agent is fenced out", async () => {
+test("a capture goes to a new agent once its heartbeat is 90 seconds old, and the old agent is fenced out", async () => {
   const { mf, database, quietFor, row, pageCount } = await setup()
   try {
     const ref = await db.createReference(database, { url: "https://example.com", mode: "crawl", maxPages: 5 })
     const old = (await db.claimJob(database))!
     assert.ok(await db.addPage(database, ref.id, old.lease, page(ref.id, old.attempt, 0)))
 
-    await quietFor(ref.id, 170)
-    assert.equal(await db.claimJob(database), null, "five missed heartbeats are not enough: the agent may just be slow to answer")
+    await quietFor(ref.id, 85)
+    assert.equal(await db.claimJob(database), null, "two missed heartbeats are not enough: the agent may just be slow to answer")
     assert.equal((await row(ref.id))!.capture_lease, old.lease)
 
-    await quietFor(ref.id, 185)
+    await quietFor(ref.id, 95)
     const next = (await db.claimJob(database))!
-    assert.equal(next.id, ref.id, "six missed heartbeats hand the capture to the next agent that asks")
+    assert.equal(next.id, ref.id, "three missed heartbeats hand the capture to the next agent that asks")
     assert.equal(next.attempt, old.attempt)
     assert.notEqual(next.lease, old.lease)
     assert.equal(next.resume?.captured, 1, "its page is kept")
@@ -606,7 +606,7 @@ test("a heartbeat, not progress, keeps a capture: a hung agent that still beats 
     const job = (await db.claimJob(database))!
     // No page and no progress report for ten minutes (the agent's own hang timeout is five), but it keeps beating.
     await database.prepare("UPDATE refs SET updated_at = ? WHERE id = ?").bind(new Date(Date.now() - 10 * 60_000).toISOString(), ref.id).run()
-    await quietFor(ref.id, 150)
+    await quietFor(ref.id, 60)
     assert.equal(await db.renewLease(database, ref.id, job.lease), true)
     assert.equal(await db.claimJob(database), null)
     await db.sweepAbandoned(database)
@@ -675,7 +675,7 @@ test("reclaims that saved no page in between still end in ABANDONED after three,
   }
 })
 
-test("quietSince is the last heartbeat once it is older than the stale window, and null in every other state", async () => {
+test("quietSince is the last heartbeat once it is older than 90 seconds, and null in every other state", async () => {
   const { mf, database, quietFor, makeStale } = await setup()
   try {
     const quiet = async (id: string) => (await db.getReference(database, id))!.reference.quietSince
@@ -684,12 +684,12 @@ test("quietSince is the last heartbeat once it is older than the stale window, a
     const job = (await db.claimJob(database))!
     assert.equal(await quiet(ref.id), null, "a fresh claim is a heartbeat")
 
-    await quietFor(ref.id, 170)
+    await quietFor(ref.id, 85)
     assert.equal(await quiet(ref.id), null, "still inside the window")
-    await quietFor(ref.id, 185)
+    await quietFor(ref.id, 95)
     const since = (await db.getReference(database, ref.id))!.reference.claimedAt!
     assert.equal(await quiet(ref.id), since, "past it: the time of the last heartbeat")
-    assert.ok(Math.abs(Date.now() - Date.parse(since) - 185_000) < 5_000)
+    assert.ok(Math.abs(Date.now() - Date.parse(since) - 95_000) < 5_000)
     assert.equal((await db.listReferences(database, { status: "capturing" })).items[0]!.quietSince, since, "lists carry it too")
 
     assert.equal(await db.renewLease(database, ref.id, job.lease), true)
@@ -700,6 +700,96 @@ test("quietSince is the last heartbeat once it is older than the stale window, a
     assert.equal(await quiet(ref.id), null, "ready after a stop")
     await db.requeueReference(database, ref.id)
     assert.equal(await quiet(ref.id), null, "queued again")
+  } finally {
+    await mf.dispose()
+  }
+})
+
+test("one threshold for the agent being there: the offline banner, quietSince, reclaim, Stop and Pause all turn at 90 seconds", async () => {
+  const { mf, database, ctx, env, row } = await setup()
+  try {
+    const crawl = async (url: string) => {
+      const ref = await db.createReference(database, { url, mode: "crawl", maxPages: 5 })
+      const job = (await db.claimJob(database))!
+      assert.equal(job.id, ref.id)
+      assert.ok(await db.addPage(database, ref.id, job.lease, page(ref.id, job.attempt, 0)))
+      return { id: ref.id, job }
+    }
+    /** The agent's last sign of life, the heartbeat that renewed the capture and touched presence, was `seconds` ago. */
+    const lastBeat = async (id: string, seconds: number) => {
+      const at = new Date(Date.now() - seconds * 1000).toISOString()
+      await database.prepare("UPDATE refs SET claimed_at = ? WHERE id = ?").bind(at, id).run()
+      await database.prepare("UPDATE worker_presence SET last_seen_at = ?").bind(at).run()
+    }
+    /** What the gallery shows: the capture agent offline banner (presence) and the capture card going quiet. */
+    const shown = async (id: string) => {
+      const status = await db.getCaptureStatus(database, (await db.getReference(database, id))!.reference)
+      const quiet = (await db.getReference(database, id))!.reference.quietSince !== null
+      const apiAgent = (await (await app.request("http://localhost/api/agent", {}, env, ctx)).json()) as { freshness: string }
+      assert.equal(status.worker.freshness, (await db.getPresence(database)).freshness, "every reader of presence agrees")
+      assert.equal(apiAgent.freshness, status.worker.freshness)
+      return { banner: status.worker.freshness === "recent" ? "online" : "offline", quiet }
+    }
+
+    const a = await crawl("https://a.example")
+    await db.touchPresence(database, "busy", a.id)
+    assert.deepEqual(await shown(a.id), { banner: "online", quiet: false }, "just beat")
+    await lastBeat(a.id, 85)
+    assert.deepEqual(await shown(a.id), { banner: "online", quiet: false }, "85 s: the card is healthy and so is the banner")
+    assert.equal(await db.claimJob(database), null, "and nobody may take the capture")
+    await lastBeat(a.id, 95)
+    assert.deepEqual(await shown(a.id), { banner: "offline", quiet: true }, "95 s: the banner and the card turn together")
+    assert.equal((await db.getReference(database, a.id))!.reference.quietSince, (await db.getReference(database, a.id))!.reference.claimedAt)
+
+    // Reclaim: the next agent that asks gets it at once, with a new lease; the first is fenced.
+    const next = (await db.claimJob(database))!
+    assert.equal(next.id, a.id)
+    assert.notEqual(next.lease, a.job.lease)
+    assert.equal(await db.renewLease(database, a.id, a.job.lease), false)
+    await db.touchPresence(database, "busy", a.id) // what the claim route does
+    assert.deepEqual(await shown(a.id), { banner: "online", quiet: false }, "the claim is itself a sign of life")
+
+    // Stop and Pause settle on a silent agent at the same threshold, and wait for a live one.
+    const live = await crawl("https://live.example")
+    const gone = await crawl("https://gone.example")
+    const pausing = await crawl("https://pausing.example")
+    await lastBeat(live.id, 85)
+    await lastBeat(gone.id, 95)
+    await lastBeat(pausing.id, 95)
+    assert.equal(await db.requestStop(database, live.id), true)
+    assert.deepEqual({ status: (await row(live.id))!.status, control: (await row(live.id))!.capture_control }, { status: "capturing", control: "stop" }, "85 s: the agent is asked to stop, and Stop waits for it")
+    assert.equal(await db.requestStop(database, gone.id), true)
+    assert.deepEqual({ status: (await row(gone.id))!.status, control: (await row(gone.id))!.capture_control, lease: (await row(gone.id))!.capture_lease }, { status: "ready", control: null, lease: null }, "95 s: Stop settles with the pages saved")
+    assert.equal(await db.requestPause(database, pausing.id), true)
+    assert.deepEqual({ status: (await row(pausing.id))!.status, control: (await row(pausing.id))!.capture_control }, { status: "queued", control: "paused" }, "95 s: Pause parks it")
+  } finally {
+    await mf.dispose()
+  }
+})
+
+test("a busy agent's presence is never older than its capture's heartbeat, so the banner cannot go offline before the card goes quiet", async () => {
+  const { mf, database, ctx, env } = await setup()
+  try {
+    const call = (path: string, lease: string, body: unknown) => app.request(`https://snip.test/agent${path}`, { method: "POST", body: JSON.stringify(body),
+      headers: { authorization: "Bearer test-token", "content-type": "application/json", "x-snip-capture-protocol": "4", "x-snip-capture-lease": lease } }, env, ctx)
+    const ref = await db.createReference(database, { url: "https://example.com", mode: "single" })
+    const job = (await db.claimJob(database))!
+    await db.touchPresence(database, "busy", ref.id)
+    // Presence was written 10 s ago, inside the idle throttle. A heartbeat and a progress report after it still move it.
+    const tenAgo = new Date(Date.now() - 10_000).toISOString()
+    await database.prepare("UPDATE worker_presence SET last_seen_at = ?").bind(tenAgo).run()
+    for (const [path, body] of [["/heartbeat", { jobId: ref.id }], [`/jobs/${ref.id}/progress`, { message: "Capturing 1/1: /" }]] as const) {
+      await database.prepare("UPDATE worker_presence SET last_seen_at = ?").bind(tenAgo).run()
+      assert.equal((await call(path, job.lease, body)).status, 200)
+      const seen = (await db.getPresence(database)).lastSeenAt!
+      const claimed = (await db.getReference(database, ref.id))!.reference.claimedAt!
+      assert.ok(seen >= claimed, `${path}: presence ${seen} is not older than the heartbeat ${claimed}`)
+    }
+    // Idle polling stays throttled: a second poll within 20 s writes nothing.
+    await db.touchPresence(database, "idle", null)
+    const idleAt = (await db.getPresence(database)).lastSeenAt
+    await db.touchPresence(database, "idle", null)
+    assert.equal((await db.getPresence(database)).lastSeenAt, idleAt)
   } finally {
     await mf.dispose()
   }
