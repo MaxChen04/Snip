@@ -302,7 +302,7 @@ Sharing a library with a second person is planned for later. When it ships, it w
 
 `npm run update` updates both halves when this Mac is in cloud mode: it fast-forwards, rebuilds, applies the remote database migrations, deploys the new Worker and then restarts capture. Existing captures and saved files are kept.
 
-A release build does the same on its first launch after a version change, before the window loads. If that deploy fails, Snip shows it as a blocking step instead of running a new app against an old Worker.
+The Mac app does not redeploy the Worker. A release build, including one that updated itself in place, does not deploy anything on its first launch after a version change; only `npm run update` (or deploying by hand, below) updates a cloud library's Worker. Update the Worker together with the app: owner sign-in and the capture agent (capture protocol 4) both need a Worker that matches the app, and the Worker rejects an agent with a different protocol until it is redeployed.
 
 The app's sign-in handoff needs the Worker to send that nonce, so a Worker older than the app cannot sign the app in. The tab that opens after the owner link then says **Your cloud library is older than this Snip. Update cloud (npm run update), then sign in again.**, and the app stays signed out until the Worker is redeployed. Nothing accepts a session without the nonce.
 

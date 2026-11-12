@@ -183,7 +183,7 @@ npm run setup:cloudflare -- migrate --json
 npm run setup:cloudflare -- deploy --json
 ```
 
-Snip records the Worker version it deployed. If the deployed Worker no longer matches, it reports that the deployment changed outside Snip and asks the user to deploy again; it does not redeploy on its own. A release build runs the same update on its first launch after a version change, before the window loads. Existing captures and saved files are preserved. Do not stop or restart a cloud install by editing Cloudflare resources; the install is recorded in `.snip/cloud.json` and only the engine writes there.
+Snip records the Worker version it deployed. If the deployed Worker no longer matches, it reports that the deployment changed outside Snip and asks the user to deploy again; it does not redeploy on its own. The Mac app does not redeploy the Worker on its own, even after a version change: run `npm run update` (or deploy by hand) so the Worker, owner sign-in and the capture agent stay in step with the app. Existing captures and saved files are preserved. Do not stop or restart a cloud install by editing Cloudflare resources; the install is recorded in `.snip/cloud.json` and only the engine writes there.
 
 Packaged release apps back up an existing local database and apply pending migrations before startup. For a source-linked desktop app or local development checkout, run `npm run db:migrate:local -w web` before starting the updated app. Page collections add membership records without copying saved files.
 
