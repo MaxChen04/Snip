@@ -1,16 +1,22 @@
-// The home gallery with a big library: how many DOM elements and images it holds at each zoom, and how smooth
-// panning and Ctrl+wheel zoom are. The counts are asserted (they are deterministic); the frame times are logged
-// only, because software rendering in CI makes them too noisy to gate on. Run alone to read the numbers:
+// The home gallery with a big library (200 and 1000 captured pages, mocked with generated 960 x 600 JPEG thumbnails):
+// how many DOM elements and images it holds at 100% and 25% zoom, and how smooth panning and Ctrl+wheel zoom are, as
+// requestAnimationFrame deltas. The counts and the will-change and tab-order checks are asserted, because they do not
+// depend on the machine; the frame times are only logged, because software rendering on a shared machine makes them
+// too noisy to gate on. It runs against the Vite dev server (development React, which is slower than the build), so
+// treat the numbers as a ceiling. Run it alone to read them:
 //   node --import tsx --test web/tests/browser/home-gallery-perf.browser.test.ts
 import assert from "node:assert/strict"
-import zlib from "node:zlib"
 import { after, before, test } from "node:test"
 import type { Page } from "playwright"
 import type { PageWithRef, SavedImage, SectionItem } from "../../shared/types.ts"
-import { sleep, startApp, until, type App, type Req } from "./harness.ts"
+import { reference, sleep, startApp, until, type App, type Req } from "./harness.ts"
 
 let app: App
-before(async () => void (app = await startApp()))
+let thumbs: Buffer[]
+before(async () => {
+  app = await startApp()
+  thumbs = await makeThumbs()
+})
 after(async () => app?.stop())
 
 // ---------------------------------------------------------------- seed
@@ -92,30 +98,37 @@ function seed(n: number) {
 
 // ---------------------------------------------------------------- generated thumbnails
 
-/** A PNG with horizontal colour bands: real pixels for the browser to decode, a few hundred bytes on the wire. */
-function bandedPng(w: number, h: number, hue: number) {
-  const rows = Buffer.alloc((w * 3 + 1) * h)
-  for (let y = 0; y < h; y++) {
-    const o = y * (w * 3 + 1)
-    const band = Math.floor(y / 40) % 2
-    const rgb = [(hue * 53 + band * 70) % 256, (hue * 97 + 90) % 256, (hue * 31 + band * 40 + 60) % 256]
-    for (let x = 0; x < w; x++) rows.set(rgb, o + 1 + x * 3)
-  }
-  const chunk = (type: string, data: Buffer) => {
-    const len = Buffer.alloc(4)
-    len.writeUInt32BE(data.length)
-    const body = Buffer.concat([Buffer.from(type), data])
-    const crc = Buffer.alloc(4)
-    crc.writeUInt32BE(zlib.crc32(body))
-    return Buffer.concat([len, body, crc])
-  }
-  const head = Buffer.alloc(13)
-  head.writeUInt32BE(w, 0)
-  head.writeUInt32BE(h, 4)
-  head.set([8, 2, 0, 0, 0], 8)
-  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", head), chunk("IDAT", zlib.deflateSync(rows)), chunk("IEND", Buffer.alloc(0))])
+/**
+ * Eight 960 x 600 JPEGs like the ones the capture agent stores (desktop-thumb.jpg): coloured bands under a few
+ * hundred small blocks, so the browser has real pixels to decode. Drawn and encoded by the browser itself.
+ */
+async function makeThumbs(): Promise<Buffer[]> {
+  const t = await app.session()
+  // A string, not a function: tsx names arrow functions with a helper the page does not have.
+  const urls = await t.page.evaluate<string[]>(`(() => {
+    const out = []
+    for (let hue = 0; hue < 8; hue++) {
+      const c = document.createElement("canvas")
+      c.width = 960
+      c.height = 600
+      const g = c.getContext("2d")
+      for (let y = 0; y < 600; y += 40) {
+        g.fillStyle = "hsl(" + (hue * 45) + " 45% " + (y % 80 ? 82 : 70) + "%)"
+        g.fillRect(0, y, 960, 40)
+      }
+      let seed = hue + 1
+      const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647)
+      for (let i = 0; i < 300; i++) {
+        g.fillStyle = "hsl(" + Math.floor(rnd() * 360) + " " + Math.floor(rnd() * 60) + "% " + Math.floor(20 + rnd() * 70) + "%)"
+        g.fillRect(rnd() * 900, rnd() * 560, 8 + rnd() * 90, 6 + rnd() * 40)
+      }
+      out.push(c.toDataURL("image/jpeg", 0.75))
+    }
+    return out
+  })()`)
+  await t.page.context().close()
+  return urls.map((u) => Buffer.from(u.split(",")[1]!, "base64"))
 }
-const THUMBS = Array.from({ length: 8 }, (_, hue) => bandedPng(960, 600, hue))
 
 // ---------------------------------------------------------------- measuring
 
@@ -151,7 +164,8 @@ const counts = (page: Page) =>
   page.evaluate(() => ({
     elements: document.getElementsByTagName("*").length,
     images: document.images.length,
-    buttons: document.querySelectorAll("#root button, #root a").length,
+    far: !!document.querySelector("[aria-roledescription=canvas] > [data-far]"),
+    willChange: getComputedStyle(document.querySelector("[aria-roledescription=canvas] > div")!).willChange,
   }))
 
 /**
@@ -175,6 +189,22 @@ async function audit(page: Page) {
     }
     return out
   })()`)
+}
+
+/** Remember the image of the tile closest to where the wheel zooms around. */
+async function markNearestTile(page: Page) {
+  await page.evaluate(`(() => {
+    let best = null, bestD = Infinity
+    for (const img of document.querySelectorAll("[aria-roledescription=canvas] button[aria-label] > img")) {
+      const r = img.getBoundingClientRect()
+      const d = Math.hypot(r.x + r.width / 2 - 640, r.y + r.height / 2 - 420)
+      if (d < bestD) { best = img; bestD = d }
+    }
+    window.__kept = best
+  })()`)
+}
+async function keptTile(page: Page, when: string) {
+  assert.equal(await page.evaluate(`!!window.__kept && window.__kept.isConnected`), true, `a tile keeps its image element ${when}`)
 }
 
 /** One drag across the canvas in small steps, then a pause so no fling follows. */
@@ -220,15 +250,16 @@ function checkTabOrder(a: Awaited<ReturnType<typeof audit>>, at: string) {
 
 type Report = {
   items: number
-  at100: { elements: number; images: number; tabbable: number }
-  at25: { elements: number; images: number; tabbable: number }
+  at100: { elements: number; images: number; tabbable: number; far: boolean; willChange: string }
+  at25: { elements: number; images: number; tabbable: number; far: boolean; willChange: string }
   pan100: Frames
   zoomOut: Frames
   zoomIn: Frames
   pan25: Frames
 }
 
-async function run(n: number): Promise<Report> {
+/** A signed-in session whose All feed is `n` seeded items and whose files are the generated thumbnails. */
+async function gallery(n: number) {
   const { pages, sections, images } = seed(n)
   const t = await app.session({ viewport: { width: 1280, height: 800 } })
   const { page } = t
@@ -243,10 +274,15 @@ async function run(n: number): Promise<Report> {
   t.on("GET", "/api/counts", () => ({ json: { websites: 0, pages: pages.length, sections: sections.length, animations: 0, images: images.length } }))
   // Registered after the harness's own /files/ stub, so this one answers.
   await page.route(/\/files\//, (route) => {
-    const hue = [...new URL(route.request().url()).pathname].reduce((s, c) => s + c.charCodeAt(0), 0) % THUMBS.length
-    return route.fulfill({ status: 200, contentType: "image/png", body: THUMBS[hue]!, headers: { "cache-control": "max-age=3600" } })
+    const hue = [...new URL(route.request().url()).pathname].reduce((s, c) => s + c.charCodeAt(0), 0) % thumbs.length
+    return route.fulfill({ status: 200, contentType: "image/jpeg", body: thumbs[hue]!, headers: { "cache-control": "max-age=3600" } })
   })
+  return t
+}
 
+async function run(n: number): Promise<Report> {
+  const t = await gallery(n)
+  const { page } = t
   await t.goto("/")
   await page.getByRole("button", { name: /^Zoom \d+%/ }).waitFor()
   await until("tiles are on the canvas", async () => (await counts(page)).images > 20)
@@ -258,27 +294,41 @@ async function run(n: number): Promise<Report> {
 
   const pan100 = await frames(page, () => pan(page))
 
+  // The tile nearest the zoom's anchor stays mounted all the way out and back; its image must be the same element
+  // throughout (crossing the far threshold changes its look with CSS, not its DOM).
+  await markNearestTile(page)
+
   // About 12 % per tick: the whole range in a dozen ticks, like a trackpad pinch. More ticks than that are sent,
   // because a busy page drops some, and the extra ones at the limit do nothing.
   const zoomOut = await frames(page, () => wheelZoom(page, 12, 24))
-  await until("zoomed all the way out", async () => (await zoomPct(page)) === 25)
+  await until("zoomed all the way out", async () => (await zoomPct(page)) === 25, 30_000)
+  await keptTile(page, "out past the far threshold")
+  await sleep(300) // let the zoom settle
   const at25 = await counts(page)
   const a25 = await audit(page)
   checkTabOrder(a25, "25%")
   const pan25 = await frames(page, () => pan(page))
+  await markNearestTile(page)
   const zoomIn = await frames(page, () => wheelZoom(page, -12, 24))
-  await until("zoomed back in", async () => (await zoomPct(page)) >= 100)
+  await until("zoomed back in", async () => (await zoomPct(page)) >= 100, 30_000)
+  await keptTile(page, "back in past the far threshold")
   assert.deepEqual(t.consoleErrors, [])
   await page.context().close()
   return {
     items: n,
-    at100: { elements: at100.elements, images: at100.images, tabbable: a100.tabbable.length },
-    at25: { elements: at25.elements, images: at25.images, tabbable: a25.tabbable.length },
+    at100: { elements: at100.elements, images: at100.images, tabbable: a100.tabbable.length, far: at100.far, willChange: at100.willChange },
+    at25: { elements: at25.elements, images: at25.images, tabbable: a25.tabbable.length, far: at25.far, willChange: at25.willChange },
     pan100,
     zoomOut,
     zoomIn,
     pan25,
   }
+}
+
+async function measured(n: number) {
+  const r = await run(n)
+  log(r)
+  return r
 }
 
 function log(r: Report) {
@@ -297,14 +347,83 @@ function log(r: Report) {
   console.log(`PERF ${JSON.stringify(r)}`)
 }
 
+// What the gallery held before it got a light tile and a tighter margin (1280 x 800, all measured here): 437 elements
+// and 63 images at 100%, 5,839 elements and 1,142 images at 25%. The bounds leave room for small layout changes, not
+// for going back.
+function checkWeight(r: Report) {
+  assert.ok(r.at100.elements < 400, `${r.at100.elements} elements at 100%`)
+  assert.ok(r.at25.elements < 1950, `${r.at25.elements} elements at 25%: less than a third of the old 5,839`)
+  assert.ok(r.at25.images < 900, `${r.at25.images} images at 25%, down from 1,142`)
+  // A tile is its button and its image; the rest is the page's own chrome.
+  assert.ok(r.at25.elements < r.at25.images * 2 + 200, `${r.at25.elements} elements for ${r.at25.images} tiles at 25%`)
+  assert.equal(r.at100.far, false, "the world is not marked far at 100%")
+  assert.equal(r.at25.far, true, "the world is marked far at 25%")
+  // The home canvas is tiled, so its world must not carry will-change: it locks the layer's raster scale, so every tile
+  // that mounts while panning at 25% is rasterized for the zoom it came from (8x the raster time measured), and a
+  // zoom-in with 1,000 tiles mounted stalls its first frame for 0.8 s instead of 0.2.
+  assert.equal(r.at100.willChange, "auto", "no will-change at 100%")
+  assert.equal(r.at25.willChange, "auto", "no will-change at 25%, so panning rasterizes at the zoom shown")
+}
+
 test("200 items: the zoomed-out gallery stays light", { timeout: 180_000 }, async () => {
-  const r = await run(200)
-  log(r)
-  assert.ok(r.at100.elements < 1500, `${r.at100.elements} elements at 100%`)
+  checkWeight(await measured(200))
 })
 
-test("1000 items: panning at 100% stays light", { timeout: 240_000 }, async () => {
-  const r = await run(1000)
-  log(r)
-  assert.ok(r.at100.elements < 1500, `${r.at100.elements} elements at 100%`)
+test("1000 items: panning at 100% and zooming out stay light", { timeout: 240_000 }, async () => {
+  checkWeight(await measured(1000))
+})
+
+// The tile is two elements now, with its hover chip a sibling: the chip must still follow hover and focus, survive the
+// pointer moving onto it, and the tile must still open, in tab order.
+test("a home tile shows its source on hover and focus, opens on click, and tabs newest first", { timeout: 60_000 }, async () => {
+  const t = await gallery(40)
+  const { page } = t
+  await t.goto("/")
+  await page.getByRole("button", { name: /^Zoom \d+%/ }).waitFor()
+  await until("tiles are on the canvas", async () => (await counts(page)).images > 5)
+  await sleep(500)
+  const chip = page.locator('a[title^="Open "]')
+  const tile = page.getByRole("button", { name: "Page 0", exact: true })
+
+  await tile.hover()
+  await chip.waitFor()
+  const [tb, cb] = [(await tile.boundingBox())!, (await chip.boundingBox())!]
+  assert.ok(cb.x >= tb.x && cb.x + cb.width <= tb.x + tb.width && cb.y >= tb.y && cb.y + cb.height <= tb.y + tb.height, "the chip sits inside its tile")
+  await page.mouse.move(cb.x + cb.width / 2, cb.y + cb.height / 2, { steps: 4 })
+  await sleep(150)
+  assert.equal(await chip.count(), 1, "moving onto the chip keeps it")
+  await page.mouse.move(4, 400, { steps: 4 })
+  await until("the chip goes when the pointer leaves", async () => (await chip.count()) === 0)
+
+  await tile.focus()
+  await chip.waitFor()
+  const label = () => page.evaluate<string>(`document.activeElement.getAttribute("aria-label")`)
+  const next: string[] = []
+  for (let i = 0; i < 3; i++) {
+    await page.keyboard.press("Tab")
+    next.push(await label())
+  }
+  assert.deepEqual(next, ["Page 1", "Page 2", "Page 3"], "Tab goes to the next newest tile")
+  // Page 0 is from alpha.test, Page 3 from delta.test: the chip moved with focus.
+  await until("the chip follows focus", async () => (await chip.count()) === 1 && (await chip.getAttribute("title")) === "Open delta.test")
+
+  // Focus panned the canvas to Page 3.
+  await page.mouse.move(4, 400)
+  await page.getByRole("button", { name: "Page 3", exact: true }).click()
+  await until("the inspector opens", async () => new URL(page.url()).searchParams.get("open") === "page:p3")
+  assert.deepEqual(t.consoleErrors, [])
+})
+
+test("on the Websites filter a tile is a link to its page", { timeout: 60_000 }, async () => {
+  const refs = Array.from({ length: 12 }, (_, i) => reference({ id: `w${i}`, url: `https://w${i}.test/`, domain: `w${i}.test`, title: `Site ${i}`, coverKey: `covers/w${i}.png`, createdAt: created(i) }))
+  const t = await gallery(0)
+  const { page } = t
+  t.on("GET", "/api/references", () => ({ json: { items: refs, nextCursor: null } }))
+  t.on("GET", "/api/counts", () => ({ json: { websites: refs.length, pages: 0, sections: 0, animations: 0, images: 0 } }))
+  await t.goto("/?filter=websites")
+  const link = page.locator('a[href="/r/w0"]').first()
+  await link.waitFor()
+  assert.equal(await link.getAttribute("aria-label"), "Site 0")
+  assert.equal(await link.evaluate((el) => el.children.length), 1, "a link tile holds only its image")
+  assert.deepEqual(t.consoleErrors, [])
 })
