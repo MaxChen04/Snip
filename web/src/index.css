@@ -455,6 +455,12 @@
   .press:active { scale: 1 !important; }
 }
 
+/* A bar with no fraction to show: a segment sweeping along its track (40% of the track wide, so 250% of its own width carries it across). */
+@keyframes indeterminate {
+  from { translate: -100% 0; }
+  to { translate: 250% 0; }
+}
+
 /* Landing page motion. Everything here is off for visitors who prefer reduced motion. */
 @property --peel {
   syntax: "<length>";

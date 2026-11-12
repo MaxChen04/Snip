@@ -4,6 +4,7 @@ import { Spinner } from "@/components/ui/spinner"
 import { notify } from "@/components/notify"
 import { api, type Reference } from "@/lib/api"
 import { cn } from "@/lib/utils"
+import { STOPPED_EMPTY } from "../../shared/capture-errors"
 
 type Action = "pause" | "resume" | "stop"
 
@@ -22,8 +23,12 @@ export function captureActions(r: Reference): Action[] {
   return []
 }
 
-/** Status line for a capture that has not finished, including a pause or stop that is winding down. */
+/** A capture the user stopped before any page was saved. The Worker records that as a failure; to the user it is not one. */
+export const isStopped = (r: Reference) => r.status === "failed" && r.error === STOPPED_EMPTY
+
+/** Status line for a capture that has not finished, including a pause or stop that is winding down, and one stopped before it saved a page. */
 export function captureLabel(r: Reference, short = false) {
+  if (isStopped(r)) return "Stopped"
   if (r.status === "paused") return r.pageCount ? (short ? `Paused at ${r.pageCount} of ${r.maxPages}` : `Paused after ${r.pageCount} of ${r.maxPages} pages`) : "Paused"
   if (r.control === "pause") return short ? "Pausing…" : "Pausing after this page"
   if (r.control === "stop") return short ? "Stopping…" : "Stopping after this page"

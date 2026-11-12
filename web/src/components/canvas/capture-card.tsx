@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactElement } from "react"
 import { navigate } from "wouter/use-browser-location"
 import { toast } from "sonner"
-import { AlertCircleIcon, ArrowRight, CheckIcon, Clock, FileIcon, GlobeIcon, ImageIcon, Link2, Loader2Icon, MoreHorizontalIcon, PauseIcon, XIcon } from "@/components/icons"
+import { AlertCircleIcon, ArrowRight, CheckIcon, Clock, FileIcon, GlobeIcon, ImageIcon, Link2, Loader2Icon, MoreHorizontalIcon, PauseIcon, StopIcon, XIcon } from "@/components/icons"
 import { Logo } from "@/components/brand"
 import { useAddFlow } from "@/components/add-flow"
-import { CaptureControls, captureLabel } from "@/components/capture-controls"
+import { CaptureControls, captureLabel, isStopped } from "@/components/capture-controls"
 import { diagnoseCaptureError, RetryCaptureButton } from "@/components/capture-retry"
 import { notify } from "@/components/notify"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
@@ -15,6 +15,7 @@ import { IMAGE_TYPES, uploadImages } from "@/lib/images"
 import { CRAWL_LIMITS, extractUrls } from "@/lib/site-url"
 import { useCollections } from "@/lib/collections"
 import { cn } from "@/lib/utils"
+import { WAITING } from "../../../shared/capture-errors"
 
 // ---------- Captures the card follows (the newest shows; a dropped link joins them) ----------
 
@@ -145,6 +146,8 @@ export function CaptureCard({
   const view = detail && detail.reference.id === cur ? detail : null
   const r = view?.reference
   const running = !!cur && (!r || RUNNING.includes(r.status))
+  // The pill beside the field names what the capture is doing, as the reference's status says.
+  const pill = !r ? { label: "Starting…", Glyph: Loader2Icon } : r.status === "paused" ? { label: "Paused", Glyph: PauseIcon } : r.status === "queued" ? { label: "Queued", Glyph: Clock } : { label: "Capturing", Glyph: Loader2Icon }
 
   /** Reload the canvas when a capture lands a page or finishes; drop finished older captures from the card. */
   const note = (ref: Reference) => {
@@ -153,7 +156,7 @@ export function CaptureCard({
     if (ref.pageCount > before.pageCount || (ref.status === "ready" && before.status !== "ready")) reloadCanvas()
     if (ref.id === cur || RUNNING.includes(ref.status)) return
     untrack(ref.id)
-    if (ref.status === "failed")
+    if (ref.status === "failed" && !isStopped(ref))
       toast.error(`Couldn't capture ${ref.domain}`, {
         description: diagnoseCaptureError(ref.error)?.summary ?? ref.error ?? undefined,
         action: { label: "Open", onClick: () => navigate(`/r/${ref.id}`) },
@@ -243,7 +246,6 @@ export function CaptureCard({
 
   // While a capture runs the field shows its link until you type another.
   const showRunning = running && !text
-  const showOptions = !running || !!text
   const board = boardId ? collections.find((c) => c.id === boardId)?.name : undefined
 
   return (
@@ -296,8 +298,8 @@ export function CaptureCard({
           />
           {showRunning ? (
             <span className="flex h-9 shrink-0 items-center gap-1.5 rounded-md bg-ink-4 px-3.5 text-xs tracking-[-0.01em] text-ink-11" aria-hidden>
-              {r?.status === "paused" ? <PauseIcon className="size-3.5" /> : <Loader2Icon className="size-3.5 animate-spin motion-reduce:animate-none" />}
-              {r?.status === "paused" ? "Paused" : "Capturing"}
+              <pill.Glyph className={cn("size-3.5", pill.Glyph === Loader2Icon && "animate-spin motion-reduce:animate-none")} />
+              {pill.label}
             </span>
           ) : (
             <button
@@ -317,72 +319,70 @@ export function CaptureCard({
           </p>
         )}
 
-        {showOptions && (
-          <div className="flex items-center gap-1 px-1 pb-0.5">
-            <div role="group" aria-label="Capture" className="tactile-track flex h-8 items-center">
-              {MODES.map((m) => (
-                <Tip key={m.value} label={m.label}>
-                  <button
-                    type="button"
-                    aria-label={m.label}
-                    aria-pressed={mode === m.value}
-                    onClick={() => setMode(m.value)}
-                    className={cn("press grid size-7 place-items-center rounded-full text-ink-10 hover:text-foreground", mode === m.value && "tactile-chosen")}
-                  >
-                    <m.icon className="size-3.5" />
-                  </button>
-                </Tip>
+        <div className="flex items-center gap-1 px-1 pb-0.5">
+          <div role="group" aria-label="Capture" className="tactile-track flex h-8 items-center">
+            {MODES.map((m) => (
+              <Tip key={m.value} label={m.label}>
+                <button
+                  type="button"
+                  aria-label={m.label}
+                  aria-pressed={mode === m.value}
+                  onClick={() => setMode(m.value)}
+                  className={cn("press grid size-7 place-items-center rounded-full text-ink-10 hover:text-foreground", mode === m.value && "tactile-chosen")}
+                >
+                  <m.icon className="size-3.5" />
+                </button>
+              </Tip>
+            ))}
+          </div>
+          {mode === "crawl" && (
+            <div role="group" aria-label="Pages to crawl" className="tactile-track ml-1 flex h-8 items-center">
+              {CRAWL_LIMITS.map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  aria-label={`Up to ${n} pages`}
+                  aria-pressed={maxPages === n}
+                  onClick={() => setMaxPages(n)}
+                  className={cn("press h-7 min-w-9 rounded-full px-2 text-2xs text-ink-11 tabular-nums hover:text-foreground", maxPages === n && "tactile-chosen")}
+                >
+                  {n}
+                </button>
               ))}
             </div>
-            {mode === "crawl" && (
-              <div role="group" aria-label="Pages to crawl" className="tactile-track ml-1 flex h-8 items-center">
-                {CRAWL_LIMITS.map((n) => (
-                  <button
-                    key={n}
-                    type="button"
-                    aria-label={`Up to ${n} pages`}
-                    aria-pressed={maxPages === n}
-                    onClick={() => setMaxPages(n)}
-                    className={cn("press h-7 min-w-9 rounded-full px-2 text-2xs text-ink-11 tabular-nums hover:text-foreground", maxPages === n && "tactile-chosen")}
-                  >
-                    {n}
-                  </button>
-                ))}
-              </div>
-            )}
-            <Tip label="Upload images">
-              <button type="button" aria-label="Upload images" disabled={!!uploading} onClick={() => filePicker.current?.click()} className={cn(iconButton, "ml-1 disabled:opacity-40")}>
-                <ImageIcon className="size-4" />
-              </button>
-            </Tip>
-            <Tip label="More options">
-              <button type="button" aria-label="More options" onClick={() => addReference(boardId, text.trim() || undefined)} className={iconButton}>
-                <MoreHorizontalIcon className="size-4" />
-              </button>
-            </Tip>
-            <span aria-live="polite" className="ml-auto flex min-w-0 items-center gap-1.5 pr-1 text-2xs text-ink-10">
-              {uploading ? (
-                <>
-                  <Loader2Icon className="size-3 shrink-0 animate-spin motion-reduce:animate-none" />
-                  Uploading {Math.min(uploading.done + 1, uploading.total)} of {uploading.total}…
-                </>
-              ) : board ? (
-                <span className="truncate">Saves to {board}</span>
-              ) : null}
-            </span>
-            <input
-              ref={filePicker}
-              type="file"
-              multiple
-              hidden
-              accept={IMAGE_TYPES.join(",")}
-              onChange={(e) => {
-                void upload([...(e.target.files ?? [])])
-                e.target.value = ""
-              }}
-            />
-          </div>
-        )}
+          )}
+          <Tip label="Upload images">
+            <button type="button" aria-label="Upload images" disabled={!!uploading} onClick={() => filePicker.current?.click()} className={cn(iconButton, "ml-1 disabled:opacity-40")}>
+              <ImageIcon className="size-4" />
+            </button>
+          </Tip>
+          <Tip label="More options">
+            <button type="button" aria-label="More options" onClick={() => addReference(boardId, text.trim() || undefined)} className={iconButton}>
+              <MoreHorizontalIcon className="size-4" />
+            </button>
+          </Tip>
+          <span aria-live="polite" className="ml-auto flex min-w-0 items-center gap-1.5 pr-1 text-2xs text-ink-10">
+            {uploading ? (
+              <>
+                <Loader2Icon className="size-3 shrink-0 animate-spin motion-reduce:animate-none" />
+                Uploading {Math.min(uploading.done + 1, uploading.total)} of {uploading.total}…
+              </>
+            ) : board ? (
+              <span className="truncate">Saves to {board}</span>
+            ) : null}
+          </span>
+          <input
+            ref={filePicker}
+            type="file"
+            multiple
+            hidden
+            accept={IMAGE_TYPES.join(",")}
+            onChange={(e) => {
+              void upload([...(e.target.files ?? [])])
+              e.target.value = ""
+            }}
+          />
+        </div>
 
         {cur && <Status r={r} pages={view?.pages ?? []} offline={offline} more={more} onChange={() => void poll().catch(() => {})} onOpen={(id) => navigate(`/r/${id}`)} />}
       </form>
@@ -456,10 +456,17 @@ function Status({
 
   if (r.status === "failed") {
     const diagnosis = diagnoseCaptureError(r.error)
+    const stopped = isStopped(r)
     return (
-      <div role="alert" className="flex items-center gap-2 px-1.5 py-1 text-xs">
-        <AlertCircleIcon className="size-3.5 shrink-0 text-(--red-11)" />
-        <span className="min-w-0 truncate text-ink-12" title={r.error ?? undefined}>
+      <div role={stopped ? "status" : "alert"} className="flex items-center gap-2 px-1.5 py-1 text-xs">
+        {stopped ? (
+          <span className="grid size-5 shrink-0 place-items-center rounded-full bg-ink-3 text-ink-11">
+            <StopIcon className="size-3" />
+          </span>
+        ) : (
+          <AlertCircleIcon className="size-3.5 shrink-0 text-(--red-11)" />
+        )}
+        <span className={cn("min-w-0 text-ink-12", !stopped && "truncate")} title={stopped ? undefined : (r.error ?? undefined)}>
           {diagnosis?.summary ?? r.error ?? `Couldn't capture ${r.domain}`}
         </span>
         {moreNote}
@@ -476,10 +483,11 @@ function Status({
   const p = parseProgress(r)
   const paused = r.status === "paused"
   const title =
-    r.status === "queued" ? (offline ? "Waiting for your Mac" : `Waiting to capture ${r.domain}`) : `${r.mode === "crawl" ? "Crawling" : "Capturing"} ${r.domain}`
+    r.status === "queued" ? (offline ? WAITING : `Waiting to capture ${r.domain}`) : `${r.mode === "crawl" ? "Crawling" : "Capturing"} ${r.domain}`
   const meta = captureLabel(r, true) ?? (p ? (r.mode === "crawl" ? `${p.n} of ${p.total} pages` : p.path) : null)
-  // Share of pages finished, so the last page reads 92%, not 100%, while it is still being captured.
-  const pct = paused ? (r.pageCount / Math.max(1, r.maxPages)) * 100 : p && r.mode === "crawl" ? ((p.n - 1) / p.total) * 100 : r.status === "queued" ? 0 : 30
+  // Share of pages finished, so the last page reads 92%, not 100%, while it is still being captured. A single page
+  // has no fraction to report, and neither does a capture that has not started: the bar then only shows it is working.
+  const fraction = paused ? r.pageCount / Math.max(1, r.maxPages) : p && r.mode === "crawl" ? (p.n - 1) / p.total : null
   return (
     <div className="flex flex-col gap-2 px-1.5 py-1">
       <div className="flex min-h-7 items-center gap-2 text-xs">
@@ -491,10 +499,15 @@ function Status({
         <CaptureControls r={r} onChange={onChange} className="ml-auto gap-1" />
       </div>
       <div className="h-1 overflow-hidden rounded-full bg-ink-4">
-        <div
-          className={cn("h-full rounded-full transition-[width] duration-300 ease-out motion-reduce:transition-none", paused ? "bg-ink-9" : "bg-ink-12")}
-          style={{ width: `${Math.max(4, Math.min(100, pct))}%` }}
-        />
+        {fraction !== null ? (
+          <div
+            className={cn("h-full rounded-full transition-[width] duration-300 ease-out motion-reduce:transition-none", paused ? "bg-ink-9" : "bg-ink-12")}
+            style={{ width: `${Math.max(4, Math.min(100, fraction * 100))}%` }}
+          />
+        ) : r.status === "capturing" ? (
+          // Reduced motion gets the whole track, still; otherwise a segment sweeps along it.
+          <div role="progressbar" aria-label="Capturing" className="h-full w-full rounded-full bg-ink-7 motion-safe:w-2/5 motion-safe:animate-[indeterminate_1.4s_ease-in-out_infinite] motion-safe:bg-ink-12" />
+        ) : null}
       </div>
     </div>
   )

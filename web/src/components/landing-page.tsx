@@ -413,7 +413,7 @@ const faqs: { q: string; a: ReactNode }[] = [
   },
   {
     q: "Does my laptop need to stay on?",
-    a: "Only while capturing. Queued URLs wait until the agent is running. In cloud mode the gallery stays available from any browser while the Mac is off, and captures queued meanwhile show “Waiting for your Mac” until it wakes.",
+    a: "Only while capturing. Queued URLs wait until the agent is running. In cloud mode the gallery stays available from any browser while the Mac is off, and captures queued meanwhile show “Waiting for the capture agent” until it wakes.",
   },
   {
     q: "Can it capture pages behind a login?",

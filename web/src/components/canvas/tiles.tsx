@@ -76,7 +76,7 @@ function Media({ item, live }: { item: CanvasItem; live: boolean }) {
     case "website": {
       const r = item.reference
       const cover = r.coverKey ?? r.previewKeys[0]
-      const status = r.status === "ready" ? null : (captureLabel(r, true) ?? (r.status === "failed" ? "Capture failed" : r.status === "queued" ? "Waiting for your Mac" : "Capturing"))
+      const status = r.status === "ready" ? null : (captureLabel(r, true) ?? (r.status === "failed" ? "Capture failed" : r.status === "queued" ? "Queued" : "Capturing"))
       return (
         <>
           {cover ? (

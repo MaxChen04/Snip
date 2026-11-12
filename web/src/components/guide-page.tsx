@@ -377,7 +377,7 @@ function CloudSection() {
       </ol>
       <div className="grid max-w-[760px] grid-cols-1 gap-4 md:grid-cols-2">
         {[
-          { t: "Waiting for your Mac", b: "A capture started from another device waits in the cloud queue until this Mac's capture agent checks in. The card and every agent status say Waiting for your Mac, whether the agent is busy or the Mac is asleep." },
+          { t: "Waiting for the capture agent", b: "A capture started from another device waits in the cloud queue until this Mac's capture agent checks in. The card and every agent status say Waiting for the capture agent, whether the agent is busy or the Mac is asleep." },
           { t: "One Snip per account", b: "An older Snip you already deployed is recognised, not refused: if it's empty the setup adopts it, and if it has references you choose Use that library or Stop. Your local library stays on disk either way, listed as This Mac's library with one action, Switch back to it. A Worker named snip that isn't a Snip is refused, with instructions to rename or delete it or pick another account." },
           { t: "workers.dev only", b: "The address is https://snip.<your-subdomain>.workers.dev. Custom domains aren't supported in this release, because the address is what your passkey and agent connections are bound to." },
           { t: "One owner for now", b: "You sign in with a passkey on each device you use, and that's the only way in: no GitHub app to register, no allowlist to maintain. A browser with no passkey yet gets in through Settings → Cloud → Sign in another browser, which mints a link that works once and expires in 10 minutes. Sharing a library with a second person is planned for later." },
@@ -520,7 +520,7 @@ function ConnectSection() {
         ["get_animation", "A contact sheet or sampled frame, plus a link to the recording"],
         ["search_pages", "Pages across references, or every page in a collection"],
         ["search_animations", "Scroll and hover recordings across references"],
-        ["get_capture_status", "Capture progress and whether your capture agent is online; a queued cloud capture says Waiting for your Mac"],
+        ["get_capture_status", "Capture progress and whether your capture agent is online; a queued cloud capture says Waiting for the capture agent"],
         ["list_collections", "Collections with counts"],
       ],
     },

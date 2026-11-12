@@ -56,6 +56,7 @@ export const reference = (o: Partial<Reference> = {}): Reference => ({
   createdAt: NOW,
   updatedAt: NOW,
   claimedAt: null,
+  quietSince: null,
   captureRun: 1,
   ...o,
 })
