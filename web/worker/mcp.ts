@@ -157,6 +157,7 @@ function buildServer(env: Env, origin: string) {
     otherScheme: p.altScheme
       ? { scheme: p.altScheme.scheme, width: p.altScheme.desktopWidth, height: p.altScheme.desktopHeight, fullPageUrl: await url(p.altScheme.desktopKey), thumbUrl: await url(p.altScheme.desktopThumbKey) }
       : null,
+    warnings: p.warnings,
     collectionIds: p.collectionIds,
   })
 

@@ -96,10 +96,16 @@ export interface Page {
   altScheme: AltScheme | null
   /** Whether sections were looked for at capture. False for older captures; true with no sections for a page that doesn't break into any. */
   sectionsCaptured: boolean
+  /** What the capture agent noticed about this page: it came out blank, or was cut short. Empty when nothing, and for older captures. */
+  warnings: PageWarning[]
   /** Collections this page was saved to on its own (not through its website). */
   collectionIds: string[]
   createdAt: string
 }
+
+/** The two things the capture agent flags on a page it saved: "blank" (nothing visible) and "truncated" (cut off before the end). */
+export const PAGE_WARNINGS = ["blank", "truncated"] as const
+export type PageWarning = (typeof PAGE_WARNINGS)[number]
 
 /**
  * The desktop page in the color scheme it was not captured in (dark for a light capture), when flipping
@@ -304,6 +310,8 @@ export interface PageUpload {
   /** Older agents send none. */
   sections?: PageSection[]
   altScheme?: AltScheme
+  /** Each code at most once. Older agents send none. */
+  warnings?: PageWarning[]
   animations: {
     kind: AnimationKind
     label: string | null

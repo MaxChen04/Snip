@@ -15,6 +15,7 @@ import {
   MAX_NAME,
   type Page,
   type PageSection,
+  type PageWarning,
   type AltScheme,
   type PageUpload,
   type Paged,
@@ -95,6 +96,7 @@ export function toPage(r: Row): Page {
     sections: parse<PageSection[]>(r.sections_json) ?? [],
     sectionsCaptured: r.sections_json != null,
     altScheme: parse<AltScheme>(r.alt_scheme_json),
+    warnings: parse<PageWarning[]>(r.warnings_json) ?? [],
     collectionIds: r.collection_ids ? String(r.collection_ids).split(",") : [],
     createdAt: r.created_at as string,
   }
@@ -689,14 +691,14 @@ export async function addPage(db: D1Database, referenceId: string, lease: string
     db
       .prepare(
         `INSERT INTO pages (id, reference_id, url, path, title, ord, desktop_key, desktop_thumb_key, desktop_width, desktop_height,
-          mobile_key, mobile_thumb_key, mobile_width, mobile_height, snapshot_key, styles_key, tokens_json, sections_json, alt_scheme_json, created_at)
-         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM refs WHERE id = ? AND status = 'capturing' AND capture_lease = ?)`,
+          mobile_key, mobile_thumb_key, mobile_width, mobile_height, snapshot_key, styles_key, tokens_json, sections_json, alt_scheme_json, warnings_json, created_at)
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM refs WHERE id = ? AND status = 'capturing' AND capture_lease = ?)`,
       )
       .bind(
         pageId, referenceId, p.url, p.path, p.title, p.ord,
         p.desktopKey, p.desktopThumbKey, p.desktopWidth, p.desktopHeight,
         p.mobileKey, p.mobileThumbKey, p.mobileWidth, p.mobileHeight,
-        p.snapshotKey, p.stylesKey, p.tokens ? JSON.stringify(p.tokens) : null, Array.isArray(p.sections) ? JSON.stringify(p.sections) : null, p.altScheme ? JSON.stringify(p.altScheme) : null, ts, referenceId, lease,
+        p.snapshotKey, p.stylesKey, p.tokens ? JSON.stringify(p.tokens) : null, Array.isArray(p.sections) ? JSON.stringify(p.sections) : null, p.altScheme ? JSON.stringify(p.altScheme) : null, p.warnings?.length ? JSON.stringify(p.warnings) : null, ts, referenceId, lease,
       ),
   ]
   for (const a of p.animations) {

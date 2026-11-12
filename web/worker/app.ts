@@ -1,5 +1,5 @@
 import { Hono, type Context } from "hono"
-import { isGzipKey, ungzipKey, type CaptureMode, type CrawlState, type JobComplete, type PageUpload } from "../shared/types"
+import { PAGE_WARNINGS, isGzipKey, ungzipKey, type CaptureMode, type CrawlState, type JobComplete, type PageUpload, type PageWarning } from "../shared/types"
 import { acceptsGzip, getFile } from "./files"
 import {
   type AppEnv,
@@ -459,6 +459,10 @@ function validSections(sections: unknown): sections is NonNullable<PageUpload["s
     (s.live === undefined || (s.live && typeof s.live.key === "string" && num(s.live.height) && num(s.live.durationMs) && (s.live.y === undefined || num(s.live.y)))))
 }
 
+/** Warnings as the agent sends them: the known codes, each at most once. */
+const validWarnings = (warnings: unknown): warnings is PageWarning[] =>
+  Array.isArray(warnings) && new Set(warnings).size === warnings.length && warnings.every((code) => (PAGE_WARNINGS as readonly unknown[]).includes(code))
+
 agent.post("/jobs/:id/pages", async (c) => {
   const id = c.req.param("id")
   const lease = leaseFrom(c)
@@ -471,6 +475,7 @@ agent.post("/jobs/:id/pages", async (c) => {
   if (alt !== undefined && !(alt && (alt.scheme === "light" || alt.scheme === "dark") && typeof alt.desktopKey === "string" && typeof alt.desktopThumbKey === "string" &&
     num(alt.desktopWidth) && num(alt.desktopHeight) && Array.isArray(alt.sectionKeys) && alt.sectionKeys.length <= 64 && alt.sectionKeys.every((k) => k === null || typeof k === "string")))
     return c.json({ error: "bad altScheme" }, 400)
+  if (page.warnings !== undefined && !validWarnings(page.warnings)) return c.json({ error: "bad warnings" }, 400)
   const keys = [page.desktopKey, page.desktopThumbKey, page.mobileKey, page.mobileThumbKey, page.snapshotKey, page.stylesKey, ...(page.sections ?? []).flatMap((s) => [s.key, s.live?.key]), alt?.desktopKey, alt?.desktopThumbKey, ...(alt?.sectionKeys ?? []), ...page.animations.flatMap((a) => [a.gifKey, a.sheetKey])]
   if (keys.some((key) => key && !key.startsWith(prefix))) return c.json({ error: "bad file key" }, 400)
   const pageId = await db.addPage(c.env.DB, id, lease, page)
