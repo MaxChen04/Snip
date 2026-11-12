@@ -593,13 +593,15 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
   const selectedNodes = nodes.filter((n) => selected.has(n.key))
   const members = selectedNodes.filter((n) => n.item)
 
-  const removeNodes = async (keys: Set<string>) => {
+  // Several items at once ask first; `open` closes it while the rest stays, so the text does not blank during the exit.
+  const [removing, setRemoving] = useState({ open: false, keys: new Set<string>(), count: 0, notes: 0 })
+  const removeNodes = async (keys: Set<string>, confirmed = false) => {
     const b = live.current
     const gone = b?.nodes.filter((n) => keys.has(n.key) && !n.style.locked) ?? []
     if (b && !gone.length && b.nodes.some((n) => keys.has(n.key))) return say(LOCKED, false)
     if (!b || !gone.length) return
     const notes = gone.filter((n) => n.kind === "note")
-    if (gone.length > 1 && !confirm(`Remove ${gone.length} items from this board?${notes.length ? " Notes are deleted." : ""} Everything else stays in All saves.`)) return
+    if (gone.length > 1 && !confirmed) return setRemoving({ open: true, keys, count: gone.length, notes: notes.length })
     const goneKeys = new Set(gone.map((n) => n.key))
     apply({ ...b, nodes: b.nodes.filter((n) => !goneKeys.has(n.key)) })
     setSelected(new Set([...sel.current].filter((k) => !goneKeys.has(k))))
@@ -1332,6 +1334,28 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
           onClose={closeMenu}
         />
       )}
+      <Dialog open={removing.open} onOpenChange={(open) => setRemoving((r) => ({ ...r, open }))}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Remove {removing.count} items from this board?</DialogTitle>
+            <DialogDescription>
+              {removing.notes ? "Notes are deleted for good. This can't be undone. Everything else stays in All saves." : "They stay in All saves."}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
+            <Button
+              variant="destructive-confirm"
+              onClick={() => {
+                setRemoving((r) => ({ ...r, open: false }))
+                void removeNodes(removing.keys, true)
+              }}
+            >
+              Remove
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       {openItem && (
         <ItemInspector
           item={openItem}

@@ -140,6 +140,7 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
   // Shown only while there is no data: a failed refresh keeps the last good page on screen.
   const [error, setError] = useState<Error | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [recapturing, setRecapturing] = useState(false)
   const tab = search.get("tab") ?? "pages"
   const openPage = search.get("page")
   const setView = (key: "tab" | "page", value: string | null) => {
@@ -247,6 +248,12 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
   const progressText = capturingPath ? `Capturing ${capturingPath}` : (r.progress ?? WAITING)
   // Share of pages already finished, so the last page reads 83%, not 100%, while it is still capturing. Only a crawl has one.
   const capturedPercent = capturing && r.mode === "crawl" ? Math.round(((Number(capturing[1]) - 1) / Number(capturing[2])) * 100) : null
+  const recapture = () =>
+    void act(async () => {
+      await api.recapture(r.id)
+      notify("Re-capture queued")
+      await load()
+    })
 
   return (
     <div className="min-h-svh">
@@ -302,14 +309,7 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
             <ActionCircle
               icon={<RefreshCwIcon />}
               label="Re-capture"
-              onClick={() => {
-                if (pages.length && !confirm(`Re-capture ${r.domain}? Its ${pages.length} captured ${pages.length === 1 ? "page" : "pages"} will be replaced.`)) return
-                void act(async () => {
-                  await api.recapture(r.id)
-                  notify("Re-capture queued")
-                  await load()
-                })
-              }}
+              onClick={() => (pages.length ? setRecapturing(true) : recapture())}
             />
           )}
           <DropdownMenu>
@@ -470,6 +470,28 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
       </div>
 
       {current && <PageViewer page={current} onClose={() => setOpenPage(null)} onCollectionsChange={setPageCollections} />}
+
+      <Dialog open={recapturing} onOpenChange={setRecapturing}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Re-capture {r.domain}?</DialogTitle>
+            <DialogDescription>
+              Its {pages.length} captured {pages.length === 1 ? "page" : "pages"} will be replaced.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
+            <Button
+              onClick={() => {
+                setRecapturing(false)
+                recapture()
+              }}
+            >
+              Re-capture
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={deleting} onOpenChange={setDeleting}>
         <DialogContent className="sm:max-w-sm">
