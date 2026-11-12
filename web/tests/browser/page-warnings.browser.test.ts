@@ -60,3 +60,18 @@ test("the website's page puts the notice under the page it is about, and only th
   assert.equal(await tile("Pricing").locator("p").count(), 0)
   assert.equal(await tile("Home").getByText(TRUNCATED).count(), 0)
 })
+
+test("the page viewer carries the same notice for the page it shows, and nothing for a clean one", async () => {
+  const t = await website([
+    savedPage({ id: "a", path: "/", title: "Home", warnings: ["blank", "truncated"] }),
+    savedPage({ id: "b", path: "/pricing", title: "Pricing" }),
+  ])
+  await t.goto("/r/ref1?page=a")
+  const viewer = t.page.getByRole("dialog").filter({ has: t.page.getByLabel("Close") })
+  await viewer.getByText(`${BLANK} ${TRUNCATED}`).waitFor()
+
+  await t.goto("/r/ref1?page=b")
+  await viewer.getByText("Pricing").first().waitFor()
+  assert.equal(await viewer.getByText(BLANK).count(), 0)
+  assert.equal(await viewer.getByText(TRUNCATED).count(), 0)
+})

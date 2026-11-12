@@ -21,6 +21,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { cn } from "@/lib/utils"
 import { fileUrl, type Page } from "@/lib/api"
+import { warningText } from "@/lib/page-warnings"
 import { readPref, writePref } from "@/lib/prefs"
 
 // ---------- Resizable sidebar ----------
@@ -227,6 +228,7 @@ export function PageViewer({ page, onClose, onCollectionsChange }: {
 
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
         <div ref={scrollRef} onScroll={onScroll} className="relative min-h-0 min-w-0 flex-1 overflow-y-auto bg-fill-1 p-4 sm:p-6">
+          {page.warnings.length > 0 && <p className="mx-auto mb-3 max-w-xl text-center text-xs text-pretty text-ink-11">{warningText(page)}</p>}
           {key ? (
             <div
               ref={device === "desktop" ? imgRef : undefined}
