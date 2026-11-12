@@ -56,8 +56,14 @@ export interface Reference {
   options: CaptureOptions | null
   createdAt: string
   updatedAt: string
-  /** Last claim or progress time while capturing. */
+  /** Last claim, heartbeat or progress time while capturing. */
   claimedAt: string | null
+  /**
+   * Set while capturing when the agent's last heartbeat (that time) is older than the stale window of 3 minutes: the agent
+   * has gone quiet, and the next agent that asks for work is given this capture. Null while it keeps beating and when not capturing.
+   * Worked out when the reference is read, so a page that wants it to appear on time has to read again.
+   */
+  quietSince: string | null
   /** Starts at 1; each Recapture adds one. An MCP task belongs to one run. */
   captureRun: number
 }
@@ -322,7 +328,7 @@ export interface CaptureStatus {
   state: RefStatus
   progress: string | null
   error: string | null
-  /** Last time this capture reported progress (or was claimed). Null unless capturing. */
+  /** Last heartbeat or progress report (or the claim). Null unless capturing. */
   lastProgressAt: string | null
   worker: {
     lastSeenAt: string | null

@@ -67,6 +67,7 @@ export function toReference(r: Row): Reference {
     createdAt: r.created_at as string,
     updatedAt: r.updated_at as string,
     claimedAt: (r.claimed_at as string) ?? null,
+    quietSince: r.status === "capturing" && typeof r.claimed_at === "string" && r.claimed_at < staleBefore(now()) ? r.claimed_at : null,
     captureRun: (r.capture_run as number) ?? 1,
   }
 }
@@ -497,7 +498,11 @@ export async function setPageCollection(db: D1Database, collectionId: string, pa
 
 // Capture queue
 
-const STALE_MINUTES = 30
+/**
+ * The heartbeat (every 30 s, and every progress report) is the one sign an agent is alive: a capture whose last one is older
+ * than this is the agent's no more. Six missed beats. Safe to be short because every claim issues a new lease, so a replaced agent is refused.
+ */
+const STALE_MINUTES = 3
 
 export async function cleanupRetiredFiles(db: D1Database, files: R2Bucket) {
   const tasks = await db.prepare(`SELECT prefix, attempts FROM capture_cleanup WHERE next_attempt IS NULL OR next_attempt <= ? LIMIT 20`)
@@ -522,6 +527,7 @@ export async function cleanupRetiredFiles(db: D1Database, files: R2Bucket) {
 
 /** Whether a refs row has saved pages. A capture with pages is resumed in its attempt; one without starts fresh. */
 const HAS_PAGES = `EXISTS (SELECT 1 FROM pages WHERE reference_id = refs.id)`
+/** Reclaims in a row that saved no page in between. A page saved under the lease starts the count again (addPage), so a Mac that sleeps now and then is not abandoned. */
 const MAX_STALE_RECLAIMS = 3
 
 /** Ends the captures matching `where` (its bound values in `args`) with what they have: ready with their pages, stopped-empty without. */
@@ -666,7 +672,7 @@ export async function addPage(db: D1Database, referenceId: string, lease: string
       .prepare(
         `UPDATE refs SET page_count = (SELECT count(*) FROM pages WHERE reference_id = ?1),
           animation_count = (SELECT count(*) FROM animations WHERE reference_id = ?1),
-          cover_key = coalesce(cover_key, ?2), crawl_state = coalesce(?5, crawl_state), updated_at = ?3 WHERE id = ?1 AND status = 'capturing' AND capture_lease = ?4`,
+          cover_key = coalesce(cover_key, ?2), crawl_state = coalesce(?5, crawl_state), stale_reclaims = 0, updated_at = ?3 WHERE id = ?1 AND status = 'capturing' AND capture_lease = ?4`,
       )
       .bind(referenceId, p.desktopThumbKey, ts, lease, p.state ? JSON.stringify(p.state) : null),
   )
@@ -811,7 +817,6 @@ export async function getCaptureStatus(db: D1Database, ref: Reference): Promise<
   const freshness = secondsSinceSeen == null ? "never" : secondsSinceSeen <= RECENT_SECONDS ? "recent" : "stale"
   const activity = (w?.activity as "idle" | "busy") ?? null
   const currentJobId = (w?.job_id as string) ?? null
-  const claimedAt = ref.claimedAt
   let advice: string
   let pollAfterSeconds: number | null = null
   switch (ref.status) {
@@ -841,18 +846,15 @@ export async function getCaptureStatus(db: D1Database, ref: Reference): Promise<
       }
       break
     case "capturing": {
-      const progressAge = claimedAt ? Math.round((Date.now() - Date.parse(claimedAt)) / 1000) : null
       if (freshness !== "recent") {
         advice = `The capture was in progress but the worker has not been seen for ${secondsSinceSeen ?? "?"}s. It may have stopped; it will be retried when a worker reconnects. Ask the user to check \`npm run capture\`.`
       } else if (currentJobId && currentJobId !== ref.id) {
         advice = "The worker is online but busy with a different job; this capture may have been interrupted and will be retried."
         pollAfterSeconds = 60
       } else {
-        advice =
-          progressAge != null && progressAge > 300
-            ? `The worker is online but this capture has not reported progress for ${progressAge}s. A slow page can cause this; keep polling slowly.`
-            : "Capturing. Progress shows the current page."
-        pollAfterSeconds = progressAge != null && progressAge > 300 ? 120 : 20
+        // A heartbeat renews claimed_at, so a worker that is online never leaves its capture silent past the stale window.
+        advice = "Capturing. Progress shows the current page."
+        pollAfterSeconds = 20
       }
       break
     }
@@ -861,8 +863,8 @@ export async function getCaptureStatus(db: D1Database, ref: Reference): Promise<
     state: ref.status,
     progress: ref.progress,
     error: ref.error,
-    // claimed_at is refreshed on every progress report, so it is the last progress time, not the attempt start.
-    lastProgressAt: ref.status === "capturing" ? claimedAt : null,
+    // claimed_at is refreshed on every heartbeat and progress report, so it is the last sign of life, not the attempt start.
+    lastProgressAt: ref.status === "capturing" ? ref.claimedAt : null,
     worker: { lastSeenAt, secondsSinceSeen, freshness, activity, currentJobId },
     pollAfterSeconds,
     advice,
