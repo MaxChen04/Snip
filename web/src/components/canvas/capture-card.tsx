@@ -18,7 +18,7 @@ import { cn } from "@/lib/utils"
 import { warningText } from "@/lib/page-warnings"
 import { WAITING } from "../../../shared/capture-errors"
 
-// ---------- Captures the card follows (the newest shows; a dropped link joins them) ----------
+// ---------- Captures the card follows (one shows at a time; a dropped link joins them) ----------
 
 let session: string[] = []
 const listeners = new Set<() => void>()
@@ -47,6 +47,15 @@ const adoptRunning = async () => {
   const fresh = running.map((r) => r.id).filter((id) => !session.includes(id))
   if (fresh.length) setSession([...fresh, ...session])
 }
+
+type Detail = { reference: Reference; pages: Page[] }
+
+/** The capture the card shows: one that is capturing (the one started last), else the newest. */
+const shown = (ids: string[], found: Record<string, Detail | undefined>) =>
+  ids
+    .filter((id) => found[id]?.reference.status === "capturing")
+    .sort((a, b) => (found[a]!.reference.claimedAt ?? "").localeCompare(found[b]!.reference.claimedAt ?? ""))
+    .at(-1) ?? ids.at(-1)
 
 type CaptureOpts = { mode: CaptureMode; maxPages?: number; boardId?: string; allowDuplicate?: boolean }
 
@@ -109,7 +118,7 @@ const iconButton = "press grid size-8 shrink-0 place-items-center rounded-full t
 
 /**
  * The mascot and capture card at the canvas origin: paste a link (or several), choose one page or crawl,
- * upload images, and watch the newest capture's progress with pause/stop. Self-contained: it calls the API,
+ * upload images, and watch the running capture's progress with pause/stop. Self-contained: it calls the API,
  * polls, and fires reloadCanvas() as pages land.
  */
 export function CaptureCard({
@@ -137,25 +146,25 @@ export function CaptureCard({
   const [submitting, setSubmitting] = useState(false)
   const [uploading, setUploading] = useState<{ done: number; total: number } | null>(null)
 
-  // Newest capture started here, polled while it runs.
+  // Every capture the card follows is polled while any runs; it shows the one capturing, whichever was started last here.
   const ids = useSyncExternalStore(subscribe, () => session)
-  const cur = ids.at(-1)
+  const [details, setDetails] = useState<Record<string, Detail>>({})
+  const cur = shown(ids, details)
   const more = ids.length - 1
-  const [detail, setDetail] = useState<{ reference: Reference; pages: Page[] } | null>(null)
   const [offline, setOffline] = useState(false)
   const seen = useRef(new Map<string, Reference>())
-  const view = detail && detail.reference.id === cur ? detail : null
+  const view = cur ? details[cur] : undefined
   const r = view?.reference
   const running = !!cur && (!r || RUNNING.includes(r.status))
   // The pill beside the field names what the capture is doing, as the reference's status says.
   const pill = !r ? { label: "Starting…", Glyph: Loader2Icon } : r.quietSince ? { label: captureLabel(r, true)!, Glyph: Clock } : r.status === "paused" ? { label: "Paused", Glyph: PauseIcon } : r.status === "queued" ? { label: "Queued", Glyph: Clock } : { label: "Capturing", Glyph: Loader2Icon }
 
-  /** Reload the canvas when a capture lands a page or finishes; drop finished older captures from the card. */
-  const note = (ref: Reference) => {
+  /** Reload the canvas when a capture lands a page or finishes; drop finished captures the card is not showing. */
+  const note = (ref: Reference, front: string | undefined) => {
     const before = seen.current.get(ref.id) ?? { pageCount: 0, status: "queued" }
     seen.current.set(ref.id, ref)
     if (ref.pageCount > before.pageCount || (ref.status === "ready" && before.status !== "ready")) reloadCanvas()
-    if (ref.id === cur || RUNNING.includes(ref.status)) return
+    if (ref.id === front || RUNNING.includes(ref.status)) return
     untrack(ref.id)
     if (ref.status === "failed" && !isStopped(ref))
       toast.error(`Couldn't capture ${ref.domain}`, {
@@ -165,29 +174,29 @@ export function CaptureCard({
   }
 
   const poll = async () => {
-    if (!cur) return
-    const others = ids.slice(0, -1)
+    if (!ids.length) return
     const gone = (id: string) => (e: Error) => {
       if (/not found/i.test(e.message)) untrack(id)
       throw e
     }
-    // Each older capture by id, so one past the newest 50 references still finishes and leaves the card.
+    // Each capture by id, so one past the newest 50 references still finishes and leaves the card.
     // ponytail: one request per tracked capture; fine for a handful, batch it if people queue dozens.
-    const [d, ...rest] = await Promise.all([
-      api.reference(cur).catch(gone(cur)),
-      ...others.map((id) => api.reference(id).catch(gone(id)).catch(() => null)),
-    ])
-    note(d.reference)
-    for (const o of rest) if (o) note(o.reference)
-    setDetail({ reference: d.reference, pages: d.pages })
-    if (d.reference.status === "queued") setOffline((await api.agent()).freshness !== "recent")
+    const got = await Promise.all(ids.map((id) => api.reference(id).catch(gone(id)).catch(() => null)))
+    const fresh: Record<string, Detail> = {}
+    got.forEach((d, i) => {
+      if (d) fresh[ids[i]] = d
+    })
+    const front = shown(ids, fresh)
+    for (const d of Object.values(fresh)) note(d.reference, front)
+    setDetails((prev) => ({ ...prev, ...fresh }))
+    if (front && fresh[front]?.reference.status === "queued") setOffline((await api.agent()).freshness !== "recent")
   }
 
   useEffect(() => void adoptRunning(), [])
   useEffect(() => {
-    // Load once per capture; usePoll keeps it fresh after that.
-    if (cur) void poll().catch(() => {})
-  }, [cur])
+    // Load when a capture joins; usePoll keeps them fresh after that.
+    void poll().catch(() => {})
+  }, [ids])
   usePoll(poll, running || more > 0, r?.status === "paused" ? undefined : LIVE_POLL)
 
   // A finished capture stays for a moment with its result, then the card goes back to idle.

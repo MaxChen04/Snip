@@ -129,3 +129,51 @@ test("website tiles say Queued while waiting and Stopped once the user stopped t
   assert.match(await tile("Stopped Site").innerText(), /Stopped/)
   assert.match(await tile("Failed Site").innerText(), /Capture failed/)
 })
+
+// ---------------------------------------------------------------- several captures at once
+
+/** The home page with several captures tracked at once, as the app adopts the running ones when it loads. */
+const withCaptures = async (refs: Reference[], opts: { clock?: boolean } = {}) => {
+  const t = await app.session({ state: { references: Object.fromEntries(refs.map((r) => [r.id, r])) }, clock: opts.clock })
+  t.on("GET", "/api/references", (req) => ({ json: { items: Object.values(t.state.references).filter((r) => r.status === req.query.get("status")), nextCursor: null } }))
+  await t.goto("/")
+  return t
+}
+const at = (sec: number) => `2026-01-01T00:00:${String(sec).padStart(2, "0")}.000Z`
+const capture = (id: string, o: Partial<Reference> = {}) =>
+  reference({ id, domain: `${id}.example`, url: `https://${id}.example/`, status: "capturing", progress: "Capturing 1/1: /", ...o })
+
+test("the card shows the capture that is capturing, not a newer one still queued", async () => {
+  const a = capture("aaa", { claimedAt: at(10), createdAt: at(1) })
+  const b = capture("bbb", { claimedAt: at(20), createdAt: at(2) })
+  const c = capture("ccc", { status: "queued", progress: WAITING, createdAt: at(3) })
+  const t = await withCaptures([a, b, c])
+  // Of the two being captured, the one that started last.
+  await card(t).getByText("Capturing bbb.example").waitFor()
+  assert.equal(await card(t).getByText("+2 more").count(), 1)
+  assert.equal(await card(t).getByText("Capturing", { exact: true }).count(), 1, "the pill")
+  assert.equal(await card(t).getByText("Queued", { exact: true }).count(), 0)
+})
+
+test("with nothing capturing the card shows the newest capture", async () => {
+  const a = capture("aaa", { status: "queued", progress: WAITING, createdAt: at(1) })
+  const b = capture("bbb", { status: "queued", progress: WAITING, createdAt: at(2) })
+  const t = await withCaptures([a, b])
+  await card(t).getByText("Queued", { exact: true }).waitFor()
+  assert.equal(await card(t).getByText("+1 more").count(), 1)
+  assert.equal(await t.page.getByPlaceholder("bbb.example").count(), 1, "the field names the newest")
+})
+
+test("a capture that finishes while another is capturing leaves the card, and the count follows", async () => {
+  const a = capture("aaa", { claimedAt: at(20), createdAt: at(1) })
+  const b = capture("bbb", { claimedAt: at(10), createdAt: at(2) })
+  const t = await withCaptures([a, b], { clock: true })
+  await card(t).getByText("Capturing aaa.example").waitFor()
+  assert.equal(await card(t).getByText("+1 more").count(), 1)
+
+  t.state.references.aaa = { ...a, status: "ready", pageCount: 1, progress: null }
+  await t.page.clock.fastForward(5000)
+  await card(t).getByText("Capturing bbb.example").waitFor()
+  assert.equal(await card(t).getByText("more", { exact: false }).count(), 0, "the finished one no longer counts")
+  assert.equal(await card(t).getByText("Saved 1 page").count(), 0)
+})
