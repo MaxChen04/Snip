@@ -38,6 +38,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { cn } from "@/lib/utils"
+import { parseProgress } from "@/lib/capture-progress"
 import { warningText } from "@/lib/page-warnings"
 import { api, fileUrl, NotFoundError, type Animation, type Page, type Reference } from "@/lib/api"
 import { WAITING } from "../../shared/capture-errors"
@@ -242,12 +243,11 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
 
   const inCollections = collections.filter((c) => r.collectionIds.includes(c.id))
   const quiet = !!r.quietSince
-  // The capture agent reports "Capturing 7/25: /enterprise" while it works on a page.
-  const capturing = r.progress?.match(/^Capturing (\d+)\/(\d+): (.+)$/)
-  const capturingPath = capturing?.[3]
+  const capturing = parseProgress(r)
+  const capturingPath = capturing?.path
   const progressText = capturingPath ? `Capturing ${capturingPath}` : (r.progress ?? WAITING)
   // Share of pages already finished, so the last page reads 83%, not 100%, while it is still capturing. Only a crawl has one.
-  const capturedPercent = capturing && r.mode === "crawl" ? Math.round(((Number(capturing[1]) - 1) / Number(capturing[2])) * 100) : null
+  const capturedPercent = capturing?.total && r.mode === "crawl" ? Math.round(((capturing.n - 1) / capturing.total) * 100) : null
   const recapture = () =>
     void act(async () => {
       await api.recapture(r.id)

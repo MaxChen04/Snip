@@ -12,6 +12,7 @@ import { reloadCanvas } from "@/components/canvas/types"
 import { LIVE_POLL, usePoll } from "@/hooks/use-poll"
 import { api, DuplicateError, fileUrl, type CaptureMode, type Page, type Reference } from "@/lib/api"
 import { IMAGE_TYPES, uploadImages } from "@/lib/images"
+import { parseProgress } from "@/lib/capture-progress"
 import { CRAWL_LIMITS, extractUrls, typedUrls } from "@/lib/site-url"
 import { useCollections } from "@/lib/collections"
 import { cn } from "@/lib/utils"
@@ -413,12 +414,6 @@ export function CaptureCard({
   )
 }
 
-/** "Capturing 7/25: /enterprise", as the capture agent reports a page it is working on. */
-const parseProgress = (r: Reference) => {
-  const m = r.status === "capturing" ? r.progress?.match(/^Capturing (\d+)\/(\d+): (.+)$/) : null
-  return m ? { n: Number(m[1]), total: Number(m[2]), path: m[3] } : null
-}
-
 function Status({
   r,
   pages,
@@ -506,10 +501,11 @@ function Status({
   const paused = r.status === "paused"
   // A queued capture says what the Worker says, as the reference page does.
   const title = r.status === "queued" ? (r.progress ?? WAITING) : `${r.mode === "crawl" ? "Crawling" : "Capturing"} ${r.domain}`
-  const meta = captureLabel(r, true) ?? (p ? (r.mode === "crawl" ? `${p.n} of ${p.total} pages` : p.path) : null)
+  const meta = captureLabel(r, true) ?? (p ? (r.mode !== "crawl" ? p.path : p.total ? `${p.n} of ${p.total} pages` : `Page ${p.n}`) : null)
   // Share of pages finished, so the last page reads 92%, not 100%, while it is still being captured. A single page
-  // has no fraction to report, and neither does a capture that has not started: the bar then only shows it is working.
-  const fraction = paused ? r.pageCount / Math.max(1, r.maxPages) : p && r.mode === "crawl" ? (p.n - 1) / p.total : null
+  // has no fraction to report, nor does a crawl that has not found its total, nor a capture that has not started: the bar then
+  // only shows it is working.
+  const fraction = paused ? r.pageCount / Math.max(1, r.maxPages) : p?.total && r.mode === "crawl" ? (p.n - 1) / p.total : null
   return (
     <div className="flex flex-col gap-2 px-1.5 py-1">
       <div className="flex min-h-7 items-center gap-2 text-xs">
@@ -539,7 +535,7 @@ function Status({
 function Landing({ r, pages }: { r: Reference; pages: Page[] }) {
   const landed = pages.filter((pg) => pg.desktopThumbKey ?? pg.mobileThumbKey).slice(-2)
   const p = parseProgress(r)
-  const queued = r.mode === "crawl" && p ? p.total - p.n : 0
+  const queued = r.mode === "crawl" && p?.total ? p.total - p.n : 0
   const capturing = r.status === "capturing" && r.control !== "stop" && !r.quietSince
   if (!landed.length && !capturing && !queued) return null
   // Three of these and their gaps come to the card's 520 px, so the row stays between the canvas columns.

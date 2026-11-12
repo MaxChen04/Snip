@@ -3,6 +3,7 @@ import assert from "node:assert/strict"
 import { after, before, test } from "node:test"
 import { STOPPED_EMPTY, WAITING } from "../../shared/capture-errors.ts"
 import type { Reference } from "../../shared/types.ts"
+import { parseProgress } from "../../src/lib/capture-progress.ts"
 import { openAddDialog, boardOf, reference, startApp, until, websiteItem, type App } from "./harness.ts"
 
 let app: App
@@ -200,4 +201,44 @@ test("pausing a queued crawl says Paused; pausing one that is capturing says it 
   c.on("POST", "/api/references/ref1/pause", () => ({ json: { ...running, control: "pause" } }))
   await card(c).getByRole("button", { name: "Pause" }).click()
   await c.page.getByText("Pausing after this page").waitFor()
+})
+
+// ---------------------------------------------------------------- the agent's progress text, with or without a total
+
+test("the progress text reads with a total (7/25) and without one (page 1), and only while capturing", () => {
+  const at = (progress: string | null, status: Reference["status"] = "capturing") => parseProgress({ status, progress })
+  assert.deepEqual(at("Capturing 7/25: /enterprise"), { n: 7, total: 25, path: "/enterprise" })
+  assert.deepEqual(at("Capturing page 1: /"), { n: 1, total: null, path: "/" })
+  assert.deepEqual(at("Capturing page 12: /docs/getting started"), { n: 12, total: null, path: "/docs/getting started" })
+  assert.equal(at("Waiting for the capture agent"), null)
+  assert.equal(at("Paused"), null)
+  assert.equal(at(null), null)
+  assert.equal(at("Capturing 7/25: /enterprise", "queued"), null)
+})
+
+test("a crawl with a known total shows N of M pages and a real fraction, and one without shows Page N and an indeterminate bar", async () => {
+  const known = await withRunning(reference({ status: "capturing", mode: "crawl", maxPages: 25, progress: "Capturing 5/10: /pricing" }))
+  await card(known).getByText("5 of 10 pages").waitFor()
+  assert.match((await card(known).locator("[style*='width']").getAttribute("style"))!, /width: 40%/)
+  assert.equal(await card(known).getByRole("progressbar").count(), 0)
+
+  const unknown = await withRunning(reference({ status: "capturing", mode: "crawl", maxPages: 25, progress: "Capturing page 1: /" }))
+  await card(unknown).getByText("Page 1", { exact: true }).waitFor()
+  assert.equal(await card(unknown).getByText(/ of \d+ pages/).count(), 0, "a total that is not known is not shown")
+  await bar(unknown).waitFor()
+  assert.equal(await card(unknown).locator("[style*='width']").count(), 0)
+  // Nothing is claimed to be queued behind it either.
+  assert.equal(await unknown.page.getByText(/more queued/).count(), 0)
+})
+
+test("the website's page shows a percentage only when the crawl's total is known", async () => {
+  const percent = async (progress: string) => {
+    const r = reference({ id: "ref1", status: "capturing", mode: "crawl", maxPages: 25, progress })
+    const t = await app.session({ state: { references: { ref1: r } } })
+    await t.goto("/r/ref1")
+    await t.page.getByRole("img", { name: /^Capturing \// }).waitFor()
+    return t.page.getByText(/^\d+%$/).count()
+  }
+  assert.equal(await percent("Capturing 5/10: /pricing"), 1)
+  assert.equal(await percent("Capturing page 1: /"), 0)
 })
