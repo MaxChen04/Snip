@@ -38,6 +38,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { cn } from "@/lib/utils"
+import { warningText } from "@/lib/page-warnings"
 import { api, fileUrl, NotFoundError, type Animation, type Page, type Reference } from "@/lib/api"
 import { WAITING } from "../../shared/capture-errors"
 import { isVideoKey } from "../../shared/types"
@@ -433,6 +434,7 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
                     <div className="truncate text-2xs text-white/75">{p.path}</div>
                   </div>
                 </button>
+                {p.warnings.length > 0 && <p className="mt-1.5 px-1 text-2xs text-pretty text-ink-11">{warningText(p)}</p>}
                 </div>
               ))}
               {busy && !quiet && (

@@ -11,7 +11,7 @@ import net from "node:net"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { chromium, type Browser, type Page } from "playwright"
-import type { BoardCanvas, BoardGroup, BoardItem, Collection, Reference, SavedImage } from "../../shared/types.ts"
+import type { BoardCanvas, BoardGroup, BoardItem, Collection, Page as SavedPage, Reference, SavedImage } from "../../shared/types.ts"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const webDir = path.resolve(here, "../..")
@@ -58,6 +58,34 @@ export const reference = (o: Partial<Reference> = {}): Reference => ({
   claimedAt: null,
   quietSince: null,
   captureRun: 1,
+  ...o,
+})
+
+/** A captured page of a website. */
+export const savedPage = (o: Partial<SavedPage> = {}): SavedPage => ({
+  id: "page1",
+  referenceId: "ref1",
+  url: "https://example.com/",
+  path: "/",
+  title: "Example Domain",
+  ord: 0,
+  desktopKey: "pages/page1/desktop.png",
+  desktopThumbKey: "pages/page1/desktop-thumb.png",
+  desktopWidth: 1440,
+  desktopHeight: 900,
+  mobileKey: null,
+  mobileThumbKey: null,
+  mobileWidth: null,
+  mobileHeight: null,
+  snapshotKey: null,
+  stylesKey: null,
+  tokens: null,
+  sections: [],
+  altScheme: null,
+  sectionsCaptured: true,
+  warnings: [],
+  collectionIds: [],
+  createdAt: NOW,
   ...o,
 })
 

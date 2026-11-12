@@ -15,6 +15,7 @@ import { IMAGE_TYPES, uploadImages } from "@/lib/images"
 import { CRAWL_LIMITS, extractUrls } from "@/lib/site-url"
 import { useCollections } from "@/lib/collections"
 import { cn } from "@/lib/utils"
+import { warningText } from "@/lib/page-warnings"
 import { WAITING } from "../../../shared/capture-errors"
 
 // ---------- Captures the card follows (the newest shows; a dropped link joins them) ----------
@@ -438,13 +439,17 @@ function Status({
 
   if (r.status === "ready") {
     const n = r.pageCount || pages.length
+    // What the capture agent noticed about the pages it saved: one page says it in full, several point at the website.
+    const flagged = pages.filter((pg) => pg.warnings.length)
+    const warning = flagged.length > 1 ? `${flagged.length} of ${n} pages have a warning. Open the website to see which.` : flagged[0] ? warningText(flagged[0]) : null
     return (
       <div role="status" className="flex items-center gap-2 px-1.5 py-1 text-xs">
         <span className="grid size-5 shrink-0 place-items-center rounded-full bg-(--green-3) text-(--green-11)">
           <CheckIcon className="size-3" />
         </span>
-        <span className="min-w-0 truncate text-ink-12">
-          Saved {plural(n, "page")} from {r.domain}
+        <span className={cn("min-w-0 text-ink-12", !warning && "truncate")}>
+          Saved {plural(n, "page")}
+          {warning ? `. ${warning}` : ` from ${r.domain}`}
         </span>
         {moreNote}
         <button type="button" onClick={() => onOpen(r.id)} className="tactile press ml-auto h-7 shrink-0 rounded-full px-3 text-xs">
