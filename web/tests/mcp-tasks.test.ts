@@ -267,6 +267,9 @@ test("add_reference and create_collection refuse what the API refuses, with the 
     assert.equal(refused.isError, true)
     assert.match(refused.content[0].text, /^A web address cannot contain a username or password\. Pass a full http\(s\) URL/)
     assert.equal((await call("add_reference", { url: "file:///etc/passwd" })).result!.isError, true)
+    const tooLong = (await call("add_reference", { url: `https://example.com/${"a".repeat(2030)}` })).result!
+    assert.equal(tooLong.isError, true)
+    assert.match(tooLong.content[0].text, /^That web address is too long\. Pass a full http\(s\) URL/, "one full stop, not two")
 
     // The same site URL written another way is the saved one, not a new capture.
     const first = (await call("add_reference", { url: "ando.so" }, { tasks: false })).result!

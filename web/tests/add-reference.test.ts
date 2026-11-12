@@ -103,6 +103,8 @@ test("a URL that cannot be captured is a 400 with a sentence, and nothing is sav
       ["https://", /not a valid web address/],
       ["", /Enter a web address/],
       ["   ", /Enter a web address/],
+      [`https://example.com/${"a".repeat(2029)}`, /too long/],
+      [`https://example.com/${"a".repeat(3000)}`, /too long/],
       [42, /url is required/],
     ]
     for (const [input, says] of refused) {
@@ -124,6 +126,7 @@ test("a URL that cannot be captured is a 400 with a sentence, and nothing is sav
       ["http://127.0.0.1:4173/", "http://127.0.0.1:4173/"],
       ["192.168.1.20", "https://192.168.1.20/"],
       ["http://[::1]:5173/", "http://[::1]:5173/"],
+      [`https://long.example/${"a".repeat(2027)}`, `https://long.example/${"a".repeat(2027)}`], // 2,048 characters is still fine
     ] as const) {
       const res = await add(input)
       assert.equal(res.status, 201, `${input}: ${res.body.error}`)

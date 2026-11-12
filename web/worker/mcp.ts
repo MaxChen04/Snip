@@ -847,7 +847,7 @@ Scroll timing is synthetic playback; hover offsets are measured. Treat easing an
         return ok({ ...(await summarizeRef(ref)), capture, next: `wait_for_capture(reference_id "${ref.id}")` })
       } catch (e) {
         if (e instanceof ProtocolError) throw e
-        return fail(`${(e as Error).message}. Pass a full http(s) URL, e.g. https://linear.app.`)
+        return fail(`${(e as Error).message.replace(/\.$/, "")}. Pass a full http(s) URL, e.g. https://linear.app.`)
       }
     },
   )
