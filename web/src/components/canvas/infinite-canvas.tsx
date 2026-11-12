@@ -104,16 +104,17 @@ export function InfiniteCanvas({
       if (!frame) frame = requestAnimationFrame(flush)
     }
 
-    // will-change keeps the world on one GPU layer but rasterizes it at the zoom it started with. Dropping and
-    // restoring it after zooming settles re-rasterizes, so text and images stay sharp.
+    // While the zoom moves, will-change keeps the compositor scaling the bitmap it has instead of rasterizing the world
+    // again at every step. Once the zoom has been still for 200 ms it is dropped, which rasterizes once at the final
+    // scale and keeps text and images sharp. It must not stay on: the layer keeps the raster scale it had when the
+    // zoom began, so tiles that mount while panning at 25% were rasterized for 100%. The same pan measured 4.5 s of
+    // raster time that way and 0.56 s without, and every frame that added tiles waited for it.
     const sharpen = () => {
+      const el = world.current
+      if (!el) return
+      el.style.willChange = "transform"
       clearTimeout(raster)
-      raster = window.setTimeout(() => {
-        const el = world.current
-        if (!el) return
-        el.style.willChange = "auto"
-        requestAnimationFrame(() => (el.style.willChange = "transform"))
-      }, 200)
+      raster = window.setTimeout(() => (el.style.willChange = ""), 200)
     }
 
     const stop = () => {
@@ -166,6 +167,7 @@ export function InfiniteCanvas({
         const p = Math.min(1, (now - t0) / 320)
         const e = 1 - (1 - p) ** 4
         set(from.x + (cx - from.x) * e, from.y + (cy - from.y) * e, from.zoom + (k - from.zoom) * e)
+        if (k !== from.zoom) sharpen()
         if (p < 1) tween = requestAnimationFrame(step)
         else {
           targetK = null
@@ -212,7 +214,7 @@ export function InfiniteCanvas({
       },
       getView,
     }
-    return { handle, flush, schedule, stop, local, panBy, zoomAt, fling, cancel: () => cancelAnimationFrame(frame) }
+    return { handle, flush, schedule, sharpen, stop, local, panBy, zoomAt, fling, cancel: () => cancelAnimationFrame(frame) }
   }
   api.current ??= makeApi()
   const a = api.current
@@ -346,6 +348,7 @@ export function InfiniteCanvas({
       v.k = k
       Object.assign(g, next)
       a.schedule()
+      a.sharpen()
     }
   }
 
@@ -429,7 +432,7 @@ export function InfiniteCanvas({
       onKeyDown={onKeyDown}
       onFocus={onFocus}
     >
-      <div ref={world} className="absolute top-0 left-0 origin-top-left will-change-transform">
+      <div ref={world} className="absolute top-0 left-0 origin-top-left">
         {children(visible)}
       </div>
     </div>
