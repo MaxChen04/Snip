@@ -53,7 +53,16 @@ export function CaptureControls({ r, onChange, compact, className }: { r: Refere
     setBusy(action)
     try {
       const next = await api.captureControl(r.id, action)
-      notify(next?.status === "ready" ? `Stopped with ${next.pageCount} ${next.pageCount === 1 ? "page" : "pages"}` : next?.status === "failed" ? "Capture stopped" : ACTIONS[action].done)
+      // What the response says happened: a capture with no page in flight pauses at once.
+      notify(
+        next?.status === "ready"
+          ? `Stopped with ${next.pageCount} ${next.pageCount === 1 ? "page" : "pages"}`
+          : next?.status === "failed"
+            ? "Capture stopped"
+            : next?.status === "paused"
+              ? "Paused"
+              : ACTIONS[action].done,
+      )
       onChange()
     } catch (err) {
       notify(`Couldn't ${action}: ${(err as Error).message}`)

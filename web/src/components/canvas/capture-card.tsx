@@ -151,7 +151,6 @@ export function CaptureCard({
   const [details, setDetails] = useState<Record<string, Detail>>({})
   const cur = shown(ids, details)
   const more = ids.length - 1
-  const [offline, setOffline] = useState(false)
   const seen = useRef(new Map<string, Reference>())
   const view = cur ? details[cur] : undefined
   const r = view?.reference
@@ -189,7 +188,6 @@ export function CaptureCard({
     const front = shown(ids, fresh)
     for (const d of Object.values(fresh)) note(d.reference, front)
     setDetails((prev) => ({ ...prev, ...fresh }))
-    if (front && fresh[front]?.reference.status === "queued") setOffline((await api.agent()).freshness !== "recent")
   }
 
   useEffect(() => void adoptRunning(), [])
@@ -394,7 +392,7 @@ export function CaptureCard({
           />
         </div>
 
-        {cur && <Status r={r} pages={view?.pages ?? []} offline={offline} more={more} onChange={() => void poll().catch(() => {})} onOpen={(id) => navigate(`/r/${id}`)} />}
+        {cur && <Status r={r} pages={view?.pages ?? []} more={more} onChange={() => void poll().catch(() => {})} onOpen={(id) => navigate(`/r/${id}`)} />}
       </form>
 
       {r && view && <Landing r={r} pages={view.pages} />}
@@ -424,14 +422,12 @@ const parseProgress = (r: Reference) => {
 function Status({
   r,
   pages,
-  offline,
   more,
   onChange,
   onOpen,
 }: {
   r: Reference | undefined
   pages: Page[]
-  offline: boolean
   more: number
   onChange: () => void
   onOpen: (id: string) => void
@@ -508,8 +504,8 @@ function Status({
 
   const p = parseProgress(r)
   const paused = r.status === "paused"
-  const title =
-    r.status === "queued" ? (offline ? WAITING : `Waiting to capture ${r.domain}`) : `${r.mode === "crawl" ? "Crawling" : "Capturing"} ${r.domain}`
+  // A queued capture says what the Worker says, as the reference page does.
+  const title = r.status === "queued" ? (r.progress ?? WAITING) : `${r.mode === "crawl" ? "Crawling" : "Capturing"} ${r.domain}`
   const meta = captureLabel(r, true) ?? (p ? (r.mode === "crawl" ? `${p.n} of ${p.total} pages` : p.path) : null)
   // Share of pages finished, so the last page reads 92%, not 100%, while it is still being captured. A single page
   // has no fraction to report, and neither does a capture that has not started: the bar then only shows it is working.

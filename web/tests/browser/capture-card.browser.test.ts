@@ -49,7 +49,7 @@ test("the options stay on the card while a capture runs", async () => {
 
 test("the pill names the state: Queued while waiting, Capturing once it runs", async () => {
   const queued = await withRunning(reference({ status: "queued", progress: WAITING }))
-  await card(queued).getByText("Waiting to capture example.com").waitFor()
+  await card(queued).getByText(WAITING).waitFor()
   assert.equal(await card(queued).getByText("Queued", { exact: true }).count(), 1)
   assert.equal(await card(queued).getByText("Capturing", { exact: true }).count(), 0)
 
@@ -59,10 +59,17 @@ test("the pill names the state: Queued while waiting, Capturing once it runs", a
   assert.equal(await card(running).getByText("Queued", { exact: true }).count(), 0)
 })
 
-test("a queued capture with no agent running says it is waiting for the capture agent", async () => {
-  const t = await withRunning(reference({ status: "queued", progress: WAITING }), { agent: "stale" })
-  await card(t).getByText(WAITING).waitFor()
-  assert.equal(await card(t).getByText("Waiting for your Mac").count(), 0)
+test("a queued capture reads the Worker's progress text on the card and the reference page, agent online or not", async () => {
+  for (const agent of ["recent", "stale"] as const) {
+    const t = await withRunning(reference({ status: "queued", progress: WAITING }), { agent })
+    await card(t).getByText(WAITING).waitFor()
+    assert.equal(await card(t).getByText("Waiting to capture").count(), 0, `a client wording of its own while the agent is ${agent}`)
+    await t.goto("/r/ref1")
+    await t.page.getByText(WAITING).first().waitFor()
+  }
+  // Whatever the Worker says is what shows: nothing on the card rewrites it.
+  const custom = await withRunning(reference({ status: "queued", progress: "Waiting behind 2 other captures" }))
+  await card(custom).getByText("Waiting behind 2 other captures").waitFor()
 })
 
 // ---------------------------------------------------------------- the bar
@@ -91,7 +98,7 @@ test("a crawl keeps its real fraction, and a queued capture shows no bar at all"
   assert.match((await fill.getAttribute("style"))!, /width: 40%/)
 
   const queued = await withRunning(reference({ status: "queued", mode: "single", progress: WAITING }))
-  await card(queued).getByText("Waiting to capture example.com").waitFor()
+  await card(queued).getByText(WAITING).waitFor()
   assert.equal(await bar(queued).count(), 0)
   assert.equal(await card(queued).locator("[style*='width']").count(), 0)
 })
@@ -176,4 +183,21 @@ test("a capture that finishes while another is capturing leaves the card, and th
   await card(t).getByText("Capturing bbb.example").waitFor()
   assert.equal(await card(t).getByText("more", { exact: false }).count(), 0, "the finished one no longer counts")
   assert.equal(await card(t).getByText("Saved 1 page").count(), 0)
+})
+
+// ---------------------------------------------------------------- pause and resume say what happened
+
+test("pausing a queued crawl says Paused; pausing one that is capturing says it pauses after the page", async () => {
+  const queued = reference({ status: "queued", mode: "crawl", maxPages: 10, progress: WAITING })
+  const q = await withRunning(queued)
+  q.on("POST", "/api/references/ref1/pause", () => ({ json: { ...queued, status: "paused", progress: "Paused" } }))
+  await card(q).getByRole("button", { name: "Pause" }).click()
+  await q.page.getByText("Paused", { exact: true }).first().waitFor()
+  assert.equal(await q.page.getByText("Pausing after this page").count(), 0)
+
+  const running = reference({ status: "capturing", mode: "crawl", maxPages: 10, progress: "Capturing 2/10: /pricing" })
+  const c = await withRunning(running)
+  c.on("POST", "/api/references/ref1/pause", () => ({ json: { ...running, control: "pause" } }))
+  await card(c).getByRole("button", { name: "Pause" }).click()
+  await c.page.getByText("Pausing after this page").waitFor()
 })
