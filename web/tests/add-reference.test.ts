@@ -83,3 +83,73 @@ test("a reference saved before the check existed is found too, and allowDuplicat
     await mf.dispose()
   }
 })
+
+test("a URL that cannot be captured is a 400 with a sentence, and nothing is saved", async () => {
+  const { mf, database, add } = await setup()
+  try {
+    const refused: [input: unknown, says: RegExp][] = [
+      ["https://user:pw@example.com", /username or password/],
+      ["https://user@example.com/", /username or password/],
+      ["file:///etc/passwd", /Only http and https/],
+      ["ftp://example.com/file", /Only http and https/],
+      ["javascript:alert(1)", /Only http and https/],
+      ["mailto:someone@example.com", /Only http and https/],
+      ["data:text/html;base64,PGgxPmhpPC9oMT4=", /Only http and https/],
+      ["not a url", /spaces/],
+      ["https://example.com/some path", /spaces/],
+      ["https://exa mple.com", /spaces/],
+      ["intranet", /host name/],
+      ["https://intranet/", /host name/],
+      ["https://", /not a valid web address/],
+      ["", /Enter a web address/],
+      ["   ", /Enter a web address/],
+      [42, /url is required/],
+    ]
+    for (const [input, says] of refused) {
+      const res = await add(input)
+      assert.equal(res.status, 400, `${JSON.stringify(input)} is refused`)
+      assert.match(res.body.error ?? "", says, JSON.stringify(input))
+      assert.doesNotMatch(res.body.error ?? "", /Invalid URL|is not a function|string did not match/i, "the message is a sentence, not a parser error")
+    }
+    assert.equal((await database.prepare("SELECT count(*) AS n FROM refs").first<{ n: number }>())!.n, 0)
+
+    // What is accepted: no scheme at all gets https, and local fixtures and IP literals stay allowed.
+    for (const [input, stored] of [
+      ["example.com", "https://example.com/"],
+      ["  Example.COM/Path?q=1#frag  ", "https://example.com/Path?q=1"],
+      ["HTTP://upper.example.com", "http://upper.example.com/"],
+      ["localhost:3000/app", "https://localhost:3000/app"],
+      ["http://localhost:8787", "http://localhost:8787/"],
+      ["example.com:8080/x", "https://example.com:8080/x"],
+      ["http://127.0.0.1:4173/", "http://127.0.0.1:4173/"],
+      ["192.168.1.20", "https://192.168.1.20/"],
+      ["http://[::1]:5173/", "http://[::1]:5173/"],
+    ] as const) {
+      const res = await add(input)
+      assert.equal(res.status, 201, `${input}: ${res.body.error}`)
+      assert.equal(res.body.url, stored)
+    }
+  } finally {
+    await mf.dispose()
+  }
+})
+
+test("adding several URLs one by one reports each failure and keeps the valid ones", async () => {
+  const { mf, database, add } = await setup()
+  try {
+    const list = ["https://one.example", "https://user:pw@two.example", "three example", "file:///etc/passwd", "https://www.one.example/?utm_source=x", "https://four.example/pricing"]
+    const results = []
+    for (const url of list) results.push(await add(url))
+    assert.deepEqual(results.map((r) => r.status), [201, 400, 400, 400, 409, 201])
+    assert.deepEqual(results.map((r) => r.body.error).filter(Boolean), [
+      "A web address cannot contain a username or password",
+      "A web address cannot contain spaces",
+      "Only http and https addresses can be captured",
+      "This URL is already saved",
+    ])
+    const saved = await database.prepare("SELECT url FROM refs ORDER BY created_at").all<{ url: string }>()
+    assert.deepEqual(saved.results.map((r) => r.url), ["https://one.example/", "https://four.example/pricing"])
+  } finally {
+    await mf.dispose()
+  }
+})

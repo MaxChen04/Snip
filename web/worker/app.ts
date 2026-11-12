@@ -257,7 +257,7 @@ api.get("/animations", async (c) => c.json(await db.listAnimations(c.env.DB, lis
 
 api.post("/references", async (c) => {
   const body = await c.req.json<{ url: string; mode: CaptureMode; maxPages?: number; collectionIds?: string[]; notes?: string; options?: unknown; allowDuplicate?: boolean }>()
-  if (!body.url) return c.json({ error: "url is required" }, 400)
+  if (typeof body.url !== "string") return c.json({ error: "url is required" }, 400)
   try {
     if (!body.allowDuplicate) {
       const existing = await db.findReferenceByUrl(c.env.DB, body.url)

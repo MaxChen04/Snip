@@ -285,10 +285,26 @@ async function listChildren<T>(
 export const listPages = (db: D1Database, f: ListFilter) => listChildren(db, "pages", (r) => toPage({ ...r, tokens_json: null }), f)
 export const listAnimations = (db: D1Database, f: ListFilter) => listChildren(db, "animations", toAnimation, f)
 
+/**
+ * The one check for a URL the user adds. Input with no scheme at all gets https://; then it must be http or https, carry no
+ * username or password, have no whitespace and name a host (with a dot, localhost or an IP literal). Anything else throws a sentence
+ * the user can read. Loopback and private addresses pass: the capture agent's own egress guard decides those.
+ */
 export function normalizeUrl(input: string): URL {
   const raw = input.trim()
-  const url = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`)
-  if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("Only http(s) URLs are supported")
+  if (!raw) throw new Error("Enter a web address")
+  if (/\s/.test(raw)) throw new Error("A web address cannot contain spaces")
+  // "localhost:3000" and "example.com:8080" start with a host and a port, not a scheme.
+  const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(raw) && !/^[^/?#]*:\d+(?:[/?#]|$)/.test(raw)
+  let url: URL
+  try {
+    url = new URL(hasScheme ? raw : `https://${raw}`)
+  } catch {
+    throw new Error("That is not a valid web address")
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("Only http and https addresses can be captured")
+  if (url.username || url.password) throw new Error("A web address cannot contain a username or password")
+  if (!url.hostname.includes(".") && url.hostname !== "localhost" && !url.hostname.startsWith("[")) throw new Error("A web address needs a host name, like example.com")
   url.hash = ""
   return url
 }
