@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react"
+import { useEffect, useRef, useState, type ReactNode } from "react"
 import { cn } from "cn"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -193,6 +193,7 @@ export function DeleteResourcesDialog({
   onConfirm: () => void
 }) {
   const [value, setValue] = useState("")
+  const field = useRef<HTMLInputElement>(null)
   useEffect(() => {
     if (open) setValue("")
   }, [open])
@@ -200,7 +201,7 @@ export function DeleteResourcesDialog({
   const matches = host !== "" && value.trim().toLowerCase() === host.toLowerCase()
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[460px]">
+      <DialogContent initialFocus={field} className="sm:max-w-[460px]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <TriangleAlertIcon className="size-4 text-(--red-11)" />
@@ -215,7 +216,7 @@ export function DeleteResourcesDialog({
           <span className="text-xs font-medium text-muted-foreground">
             Type <span className="font-mono text-foreground">{host}</span> to confirm
           </span>
-          <Input autoFocus value={value} onChange={event => setValue(event.target.value)} spellCheck={false} autoComplete="off" aria-label="Cloud library address" />
+          <Input ref={field} value={value} onChange={event => setValue(event.target.value)} spellCheck={false} autoComplete="off" aria-label="Cloud library address" />
         </label>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>

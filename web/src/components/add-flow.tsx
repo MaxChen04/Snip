@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react"
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react"
 import { useLocation } from "wouter"
 import { XIcon } from "@/components/icons"
 import { toast } from "sonner"
@@ -99,6 +99,7 @@ function NewCollectionDialog({ open, onOpenChange }: { open: boolean; onOpenChan
   const [, navigate] = useLocation()
   const [name, setName] = useState("")
   const [busy, setBusy] = useState(false)
+  const field = useRef<HTMLInputElement>(null)
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -121,7 +122,7 @@ function NewCollectionDialog({ open, onOpenChange }: { open: boolean; onOpenChan
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent showCloseButton={false} className="gap-0 p-0 sm:max-w-[400px]">
+      <DialogContent initialFocus={field} showCloseButton={false} className="gap-0 p-0 sm:max-w-[400px]">
         <form onSubmit={submit}>
           <div className="flex items-center justify-between px-5 pt-5 pb-4">
             <DialogTitle className="text-base font-medium">New board</DialogTitle>
@@ -132,7 +133,7 @@ function NewCollectionDialog({ open, onOpenChange }: { open: boolean; onOpenChan
           </div>
           <div className="px-5 pb-5">
             <input
-              autoFocus
+              ref={field}
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. Pricing pages"

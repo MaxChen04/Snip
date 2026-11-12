@@ -56,6 +56,7 @@ export function AddReferenceDialog({
   const [signedIn, setSignedIn] = useState(false)
   const [duplicate, setDuplicate] = useState<Reference | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const field = useRef<HTMLInputElement>(null)
   const parsed = useMemo(() => parseSiteUrl(url), [url])
   useEffect(() => setDuplicate(null), [url])
   // Closing unmounts the dialog. A submit still running then finishes sending, but closes nothing: that would close a newer dialog.
@@ -142,7 +143,7 @@ export function AddReferenceDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent showCloseButton={false} className="flex max-h-[calc(100svh-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[460px]">
+      <DialogContent initialFocus={field} showCloseButton={false} className="flex max-h-[calc(100svh-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[460px]">
         <form onSubmit={submit} className="flex min-h-0 flex-col">
           <div className="flex items-center justify-between px-5 pt-5 pb-4">
             <DialogTitle className="text-base font-medium">New reference</DialogTitle>
@@ -180,7 +181,7 @@ export function AddReferenceDialog({
               <label className="well flex h-12 items-center gap-3 rounded-lg px-3.5">
                 <GlobeIcon className="size-5 shrink-0 text-muted-foreground" />
                 <input
-                  autoFocus
+                  ref={field}
                   inputMode="url"
                   autoComplete="off"
                   spellCheck={false}
