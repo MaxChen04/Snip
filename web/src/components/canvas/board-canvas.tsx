@@ -20,6 +20,8 @@ import { SelectionToolbar } from "@/components/canvas/selection-toolbar"
 import { StickyNote } from "@/components/canvas/sticky-note"
 import { CanvasTile, tileLabel } from "@/components/canvas/tiles"
 import { filterOf, itemAspect, RELOAD_EVENT, type CanvasFilter, type CanvasItem } from "@/components/canvas/types"
+import { Button } from "@/components/ui/button"
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Spinner } from "@/components/ui/spinner"
 import { useDesktopState } from "@/hooks/use-desktop-state"
@@ -210,6 +212,7 @@ const iconButton = "press grid size-8 place-items-center rounded-full text-ink-1
 /** Floating pill under the top bar: the board's name (click to rename), counts, Add note, Add website, more. */
 function BoardHeader({ board, onRename, onAddNote, onAddWebsite, onDelete }: { board: Collection; onRename: (name: string) => void; onAddNote: () => void; onAddWebsite: () => void; onDelete: () => void }) {
   const [editing, setEditing] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   return (
     <div className={cn(pill, "absolute top-16 left-4 z-50 max-w-[calc(100%-2rem)] gap-2 py-1 pr-1 pl-1.5 sm:left-6")}>
       {editing ? (
@@ -251,11 +254,31 @@ function BoardHeader({ board, onRename, onAddNote, onAddWebsite, onDelete }: { b
           <MoreHorizontalIcon />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="w-44">
-          <DropdownMenuItem variant="destructive" onClick={onDelete}>
+          <DropdownMenuItem variant="destructive" onClick={() => setDeleting(true)}>
             <Trash2Icon /> Delete board
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+      <Dialog open={deleting} onOpenChange={setDeleting}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Delete “{board.name}”?</DialogTitle>
+            <DialogDescription>Its saves stay in All saves. Its notes and groups are deleted for good. This can't be undone.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
+            <Button
+              variant="destructive-confirm"
+              onClick={() => {
+                setDeleting(false)
+                onDelete()
+              }}
+            >
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
@@ -934,7 +957,6 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
   }
 
   const deleteBoard = async () => {
-    if (!confirm(`Delete “${title}”? Its saves stay in All saves; its notes and groups are deleted.`)) return
     try {
       const p = pending.current
       clearTimeout(p.timer)
@@ -942,6 +964,7 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
       p.groups.clear()
       await api.deleteCollection(id)
       await refresh().catch(() => {})
+      notify(`Deleted board “${title}”`)
       navigate("/")
     } catch (e) {
       toast.error(message(e))

@@ -10,15 +10,18 @@ import {
   AlertCircleIcon,
   DownloadIcon,
   PauseIcon,
+  StopIcon,
 } from "@/components/icons"
 import { exportReference } from "@/lib/export-reference"
 import { toast } from "sonner"
 import { notify } from "@/components/notify"
 import { CollectionPicker } from "@/components/collection-picker"
 import { diagnoseCaptureError, RetryCaptureButton } from "@/components/capture-retry"
-import { CaptureControls, captureLabel } from "@/components/capture-controls"
+import { CaptureControls, captureLabel, isStopped } from "@/components/capture-controls"
 import { EMPTY_SELECTION, SelectCheck, SelectionBar, toggleIn, type Selection } from "@/components/prompt-selection"
 import { SavePagesButton } from "@/components/save-pages"
+import { Button } from "@/components/ui/button"
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { TokensPanel } from "@/components/tokens-panel"
 import { ImageGeneration } from "@/components/image-generation"
@@ -36,6 +39,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { cn } from "@/lib/utils"
 import { api, fileUrl, NotFoundError, type Animation, type Page, type Reference } from "@/lib/api"
+import { WAITING } from "../../shared/capture-errors"
 import { isVideoKey } from "../../shared/types"
 import { useCollections } from "@/lib/collections"
 import { referenceViewUrl, useDesktopState } from "@/hooks/use-desktop-state"
@@ -59,6 +63,23 @@ function CaptureFailure({ id, error, onRetried }: { id: string; error: string | 
         {error && <p className="font-mono text-2xs break-words text-(--red-11)/70">{error}</p>}
       </div>
       <RetryCaptureButton id={id} error={error} onRetried={onRetried} />
+    </div>
+  )
+}
+
+/** A capture the user stopped before it saved a page: not a failure, so no red and no raw error. Start again, or let it go. */
+function CaptureStopped({ id, error, onRetried, onDelete }: { id: string; error: string | null; onRetried: () => void; onDelete: () => void }) {
+  return (
+    <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+      <div role="status" className="flex h-7 items-center gap-2 rounded-full bg-control px-3 text-xs shadow-button">
+        <StopIcon className="size-3.5 text-ink-10" />
+        <span>{diagnoseCaptureError(error)?.summary}</span>
+      </div>
+      <RetryCaptureButton id={id} error={error} onRetried={onRetried} className="h-7 gap-1.5 px-3 text-xs" />
+      <button type="button" onClick={onDelete} className="tactile press inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full px-3 text-xs font-medium text-(--red-11)">
+        <Trash2Icon className="size-3.5" />
+        Delete
+      </button>
     </div>
   )
 }
@@ -116,7 +137,8 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
   const search = new URLSearchParams(query)
   const [data, setData] = useState<Detail | null>(null)
   // Shown only while there is no data: a failed refresh keeps the last good page on screen.
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<Error | null>(null)
+  const [deleting, setDeleting] = useState(false)
   const tab = search.get("tab") ?? "pages"
   const openPage = search.get("page")
   const setView = (key: "tab" | "page", value: string | null) => {
@@ -151,7 +173,7 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
       .catch((e) => {
         // A reference that is gone has no page to keep, and nothing left to poll.
         if (e instanceof NotFoundError) setData(null)
-        setError((e as Error).message)
+        setError(e as Error)
       })
   }, [id])
 
@@ -162,7 +184,18 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
   usePoll(load, !!busy, data?.reference.status === "capturing" ? LIVE_POLL : undefined)
 
   if (!data) {
-    if (error) return <div className="grid min-h-svh place-items-center text-sm text-muted-foreground">{error}</div>
+    if (error)
+      return (
+        <div className="grid min-h-svh place-items-center px-4 text-center">
+          <div className="grid justify-items-center gap-3" role="alert">
+            <p className="text-sm text-ink-12">{error instanceof NotFoundError ? "This website doesn't exist" : "Couldn't load this website"}</p>
+            <p className="text-xs text-ink-11">{error instanceof NotFoundError ? "It may have been deleted." : error.message}</p>
+            <Link href="/" className="tactile press flex h-8 items-center rounded-full px-3.5 text-xs">
+              Go to All saves
+            </Link>
+          </div>
+        </div>
+      )
     return (
       <div className="mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6">
         <Skeleton className="h-8 w-64" />
@@ -209,8 +242,9 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
   // The capture agent reports "Capturing 7/25: /enterprise" while it works on a page.
   const capturing = r.progress?.match(/^Capturing (\d+)\/(\d+): (.+)$/)
   const capturingPath = capturing?.[3]
-  // Share of pages already finished, so the last page reads 83%, not 100%, while it is still capturing.
-  const capturedPercent = capturing ? Math.round(((Number(capturing[1]) - 1) / Number(capturing[2])) * 100) : 0
+  const progressText = capturingPath ? `Capturing ${capturingPath}` : (r.progress ?? WAITING)
+  // Share of pages already finished, so the last page reads 83%, not 100%, while it is still capturing. Only a crawl has one.
+  const capturedPercent = capturing && r.mode === "crawl" ? Math.round(((Number(capturing[1]) - 1) / Number(capturing[2])) * 100) : null
 
   return (
     <div className="min-h-svh">
@@ -298,30 +332,22 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
               >
                 <DownloadIcon /> Export as .zip
               </DropdownMenuItem>
-              <DropdownMenuItem
-                variant="destructive"
-                onClick={() => {
-                  if (!confirm("Delete this reference and all its captures?")) return
-                  void act(async () => {
-                    await api.deleteReference(r.id)
-                    void refreshCollections().catch(() => {})
-                    navigate("/")
-                  })
-                }}
-              >
+              <DropdownMenuItem variant="destructive" onClick={() => setDeleting(true)}>
                 <Trash2Icon /> Delete reference
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
 
-        {r.status === "failed" ? (
+        {isStopped(r) ? (
+          <CaptureStopped id={r.id} error={r.error} onRetried={load} onDelete={() => setDeleting(true)} />
+        ) : r.status === "failed" ? (
           <CaptureFailure id={r.id} error={r.error} onRetried={load} />
         ) : r.status !== "ready" && (
           <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
             <div className="flex h-7 items-center gap-2 rounded-full bg-control px-3 text-xs shadow-button">
               {r.status === "paused" ? <PauseIcon className="size-3.5 text-ink-10" /> : <Spinner className="size-3.5 text-ink-10" />}
-              <span>{captureLabel(r) ?? r.progress ?? "Waiting for your Mac"}</span>
+              <span>{captureLabel(r) ?? r.progress ?? WAITING}</span>
             </div>
             <CaptureControls r={r} onChange={load} />
           </div>
@@ -404,11 +430,11 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
               {busy && (
                 <ImageGeneration
                   status={r.status === "queued" ? "queued" : "generating"}
-                  label={capturingPath ? `Capturing ${capturingPath}` : (r.progress ?? "Waiting for your Mac")}
+                  label={progressText}
                   resolution={capturingPath ?? ""}
                   aspectRatio="16 / 10"
                   size="fluid"
-                  statusText={`${capturedPercent}%`}
+                  statusText={capturedPercent === null ? progressText : `${capturedPercent}%`}
                   statusClassName="tabular-nums"
                   className="[&_[role=img]]:rounded-lg [&_[role=img]]:shadow-card"
                 />
@@ -434,6 +460,32 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
       </div>
 
       {current && <PageViewer page={current} onClose={() => setOpenPage(null)} onCollectionsChange={setPageCollections} />}
+
+      <Dialog open={deleting} onOpenChange={setDeleting}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Delete {r.domain}?</DialogTitle>
+            <DialogDescription>Its pages, recordings and design tokens are deleted for good, and it leaves every board. This can't be undone.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
+            <Button
+              variant="destructive-confirm"
+              onClick={() => {
+                setDeleting(false)
+                void act(async () => {
+                  await api.deleteReference(r.id)
+                  void refreshCollections().catch(() => {})
+                  notify(`Deleted ${r.domain}`)
+                  navigate("/")
+                })
+              }}
+            >
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

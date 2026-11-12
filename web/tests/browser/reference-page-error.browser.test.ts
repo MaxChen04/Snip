@@ -3,6 +3,7 @@
 // even though later polls succeed. Correct behaviour: the page comes back (title visible, no error screen).
 import assert from "node:assert/strict"
 import { after, before, test } from "node:test"
+import { STOPPED_EMPTY, WAITING } from "../../shared/capture-errors.ts"
 import { gate, reference, startApp, until, sleep, type App } from "./harness.ts"
 
 let app: App
@@ -73,7 +74,7 @@ test("a reference deleted while capturing shows the error and stops polling", as
   const boot = t.count("GET", url)
   await page.clock.fastForward(4500)
   await until("the poll that finds it gone", () => t.count("GET", url) > boot)
-  await page.getByText("not found").waitFor()
+  await page.getByText("This website doesn't exist").waitFor()
   assert.equal(await page.getByRole("heading", { name: "Poll Target" }).isVisible(), false, "the deleted reference's page is still showing")
 
   const before = t.count("GET", url)
@@ -140,11 +141,79 @@ test("a failed delete is shown and stays on the page", async () => {
   const t = await app.session({ state: { references: { ref1: reference({ id: "ref1", title: "Poll Target" }) } } })
   const { page } = t
   t.on("DELETE", "/api/references/ref1", () => ({ status: 500, json: { error: "Boom: could not delete" } }))
-  page.on("dialog", (d) => void d.accept())
   await t.goto("/r/ref1")
   await page.getByRole("button", { name: "More" }).click()
   await page.getByRole("menuitem", { name: "Delete reference" }).click()
+  await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click()
   await page.getByText("Boom: could not delete").waitFor()
   assert.equal(await page.getByRole("heading", { name: "Poll Target" }).isVisible(), true)
   assert.deepEqual(t.consoleErrors, [])
+})
+
+test("Delete reference asks in the app's own dialog, says there is no undo, and Cancel sends nothing", async () => {
+  const t = await app.session({ state: { references: { ref1: reference({ id: "ref1", title: "Poll Target" }) } } })
+  const { page } = t
+  let native = 0
+  page.on("dialog", (d) => void (native++, d.dismiss()))
+  await t.goto("/r/ref1")
+  await page.getByRole("button", { name: "More" }).click()
+  await page.getByRole("menuitem", { name: "Delete reference" }).click()
+  const dialog = page.getByRole("dialog", { name: "Delete example.com?" })
+  await dialog.getByText("This can't be undone.").waitFor()
+  await dialog.getByRole("button", { name: "Cancel" }).click()
+  await dialog.waitFor({ state: "detached" })
+  assert.equal(t.count("DELETE", "/api/references/ref1"), 0)
+  assert.equal(native, 0, "a native confirm was used")
+})
+
+test("a deleted reference says so with a toast and goes back to the library; its URL then offers a way back", async () => {
+  const state = { references: { ref1: reference({ id: "ref1", title: "Poll Target" }) } }
+  const t = await app.session({ state })
+  const { page } = t
+  t.on("DELETE", "/api/references/ref1", () => {
+    delete state.references.ref1
+    return { json: { ok: true } }
+  })
+  t.on("GET", /^\/api\/references\/ref1$/, () => (state.references.ref1 ? undefined : { status: 404, json: { error: "not found" } }))
+  await t.goto("/r/ref1")
+  await page.getByRole("button", { name: "More" }).click()
+  await page.getByRole("menuitem", { name: "Delete reference" }).click()
+  await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click()
+  await page.getByText("Deleted example.com").waitFor()
+  await page.waitForURL((url) => url.pathname === "/")
+
+  // Its old address no longer has a page, and says how to get out.
+  await t.goto("/r/ref1")
+  await page.getByText("This website doesn't exist").waitFor()
+  await page.getByRole("link", { name: "Go to All saves" }).click()
+  await page.waitForURL((url) => url.pathname === "/")
+})
+
+test("a capture the user stopped is a neutral state with Re-capture and Delete, not a red failure", async () => {
+  const state = { references: { ref1: reference({ id: "ref1", title: "Poll Target", status: "failed", error: STOPPED_EMPTY }), ref2: reference({ id: "ref2", title: "Broken", status: "failed", error: "Something odd happened" }) } }
+  const t = await app.session({ state })
+  const { page } = t
+  await t.goto("/r/ref1")
+  await page.getByText("You stopped this capture before any pages were saved.").waitFor()
+  assert.equal(await page.getByText(STOPPED_EMPTY).count(), 0, "the raw error is not shown")
+  assert.equal(await page.getByText("Capture failed.").count(), 0)
+  const panel = page.getByRole("status").filter({ hasText: "You stopped this capture" })
+  assert.equal(await panel.count(), 1)
+  // Re-capture and Delete sit beside it.
+  await page.getByRole("button", { name: "Re-capture" }).first().waitFor()
+  await page.getByRole("button", { name: "Delete", exact: true }).click()
+  await page.getByRole("dialog", { name: "Delete example.com?" }).waitFor()
+  await page.keyboard.press("Escape")
+
+  // A real failure keeps the red panel and its raw error.
+  await t.goto("/r/ref2")
+  await page.getByText("Capture failed.").waitFor()
+  await page.getByText("Something odd happened").waitFor()
+})
+
+test("a queued capture says it is waiting for the capture agent", async () => {
+  const t = await app.session({ state: { references: { ref1: reference({ id: "ref1", title: "Poll Target", status: "queued", progress: WAITING }) } } })
+  await t.goto("/r/ref1")
+  await t.page.getByText(WAITING).first().waitFor()
+  assert.equal(await t.page.getByText("Waiting for your Mac").count(), 0)
 })
