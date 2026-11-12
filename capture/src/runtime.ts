@@ -9,8 +9,11 @@ export type CaptureStatus = {
   retryInMs?: number
 }
 
+/** A capture added while the agent idles waits at most this long, or one poll interval if that is longer. */
+const IDLE_POLL_MAX_MS = 10_000
+
 export const idlePollDelay = (pollMs: number, emptyPolls: number) =>
-  Math.min(30_000, pollMs * 2 ** Math.min(Math.max(0, emptyPolls - 1), 20))
+  Math.min(Math.max(pollMs, IDLE_POLL_MAX_MS), pollMs * 2 ** Math.min(Math.max(0, emptyPolls - 1), 20))
 
 /** A capture that reports nothing for this long is hung: its job is failed and the worker takes the next one. */
 const STALL_MS = 5 * 60_000

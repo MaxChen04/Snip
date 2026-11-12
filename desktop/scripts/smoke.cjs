@@ -116,7 +116,7 @@ async function main() {
     evidence.visible = await processTree(application.process().pid)
     await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close())
     await until(async () => await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length) === 0, "hidden renderer was retained")
-    // Reach the 30-second steady-state queue interval and let Chromium exit.
+    // Reach the steady-state queue interval (10 seconds) and let Chromium exit.
     await sleep(35000)
     evidence.hidden = await processTree(application.process().pid)
     await sleep(30000)
