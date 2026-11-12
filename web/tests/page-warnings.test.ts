@@ -5,6 +5,7 @@ import type { Page, PageUpload, Paged, Reference } from "../shared/types"
 import { app } from "../worker/app"
 import * as db from "../worker/db"
 import { applyMigrations } from "./helpers/d1"
+import { exportPlan } from "../src/lib/export-reference"
 
 // The capture agent may flag a page it saved as blank or truncated; the Worker keeps the flags and returns them on the page.
 
@@ -32,11 +33,14 @@ test("page warnings round-trip from the agent's upload to the page, its website 
       const res = await send(upload(ord, warnings ? { warnings } : {}))
       assert.equal(res.status, 200, JSON.stringify(warnings))
     }
-    const { pages } = await read<{ reference: Reference; pages: Page[] }>(`/api/references/${ref.id}`)
+    const { reference, pages } = await read<{ reference: Reference; pages: Page[] }>(`/api/references/${ref.id}`)
     assert.deepEqual(pages.map((p) => p.warnings), [[], [], ["blank"], ["truncated"], ["truncated", "blank"]])
     const feed = await read<Paged<Page>>(`/api/pages?sort=oldest`)
     assert.deepEqual(feed.items.sort((a, b) => a.ord - b.ord).map((p) => p.warnings), pages.map((p) => p.warnings), "the pages feed carries them too")
     assert.deepEqual((await db.getPage(database, pages[2]!.id))!.warnings, ["blank"])
+    // The exported reference.json says it for every page, with [] for none, the same as the app.
+    const exported = JSON.parse(JSON.stringify(exportPlan(reference, pages, []).metadata)) as { pages: { warnings: string[] }[] }
+    assert.deepEqual(exported.pages.map((p) => p.warnings), pages.map((p) => p.warnings), "the export carries them too")
     const stored = await database.prepare("SELECT warnings_json FROM pages ORDER BY ord").all<{ warnings_json: string | null }>()
     assert.deepEqual(stored.results.map((r) => r.warnings_json), [null, null, '["blank"]', '["truncated"]', '["truncated","blank"]'], "a page without warnings stores nothing")
 

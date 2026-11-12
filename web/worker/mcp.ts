@@ -2,6 +2,7 @@ import { createMcpHandler } from "agents/mcp/server"
 import { McpServer, ProtocolError, ProtocolErrorCode, type CallToolResult } from "@modelcontextprotocol/server"
 import { z } from "zod"
 import { isVideoKey, type Animation, type DesignTokens, type Page, type Reference } from "../shared/types"
+import { pageSummary } from "../shared/page-summary"
 import { currentEpoch, isLocalOrigin, signFileUrl } from "./auth"
 import * as db from "./db"
 import { readText } from "./files"
@@ -126,11 +127,8 @@ function buildServer(env: Env, origin: string) {
   const coverage = (h: number | null) => (h == null ? "not_captured" : h >= PAGE_CLIP_PX ? "clipped_at_height_limit" : "full_document_at_capture")
 
   const describePage = async (p: Page, withUrls = false) => ({
-    id: p.id,
+    ...pageSummary(p),
     referenceId: p.referenceId,
-    url: p.url,
-    path: p.path,
-    title: p.title,
     desktop: {
       fullPageUrl: await url(p.desktopKey),
       thumbUrl: await url(p.desktopThumbKey),
@@ -157,7 +155,6 @@ function buildServer(env: Env, origin: string) {
     otherScheme: p.altScheme
       ? { scheme: p.altScheme.scheme, width: p.altScheme.desktopWidth, height: p.altScheme.desktopHeight, fullPageUrl: await url(p.altScheme.desktopKey), thumbUrl: await url(p.altScheme.desktopThumbKey) }
       : null,
-    warnings: p.warnings,
     collectionIds: p.collectionIds,
   })
 
@@ -222,7 +219,7 @@ function buildServer(env: Env, origin: string) {
       bytes += size
       images.push(got.image)
     }
-    const listed = bounded(pages.map((p) => ({ id: p.id, path: p.path, title: p.title })), 0, 10)
+    const listed = bounded(pages.map(pageSummary), 0, 10)
     const tokens = tokenSummary(full.tokens, 4)
     return ok(
       {
@@ -369,7 +366,7 @@ Signed file URLs expire after 24 hours.`,
       }
 
       if (part === "overview") {
-        const pages = bounded(r.pages.map((p) => ({ id: p.id, path: p.path, title: p.title })), 0, Math.min(limit, 20))
+        const pages = bounded(r.pages.map(pageSummary), 0, Math.min(limit, 20))
         const anims = bounded(r.animations.map(listedAnimation), 0, Math.min(limit, 20))
         const status = ref.status === "ready" ? null : await db.getCaptureStatus(env.DB, ref)
         return ok({
@@ -397,10 +394,7 @@ Signed file URLs expire after 24 hours.`,
       if (part === "pages") {
         const res = bounded(
           r.pages.map((p) => ({
-            id: p.id,
-            path: p.path,
-            title: p.title,
-            url: p.url,
+            ...pageSummary(p),
             desktop: p.desktopKey ? { width: p.desktopWidth, height: p.desktopHeight, coverage: coverage(p.desktopHeight) } : null,
             mobile: p.mobileKey ? { width: p.mobileWidth, height: p.mobileHeight, coverage: coverage(p.mobileHeight) } : null,
           })),
@@ -694,11 +688,8 @@ Scroll timing is synthetic playback; hover offsets are measured. Treat easing an
       return ok({
         items: await Promise.all(
           res.items.map(async (p) => ({
-            id: p.id,
+            ...pageSummary(p),
             referenceId: p.referenceId,
-            url: p.url,
-            path: p.path,
-            title: p.title,
             thumbUrl: await url(p.desktopThumbKey ?? p.mobileThumbKey),
             reference: p.reference,
             collectionIds: p.collectionIds,

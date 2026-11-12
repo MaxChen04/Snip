@@ -286,3 +286,31 @@ test("add_reference and create_collection refuse what the API refuses, with the 
     await mf.dispose()
   }
 })
+
+test("every MCP view of a page carries what the capture agent noticed about it", async () => {
+  const { mf, DB, call } = await setup()
+  try {
+    const ref = await db.createReference(DB, { url: "https://example.com", mode: "crawl", maxPages: 5 })
+    const job = (await db.claimJob(DB))!
+    const expected: Record<string, string[]> = { "/0": [], "/1": ["blank"], "/2": ["truncated", "blank"] }
+    for (const [ord, warnings] of Object.values(expected).map((w, i) => [i, w] as const))
+      assert.ok(await db.addPage(DB, ref.id, job.lease, {
+        url: `https://example.com/${ord}`, path: `/${ord}`, title: `Page ${ord}`, ord, desktopKey: null, desktopThumbKey: null, desktopWidth: null, desktopHeight: null,
+        mobileKey: null, mobileThumbKey: null, mobileWidth: null, mobileHeight: null, snapshotKey: null, stylesKey: null, tokens: null, animations: [], warnings: warnings as never,
+      } satisfies PageUpload))
+    assert.ok(await db.completeJob(DB, ref.id, job.lease, { title: "Example", description: null, favicon: null, coverKey: null, tokens: null }))
+
+    type Listed = { id: string; path: string; warnings?: string[] }
+    const seen = (pages: Listed[]) => Object.fromEntries(pages.map((p) => [p.path, p.warnings]))
+    const sc = async (name: string, args: Record<string, unknown>) => (await call(name, args)).result!.structuredContent
+    assert.deepEqual(seen((await sc("get_reference", { id: ref.id, part: "overview" })).pages), expected, "overview")
+    assert.deepEqual(seen((await sc("get_reference", { id: ref.id, part: "pages" })).items), expected, "pages")
+    assert.deepEqual(seen((await sc("get_reference", { id: ref.id, part: "full" })).pages), expected, "full")
+    assert.deepEqual(seen((await sc("search_pages", {})).items), expected, "search_pages")
+    assert.deepEqual(seen((await sc("wait_for_capture", { reference_id: ref.id })).pages), expected, "the finished capture's summary")
+    for (const p of (await sc("get_reference", { id: ref.id, part: "pages" })).items as Listed[])
+      assert.deepEqual((await sc("get_page", { page_id: p.id, image: "none" })).warnings, expected[p.path], `get_page ${p.path}`)
+  } finally {
+    await mf.dispose()
+  }
+})
