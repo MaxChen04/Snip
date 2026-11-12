@@ -1,7 +1,11 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import { spawn } from "node:child_process"
 import http from "node:http"
-import { chromium } from "playwright"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { fileURLToPath } from "node:url"
+import { chromium, type Browser } from "playwright"
 import type { CrawlState, Job, JobComplete, PageUpload } from "../../web/shared/types"
 import { JobGoneError } from "../src/api"
 import { captureJob } from "../src/capture"
@@ -257,4 +261,160 @@ test("a capture whose job another agent took stops at the first refused call: no
       await browser.close()
     }
   })
+})
+
+const SITE = (req: http.IncomingMessage) => req.url === "/b" ? plain("Page B") : req.url === "/c" ? plain("Page C") : plain("Page A", `<nav><a href="/b">B</a> <a href="/c">C</a></nav>`)
+
+/** An api whose page "/b" is cut off: `cut` runs when its capture starts. Records what the agent did. */
+function cutOffApi(cut: () => void, acceptsPause: boolean) {
+  const seen = { pages: [] as PageUpload[], paused: [] as { state: CrawlState; release?: boolean }[], completed: 0 }
+  const api = {
+    control: async () => null,
+    progress: async (_id: string, message: string) => { if (message.endsWith(": /b")) setTimeout(cut, 400) },
+    upload: async (key: string) => key,
+    addPage: async (_id: string, page: PageUpload) => { seen.pages.push(page) },
+    pause: async (_id: string, state: CrawlState, release?: boolean) => { seen.paused.push({ state, release }); return acceptsPause },
+    complete: async () => { seen.completed++ },
+  }
+  return { api, seen }
+}
+
+test("a page cut off by a stop is no failure: it heads the checkpoint, and the resume captures it under an ord of its own", { timeout: 300_000 }, async () => {
+  let hold = true
+  await withServer((req, res) => {
+    if (hold && req.url === "/b") return // the page never answers: the stop and the closed browser land mid-page
+    res.writeHead(200, { "content-type": "text/html" })
+    res.end(SITE(req))
+  }, async (base) => {
+    const first = await launch()
+    try {
+      const abort = new AbortController()
+      const { api, seen } = cutOffApi(() => { abort.abort(); void first.close() }, true)
+      await captureJob(first, api as never, { id: "cut", url: base, mode: "crawl", maxPages: 3, attempt, resume: null, options: null, features: [] } as unknown as Job, abort.signal)
+      assert.deepEqual(seen.pages.map((p) => p.path), ["/"], "the cut-off page was not stored")
+      assert.equal(seen.completed, 0)
+      assert.equal(seen.paused.length, 1)
+      assert.equal(seen.paused[0]!.release, true)
+      const state = seen.paused[0]!.state
+      assert.equal(state.failures, 0, "a page the stop cut off is not a failure")
+      assert.equal(state.captured, 1)
+      assert.deepEqual(state.queue, [`${base}b`, `${base}c`], "the cut-off page is first in line")
+      assert.deepEqual(state.visited, [base, `${base}b`], "its ord stays taken")
+
+      // Resumed by the next claim, in a browser of its own.
+      hold = false
+      const second = await launch()
+      try {
+        const resumed = cutOffApi(() => {}, true)
+        await captureJob(second, resumed.api as never, { id: "cut", url: base, mode: "crawl", maxPages: 3, attempt, resume: state, options: null, features: [] } as unknown as Job)
+        assert.deepEqual(resumed.seen.pages.map((p) => p.path), ["/b", "/c"], "the cut-off page is captured, then the rest")
+        assert.deepEqual([...seen.pages, ...resumed.seen.pages].map((p) => p.ord), [0, 2, 3], "ords stay unique across the pause")
+        assert.equal(resumed.seen.completed, 1)
+      } finally {
+        await closeRenderer()
+        await second.close()
+      }
+    } finally {
+      await closeRenderer()
+      await first.close()
+    }
+  })
+})
+
+// The browser process dies, as when it is killed or runs out of memory.
+const crash = async (browser: Browser) => (await browser.newBrowserCDPSession()).send("Browser.crash").catch(() => {})
+
+test("a browser lost mid-page is handed back like a stop, or ends the capture, and never loops", { timeout: 300_000 }, async () => {
+  let hold = true
+  await withServer((req, res) => {
+    if (hold && req.url === "/b") return
+    res.writeHead(200, { "content-type": "text/html" })
+    res.end(SITE(req))
+  }, async (base) => {
+    const run = async (acceptsPause: boolean, resume: CrawlState | null) => {
+      const browser = await launch()
+      try {
+        const { api, seen } = cutOffApi(() => void crash(browser), acceptsPause)
+        const done = captureJob(browser, api as never, { id: "lost", url: base, mode: "crawl", maxPages: 3, attempt, resume, options: null, features: [] } as unknown as Job).then(() => null, (e: Error) => e)
+        return { error: await done, seen }
+      } finally {
+        await closeRenderer()
+        await browser.close()
+      }
+    }
+    // The Worker takes the crawl back: nothing fails, and the cut-off page leads the queue.
+    const handed = await run(true, null)
+    assert.equal(handed.error, null)
+    assert.equal(handed.seen.paused.length, 1)
+    assert.equal(handed.seen.paused[0]!.state.failures, 0)
+    assert.equal(handed.seen.paused[0]!.state.queue[0], `${base}b`)
+    assert.equal(handed.seen.completed, 0)
+    // An older Worker refuses: the pages it has are kept.
+    const kept = await run(false, null)
+    assert.equal(kept.error, null)
+    assert.deepEqual(kept.seen.pages.map((p) => p.path), ["/"])
+    assert.equal(kept.seen.completed, 1)
+    // Nothing captured yet and nothing taking it back: the capture ends with an error, it does not retry on a dead browser.
+    hold = false
+    const empty = await run(false, { version: 1, queue: [`${base}b`], visited: [base], captured: 0, failures: 0, navLinksQueued: true, hoverSeen: [], meta: null, tokens: null })
+    assert.match(empty.error?.message ?? "", /browser closed/)
+    assert.equal(empty.seen.completed, 0)
+  })
+})
+
+test("SIGTERM during a page lets the agent finish it, then hand the crawl back", { timeout: 300_000 }, async () => {
+  const saved = { pages: [] as string[], paused: [] as { release: boolean; queue: string[] }[], failed: 0, completed: 0 }
+  let agent: ReturnType<typeof spawn> | undefined
+  let claimed = false
+  // The Worker: one crawl job, then an empty queue.
+  const worker = http.createServer((req, res) => {
+    const chunks: Buffer[] = []
+    req.on("data", (c: Buffer) => chunks.push(c))
+    req.on("end", () => {
+      const url = new URL(req.url!, "http://worker")
+      const body = Buffer.concat(chunks).toString()
+      const reply = (status: number, payload = "{}") => { res.writeHead(status, { "content-type": "application/json" }); res.end(payload) }
+      if (url.pathname === "/agent/jobs/claim") {
+        if (claimed) return reply(204, "")
+        claimed = true
+        return reply(200, JSON.stringify({ id: "term", url: siteBase, mode: "crawl", maxPages: 3, attempt, lease: "lease", resume: null, options: null, features: [], recordingFormats: ["gif"] }))
+      }
+      if (url.pathname === "/agent/jobs/term/control") return reply(200, '{"control":null}')
+      if (url.pathname === "/agent/jobs/term/pages") saved.pages.push((JSON.parse(body) as PageUpload).path)
+      if (url.pathname === "/agent/jobs/term/pause") saved.paused.push({ release: url.searchParams.has("release"), queue: (JSON.parse(body) as CrawlState).queue })
+      if (url.pathname === "/agent/jobs/term/fail") saved.failed++
+      if (url.pathname === "/agent/jobs/term/complete") saved.completed++
+      reply(200)
+    })
+  })
+  let siteBase = ""
+  await new Promise<void>((resolve) => worker.listen(0, "127.0.0.1", resolve))
+  try {
+    await withServer((req, res) => {
+      // The first page answers a beat after the signal, so the signal lands while the page is loading (once: a second one forces the exit).
+      if (req.url === "/" && !agent!.killed) agent!.kill("SIGTERM")
+      setTimeout(() => { res.writeHead(200, { "content-type": "text/html" }); res.end(SITE(req)) }, req.url === "/" ? 1500 : 0)
+    }, async (base) => {
+      siteBase = base
+      agent = spawn(process.execPath, ["--import", "tsx", fileURLToPath(new URL("../src/index.ts", import.meta.url))], {
+        stdio: "ignore",
+        env: {
+          ...process.env,
+          SNIP_URL: `http://127.0.0.1:${(worker.address() as { port: number }).port}`,
+          CAPTURE_TOKEN: "test",
+          SNIP_CAPTURE_ENV_FILE: join(tmpdir(), "snip-no-such.env"),
+          ALLOW_PRIVATE_URLS: "true",
+          POLL_SECONDS: "1",
+        },
+      })
+      const exit = await new Promise<number | null>((resolve) => agent!.once("exit", (code) => resolve(code)))
+      assert.equal(exit, 0, "the agent winds down on its own")
+      assert.deepEqual(saved.pages, ["/"], "the page in flight was finished, not cut off")
+      assert.deepEqual(saved.paused, [{ release: true, queue: [`${base}b`, `${base}c`] }], "the crawl was handed back")
+      assert.deepEqual({ failed: saved.failed, completed: saved.completed }, { failed: 0, completed: 0 })
+    })
+  } finally {
+    agent?.kill("SIGKILL")
+    await new Promise<void>((resolve) => worker.close(() => resolve()))
+  }
 })

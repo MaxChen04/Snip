@@ -27,7 +27,9 @@ const runtime = new CaptureRuntime({
     const { chromium } = await import("playwright")
     const headless = process.env.HEADLESS !== "false"
     return launchWithRepair({
-      launch: () => chromium.launch({ headless, args: CHROMIUM_ARGS, executablePath: process.env.CHROMIUM_PATH || undefined }),
+      // Playwright's own SIGINT/SIGTERM handlers would close the browser at once, cutting off the page the runtime is finishing
+      // (and exit on SIGINT before the crawl is handed back). Our handlers below stop the runtime; a second signal exits and kills the browser.
+      launch: () => chromium.launch({ headless, args: CHROMIUM_ARGS, executablePath: process.env.CHROMIUM_PATH || undefined, handleSIGINT: false, handleSIGTERM: false }),
       install: () => installBrowser(headless, (line) => console.log(`[browser install] ${line}`)),
       canInstall: !process.env.CHROMIUM_PATH && process.env.SNIP_BROWSER_AUTO_INSTALL !== "0",
       onInstall: () => api.progress(job.id, "Installing the capture browser (one-time, about a minute)"),

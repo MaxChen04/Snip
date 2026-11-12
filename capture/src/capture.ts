@@ -1246,12 +1246,14 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
     meta,
     tokens: mergeTokens(allTokens),
   })
+  /** A stop of this worker or a lost browser ends the page in flight; the site did not fail it. */
+  const interrupted = () => signal.aborted || !browser.isConnected()
   /** Between pages: honour a pause or stop the user asked for, or a stop of this worker. A pause hands back where the crawl is. */
   const windDown = async (): Promise<"stop" | "paused" | null> => {
     try {
       // A stopping worker hands the crawl back, to be resumed by the next claim. An older Worker refuses unless the user asked
       // for a pause: then it stops with the pages it has, after at least one, so a job claimed just before the stop is not failed as empty.
-      if (signal.aborted) return (await api.pause(job.id, checkpoint(), true)) ? "paused" : captured ? "stop" : null
+      if (interrupted()) return (await api.pause(job.id, checkpoint(), true)) ? "paused" : captured ? "stop" : null
       for (let checks = 0; checks < 5; checks++) {
         const control = await api.control(job.id)
         if (control !== "pause") return control
@@ -1279,6 +1281,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       log(`[${job.id}] stopped after ${captured} page(s)`)
       break
     }
+    if (!browser.isConnected()) throw new Error("The capture browser closed")
     const url = queue.shift()!
     // A page's ord and file prefix are its place in `visited`: every attempt takes its own, and a pause saves `visited`, so a resumed crawl carries on from it.
     const ord = visited.push(url) - 1
@@ -1521,6 +1524,13 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
     } catch (e) {
       network?.assertAllowed()
       if (e instanceof JobGoneError || e instanceof PrivateAddressError) throw e
+      if (interrupted()) {
+        // Cut off by a stop or a lost browser: not a failure. The page goes back to the front of the queue for the resume. Its ord
+        // stays taken in `visited`, as the cut-off attempt may have saved files, or the page itself.
+        log(`  - ${path} interrupted, left for the resume`)
+        queue.unshift(url)
+        continue
+      }
       failures++
       log(`  ✗ ${url}: ${(e as Error).message.split("\n")[0]}`)
       if (captured === 0 && job.mode === "single") throw e
