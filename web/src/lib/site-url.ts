@@ -24,3 +24,6 @@ export function extractUrls(text: string): URL[] {
   }
   return out
 }
+
+/** The page caps a crawl can be set to, in the Add dialog and on the capture card. */
+export const CRAWL_LIMITS = [10, 25, 50, 100]

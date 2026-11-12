@@ -4,7 +4,7 @@
 // second dialog stays open with B still in its field.
 import assert from "node:assert/strict"
 import { after, before, test } from "node:test"
-import { boardOf, closeDialog, gate, openAddDialog, sleep, startApp, until, type App } from "./harness.ts"
+import { boardOf, closeDialog, gate, openAddDialog, pasteOnPage, sleep, startApp, until, type App } from "./harness.ts"
 
 let app: App
 before(async () => void (app = await startApp()))
@@ -56,4 +56,36 @@ test("a submit that finishes while its dialog is open closes it and reloads the 
   await dialog.waitFor({ state: "detached" })
   assert.equal(t.count("POST", "/api/references"), 1)
   assert.equal(await page.evaluate(() => (window as any).reloads), 1)
+})
+
+test("a sentence pasted on the page puts just its link in the field", async () => {
+  const t = await app.session({ state: { boards: { board1: boardOf() } } })
+  const { page } = t
+  await t.goto("/b/board1")
+  await page.getByRole("button", { name: "Add website" }).first().waitFor()
+
+  await pasteOnPage(page, "check this out https://aside.com/ cool")
+  const dialog = page.getByRole("dialog", { name: "New reference" })
+  const field = dialog.getByRole("textbox", { name: "Website URL" })
+  assert.equal(await field.inputValue(), "https://aside.com/")
+  assert.equal(await dialog.getByText("Enter a full domain like linear.app").count(), 0)
+
+  await dialog.getByRole("button", { name: /Save reference/ }).click()
+  await dialog.waitFor({ state: "detached" })
+  assert.deepEqual(t.list("POST", "/api/references").map((r) => r.body.url), ["https://aside.com/"])
+})
+
+test("a sentence with several links in it adds each of them, and text with no link opens nothing", async () => {
+  const t = await app.session({ state: { boards: { board1: boardOf() } } })
+  const { page } = t
+  await t.goto("/b/board1")
+  await page.getByRole("button", { name: "Add website" }).first().waitFor()
+
+  await pasteOnPage(page, "compare stripe.com and https://linear.app/pricing please")
+  const dialog = page.getByRole("dialog", { name: "New reference" })
+  await dialog.getByText("2 websites", { exact: true }).waitFor()
+  await closeDialog(page)
+
+  await pasteOnPage(page, "no link here, just words")
+  assert.equal(await page.getByRole("dialog").count(), 0, "text without a link opens nothing")
 })

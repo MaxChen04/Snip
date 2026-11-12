@@ -12,7 +12,7 @@ import { reloadCanvas } from "@/components/canvas/types"
 import { LIVE_POLL, usePoll } from "@/hooks/use-poll"
 import { api, DuplicateError, fileUrl, type CaptureMode, type Page, type Reference } from "@/lib/api"
 import { IMAGE_TYPES, uploadImages } from "@/lib/images"
-import { extractUrls } from "@/lib/site-url"
+import { CRAWL_LIMITS, extractUrls } from "@/lib/site-url"
 import { useCollections } from "@/lib/collections"
 import { cn } from "@/lib/utils"
 
@@ -91,7 +91,6 @@ const MODES = [
   { value: "single", label: "One page", icon: FileIcon },
   { value: "crawl", label: "Crawl site", icon: GlobeIcon },
 ] as const
-const LIMITS = [10, 25, 50]
 const EXAMPLES = ["stripe.com", "linear.app", "vercel.com", "rauno.me"]
 const RUNNING: Reference["status"][] = ["queued", "capturing", "paused"]
 
@@ -337,7 +336,7 @@ export function CaptureCard({
             </div>
             {mode === "crawl" && (
               <div role="group" aria-label="Pages to crawl" className="tactile-track ml-1 flex h-8 items-center">
-                {LIMITS.map((n) => (
+                {CRAWL_LIMITS.map((n) => (
                   <button
                     key={n}
                     type="button"

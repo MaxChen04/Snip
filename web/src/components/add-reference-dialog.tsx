@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogTitle, DialogClose, DialogDescription } fr
 import { Spinner } from "@/components/ui/spinner"
 import { api, DuplicateError, type CaptureMode, type CaptureOptions, type Reference } from "@/lib/api"
 import { DESKTOP_WIDTHS } from "../../shared/types"
-import { extractUrls, parseSiteUrl } from "@/lib/site-url"
+import { CRAWL_LIMITS, extractUrls, parseSiteUrl } from "@/lib/site-url"
 
 export { extractUrls, parseSiteUrl }
 import { cn } from "@/lib/utils"
@@ -17,7 +17,15 @@ const MODES: { value: CaptureMode; title: string; description: string; icon: typ
   { value: "single", title: "Single page", description: "Just this URL", icon: FileIcon },
   { value: "crawl", title: "Crawl site", description: "Follow same-domain links", icon: NetworkIcon },
 ]
-const LIMITS = [10, 25, 50, 100]
+
+/**
+ * What pasted text puts in the dialog: one link fills the field (the rest of a sentence is dropped), several are added
+ * together, and text with no link stays as it was so it can be corrected.
+ */
+const readLinks = (text: string) => {
+  const found = extractUrls(text)
+  return found.length > 1 ? { url: "", bulk: found } : { url: found[0]?.href ?? text.trim(), bulk: [] }
+}
 
 export function AddReferenceDialog({
   open,
@@ -34,10 +42,10 @@ export function AddReferenceDialog({
   defaultUrl?: string
 }) {
   const [, navigate] = useLocation()
-  const initial = useMemo(() => extractUrls(defaultUrl ?? ""), [defaultUrl])
-  const [url, setUrl] = useState(initial.length > 1 ? "" : (defaultUrl ?? ""))
+  const initial = useMemo(() => readLinks(defaultUrl ?? ""), [defaultUrl])
+  const [url, setUrl] = useState(initial.url)
   // Several pasted websites are added together, each as its own reference.
-  const [bulk, setBulk] = useState<URL[]>(initial.length > 1 ? initial : [])
+  const [bulk, setBulk] = useState<URL[]>(initial.bulk)
   const [mode, setMode] = useState<CaptureMode>("single")
   const [maxPages, setMaxPages] = useState(25)
   const [selected, setSelected] = useState<string[]>(defaultCollection ? [defaultCollection] : [])
@@ -50,7 +58,7 @@ export function AddReferenceDialog({
   const [submitting, setSubmitting] = useState(false)
   const parsed = useMemo(() => parseSiteUrl(url), [url])
   useEffect(() => setDuplicate(null), [url])
-  // Closing unmounts the dialog. A submit still running then adds nothing more and closes nothing.
+  // Closing unmounts the dialog. A submit still running then finishes sending, but closes nothing: that would close a newer dialog.
   const gone = useRef(false)
   useEffect(() => {
     gone.current = false
@@ -74,7 +82,6 @@ export function AddReferenceDialog({
     const failed: URL[] = []
     let lastError = ""
     for (const u of bulk) {
-      if (gone.current) break
       try {
         onCreated?.(await api.addReference(body(u)))
         added++
@@ -119,16 +126,10 @@ export function AddReferenceDialog({
     }
   }
 
-  /** One URL fills the field; several switch to adding them all at once. */
   const take = (text: string) => {
-    const found = extractUrls(text)
-    if (found.length > 1) {
-      setBulk(found)
-      setUrl("")
-      return true
-    }
-    setUrl(text.trim())
-    return false
+    const next = readLinks(text)
+    setUrl(next.url)
+    setBulk(next.bulk)
   }
 
   const paste = async () => {
@@ -188,12 +189,10 @@ export function AddReferenceDialog({
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
                   onPaste={(e) => {
-                    const found = extractUrls(e.clipboardData.getData("text"))
-                    if (found.length > 1) {
-                      e.preventDefault()
-                      setBulk(found)
-                      setUrl("")
-                    }
+                    const text = e.clipboardData.getData("text")
+                    if (!extractUrls(text).length) return
+                    e.preventDefault()
+                    take(text)
                   }}
                   className="h-full min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-ink-10"
                 />
@@ -266,7 +265,7 @@ export function AddReferenceDialog({
               <div className="flex items-center gap-2.5 px-1">
                 <span className="text-xs text-ink-11">Up to</span>
                 <div className="tactile-track flex">
-                  {LIMITS.map((n) => (
+                  {CRAWL_LIMITS.map((n) => (
                     <button
                       key={n}
                       type="button"
