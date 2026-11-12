@@ -8,9 +8,7 @@ import { Dialog, DialogContent, DialogTitle, DialogClose, DialogDescription } fr
 import { Spinner } from "@/components/ui/spinner"
 import { api, DuplicateError, type CaptureMode, type CaptureOptions, type Reference } from "@/lib/api"
 import { DESKTOP_WIDTHS } from "../../shared/types"
-import { CRAWL_LIMITS, extractUrls, parseSiteUrl } from "@/lib/site-url"
-
-export { extractUrls, parseSiteUrl }
+import { CRAWL_LIMITS, extractUrls, typedUrls } from "@/lib/site-url"
 import { cn } from "@/lib/utils"
 
 const MODES: { value: CaptureMode; title: string; description: string; icon: typeof FileIcon }[] = [
@@ -42,7 +40,12 @@ export function AddReferenceDialog({
   defaultUrl?: string
 }) {
   const [, navigate] = useLocation()
-  const initial = useMemo(() => readLinks(defaultUrl ?? ""), [defaultUrl])
+  // Handed over as it is, because what was typed in the capture card is not a sentence to pick links out of; several
+  // valid addresses are added together, as if pasted.
+  const initial = useMemo(() => {
+    const { urls } = typedUrls(defaultUrl ?? "")
+    return urls.length > 1 ? { url: "", bulk: urls } : { url: (defaultUrl ?? "").trim(), bulk: [] }
+  }, [defaultUrl])
   const [url, setUrl] = useState(initial.url)
   // Several pasted websites are added together, each as its own reference.
   const [bulk, setBulk] = useState<URL[]>(initial.bulk)
@@ -55,10 +58,18 @@ export function AddReferenceDialog({
   const [desktopWidth, setDesktopWidth] = useState<number>(1440)
   const [signedIn, setSignedIn] = useState(false)
   const [duplicate, setDuplicate] = useState<Reference | null>(null)
+  // What the Worker said when it refused the address that was sent.
+  const [refused, setRefused] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const field = useRef<HTMLInputElement>(null)
-  const parsed = useMemo(() => parseSiteUrl(url), [url])
-  useEffect(() => setDuplicate(null), [url])
+  // Typed addresses are all added, or none: one that is not an address is said so.
+  const typed = useMemo(() => typedUrls(url), [url])
+  const links = bulk.length ? bulk : typed.urls
+  const error = typed.error ?? refused
+  useEffect(() => {
+    setDuplicate(null)
+    setRefused(null)
+  }, [url])
   // Closing unmounts the dialog. A submit still running then finishes sending, but closes nothing: that would close a newer dialog.
   const gone = useRef(false)
   useEffect(() => {
@@ -82,7 +93,7 @@ export function AddReferenceDialog({
     let saved = 0
     const failed: URL[] = []
     let lastError = ""
-    for (const u of bulk) {
+    for (const u of links) {
       try {
         onCreated?.(await api.addReference(body(u)))
         added++
@@ -98,6 +109,7 @@ export function AddReferenceDialog({
     if (added) window.dispatchEvent(new Event("rs:reload"))
     if (failed.length) {
       // Keep the ones that failed in the dialog so they can be retried as they were.
+      setUrl("")
       setBulk(failed)
       toast.error(`${summary ? `${summary}. ` : ""}${failed.length} couldn't be added: ${lastError}`)
       return
@@ -108,20 +120,21 @@ export function AddReferenceDialog({
 
   const submit = async (e?: React.FormEvent, allowDuplicate = false) => {
     e?.preventDefault()
-    if (submitting || (!parsed && !bulk.length)) return
+    if (submitting || !links.length) return
     setSubmitting(true)
+    setRefused(null)
     try {
-      if (bulk.length) return await submitBulk()
-      const ref = await api.addReference(body(parsed!, allowDuplicate))
+      if (bulk.length || links.length > 1) return await submitBulk()
+      const ref = await api.addReference(body(links[0], allowDuplicate))
       onCreated?.(ref)
       window.dispatchEvent(new Event("rs:reload"))
       if (!gone.current) onOpenChange(false)
-      notify(mode === "crawl" ? `Crawling ${parsed!.hostname}` : "Added 1 reference", {
+      notify(mode === "crawl" ? `Crawling ${links[0].hostname}` : "Added 1 reference", {
         action: { label: "View", onClick: () => navigate(`/r/${ref.id}`) },
       })
     } catch (err) {
       if (err instanceof DuplicateError) setDuplicate(err.existing)
-      else toast.error((err as Error).message)
+      else setRefused((err as Error).message)
     } finally {
       setSubmitting(false)
     }
@@ -220,12 +233,11 @@ export function AddReferenceDialog({
                   </button>
                 </div>
               ) : (
-              <p className={cn("mt-1.5 h-4 px-1 text-2xs text-ink-10", url && !parsed && "text-(--red-11)")}>
-                {url && !parsed
-                  ? "Enter a full domain like linear.app"
-                  : mode === "crawl"
-                    ? `Follows links on ${parsed?.hostname ?? "the same domain"}, desktop and mobile`
-                    : "Desktop and mobile screenshots, styles and motion"}
+              <p className={cn("mt-1.5 min-h-4 px-1 text-2xs text-ink-10", error && "text-(--red-11)")}>
+                {error ??
+                  (mode === "crawl"
+                    ? `Follows links on ${links.length === 1 ? links[0].hostname : "the same domain"}, desktop and mobile`
+                    : "Desktop and mobile screenshots, styles and motion")}
               </p>
               )}
             </div>
@@ -358,11 +370,11 @@ export function AddReferenceDialog({
           <div className="border-t-[0.5px] border-border p-3">
             <button
               type="submit"
-              disabled={(!parsed && !bulk.length) || submitting}
+              disabled={!links.length || submitting}
               className="press flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-primary px-3.5 text-sm font-medium tracking-[-0.01em] text-primary-foreground shadow-primary hover:bg-(--primary-hover) disabled:opacity-60 disabled:active:scale-100 dark:disabled:bg-ink-4 dark:disabled:text-ink-8 dark:disabled:opacity-100 dark:disabled:shadow-none"
             >
               {submitting ? <Spinner className="size-3.5" /> : null}
-              {submitting ? "Saving…" : bulk.length ? `Save ${bulk.length} websites` : mode === "crawl" ? "Crawl and save" : "Save reference"}
+              {submitting ? "Saving…" : links.length > 1 ? `Save ${links.length} websites` : mode === "crawl" ? "Crawl and save" : "Save reference"}
               {!submitting && (
                 <kbd className="grid size-[18px] place-items-center rounded-xs bg-primary-foreground/15">
                   <CornerDownLeftIcon className="size-3" />

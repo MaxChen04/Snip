@@ -2,13 +2,14 @@ import { createContext, useContext, useEffect, useRef, useState, type ReactNode 
 import { useLocation } from "wouter"
 import { XIcon } from "@/components/icons"
 import { toast } from "sonner"
-import { AddReferenceDialog, extractUrls } from "@/components/add-reference-dialog"
+import { AddReferenceDialog } from "@/components/add-reference-dialog"
 import { trackCapture } from "@/components/canvas/capture-card"
 import { ConnectMcpDialog } from "@/components/connect-mcp-dialog"
 import { notify } from "@/components/notify"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
 import { api } from "@/lib/api"
 import { useCollections } from "@/lib/collections"
+import { extractUrls } from "@/lib/site-url"
 import { MAX_NAME } from "../../shared/types"
 
 // One place that owns the "Create" dialogs so the top bar, board views and empty
@@ -50,9 +51,10 @@ export function AddFlowProvider({ children }: { children: ReactNode }) {
       // The canvas capture card takes its own pastes (data-capture-input).
       if (typing(e.target) || (e.target as Element | null)?.closest?.("[data-capture-input]") || dialogOpen()) return
       const text = e.clipboardData?.getData("text") ?? ""
-      if (!extractUrls(text).length) return
+      const found = extractUrls(text)
+      if (!found.length) return
       e.preventDefault()
-      open(currentBoard(), text)
+      open(currentBoard(), found.map((u) => u.href).join(" "))
     }
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey || typing(e.target) || dialogOpen()) return

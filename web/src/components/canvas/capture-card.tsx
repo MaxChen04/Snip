@@ -12,7 +12,7 @@ import { reloadCanvas } from "@/components/canvas/types"
 import { LIVE_POLL, usePoll } from "@/hooks/use-poll"
 import { api, DuplicateError, fileUrl, type CaptureMode, type Page, type Reference } from "@/lib/api"
 import { IMAGE_TYPES, uploadImages } from "@/lib/images"
-import { CRAWL_LIMITS, extractUrls } from "@/lib/site-url"
+import { CRAWL_LIMITS, extractUrls, typedUrls } from "@/lib/site-url"
 import { useCollections } from "@/lib/collections"
 import { cn } from "@/lib/utils"
 import { warningText } from "@/lib/page-warnings"
@@ -205,9 +205,9 @@ export function CaptureCard({
   const submit = async (e?: React.FormEvent) => {
     e?.preventDefault()
     if (submitting) return
-    const urls = extractUrls(text)
+    const { urls, error: refused } = typedUrls(text)
     if (!urls.length) {
-      setError(text.trim() ? "Enter a full domain like linear.app" : null)
+      setError(refused)
       input.current?.focus()
       return
     }
@@ -271,9 +271,9 @@ export function CaptureCard({
               setError(null)
             }}
             onPaste={(e) => {
-              // A text field drops line breaks, which would glue several pasted links together.
+              // Pasted text gives up its links, however it is worded: a sentence, or lines a text field would glue together.
               const found = extractUrls(e.clipboardData.getData("text"))
-              if (found.length < 2) return
+              if (!found.length) return
               e.preventDefault()
               setText(found.map((u) => u.href).join(" "))
               setError(null)

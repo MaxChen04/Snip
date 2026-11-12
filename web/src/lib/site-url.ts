@@ -1,28 +1,31 @@
-/** Accepts "linear.app" or a full URL; returns null until it looks like a real host. */
+import { checkSiteUrl } from "../../shared/site-url"
+
+/** The address in `raw`, normalised, or null when it is not one. The rule, and the sentence for each way to break it, are shared/site-url.ts. */
 export function parseSiteUrl(raw: string): URL | null {
-  const s = raw.trim()
-  if (!s) return null
-  try {
-    const u = new URL(/^[a-z]+:\/\//i.test(s) ? s : `https://${s}`)
-    if (!/^https?:$/.test(u.protocol) || !u.hostname.includes(".")) return null
-    return u
-  } catch {
-    return null
-  }
+  const checked = checkSiteUrl(raw)
+  return "url" in checked ? checked.url : null
 }
 
-/** Every distinct website in pasted text (one per line, or separated by spaces or commas). */
+const parts = (text: string) => text.split(/[\s,]+/).filter(Boolean)
+const distinct = (urls: URL[]) => [...new Map(urls.map((u) => [u.href, u])).values()]
+
+/** The links in pasted text, whatever else it says: a sentence, one per line, or separated by spaces or commas. */
 export function extractUrls(text: string): URL[] {
-  const seen = new Set<string>()
-  const out: URL[] = []
-  for (const part of text.split(/[\s,]+/)) {
-    const u = parseSiteUrl(part)
-    if (u && !seen.has(u.href)) {
-      seen.add(u.href)
-      out.push(u)
-    }
+  return distinct(parts(text).flatMap((part) => parseSiteUrl(part) ?? []))
+}
+
+/**
+ * The addresses in what was typed (separated by spaces or commas), or the sentence for the first one that is not an
+ * address. Nothing is left out: a typo cannot turn into a capture of something else.
+ */
+export function typedUrls(text: string): { urls: URL[]; error: string | null } {
+  const urls: URL[] = []
+  for (const part of parts(text)) {
+    const checked = checkSiteUrl(part)
+    if ("error" in checked) return { urls: [], error: checked.error }
+    urls.push(checked.url)
   }
-  return out
+  return { urls: distinct(urls), error: null }
 }
 
 /** The page caps a crawl can be set to, in the Add dialog and on the capture card. */
