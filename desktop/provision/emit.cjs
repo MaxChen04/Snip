@@ -11,8 +11,6 @@ function createEmitter({ json = false, stdout = process.stdout, stderr = process
     if (json) write(JSON.stringify({ v: 1, ...event }));
   };
 
-  const symbols = { started: '›', ok: '✓', skipped: '·', waiting: '…', failed: '✗' };
-
   function step(stepId, status, message, extra = {}) {
     if (json) {
       send({ event: 'step', command, step: stepId, status, message, ...extra });
@@ -30,7 +28,6 @@ function createEmitter({ json = false, stdout = process.stdout, stderr = process
     } else if (status === 'failed') {
       note(`  \x1b[31m✗\x1b[0m ${message}`);
     }
-    void symbols;
   }
 
   function log(level, message) {

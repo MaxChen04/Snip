@@ -13,7 +13,7 @@ const { SourceUpdates } = require("./source-updates.cjs")
 const { prepareRuntimeLayout, selectExistingLibrary } = require("./runtime-layout.cjs")
 const windowOrigin = require("./window-origin.cjs")
 const { readCloudState, cloudMode, selectCaptureEnvFile, keepLocalCaptureEnv } = require("./cloud-state.cjs")
-const { engineAvailable, runEngine } = require("./cloud-engine.cjs")
+const { engineAvailable, runEngine, cloudFlags } = require("./cloud-engine.cjs")
 const { sessionCookie, externalUrl } = require("./cloud-session.cjs")
 const { snapshotFlags } = require("./cloud-confirm.cjs")
 const { ownerLinkFrom, LINK_NOTE, LINK_TTL_MS } = require("./cloud-link.cjs")
@@ -449,19 +449,6 @@ async function cloudSnapshotState() {
     app: { version: app.getVersion(), dataRoot: layout?.dataRoot ?? null, captureEnv: captureEnvFile()?.name ?? null },
   }
 }
-function cloudFlags(options = {}) {
-  const text = (value, limit) => (typeof value === "string" && value.trim() ? value.trim().slice(0, limit) : undefined)
-  return {
-    account: text(options.accountId, 64),
-    domain: text(options.domain, 253),
-    login: text(options.login, 64),
-    // Set only when the person picked "Use that library" in the choice screen.
-    "adopt-existing": options.adoptExisting === true ? true : undefined,
-    // The app always keeps the local capture settings as .env.local and points the
-    // agent at the cloud queue; that is the "replace" behaviour from the contracts.
-    "capture-env": "replace",
-  }
-}
 /** `event: "session"` is consumed here: the token goes to the cookie jar, never the renderer. */
 async function acceptCloudSession(event) {
   const cookie = sessionCookie(event, cloudState?.cloud?.url)
@@ -648,7 +635,6 @@ function registerCloudIpc() {
     cloudInput.set(payload.key.slice(0, 64), typeof payload.value === "string" ? payload.value.slice(0, 500) : "")
     return { accepted: true }
   }))
-  ipcMain.handle("snip:cloud-open-settings", guard(() => { openSettings(); return { opened: true } }))
   ipcMain.handle("snip:cloud-open-url", guard(payload => {
     const url = externalUrl(payload.url)
     if (!url) return { opened: false }

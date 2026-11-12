@@ -15,13 +15,6 @@ export interface HumanAction {
   url?: string
   message?: string
 }
-export interface Progress {
-  step: string
-  message?: string
-  current?: number
-  total?: number
-  unit?: string
-}
 export interface NeededInput {
   key: string
   label: string
@@ -57,10 +50,8 @@ const CONFIRM_CODES = new Set(["CONFIRM_MISSING", "CONFIRM_MISMATCH"])
  */
 export function useCloud(bridge = window.snipCloud) {
   const [snapshot, setSnapshot] = useState<CloudSnapshotState>(EMPTY)
-  const [loaded, setLoaded] = useState(false)
   const [steps, setSteps] = useState<Record<string, LiveStep>>({})
   const [action, setAction] = useState<HumanAction | null>(null)
-  const [progress, setProgress] = useState<Progress | null>(null)
   const [error, setError] = useState<CloudError | null>(null)
   const [choice, setChoice] = useState<EngineChoiceEvent | null>(null)
   const [needed, setNeeded] = useState<NeededInput[] | null>(null)
@@ -85,26 +76,22 @@ export function useCloud(bridge = window.snipCloud) {
 
   const refresh = useCallback(async () => {
     if (!bridge) return
-    try {
-      const next = await bridge.state()
-      if (next) {
-        setSnapshot(next)
-        setBusy(next.busy)
-        setLink(current => keepLink(current, next.link))
-        setError(next.state?.error ?? null)
-        if (!next.busy) {
-          setSteps(previous => {
-            // A cold read wins only when no engine is running; live events are fresher otherwise.
-            const seeded: Record<string, LiveStep> = {}
-            for (const step of next.state?.steps ?? []) {
-              seeded[step.id] = { id: step.id, status: step.status === "running" ? "running" : step.status, detail: step.detail ?? undefined }
-            }
-            return Object.keys(previous).length && next.busy ? previous : seeded
-          })
-        }
+    const next = await bridge.state()
+    if (next) {
+      setSnapshot(next)
+      setBusy(next.busy)
+      setLink(current => keepLink(current, next.link))
+      setError(next.state?.error ?? null)
+      if (!next.busy) {
+        setSteps(previous => {
+          // A cold read wins only when no engine is running; live events are fresher otherwise.
+          const seeded: Record<string, LiveStep> = {}
+          for (const step of next.state?.steps ?? []) {
+            seeded[step.id] = { id: step.id, status: step.status === "running" ? "running" : step.status, detail: step.detail ?? undefined }
+          }
+          return Object.keys(previous).length && next.busy ? previous : seeded
+        })
       }
-    } finally {
-      setLoaded(true)
     }
   }, [bridge, keepLink])
 
@@ -158,10 +145,6 @@ export function useCloud(bridge = window.snipCloud) {
         setBusy(false)
         return
       }
-      if (event.event === "progress") {
-        setProgress({ step: event.step, message: event.message, current: event.current, total: event.total, unit: event.unit })
-        return
-      }
       if (event.event === "needs_input") {
         // Terminal: the engine never reads stdin. Collect the value here and re-invoke.
         const keys = (event.keys ?? [])
@@ -181,7 +164,6 @@ export function useCloud(bridge = window.snipCloud) {
       if (event.event === "result") {
         setBusy(false)
         setAction(null)
-        setProgress(null)
         if (!event.ok && event.code !== "CANCELLED") {
           const retryable = event.retryable !== false
           const code = typeof event.data?.code === "string" ? event.data.code : event.code
@@ -274,7 +256,6 @@ export function useCloud(bridge = window.snipCloud) {
     const ticket = ++runId.current
     setSteps({})
     setAction(null)
-    setProgress(null)
     setError(null)
     setChoice(null)
     setNeeded(null)
@@ -291,20 +272,17 @@ export function useCloud(bridge = window.snipCloud) {
   return {
     bridge,
     snapshot,
-    loaded,
     mode: snapshot.mode,
     file: snapshot.state,
     cloud: snapshot.state?.cloud ?? null,
     snapshotRecord: snapshot.state?.snapshot ?? null,
     local: snapshot.local ?? null,
-    engineAvailable: snapshot.engine?.available !== false,
     busy: busy || snapshot.busy,
     running: snapshot.running,
     steps,
     action,
     choice,
     needed,
-    progress,
     error,
     note,
     link,

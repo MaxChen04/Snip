@@ -104,7 +104,7 @@ const ID = {
   DocType: 0x4282, DocTypeVersion: 0x4287, DocTypeReadVersion: 0x4285,
   Segment: 0x18538067, Info: 0x1549a966, TimestampScale: 0x2ad7b1, Duration: 0x4489, MuxingApp: 0x4d80, WritingApp: 0x5741,
   Tracks: 0x1654ae6b, TrackEntry: 0xae, TrackNumber: 0xd7, TrackUID: 0x73c5, TrackType: 0x83, FlagLacing: 0x9c, CodecID: 0x86,
-  DefaultDuration: 0x23e383, Video: 0xe0, PixelWidth: 0xb0, PixelHeight: 0xba,
+  Video: 0xe0, PixelWidth: 0xb0, PixelHeight: 0xba,
   Colour: 0x55b0, MatrixCoefficients: 0x55b1, Range: 0x55b9, TransferCharacteristics: 0x55ba, Primaries: 0x55bb,
   Cluster: 0x1f43b675, Timestamp: 0xe7, SimpleBlock: 0xa3, BlockGroup: 0xa0, Block: 0xa1, BlockDuration: 0x9b, ReferenceBlock: 0xfb,
   Cues: 0x1c53bb6b, CuePoint: 0xbb, CueTime: 0xb3, CueTrackPositions: 0xb7, CueTrack: 0xf7, CueClusterPosition: 0xf1,
@@ -115,7 +115,7 @@ const ID = {
  * next one starts; the last runs to `durationMs`, which is written as the file's duration so the final frame
  * holds before the video loops.
  */
-export function muxWebm(opts: { codecId: string; width: number; height: number; frames: EncodedFrame[]; durationMs: number; colorSpace?: ColorSpace | null }) {
+export function muxWebm(opts: { width: number; height: number; frames: EncodedFrame[]; durationMs: number; colorSpace?: ColorSpace | null }) {
   const { frames } = opts
   if (!frames.length || !frames[0]!.key) throw new Error("A WebM needs at least one frame, starting with a keyframe")
   const ms = (us: number) => Math.round(us / 1000)
@@ -124,7 +124,7 @@ export function muxWebm(opts: { codecId: string; width: number; height: number; 
     str(ID.DocType, "webm"), uint(ID.DocTypeVersion, 4), uint(ID.DocTypeReadVersion, 2))
   const info = el(ID.Info, uint(ID.TimestampScale, 1_000_000), float(ID.Duration, opts.durationMs), str(ID.MuxingApp, "snip"), str(ID.WritingApp, "snip"))
   const tracks = el(ID.Tracks, el(ID.TrackEntry,
-    uint(ID.TrackNumber, 1), uint(ID.TrackUID, 1), uint(ID.TrackType, 1), uint(ID.FlagLacing, 0), str(ID.CodecID, opts.codecId),
+    uint(ID.TrackNumber, 1), uint(ID.TrackUID, 1), uint(ID.TrackType, 1), uint(ID.FlagLacing, 0), str(ID.CodecID, "V_VP9"),
     el(ID.Video, uint(ID.PixelWidth, opts.width), uint(ID.PixelHeight, opts.height), colour(opts.colorSpace))))
 
   // A new cluster at every keyframe, and before a block's offset would overflow 16 bits.

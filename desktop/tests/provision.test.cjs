@@ -1060,6 +1060,14 @@ test('CLI exit codes: 0 ok, 2 needs_input, 3 locked, 4 unsupported', async () =>
   assert.equal(locked.code, 3);
 });
 
+test('setup --check that fails preflight writes no state', async () => {
+  // Documented as "nothing is changed": a refusal is reported, never journalled or recorded.
+  const empty = tempDir();
+  const result = await cli.main(['setup', '--check', '--root', empty, '--data-root', empty, '--json'], { stdout: { write: () => true }, stderr: { write: () => true } });
+  assert.equal(result.code, 4);
+  assert.equal(fs.existsSync(stateModule.profileDir(empty)), false, 'setup --check must not create .snip/cloud.json');
+});
+
 test('CLI --json keeps stdout pure NDJSON and never reads stdin', async () => {
   const library = fakeLibrary();
   const model = buildModel({ root: library.root });

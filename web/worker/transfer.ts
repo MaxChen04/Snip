@@ -17,7 +17,7 @@ export const MANIFEST_HEAD_CONCURRENCY = 8
 // object here: listed, sized, read and written as the bytes R2 holds, so manifests and size checks stay exact. Only
 // `/files/*` and worker/files.ts unzip it. Before copying one, the engine checks `reads` below (setup.cjs, import).
 const KEY_RE = /^(refs|uploads)\/[a-z0-9]+\/[A-Za-z0-9._\/-]+$/
-const validKey = (key: string) => KEY_RE.test(key) && !key.includes("..")
+export const validKey = (key: string) => KEY_RE.test(key) && !key.includes("..")
 const keyFromPath = (path: string) => decodeURIComponent(path.slice("/transfer/file/".length))
 
 export const transfer = new Hono<{ Bindings: Env }>()
