@@ -207,7 +207,7 @@ export function PasskeysPage({ me }: { me: Me | null }) {
             <p className="mt-0.5 text-[12.5px] leading-relaxed text-muted-foreground">
               Signing out everywhere ends every browser session, the Snip app's session and every connected agent. Passkeys stay registered.
             </p>
-            <Button variant="destructive" size="sm" className="mt-2.5" onClick={() => setSigningOut(true)}>
+            <Button variant="destructive" size="sm" className="mt-2.5 h-auto max-w-full py-1.5 text-left whitespace-normal" onClick={() => setSigningOut(true)}>
               <LogOutIcon className="size-3.5" />
               Sign out everywhere, including connected agents
             </Button>
