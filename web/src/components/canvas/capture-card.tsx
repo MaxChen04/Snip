@@ -110,7 +110,9 @@ const RUNNING: Reference["status"][] = ["queued", "capturing", "paused"]
 
 function Tip({ label, children }: { label: string; children: ReactElement }) {
   return (
-    <Tooltip>
+    // These labels repeat the buttons' accessible names. When keyboard focus opens one over the URL field,
+    // keep the field clickable instead of letting the label catch the click.
+    <Tooltip disableHoverablePopup>
       <TooltipTrigger render={children} />
       <TooltipContent className="h-8 rounded-full px-2.5 text-xs">{label}</TooltipContent>
     </Tooltip>
