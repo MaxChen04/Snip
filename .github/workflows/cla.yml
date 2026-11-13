@@ -35,4 +35,6 @@ jobs:
           path-to-document: https://github.com/MaxChen04/Snip/blob/main/CLA.md
           path-to-signatures: signatures/cla.json
           branch: cla-signatures
-          allowlist: MaxChen04,dependabot[bot],github-actions[bot],claude[bot],chatgpt-codex-connector[bot]
+          # Unlinked Claude commits are reported by name by the pinned action.
+          # Exempt that exact name only on the maintainer's own pull requests.
+          allowlist: MaxChen04,dependabot[bot],github-actions[bot],claude[bot],chatgpt-codex-connector[bot]${{ (github.event.pull_request.user.login == 'MaxChen04' || github.event.issue.user.login == 'MaxChen04') && ',Claude' || '' }}
