@@ -185,7 +185,11 @@ async function startVite(): Promise<{ proc: ChildProcess; url: string }> {
       const r = await fetch(url + "/")
       if (r.ok) break
     } catch {}
-    if (Date.now() > deadline) throw new Error(`vite did not start:\n${log}`)
+    if (Date.now() > deadline) {
+      // A detached child left running keeps the test process alive long after the failure.
+      try { process.kill(-proc.pid!, "SIGKILL") } catch {}
+      throw new Error(`vite did not start:\n${log}`)
+    }
     await sleep(150)
   }
   return { proc, url }

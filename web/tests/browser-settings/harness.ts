@@ -53,7 +53,11 @@ export async function startVite(): Promise<Server> {
       const response = await fetch(`${url}/settings.html`)
       if (response.ok) break
     } catch {}
-    if (Date.now() > deadline) throw new Error(`vite did not start:\n${output}`)
+    if (Date.now() > deadline) {
+      // A detached child left running keeps the test process alive long after the failure.
+      try { process.kill(-child.pid!, "SIGKILL") } catch {}
+      throw new Error(`vite did not start:\n${output}`)
+    }
     await new Promise(resolve => setTimeout(resolve, 200))
   }
   return {
