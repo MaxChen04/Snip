@@ -24,10 +24,11 @@ export async function loadLibrary(database: D1Database, files?: R2Bucket, extra 
     for (const [ord, page] of site.pages.entries()) {
       const upload = pageUpload(ref.id, job.attempt, page, ord, site.url)
       if (files) for (const key of [upload.desktopKey, upload.desktopThumbKey, ...(upload.sections ?? []).map((s) => s.key)]) if (key) await files.put(key, PIXEL, { httpMetadata: { contentType: "image/jpeg" } })
-      const id = await db.addPage(database, ref.id, job.attempt, upload)
+      const id = await db.addPage(database, ref.id, job.lease, upload)
+      if (!id) throw new Error(`Fixture capture lost its lease while saving ${site.url}${page.path}`)
       pages.set(site.url + page.path, id!)
     }
-    await db.completeJob(database, ref.id, job.attempt, { title: site.title, description: site.description, favicon: null, coverKey: null, tokens: null })
+    await db.completeJob(database, ref.id, job.lease, { title: site.title, description: site.description, favicon: null, coverKey: null, tokens: null })
     refs.set(site.url, ref.id)
   }
   return { refs, pages }

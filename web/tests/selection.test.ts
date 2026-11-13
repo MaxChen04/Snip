@@ -47,8 +47,8 @@ test("a copied prompt names the view and capture run, and its Selection finds ev
     const ref = await db.createReference(database, { url: "https://example.com", mode: "single" })
     const job = (await db.claimJob(database))!
     const p1 = `refs/${ref.id}/${job.attempt}/p0`
-    await db.addPage(database, ref.id, job.attempt, pageUpload(p1, "/pricing", [section("header", "Header", 0, `${p1}/s0.jpg`), section("section", "Plans", 100, `${p1}/s1.jpg`), section("footer", "Footer", 200, `${p1}/s2.jpg`)], "button.buy"))
-    await db.completeJob(database, ref.id, job.attempt, { title: "Example", description: null, favicon: null, coverKey: null, tokens: tokens("#111") } as never)
+    await db.addPage(database, ref.id, job.lease, pageUpload(p1, "/pricing", [section("header", "Header", 0, `${p1}/s0.jpg`), section("section", "Plans", 100, `${p1}/s1.jpg`), section("footer", "Footer", 200, `${p1}/s2.jpg`)], "button.buy"))
+    await db.completeJob(database, ref.id, job.lease, { title: "Example", description: null, favicon: null, coverKey: null, tokens: tokens("#111") } as never)
     const first = (await db.getReference(database, ref.id))!
     const page = first.pages[0]!
 
@@ -75,8 +75,8 @@ test("a copied prompt names the view and capture run, and its Selection finds ev
     const recapture = async (upload: (prefix: string) => PageUpload, color: string) => {
       await db.requeueReference(database, ref.id)
       const j = (await db.claimJob(database))!
-      await db.addPage(database, ref.id, j.attempt, upload(`refs/${ref.id}/${j.attempt}/p0`))
-      await db.completeJob(database, ref.id, j.attempt, { title: "Example", description: null, favicon: null, coverKey: null, tokens: tokens(color) } as never)
+      await db.addPage(database, ref.id, j.lease, upload(`refs/${ref.id}/${j.attempt}/p0`))
+      await db.completeJob(database, ref.id, j.lease, { title: "Example", description: null, favicon: null, coverKey: null, tokens: tokens(color) } as never)
       return (await db.getReference(database, ref.id))!
     }
     const second = await recapture((p2) => pageUpload(p2, "/pricing/", [section("header", "Header", 0, `${p2}/s0.jpg`), section("section", "Announcement", 100, `${p2}/s1.jpg`), section("section", "Plans", 200, `${p2}/s2.jpg`), section("footer", "Footer", 300, `${p2}/s3.jpg`)], "button.buy"), "#222")

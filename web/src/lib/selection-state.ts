@@ -37,4 +37,3 @@ export function pruneSelection(s: Selection, pages: { id: string }[], animations
   if (keep.length === s.pages.length && keepAnimations.length === s.animations.length) return s
   return { ...s, pages: keep, animations: keepAnimations, views: Object.fromEntries(Object.entries(s.views ?? {}).filter(([id]) => pageIds.has(id))) }
 }
-

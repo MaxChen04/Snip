@@ -88,10 +88,11 @@ async function build(pageCount: number) {
       snapshotKey: null, stylesKey, tokens: pageTokens(i) as never, stylesSummary,
       animations: [{ kind: "hover", label: `Card ${i}`, selector: `.card-${i}`, viewport: "desktop", gifKey: `${p}/a.webm`, width: 320, height: 200, sheetKey: null, meta: null } as never],
     }
-    const id = await db.addPage(DB, ref.id, job.attempt, upload)
+    const id = await db.addPage(DB, ref.id, job.lease, upload)
+    if (!id) throw new Error(`Benchmark capture lost its lease while saving page ${i}`)
     pageIds.push(id!)
   }
-  await db.completeJob(DB, ref.id, job.attempt, { title: "Example", description: null, favicon: null, coverKey: null, tokens: pageTokens(0) as never })
+  await db.completeJob(DB, ref.id, job.lease, { title: "Example", description: null, favicon: null, coverKey: null, tokens: pageTokens(0) as never })
   animationId = (await DB.prepare("SELECT id FROM animations LIMIT 1").first<{ id: string }>())!.id
   return { mf, DB, FILES, refId: ref.id, pageId: pageIds[0]!, animationId }
 }

@@ -98,10 +98,10 @@ test("pages captured before page text keep their section labels searchable", asy
     const all = (await readdir(dir)).filter((f) => f.endsWith(".sql")).sort()
     const at = all.indexOf("0016_page_text.sql")
     for (const m of all.slice(0, at)) await apply(m)
-    const ref = await db.createReference(database, { url: "https://old.test", mode: "single" })
-    const job = (await db.claimJob(database))!
-    const sections = [{ kind: "section", label: "Customer stories", y: 0, height: 100, key: `refs/${ref.id}/${job.attempt}/s0.jpg` }]
-    await database.prepare(`INSERT INTO pages (id, reference_id, url, path, title, ord, sections_json, created_at) VALUES ('p1', ?, 'https://old.test/', '/', 'Old', 0, ?, '2026-01-01')`).bind(ref.id, JSON.stringify(sections)).run()
+    // Seed the old schema directly: today's lease-aware capture code requires later migrations.
+    await database.prepare(`INSERT INTO refs (id, url, domain, mode, status, created_at, updated_at) VALUES ('old-ref', 'https://old.test', 'old.test', 'single', 'ready', '2026-01-01', '2026-01-01')`).run()
+    const sections = [{ kind: "section", label: "Customer stories", y: 0, height: 100, key: "refs/old-ref/old-attempt/s0.jpg" }]
+    await database.prepare(`INSERT INTO pages (id, reference_id, url, path, title, ord, sections_json, created_at) VALUES ('p1', 'old-ref', 'https://old.test/', '/', 'Old', 0, ?, '2026-01-01')`).bind(JSON.stringify(sections)).run()
     for (const m of all.slice(at)) await apply(m)
     const hit = (await searchPages(database, { q: "customer stories" })).items[0]
     assert.equal(hit?.page.id, "p1")
@@ -132,6 +132,9 @@ test("search_pages over MCP returns ranked hits with match details", async () =>
     assert.match(pages.items[0].notes, /Testimonials wall/)
     assert.deepEqual(pages.items[0].match.matched, ["testimonial", "wall"])
     assert.deepEqual(pages.terms, ["testimonial", "wall"])
+    await database.prepare(`UPDATE pages SET warnings_json = '["truncated"]' WHERE id = ?`).bind(pages.items[0].id).run()
+    const warned = await call("search_pages", { query: "testimonials wall" })
+    assert.deepEqual(warned.items[0].warnings, ["truncated"], "ranked MCP hits keep captured-page warnings")
 
     const refs = await call("search_references", { query: "team grid" })
     assert.equal(refs.items[0].domain, "northstar.test")

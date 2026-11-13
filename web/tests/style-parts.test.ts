@@ -129,9 +129,9 @@ async function setup() {
         snapshotKey: null, stylesKey, stylesSummary, tokens: null,
         animations: [{ kind: "hover", label: `A${i}`, selector: `.a${i}`, viewport: "desktop", gifKey: `${p}/a.webm`, width: 10, height: 10, sheetKey: null, meta: null }],
       }
-      ids.push((await db.addPage(DB, ref.id, job.attempt, upload))!)
+      ids.push((await db.addPage(DB, ref.id, job.lease, upload))!)
     }
-    await db.completeJob(DB, ref.id, job.attempt, { title: "Example", description: null, favicon: null, coverKey: null, tokens: null })
+    await db.completeJob(DB, ref.id, job.lease, { title: "Example", description: null, favicon: null, coverKey: null, tokens: null })
     return { refId: ref.id, pageIds: ids }
   }
   const holdPuts = () => {
@@ -213,6 +213,7 @@ test("get_reference pages and animations page through every row once, in order",
   const { mf, DB, call, crawl } = await setup()
   try {
     const { refId, pageIds } = await crawl(60, () => false)
+    await DB.prepare(`UPDATE pages SET warnings_json = '["truncated"]' WHERE id = ?`).bind(pageIds[0]).run()
     for (const part of ["pages", "animations"]) {
       const seen: string[] = []
       let cursor: string | undefined
@@ -221,6 +222,7 @@ test("get_reference pages and animations page through every row once, in order",
         const res = (await call("get_reference", { id: refId, part, limit: 25, ...(cursor ? { cursor } : {}) })).structuredContent
         assert.equal(res.total, 60)
         assert.equal(res.offset, seen.length)
+        if (part === "pages" && calls === 0) assert.deepEqual(res.items[0].warnings, ["truncated"], "bounded page reads keep captured-page warnings")
         seen.push(...res.items.map((x: { id: string; pageId?: string }) => (part === "pages" ? x.id : x.pageId)))
         cursor = res.nextCursor ?? undefined
         calls++
@@ -230,6 +232,7 @@ test("get_reference pages and animations page through every row once, in order",
     }
     const overview = (await call("get_reference", { id: refId, part: "overview" })).structuredContent
     assert.equal(overview.pages.length, 20)
+    assert.deepEqual(overview.pages[0].warnings, ["truncated"], "the overview keeps captured-page warnings")
     assert.deepEqual(overview.omitted.pages, 40)
     assert.deepEqual(overview.omitted.animations, 40)
     // A cursor from before keyed paging (offset only) is refused rather than restarting silently.

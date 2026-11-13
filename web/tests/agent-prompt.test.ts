@@ -65,3 +65,19 @@ test("copied prompt asks for motion at the scope of the selection", () => {
   assert.match(buildAgentPrompt({ ...base, tokens: true }), /get_motion_profile with reference_id "ref1": .*merged across its pages/, "the whole site only for site-wide tokens")
   assert.ok(!buildAgentPrompt({ ...base, reference: { ...(reference as object), tokens: null } as never, pages: [{ id: "p1", path: "/" }] as never }).includes("get_motion_profile"), "no profile, no call")
 })
+
+test("saved direction, selected view, capture revision and scoped motion survive in one prompt", () => {
+  const reference = { id: "ref1", title: "Example", domain: "example.test", url: "https://example.test", captureRun: 7,
+    notes: "Use the pricing cards.\nKeep our own copy.", options: { colorScheme: "light" }, tokens: { motion: { version: 1 } } } as never
+  const pages = [{ id: "p1", path: "/pricing", title: "Pricing", mobileKey: "mobile.jpg", altScheme: { scheme: "dark" },
+    sections: [{ kind: "section", label: "Plans" }] }] as never
+  const prompt = buildAgentPrompt({ reference, pages, animations: [], tokens: false, mcpUrl: "https://snip.test/mcp",
+    views: { p1: { viewport: "desktop", scheme: "dark", sections: [0] } } })
+  assert.match(prompt, /> Use the pricing cards\.\n> Keep our own copy\./)
+  assert.match(prompt, /Capture run: 7\./)
+  assert.match(prompt, /page_id "p1", desktop, dark theme, section 0 "Plans"/)
+  assert.match(prompt, /get_motion_profile with reference_id "ref1" and page_id "p1":/)
+  const selection = JSON.parse(prompt.split("\n").find((line) => line.startsWith("Selection: "))!.slice("Selection: ".length))
+  assert.deepEqual(selection, { reference_id: "ref1", capture_run: 7, pages: [{ page_id: "p1", path: "/pricing", viewport: "desktop", scheme: "dark", sections: [{ index: 0, kind: "section", label: "Plans" }] }] })
+  assert.match(prompt, /captureRun other than 7/)
+})
