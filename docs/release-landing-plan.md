@@ -6,7 +6,7 @@ Updated 2026-11-13. These are review candidates, not a merged or deployed releas
 
 | Candidate | GitHub | Role |
 | --- | --- | --- |
-| CLA prerequisite | [PR #65](https://github.com/MaxChen04/Snip/pull/65), `codex/snip-cla-maintainer-identity` → `main` | Allow the exact unlinked Claude author name on maintainer-owned PRs before checking the release stack |
+| CLA prerequisites | [PR #65](https://github.com/MaxChen04/Snip/pull/65), [PR #68](https://github.com/MaxChen04/Snip/pull/68) → `main` | Allow the exact linked `claude` login and unlinked `Claude` fallback on maintainer-owned PRs before checking the release stack |
 | A | [PR #63](https://github.com/MaxChen04/Snip/pull/63), `codex/snip-release-hardening` → `main` | The `sharp-ramanujan` hardening baseline plus capture, browser CI and explicit cloud-update fixes |
 | B | [PR #64](https://github.com/MaxChen04/Snip/pull/64), `codex/snip-integration-candidate` → A | Reconciled #57, #59, #58, #60 and #61; the narrow #62 spring-easing correction |
 
@@ -26,7 +26,7 @@ The original `sharp-ramanujan` branch does not have **Update cloud library**. Th
 
 ## Exact merge strategy
 
-1. Review and land the small CLA prerequisite #65, then trigger fresh A/B checks against the updated base workflow. `pull_request_target` runs trusted base code, so an allowlist change sitting only in a release PR cannot clear its own check. No CLA signature is fabricated, and the exact-name exemption applies only to MaxChen04-owned PRs. Validate A on its own and B as the combined candidate; keep both draft until the outstanding gates below are satisfied.
+1. Land the small CLA prerequisites #65 and #68, bring main into A and A into B, then require fresh CLA and application checks on both heads. `pull_request_target` runs trusted base code, so an allowlist change sitting only in a release PR cannot clear its own check. The live run showed that GitHub resolves the imported commits to the lowercase account `claude`; `Claude` alone did not match. No CLA signature is fabricated, and the exact-identity exemption applies only to MaxChen04-owned PRs. Validate A on its own and B as the combined candidate; keep both draft until the outstanding gates below are satisfied.
 2. Merge A using an explicit command-line merge method, not the browser's default button. The repository permits merge commits even though its recent history uses squash merges. This is an explicit exception for this stack.
 3. Retarget B to main, inspect the resulting diff, update from main if needed, and rerun affected checks on the actual result. It must contain the features, not replay the hardening baseline. Merge B with a merge commit as well.
 4. Confirm the final main commit passes checks before selecting a stable release tag. Only then close or mark the old feature PRs superseded; do not merge them independently. #62 has already been converted to draft to prevent accidentally landing its incompatible overlapping changes.
@@ -97,4 +97,4 @@ The local history rehearsal passed all **five histories using Wrangler 4.157.0 /
 
 The distinction between test steps matters: at A `a725e1a`, **`test:app` passed but `test:desktop` failed**. The native smoke waited for a claim, then quit before navigation, and called Playwright's disposed application handle after exit. The corrected fixture waits for a real page request, holds its response through the shutdown interval, retains the native child handle before close, and still requires a persisted ready capture. The packaged macOS run must prove this fix; Linux lifecycle tests alone do not.
 
-CI also found browser interaction failures and a B-only migration-test fixture that excluded every `0017` file. The migration test now holds back only `0017_board_item_z.sql`, preserving the separate style-parts migration; its focused real-D1 test passes. Browser corrections and latest-head CI remain release gates. Representative live-site capture and signed Mac/hosted-cloud upgrade acceptance also remain pending. Nothing in this document authorizes bypassing those checks or claims deployment has happened.
+CI also found browser interaction failures and a B-only migration-test fixture that excluded every `0017` file. The migration test now holds back only `0017_board_item_z.sql`, preserving the separate style-parts migration; its focused real-D1 test passes. A `e1be1af` and B `5d09396` subsequently passed their full core, browser and macOS jobs, including the corrected shutdown test and both standalone runtime checks. Fresh checks after the CLA/base updates remain landing gates. Representative live-site capture and signed Mac/hosted-cloud upgrade acceptance also remain pending. Nothing in this document authorizes bypassing those checks or claims deployment has happened.
