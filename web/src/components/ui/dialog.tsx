@@ -171,4 +171,5 @@ export {
   DialogPortal,
   DialogTitle,
   DialogTrigger,
+  wrapTab,
 }

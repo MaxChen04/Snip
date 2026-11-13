@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { Dialog as DialogPrimitive } from "@base-ui/react/dialog"
 import {
   CopyIcon,
   DownloadIcon,
@@ -14,6 +15,7 @@ import { TokensPanel } from "@/components/tokens-panel"
 import { SavePagesButton } from "@/components/save-pages"
 import { LiveClips, LiveTag, LookToggles, usePageLook, type PageLook } from "@/components/page-look"
 import { Button } from "@/components/ui/button"
+import { Dialog, DialogPortal, DialogTitle, wrapTab } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { Spinner } from "@/components/ui/spinner"
@@ -152,16 +154,6 @@ export function PageViewer({ page, onClose, onCollectionsChange }: {
   const [tabPref, setTabPref] = useState<SideTab>(() => readPref<SideTab>(TAB_KEY, "sections"))
   const tab = tabs.some((t) => t.value === tabPref) ? tabPref : tabs[0]?.value
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose()
-    window.addEventListener("keydown", onKey)
-    document.body.style.overflow = "hidden"
-    return () => {
-      window.removeEventListener("keydown", onKey)
-      document.body.style.overflow = ""
-    }
-  }, [onClose])
-
   const showSidebar = open && tabs.length > 0
 
   // Sections are measured on the desktop screenshot; map their capture px onto the image as displayed.
@@ -188,110 +180,116 @@ export function PageViewer({ page, onClose, onCollectionsChange }: {
     setActive(i)
   }
 
+  // The viewer is a modal dialog, which traps Tab, closes on Escape, hides the page behind it from the keyboard and screen readers, and
+  // returns focus to the tile that opened it. It is not a DialogContent, which would centre it as a card; it takes that component's Tab wrap.
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-background" role="dialog" aria-modal="true">
-      <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2.5">
-        <Button variant="ghost" size="icon-sm" aria-label="Close" onClick={onClose}>
-          <XIcon />
-        </Button>
-        <div className="min-w-0 flex-1 basis-40">
-          <div className="truncate text-sm font-medium">{page.title || page.path}</div>
-          <a href={page.url} target="_blank" rel="noreferrer" className="block truncate text-2xs text-muted-foreground hover:text-foreground">
-            {page.url}
-          </a>
-        </div>
-        <ToggleGroup variant="outline" size="sm" value={[device]} onValueChange={(v) => v[0] && setDevice(v[0] as "desktop" | "mobile")}>
-          <ToggleGroupItem value="desktop" aria-label="Desktop">
-            <MonitorIcon /> <span className="hidden sm:inline">Desktop</span>
-          </ToggleGroupItem>
-          <ToggleGroupItem value="mobile" aria-label="Mobile">
-            <SmartphoneIcon /> <span className="hidden sm:inline">Mobile</span>
-          </ToggleGroupItem>
-        </ToggleGroup>
-        <LookToggles look={look} />
-        <div className="flex flex-1 basis-0 justify-end gap-2">
-          <SavePagesButton pages={[page]} onChange={onCollectionsChange} label={page.collectionIds.length ? "Saved" : "Save"} className="h-8 px-3" />
-          {tabs.length > 0 && (
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label={open ? "Hide sidebar" : "Show sidebar"}
-              aria-pressed={open}
-              title={open ? "Hide sidebar" : "Show sections, tokens, HTML and CSS"}
-              onClick={() => setOpen(!open)}
-            >
-              {open ? <PanelRightCloseIcon /> : <PanelRightOpenIcon />}
+    <Dialog open onOpenChange={(next) => !next && onClose()} disablePointerDismissal>
+      <DialogPortal>
+        <DialogPrimitive.Popup onKeyDown={wrapTab} className="fixed inset-0 z-50 flex flex-col bg-background outline-none">
+          <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2.5">
+            <Button variant="ghost" size="icon-sm" aria-label="Close" onClick={onClose}>
+              <XIcon />
             </Button>
-          )}
-        </div>
-      </div>
-
-      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-        <div ref={scrollRef} onScroll={onScroll} className="relative min-h-0 min-w-0 flex-1 overflow-y-auto bg-fill-1 p-4 sm:p-6">
-          {page.warnings.length > 0 && <p className="mx-auto mb-3 max-w-xl text-center text-xs text-pretty text-ink-11">{warningText(page)}</p>}
-          {key ? (
-            <div
-              ref={device === "desktop" ? imgRef : undefined}
-              className={cn("relative mx-auto overflow-hidden shadow-card", device === "desktop" ? "w-full max-w-6xl rounded-lg" : "w-[390px] max-w-full rounded-3xl")}
-            >
-              <img src={fileUrl(key)} alt="" className="block w-full" />
-              <LiveClips page={page} look={look} />
+            <div className="min-w-0 flex-1 basis-40">
+              <DialogTitle className="truncate text-sm leading-5 font-medium">{page.title || page.path}</DialogTitle>
+              <a href={page.url} target="_blank" rel="noreferrer" className="block truncate text-2xs text-muted-foreground hover:text-foreground">
+                {page.url}
+              </a>
             </div>
-          ) : (
-            <p className="py-24 text-center text-sm text-muted-foreground">No {device} screenshot.</p>
-          )}
-        </div>
+            <ToggleGroup variant="outline" size="sm" value={[device]} onValueChange={(v) => v[0] && setDevice(v[0] as "desktop" | "mobile")}>
+              <ToggleGroupItem value="desktop" aria-label="Desktop">
+                <MonitorIcon /> <span className="hidden sm:inline">Desktop</span>
+              </ToggleGroupItem>
+              <ToggleGroupItem value="mobile" aria-label="Mobile">
+                <SmartphoneIcon /> <span className="hidden sm:inline">Mobile</span>
+              </ToggleGroupItem>
+            </ToggleGroup>
+            <LookToggles look={look} />
+            <div className="flex flex-1 basis-0 justify-end gap-2">
+              <SavePagesButton pages={[page]} onChange={onCollectionsChange} label={page.collectionIds.length ? "Saved" : "Save"} className="h-8 px-3" />
+              {tabs.length > 0 && (
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={open ? "Hide sidebar" : "Show sidebar"}
+                  aria-pressed={open}
+                  title={open ? "Hide sidebar" : "Show sections, tokens, HTML and CSS"}
+                  onClick={() => setOpen(!open)}
+                >
+                  {open ? <PanelRightCloseIcon /> : <PanelRightOpenIcon />}
+                </Button>
+              )}
+            </div>
+          </div>
 
-        {showSidebar && tab && (
-          <>
-            <ResizeHandle width={width} onDrag={setWidth} onCommit={commitWidth} />
-            <aside
-              style={{ "--sidebar-w": `${width}px` } as React.CSSProperties}
-              className="flex h-[45svh] min-h-0 w-full shrink-0 flex-col border-t border-border lg:h-auto lg:w-(--sidebar-w) lg:border-t-0"
-            >
-              <Tabs
-                value={tab}
-                onValueChange={(v) => {
-                  setTabPref(v as SideTab)
-                  writePref(TAB_KEY, v as string)
-                }}
-                className="min-h-0 flex-1 flex-col gap-0"
-              >
-                <div className="flex shrink-0 items-center px-4 pt-3 pb-2">
-                  <TabsList>
-                    {tabs.map((t) => (
-                      <TabsTrigger key={t.value} value={t.value}>
-                        {t.label}
-                      </TabsTrigger>
-                    ))}
-                  </TabsList>
+          <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+            <div ref={scrollRef} onScroll={onScroll} className="relative min-h-0 min-w-0 flex-1 overflow-y-auto bg-fill-1 p-4 sm:p-6">
+              {page.warnings.length > 0 && <p className="mx-auto mb-3 max-w-xl text-center text-xs text-pretty text-ink-11">{warningText(page)}</p>}
+              {key ? (
+                <div
+                  ref={device === "desktop" ? imgRef : undefined}
+                  className={cn("relative mx-auto overflow-hidden shadow-card", device === "desktop" ? "w-full max-w-6xl rounded-lg" : "w-[390px] max-w-full rounded-3xl")}
+                >
+                  <img src={fileUrl(key)} alt="" className="block w-full" />
+                  <LiveClips page={page} look={look} />
                 </div>
-                {page.sections.length > 0 && (
-                  <TabsContent value="sections" className="min-h-0 overflow-y-auto px-4 pt-2 pb-6">
-                    <SectionsPanel page={page} look={look} active={device === "desktop" ? active : -1} onSelect={goToSection} />
-                  </TabsContent>
-                )}
-                {page.tokens && (
-                  <TabsContent value="tokens" className="min-h-0 overflow-y-auto px-4 pt-2 pb-6">
-                    <TokensPanel tokens={page.tokens} compact />
-                  </TabsContent>
-                )}
-                {page.snapshotKey && (
-                  <TabsContent value="html" className="flex min-h-0 flex-col">
-                    <HtmlPanel fileKey={page.snapshotKey} />
-                  </TabsContent>
-                )}
-                {page.stylesKey && (
-                  <TabsContent value="css" className="flex min-h-0 flex-col">
-                    <CssPanel fileKey={page.stylesKey} />
-                  </TabsContent>
-                )}
-              </Tabs>
-            </aside>
-          </>
-        )}
-      </div>
-    </div>
+              ) : (
+                <p className="py-24 text-center text-sm text-muted-foreground">No {device} screenshot.</p>
+              )}
+            </div>
+
+            {showSidebar && tab && (
+              <>
+                <ResizeHandle width={width} onDrag={setWidth} onCommit={commitWidth} />
+                <aside
+                  style={{ "--sidebar-w": `${width}px` } as React.CSSProperties}
+                  className="flex h-[45svh] min-h-0 w-full shrink-0 flex-col border-t border-border lg:h-auto lg:w-(--sidebar-w) lg:border-t-0"
+                >
+                  <Tabs
+                    value={tab}
+                    onValueChange={(v) => {
+                      setTabPref(v as SideTab)
+                      writePref(TAB_KEY, v as string)
+                    }}
+                    className="min-h-0 flex-1 flex-col gap-0"
+                  >
+                    <div className="flex shrink-0 items-center px-4 pt-3 pb-2">
+                      <TabsList>
+                        {tabs.map((t) => (
+                          <TabsTrigger key={t.value} value={t.value}>
+                            {t.label}
+                          </TabsTrigger>
+                        ))}
+                      </TabsList>
+                    </div>
+                    {page.sections.length > 0 && (
+                      <TabsContent value="sections" className="min-h-0 overflow-y-auto px-4 pt-2 pb-6">
+                        <SectionsPanel page={page} look={look} active={device === "desktop" ? active : -1} onSelect={goToSection} />
+                      </TabsContent>
+                    )}
+                    {page.tokens && (
+                      <TabsContent value="tokens" className="min-h-0 overflow-y-auto px-4 pt-2 pb-6">
+                        <TokensPanel tokens={page.tokens} compact />
+                      </TabsContent>
+                    )}
+                    {page.snapshotKey && (
+                      <TabsContent value="html" className="flex min-h-0 flex-col">
+                        <HtmlPanel fileKey={page.snapshotKey} />
+                      </TabsContent>
+                    )}
+                    {page.stylesKey && (
+                      <TabsContent value="css" className="flex min-h-0 flex-col">
+                        <CssPanel fileKey={page.stylesKey} />
+                      </TabsContent>
+                    )}
+                  </Tabs>
+                </aside>
+              </>
+            )}
+          </div>
+        </DialogPrimitive.Popup>
+      </DialogPortal>
+    </Dialog>
   )
 }
 
