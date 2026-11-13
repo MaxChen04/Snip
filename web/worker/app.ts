@@ -223,12 +223,7 @@ api.get("/passkeys", (c) => listDevices(c))
 api.delete("/passkeys/:id", (c) => removeDevice(c))
 
 api.get("/cloud-status", async (c) => {
-  const [owner, passkeys, presence, counts] = await Promise.all([
-    db.firstOwner(c.env.DB),
-    db.hasPasskeys(c.env.DB),
-    db.getPresence(c.env.DB),
-    db.libraryCounts(c.env.DB),
-  ])
+  const [owner, passkeys, counts] = await Promise.all([db.firstOwner(c.env.DB), db.hasPasskeys(c.env.DB), db.libraryCounts(c.env.DB)])
   const methods: ("passkey" | "github")[] = []
   if (passkeys) methods.push("passkey")
   if (githubEnabled(c.env)) methods.push("github")
@@ -238,7 +233,6 @@ api.get("/cloud-status", async (c) => {
     ownerId: owner?.id ?? null,
     methods,
     counts,
-    lastCapture: { at: presence.lastSeenAt, activity: presence.activity, stale: presence.freshness !== "recent" },
   })
 })
 

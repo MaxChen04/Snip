@@ -617,14 +617,13 @@ test("an adopted library's owner is the id the engine must mint links for", () =
     assert.deepEqual(await status(), { hasOwner: true, ownerId: "max" }, "§4.2.1: the exact ownerId, never a default")
   }))
 
-test("cloud status reports the owner, methods, counts and the capture agent", () =>
+test("cloud status reports the owner, methods and counts; the capture agent is read from /api/agent", () =>
   withWorker(async ({ database, local }) => {
     const initial = (await (await local("/api/cloud-status", {}, { DEV_LOGIN: "max" })).json()) as Record<string, unknown>
-    assert.deepEqual(Object.keys(initial).sort(), ["counts", "hasOwner", "lastCapture", "methods", "ownerId", "version"])
+    assert.deepEqual(Object.keys(initial).sort(), ["counts", "hasOwner", "methods", "ownerId", "version"])
     assert.equal(initial.hasOwner, false)
     assert.deepEqual(initial.methods, [], "no GitHub credentials and no passkeys")
     assert.deepEqual(initial.counts, { refs: 0, pages: 0, animations: 0, collections: 0, images: 0 })
-    assert.deepEqual(initial.lastCapture, { at: null, activity: null, stale: true })
 
     await database.prepare(`INSERT INTO owners (id, label, created_at) VALUES ('max', 'Max', '2026-01-01T00:00:00Z')`).run()
     await database.prepare(`INSERT INTO passkeys (id, owner_id, public_key, counter, created_at) VALUES ('k1', 'max', ?2, 0, '2026-01-01T00:00:00Z')`).bind("k1", new Uint8Array([1, 2, 3])).run()
