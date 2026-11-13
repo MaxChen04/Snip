@@ -65,8 +65,23 @@ test("on a phone, focusing the capture card's controls leaves the card where it 
     // The stop after the card's last button is a tile, which may rightly pan the card away.
     if (stop < 4) await page.keyboard.press("Tab")
   }
-  // A click in the field is the same.
-  await page.getByLabel("Link to capture").click()
+  // The focused Upload images label can overlap the field. Click in that overlap, rather than relying on the
+  // default center point: different system fonts put the tooltip just to either side of the field's center.
+  const field = page.getByLabel("Link to capture")
+  const tooltip = page.locator('[data-slot="tooltip-content"][data-open]').filter({ hasText: "Upload images" })
+  await tooltip.waitFor()
+  const fieldBox = (await field.boundingBox())!
+  const tipBox = (await tooltip.boundingBox())!
+  const left = Math.max(fieldBox.x, tipBox.x)
+  const right = Math.min(fieldBox.x + fieldBox.width, tipBox.x + tipBox.width)
+  const top = Math.max(fieldBox.y, tipBox.y)
+  const bottom = Math.min(fieldBox.y + fieldBox.height, tipBox.y + tipBox.height)
+  const point = right > left && bottom > top
+    ? { x: (left + right) / 2, y: (top + bottom) / 2 }
+    : { x: fieldBox.x + fieldBox.width / 2, y: fieldBox.y + fieldBox.height / 2 }
+  assert.equal(await field.evaluate((el, p) => document.elementFromPoint(p.x, p.y) === el, point), true, "a control label must not intercept the URL input")
+  await field.click({ position: { x: point.x - fieldBox.x, y: point.y - fieldBox.y } })
+  assert.equal((await focused()).label, "Link to capture")
   await sleep(500)
   assert.ok(Math.abs((await card(page).boundingBox())!.x - before.x) < 0.5, "the card did not move for a click either")
   assert.deepEqual(t.consoleErrors, [])

@@ -1,7 +1,7 @@
 // Toasts: removing several items and creating a board in the popover say so, and the same news twice replaces its toast.
 import assert from "node:assert/strict"
 import { after, before, test } from "node:test"
-import { boardOf, noteItem, reference, sleep, startApp, until, type App } from "./harness.ts"
+import { boardOf, gate, noteItem, reference, sleep, startApp, until, type App } from "./harness.ts"
 
 let app: App
 before(async () => void (app = await startApp()))
@@ -37,13 +37,24 @@ test("asking to add a saved site again replaces its Already saved toast", async 
   const saved = reference({ id: "ref1", title: "Example Domain" })
   const t = await app.session({ state: { references: { ref1: saved } } })
   const { page } = t
-  t.on("POST", "/api/references", () => ({ status: 409, json: { error: "This URL is already saved", existing: saved } }))
+  const replies = [gate(), gate(), gate()]
+  let received = 0
+  t.on("POST", "/api/references", async () => {
+    await replies[received++]!.opened
+    return { status: 409, json: { error: "This URL is already saved", existing: saved } }
+  })
   await t.goto("/")
   const field = page.getByRole("textbox", { name: "Link to capture" })
+  const submit = page.getByRole("button", { name: "Snip", exact: true })
   for (let i = 1; i <= 3; i++) {
     await field.fill("example.com")
     await field.press("Enter")
     await until("POST sent", () => t.count("POST", "/api/references") === i)
+    assert.equal(await submit.isDisabled(), true, "the form waits for the response")
+    replies[i - 1]!.open()
+    // A previous "Already saved" toast stays visible during the next request. Only the completed form state
+    // proves this response has arrived and it is safe to start another capture.
+    await until("capture form ready again", async () => await submit.isEnabled() && await field.inputValue() === "")
     await page.getByText("Already saved").first().waitFor()
   }
   await sleep(500)
