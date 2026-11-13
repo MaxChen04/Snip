@@ -5,14 +5,8 @@ import { mcpUrl } from "@/lib/mcp"
 import type { Animation, Page, Reference } from "@/lib/api"
 import { cn } from "@/lib/utils"
 
-export interface Selection {
-  pages: string[]
-  animations: string[]
-  tokens: boolean
-}
-export const EMPTY_SELECTION: Selection = { pages: [], animations: [], tokens: false }
-export const selectionSize = (s: Selection) => s.pages.length + s.animations.length + (s.tokens ? 1 : 0)
-export const toggleIn = (xs: string[], id: string) => (xs.includes(id) ? xs.filter((x) => x !== id) : [...xs, id])
+export { EMPTY_SELECTION, pruneSelection, selectionSize, toggleIn, togglePage, withPageView, type Selection } from "@/lib/selection-state"
+import { selectionSize, type Selection } from "@/lib/selection-state"
 
 /** Round check in a tile's corner. Visible on hover, or always while selecting. */
 export function SelectCheck({ on, active, onToggle, label }: { on: boolean; active: boolean; onToggle: () => void; label: string }) {
@@ -67,6 +61,7 @@ export function SelectionBar({
         animations: animations.filter((a) => selection.animations.includes(a.id)),
         tokens: selection.tokens,
         mcpUrl: mcpUrl(),
+        views: selection.views,
       },
       pages,
     )
