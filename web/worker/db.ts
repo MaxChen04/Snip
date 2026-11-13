@@ -25,6 +25,7 @@ import {
 } from "../shared/types"
 import { ABANDONED, STOPPED_EMPTY, WAITING } from "../shared/capture-errors"
 import { checkSiteUrl } from "../shared/site-url"
+import { outdatedHalf } from "../shared/capture-protocol"
 
 // Data access shared by the HTTP API and the MCP server.
 
@@ -811,6 +812,8 @@ export async function pauseJob(db: D1Database, id: string, lease: string, state:
 // ---------- Capture worker presence ----------
 
 const PRESENCE_ID = "capture"
+/** The row of the last agent turned away for its protocol (noteRefusedAgent). It shares the table, not the meaning: it is never the agent's contact. */
+const REFUSED_ID = "refused"
 const PRESENCE_WRITE_SECONDS = 20
 
 /** The agent's contact as the offline banner reads it, by the same threshold and comparison as a capture's `quietSince`. */
@@ -833,13 +836,36 @@ export async function touchPresence(db: D1Database, activity: "idle" | "busy", j
     .run()
 }
 
+/**
+ * Remember that an agent holding the capture token was turned away for its protocol, on the row `REFUSED_ID`: `last_seen_at` is when and
+ * `protocol` is what it sent (null if it sent none). Written like idle presence, at most once per PRESENCE_WRITE_SECONDS, and at once when
+ * the protocol is not the one already there. Not presence: `getPresence` keeps the two apart.
+ */
+export async function noteRefusedAgent(db: D1Database, protocol: number | null) {
+  const before = new Date(Date.now() - PRESENCE_WRITE_SECONDS * 1000).toISOString()
+  await db
+    .prepare(
+      `INSERT INTO worker_presence (id, last_seen_at, activity, protocol) VALUES (?1, ?2, 'idle', ?3)
+       ON CONFLICT (id) DO UPDATE SET last_seen_at = ?2, protocol = ?3
+       WHERE worker_presence.last_seen_at < ?4 OR coalesce(worker_presence.protocol, -1) != coalesce(?3, -1)`,
+    )
+    .bind(REFUSED_ID, now(), protocol, before)
+    .run()
+}
+
 export async function getPresence(db: D1Database): Promise<AgentPresence> {
-  const w = await db.prepare(`SELECT * FROM worker_presence WHERE id = ?`).bind(PRESENCE_ID).first<Row>()
+  const rows = await db.prepare(`SELECT * FROM worker_presence WHERE id IN (?, ?)`).bind(PRESENCE_ID, REFUSED_ID).all<Row>()
+  const w = rows.results.find((r) => r.id === PRESENCE_ID)
+  const turnedAway = rows.results.find((r) => r.id === REFUSED_ID)
   const lastSeenAt = (w?.last_seen_at as string) ?? null
+  // A refusal counts for as long as an agent would: by that point the one turned away has stopped polling, or is polling a Worker that was updated.
+  const refusedAt = (turnedAway?.last_seen_at as string) ?? null
+  const protocol = (turnedAway?.protocol as number | null) ?? null
   return {
     lastSeenAt,
     freshness: freshnessOf(lastSeenAt),
     activity: (w?.activity as "idle" | "busy") ?? null,
+    refused: refusedAt && freshnessOf(refusedAt) === "recent" ? { at: refusedAt, protocol, outdated: outdatedHalf(protocol) } : null,
   }
 }
 

@@ -18,7 +18,7 @@ import {
 import * as db from "./db"
 import { canvas } from "./canvas"
 import { signInPath } from "../shared/safe-next"
-import { CAPTURE_PROTOCOL, CAPTURE_PROTOCOL_HEADER, refusalMessage } from "../shared/capture-protocol"
+import { CAPTURE_PROTOCOL, CAPTURE_PROTOCOL_HEADER, parseProtocol, refusalMessage } from "../shared/capture-protocol"
 import { loginOptions, loginVerify, registerOptions, registerVerify, listDevices, removeDevice } from "./passkeys"
 import { ownerLinkPage, ownerLinkSubmit } from "./owner"
 import { transfer } from "./transfer"
@@ -379,7 +379,11 @@ agent.use("*", requireCaptureToken)
 agent.use("*", async (c, next) => {
   const sent = c.req.header(CAPTURE_PROTOCOL_HEADER)
   // `expectedProtocol` lets an agent tell which side is out of date from the numbers, which a Worker before 1.5.0 never said.
-  if (sent !== String(CAPTURE_PROTOCOL)) return c.json({ error: refusalMessage(sent), expectedProtocol: CAPTURE_PROTOCOL }, 426)
+  if (sent !== String(CAPTURE_PROTOCOL)) {
+    // Remembered for the browser's banner, which would call this agent offline. The agent hears why whether or not the note is kept.
+    c.executionCtx.waitUntil(db.noteRefusedAgent(c.env.DB, parseProtocol(sent)).catch((error) => console.error("refused agent not recorded", error)))
+    return c.json({ error: refusalMessage(sent), expectedProtocol: CAPTURE_PROTOCOL }, 426)
+  }
   await next()
 })
 

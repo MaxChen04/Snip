@@ -14,8 +14,11 @@ export const CLOUD_OLDER_MESSAGE = "Your cloud library is older than this Snip. 
 /** A refusal that does not say which: both updates fix it, the app first. */
 export const MISMATCH_MESSAGE = "This capture agent and your cloud library are on different versions. Update the Snip app, then update cloud (npm run update)."
 
-/**
- * What the Worker says to an agent that sent `sent` as its protocol. Only a number above the Worker's own means the agent is
- * newer; a missing or unreadable one is an agent too old to have sent it.
- */
-export const refusalMessage = (sent: string | undefined) => (/^\d+$/.test(sent ?? "") && Number(sent) > CAPTURE_PROTOCOL ? CLOUD_OLDER_MESSAGE : AGENT_OLDER_MESSAGE)
+/** The protocol an agent sent: a whole number, or null when it sent none or something else, which is an agent too old to have sent one. */
+export const parseProtocol = (sent: string | undefined): number | null => (/^\d{1,6}$/.test(sent ?? "") ? Number(sent) : null)
+
+/** Which half a refusal says to update. Only an agent above the Worker's own protocol is newer: then the cloud library is old, otherwise the app that carries the agent. */
+export const outdatedHalf = (protocol: number | null): "app" | "cloud" => (protocol !== null && protocol > CAPTURE_PROTOCOL ? "cloud" : "app")
+
+/** What the Worker says to an agent that sent `sent` as its protocol. */
+export const refusalMessage = (sent: string | undefined) => (outdatedHalf(parseProtocol(sent)) === "cloud" ? CLOUD_OLDER_MESSAGE : AGENT_OLDER_MESSAGE)

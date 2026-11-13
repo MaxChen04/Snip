@@ -4,7 +4,9 @@ import { app } from "../worker/app"
 
 // The Worker's answer to an agent on another capture protocol: 426, which side is out of date, and the protocol it expects.
 
-const env = { CAPTURE_TOKEN: "test-token" } as unknown as Env
+// A refusal notes the agent in D1 (agent-refusals.test.ts); here the database is a stub that takes the write.
+const noWrite = { bind: () => ({ run: async () => ({}) }) }
+const env = { CAPTURE_TOKEN: "test-token", DB: { prepare: () => noWrite } } as unknown as Env
 const ctx = { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext
 const agent = (protocol: string | null, path = "/jobs/claim", method = "POST") =>
   app.request(`http://localhost/agent${path}`, { method, headers: { authorization: "Bearer test-token", ...(protocol === null ? {} : { "x-snip-capture-protocol": protocol }) } }, env, ctx)

@@ -359,6 +359,12 @@ export interface AgentPresence {
   lastSeenAt: string | null
   freshness: "recent" | "stale" | "never"
   activity: "idle" | "busy" | null
+  /**
+   * The last agent the Worker turned away for its capture protocol (426), while it would still count as alive: it is not offline, it is the wrong version.
+   * `outdated` is the half to update: "app" when the agent is behind the Worker, "cloud" when it is ahead. `protocol` is null for an agent too old to send one.
+   * Null when there is none, and absent from a Worker before 1.5.0.
+   */
+  refused: { at: string; protocol: number | null; outdated: "app" | "cloud" } | null
 }
 
 export interface StorageUsage {
