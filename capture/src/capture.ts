@@ -1275,11 +1275,11 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
   /** A stop of this worker or a lost browser ends the page in flight; the site did not fail it. */
   const interrupted = () => signal.aborted || !browser.isConnected()
   /** Between pages: honour a pause or stop the user asked for, or a stop of this worker. A pause hands back where the crawl is. */
-  const windDown = async (): Promise<"stop" | "paused" | null> => {
+  const windDown = async (): Promise<"stop" | "paused" | "handed back" | null> => {
     try {
       // A stopping worker hands the crawl back, to be resumed by the next claim. An older Worker refuses unless the user asked
       // for a pause: then it stops with the pages it has, after at least one, so a job claimed just before the stop is not failed as empty.
-      if (interrupted()) return (await api.pause(job.id, checkpoint(), true)) ? "paused" : captured ? "stop" : null
+      if (interrupted()) return (await api.pause(job.id, checkpoint(), true)) ? "handed back" : captured ? "stop" : null
       for (let checks = 0; checks < 5; checks++) {
         const control = await api.control(job.id)
         if (control !== "pause") return control
@@ -1298,8 +1298,8 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
   while (queue.length && captured < job.maxPages) {
     progress()
     const next = await windDown()
-    if (next === "paused") {
-      log(`[${job.id}] paused after ${captured} page(s)`)
+    if (next === "paused" || next === "handed back") {
+      log(`[${job.id}] ${next} after ${captured} page(s)`)
       return
     }
     if (next === "stop") {
@@ -1312,7 +1312,10 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
     // A page's ord and file prefix are its place in `visited`: every attempt takes its own, and a pause saves `visited`, so a resumed crawl carries on from it.
     const ord = visited.push(url) - 1
     const path = new URL(url).pathname || "/"
-    await api.progress(job.id, `Capturing ${captured + 1}/${job.mode === "crawl" ? `${Math.min(job.maxPages, captured + 1 + queue.length)}` : 1}: ${path}`)
+    // A crawl's total is its queue. A site with no sitemap has none until the first page's links are read, so that page is
+    // reported without one rather than as "1 of 1".
+    const total = job.mode !== "crawl" ? 1 : !navLinksQueued && !queue.length && job.maxPages > 1 ? null : Math.min(job.maxPages, captured + 1 + queue.length)
+    await api.progress(job.id, total === null ? `Capturing page ${captured + 1}: ${path}` : `Capturing ${captured + 1}/${total}: ${path}`)
     log(`[${job.id}] ${url}`)
     const p = `${prefix}/p${ord}`
     // Each viewport gets a fresh page that closes once captured. The mobile page loads and screenshots while

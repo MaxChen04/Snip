@@ -265,6 +265,47 @@ test("a capture whose job another agent took stops at the first refused call: no
 
 const SITE = (req: http.IncomingMessage) => req.url === "/b" ? plain("Page B") : req.url === "/c" ? plain("Page C") : plain("Page A", `<nav><a href="/b">B</a> <a href="/c">C</a></nav>`)
 
+test("a crawl's first page is reported without a total until its links are known, and a hand-back is not called a pause", { timeout: 300_000 }, async () => {
+  await withServer((req, res) => {
+    res.writeHead(200, { "content-type": "text/html" })
+    res.end(SITE(req))
+  }, async (base) => {
+    const browser = await launch()
+    const lines: string[] = []
+    const log = console.log
+    console.log = (...a: unknown[]) => { lines.push(a.join(" ")) }
+    try {
+      const run = async (job: Partial<Job>, control: (n: number) => "pause" | null, signal?: AbortSignal, afterPage = () => {}) => {
+        const messages: string[] = []
+        let calls = 0
+        const api = {
+          control: async () => control(calls++),
+          progress: async (_id: string, message: string) => { messages.push(message) },
+          upload: async (key: string) => key,
+          addPage: async () => { afterPage() },
+          pause: async () => true,
+          complete: async () => {},
+        }
+        await captureJob(browser, api as never, { id: "words", url: base, mode: "crawl", maxPages: 3, attempt, resume: null, options: null, features: [], ...job } as unknown as Job, signal)
+        return messages
+      }
+      assert.deepEqual(await run({}, () => null), ["Capturing page 1: /", "Capturing 2/3: /b", "Capturing 3/3: /c"], "no total before the first page's links are in, the fraction after")
+      assert.deepEqual(await run({ mode: "single", maxPages: 1 }, () => null), ["Capturing 1/1: /"], "a single page has its own total")
+      assert.deepEqual(await run({ maxPages: 1 }, () => null), ["Capturing 1/1: /"], "a crawl of one page is one page")
+
+      assert.deepEqual(await run({}, (n) => (n === 1 ? "pause" : null)), ["Capturing page 1: /"])
+      assert.ok(lines.some((l) => l.endsWith("paused after 1 page(s)")), `a user's pause says paused, got ${lines}`)
+      const abort = new AbortController()
+      await run({}, () => null, abort.signal, () => abort.abort())
+      assert.ok(lines.some((l) => l.endsWith("handed back after 1 page(s)")), `a stopping worker's hand-back says handed back, got ${lines}`)
+    } finally {
+      console.log = log
+      await closeRenderer()
+      await browser.close()
+    }
+  })
+})
+
 /** An api whose page "/b" is cut off: `cut` runs when its capture starts. Records what the agent did. */
 function cutOffApi(cut: () => void, acceptsPause: boolean) {
   const seen = { pages: [] as PageUpload[], paused: [] as { state: CrawlState; release?: boolean }[], completed: 0 }
