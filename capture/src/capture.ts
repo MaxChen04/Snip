@@ -9,6 +9,13 @@ import { allowPrivateUrls, assertPublicUrl, createCaptureNetwork, PrivateAddress
 import { buildStills, closeRenderer, cropBands, sampleIndexes } from "./sheet"
 import { encodeRecording, recordingWriter, type Recording } from "./video"
 
+// Playwright's page.screenshot waits for document.fonts.ready before every shot, bounded only by the shot's own 30 s timeout, so one web
+// font whose request is never answered fails the whole page, where a person's browser shows the fallback font. That wait is switched
+// off here and done by screenshot() below, capped. Playwright's server runs in this process and reads the variable at every
+// screenshot, so setting it on import is early enough however the browser was launched (page-deadline.browser.test.ts fails if an
+// update stops honouring it).
+process.env.PW_TEST_SCREENSHOT_NO_FONTS_READY ??= "1"
+
 // In-page scripts live in plain .js files so the TS toolchain can't inject helpers into them.
 const script = (name: string) => readFileSync(new URL(`./inpage/${name}.js`, import.meta.url), "utf8")
 const STYLES_JS = script("styles")
@@ -201,6 +208,24 @@ async function sitemapUrls(context: BrowserContext, root: URL): Promise<string[]
 
 type CaptureNetwork = Awaited<ReturnType<typeof createCaptureNetwork>> | null
 
+/** Pages whose web fonts did not settle within FONTS_WAIT_MS: asking again would only cost the cap again, so they are not asked. */
+const fontsHung = new WeakMap<PwPage, true>()
+
+/** Waits for the page's web fonts, but never longer than FONTS_WAIT_MS. Whether they are ready (false for a page they hung on, which is not asked twice). */
+async function fontsReady(page: PwPage) {
+  if (fontsHung.has(page)) return false
+  let state: "ready" | "failed" | undefined
+  await within(FONTS_WAIT_MS, page.evaluate(() => document.fonts?.ready).then(() => { state = "ready" }, () => { state = "failed" }))
+  if (state === undefined) fontsHung.set(page, true) // a call that failed (the page closed or navigated) is not a font that hung: the shot after it reports that itself
+  return state === "ready"
+}
+
+/** The one way the capture takes a screenshot of a page: page.screenshot after the capped wait for fonts (Playwright's own wait is off, see the top of this file). */
+async function screenshot(page: PwPage, options?: Parameters<PwPage["screenshot"]>[0]) {
+  await fontsReady(page)
+  return page.screenshot(options)
+}
+
 /** Loads the page and returns the HTTP status of the document it landed on, or null if there was no response. */
 async function load(page: PwPage, url: string, network: CaptureNetwork, tick: Tick = noTick) {
   let status: number | null = null
@@ -214,7 +239,7 @@ async function load(page: PwPage, url: string, network: CaptureNetwork, tick: Ti
   tick()
   await page.waitForLoadState("networkidle", { timeout: 8_000 }).catch(() => {}) // a page that never goes idle is normal: no tick for giving up on it
   await dismissBanners(page, tick)
-  await within(FONTS_WAIT_MS, page.evaluate(() => document.fonts?.ready).then(() => tick()))
+  if (await fontsReady(page)) tick() // fonts that never settled are not a step that finished
   await sleep(600)
   return status
 }
@@ -734,7 +759,7 @@ export async function recordLiveSections(
   }
   const scale = async (frame: string) => imageSize(Buffer.from(frame, "base64")).width / vw // screencast pixels per CSS px
   // A viewport still at the page's DPR: CDP's own captureScreenshot is at DPR 1 under mobile emulation.
-  const still = () => page.screenshot({ type: "jpeg", quality: 90 })
+  const still = () => screenshot(page, { type: "jpeg", quality: 90 })
   // Where the page's bars sit in the first viewport, and the patches cut from frames with them hidden (scrolled away from the top).
   let pinned: { x: number; y: number; width: number; height: number }[] = []
   const barless: InViewPatch[] = []
@@ -957,16 +982,16 @@ export async function recordLiveSections(
 export async function captureOtherScheme(page: PwPage, base: "light" | "dark", tick: Tick = noTick) {
   const scheme = base === "dark" ? ("light" as const) : ("dark" as const)
   try {
-    const before = await page.screenshot({ type: "jpeg", quality: 70 })
+    const before = await screenshot(page, { type: "jpeg", quality: 70 })
     tick()
     await page.emulateMedia({ colorScheme: scheme })
     tick()
     await sleep(400)
-    const after = await page.screenshot({ type: "jpeg", quality: 70 })
+    const after = await screenshot(page, { type: "jpeg", quality: 70 })
     tick()
     if ((await changedShare(before, after, { top: 0, height: imageSize(before).height })) < OTHER_SCHEME_CHANGED) return null
     const shot = await fullPageShot(page, 1, tick)
-    const thumb = await thumbnail(await page.screenshot({ type: "jpeg", quality: 75 }), THUMB_WIDTH.desktop)
+    const thumb = await thumbnail(await screenshot(page, { type: "jpeg", quality: 75 }), THUMB_WIDTH.desktop)
     tick()
     return { scheme, shot, thumb }
   } catch (e) {
@@ -1026,7 +1051,7 @@ async function fullPageShot(page: PwPage, dpr: number, tick: Tick = noTick) {
     }
   }).catch(() => {})
   try {
-    const buf = await page.screenshot({ type: "jpeg", quality: 80, fullPage: true, clip: { x: 0, y: 0, width, height: clipH } })
+    const buf = await screenshot(page, { type: "jpeg", quality: 80, fullPage: true, clip: { x: 0, y: 0, width, height: clipH } })
     tick()
     return { buf, width: Math.round(width * dpr), height: Math.round(clipH * dpr), truncated: height > clipH }
   } finally {
@@ -1491,7 +1516,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
             })
             tick()
           }
-          const thumb = await thumbnail(await mPage.screenshot({ type: "jpeg", quality: 75 }), THUMB_WIDTH.mobile)
+          const thumb = await thumbnail(await screenshot(mPage, { type: "jpeg", quality: 75 }), THUMB_WIDTH.mobile)
           tick()
           return { shot, thumb, patches: inView.patches.length }
         } catch (e) {
@@ -1523,7 +1548,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
         })
         tick()
       }
-      const desktopThumb = await thumbnail(await dPage.screenshot({ type: "jpeg", quality: 75 }), THUMB_WIDTH.desktop)
+      const desktopThumb = await thumbnail(await screenshot(dPage, { type: "jpeg", quality: 75 }), THUMB_WIDTH.desktop)
       tick()
       const other = features.has("schemes") ? await captureOtherScheme(dPage, job.options?.colorScheme === "dark" ? "dark" : "light", tick) : null
       const styles = await run<{ tokens: DesignTokens }>(dPage, STYLES_JS, { maxElements: 3000 })
@@ -1729,3 +1754,4 @@ export const OBSERVED_FOR_TEST = OBSERVED_JS
 export const likelyInViewForTest = likelyInView
 export const fullPageShotAtForTest = fullPageShot
 export const loadForTest = load
+export const screenshotForTest = screenshot
