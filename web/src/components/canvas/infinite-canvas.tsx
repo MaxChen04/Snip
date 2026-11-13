@@ -39,7 +39,7 @@ const within = (target: EventTarget | null, selector: string) => target instance
  *
  * Drag anywhere to pan (mouse, touch, pen; a 3–6 px threshold keeps clicks working and the click ending a pan is
  * swallowed). Wheel pans, ctrl/⌘+wheel and pinch zoom around the pointer. With focus: arrows pan, +/- zoom,
- * 0 recenters. Keyboard focus moving to an off-screen child pans to it.
+ * 0 recenters. Keyboard focus moving to a child that is out of view pans to it.
  */
 export function InfiniteCanvas({
   children,
@@ -405,16 +405,21 @@ export function InfiniteCanvas({
     e.preventDefault()
   }
 
-  // Tabbing to a child outside the viewport (or under the floating chrome) brings it to the centre.
+  // Tabbing to a child that is out of view, or under the floating chrome at the top and bottom, brings it to the centre.
+  // Only along the axis on which it is out, and never for a child that is in view: the capture card is nearly as wide as
+  // a phone, so centring its field (or a button beside it) used to shift the whole card off the screen.
   const onFocus = (e: React.FocusEvent) => {
     const el = e.target as HTMLElement
     if (el === viewport.current || !inside(e) || !el.matches(":focus-visible")) return
     const r = el.getBoundingClientRect()
     const box = viewport.current!.getBoundingClientRect()
     const pad = 80
-    if (r.left >= box.left + pad && r.right <= box.right - pad && r.top >= box.top + pad && r.bottom <= box.bottom - pad) return
+    const outX = r.left < box.left || r.right > box.right
+    const outY = r.top < box.top + pad || r.bottom > box.bottom - pad
+    if (!outX && !outY) return
     const p = a.handle.screenToWorld(r.left + r.width / 2, r.top + r.height / 2)
-    a.handle.panTo(p.x, p.y)
+    const now = a.handle.getView()
+    a.handle.panTo(outX ? p.x : now.x, outY ? p.y : now.y)
   }
 
   return (
