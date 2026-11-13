@@ -26,7 +26,8 @@
 // decode. Chromium decodes and rescales the 1440 px crops (about 1,000 megapixels loaded at 25%) on its worker threads,
 // and the next frame's commit waits for them. On the real library with the images hidden the worst frame of the same
 // gesture is 33 ms in development and 17 ms in a build; with them it is 100 to 133 ms, from the first step in of a page
-// that has never zoomed. Smaller thumbnails of the sections would remove that; the gallery cannot.
+// that has never zoomed. Section thumbnails (PageSection.thumbKey) remove most of that, but only for captures made since they
+// existed: the sections mocked here have none, like a library captured before them, which is the case this benchmark is for.
 import assert from "node:assert/strict"
 import { after, before, test } from "node:test"
 import type { Page } from "playwright"
@@ -86,21 +87,7 @@ function seed(n: number) {
         reference: ref(i),
       })
     } else if (kind === "section") {
-      sections.push({
-        id: `p${i}:0`,
-        pageId: `p${i}`,
-        referenceId: ref(i).id,
-        index: 0,
-        kind: "section",
-        label: `Section ${i}`,
-        key: `pages/p${i}/section-0.jpg`,
-        width: 1440,
-        height: sectionHeight(i),
-        path: `/p${i}`,
-        url: `https://${ref(i).domain}/p${i}`,
-        reference: ref(i),
-        createdAt: created(i),
-      })
+      sections.push(sectionItem(i))
     } else {
       const aspect = IMAGE_ASPECTS[i % IMAGE_ASPECTS.length]!
       images.push({
@@ -119,6 +106,24 @@ function seed(n: number) {
   }
   return { pages, sections, images }
 }
+
+/** A section of the library, stored without a thumbnail like every capture from before they existed. */
+const sectionItem = (i: number, thumbKey: string | null = null): SectionItem => ({
+  id: `p${i}:0`,
+  pageId: `p${i}`,
+  referenceId: ref(i).id,
+  index: 0,
+  kind: "section",
+  label: `Section ${i}`,
+  key: `pages/p${i}/section-0.jpg`,
+  thumbKey,
+  width: 1440,
+  height: sectionHeight(i),
+  path: `/p${i}`,
+  url: `https://${ref(i).domain}/p${i}`,
+  reference: ref(i),
+  createdAt: created(i),
+})
 
 /** A section's height; every 40th is a tall crop (a long section of a long page) of 1440 x 5000. */
 const sectionHeight = (i: number) => (i % 40 === 8 ? 5000 : Math.round(1440 / SECTION_ASPECTS[i % SECTION_ASPECTS.length]!))
@@ -624,6 +629,28 @@ test("a home tile shows its source on hover and focus, opens on click, and tabs 
   // Focus panned the canvas to Section 3.
   await page.getByRole("button", { name: "Section 3 · delta.test", exact: true }).click()
   await until("the inspector opens", async () => new URL(page.url()).searchParams.get("open") === "section:p3:0")
+  assert.deepEqual(t.consoleErrors, [])
+})
+
+// The gallery zooms hundreds of section tiles, and decoding 1440 px crops at every zoom was its slowest frame: where the capture stored
+// a 640 px thumbnail the home tile draws that, and where it did not (every capture from before them) the full crop. Everything else that
+// shows the section, here the inspector, keeps the crop.
+test("a home tile draws a section's thumbnail where there is one, the full crop where there is not, and the inspector the crop", { timeout: 60_000 }, async () => {
+  const t = await gallery(0)
+  const { page } = t
+  const items = [sectionItem(1, "pages/p1/section-0-thumb.jpg"), sectionItem(2)]
+  t.on("GET", "/api/sections", () => ({ json: { items, nextCursor: null } }))
+  t.on("GET", "/api/counts", () => ({ json: { websites: 0, pages: 0, sections: items.length, animations: 0, images: 0 } }))
+  await t.goto("/")
+  const src = (name: string) => page.getByRole("button", { name, exact: true }).locator("img").getAttribute("src")
+  assert.equal(await src("Section 1 · beta.test"), "/files/pages/p1/section-0-thumb.jpg", "a stored thumbnail is what the tile draws")
+  assert.equal(await src("Section 2 · gamma.test"), "/files/pages/p2/section-0.jpg", "without one, the crop")
+
+  await page.getByRole("button", { name: "Section 1 · beta.test", exact: true }).click()
+  await until("the inspector opens", async () => new URL(page.url()).searchParams.get("open") === "section:p1:0")
+  const still = page.getByRole("img", { name: "Section 1", exact: true })
+  await still.waitFor()
+  assert.equal(await still.getAttribute("src"), "/files/pages/p1/section-0.jpg", "the inspector shows the full crop")
   assert.deepEqual(t.consoleErrors, [])
 })
 

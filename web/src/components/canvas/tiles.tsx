@@ -5,7 +5,7 @@ import { captureLabel } from "@/components/capture-controls"
 import { SiteIcon } from "@/components/site-icon"
 import { fileUrl } from "@/lib/api"
 import { cn } from "@/lib/utils"
-import { isVideoKey, type RefSummary } from "../../../shared/types"
+import { isVideoKey, type RefSummary, type SectionItem } from "../../../shared/types"
 import type { CanvasItem } from "@/components/canvas/types"
 
 /** Where an item came from, for the hover chip. Uploaded images have none. */
@@ -65,12 +65,19 @@ function AnimationMedia({ a, live }: { a: Extract<CanvasItem, { kind: "animation
   )
 }
 
-function Media({ item, live }: { item: CanvasItem; live: boolean }) {
+/**
+ * The file a section tile draws: on the home gallery its thumbnail where the capture stored one (it zooms hundreds of tiles, and
+ * decoding the 1440 px crop at each zoom was its slowest frame), else the full crop, which is also all a board, the inspector
+ * and the page viewer ever show.
+ */
+const sectionSrc = (s: SectionItem, home?: boolean) => (home && s.thumbKey) || s.key
+
+function Media({ item, live, home }: { item: CanvasItem; live: boolean; home?: boolean }) {
   switch (item.kind) {
     case "page":
       return thumb(item.page.desktopThumbKey ?? item.page.mobileThumbKey, "object-cover object-top")
     case "section":
-      return thumb(item.section.key, "object-cover object-top")
+      return thumb(sectionSrc(item.section, home), "object-cover object-top")
     case "animation":
       return <AnimationMedia a={item.animation} live={live} />
     case "image":
@@ -248,7 +255,7 @@ export const HomeTile = memo(function HomeTile({
     onBlur: leave,
   }
   // Called, not rendered as <Media />: one fewer element and fiber for each of hundreds of tiles.
-  const media = Media({ item, live })
+  const media = Media({ item, live, home: true })
   const tile =
     item.kind === "website" && !onOpen ? (
       <Link ref={face as Ref<HTMLAnchorElement>} href={`/r/${item.id}`} draggable={false} {...shared}>
