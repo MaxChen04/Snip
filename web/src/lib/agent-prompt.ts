@@ -30,6 +30,17 @@ export function tokenDigest(t: DesignTokens): string {
     .join("\n")
 }
 
+/** The owner's note on why they saved this reference, quoted so multi-line notes stay one block. */
+function savedNote(notes: string | null | undefined): string[] {
+  const text = notes?.trim()
+  if (!text) return []
+  return [
+    ``,
+    `Why I saved this reference (my note, use it to decide what to borrow):`,
+    ...text.split(/\r?\n/).map((l) => `> ${l}`.trimEnd()),
+  ]
+}
+
 /**
  * Prewritten prompt that tells an agent exactly which Snip items to pull over MCP and what to study.
  * Tool names and arguments match web/worker/mcp.ts.
@@ -44,6 +55,7 @@ export function buildAgentPrompt({ reference: r, pages, animations, tokens, mcpU
     ``,
     `Reference: ${name} (${r.url})`,
     `Snip reference id: ${r.id}`,
+    ...savedNote(r.notes),
     ``,
     `Fetch only the items below, by id. You don't need to read the whole reference first.`,
   ]

@@ -34,3 +34,23 @@ test("copied prompt names the exact Snip MCP URL", () => {
   assert.match(prompt, /^Use the Snip MCP server/)
   assert.ok(prompt.includes("Make sure to use the Snip MCP: https://snip.max.workers.dev/mcp"))
 })
+
+test("copied prompt carries the saved note on why the reference was saved", () => {
+  const base = { id: "ref1", title: "Linear", domain: "linear.app", url: "https://linear.app" }
+  const prompt = buildAgentPrompt({
+    reference: { ...base, notes: "Borrow this navigation and spacing.\nIgnore the hero." } as never,
+    pages: [],
+    animations: [],
+    tokens: false,
+    mcpUrl: "https://snip.max.workers.dev/mcp",
+  })
+  assert.ok(prompt.includes("Why I saved this reference"))
+  assert.ok(prompt.includes("> Borrow this navigation and spacing.\n> Ignore the hero."))
+  // The note sits with the reference details, before the fetch steps.
+  assert.ok(prompt.indexOf("> Borrow") < prompt.indexOf("Fetch only the items below"))
+
+  for (const notes of [null, "   "]) {
+    const without = buildAgentPrompt({ reference: { ...base, notes } as never, pages: [], animations: [], tokens: false, mcpUrl: "x" })
+    assert.ok(!without.includes("Why I saved this reference"))
+  }
+})
