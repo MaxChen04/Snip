@@ -7,6 +7,7 @@ const ORDER: Record<string, string[]> = {
     // on the quiescent persist dir (contracts §1.8).
     "schema", "deploy", "secrets", "quiesce", "release", "export", "import", "verify", "owner", "finish",
   ],
+  deploy: ["deploy-quiesce", "deploy-preflight", "deploy-layout", "deploy-schema", "deploy-worker", "deploy-verify"],
   pull: [
     "pull-preflight", "pull-manifest", "pull-d1", "pull-stage", "pull-files",
     "pull-verify", "pull-swap", "pull-finish",
@@ -38,6 +39,12 @@ const TITLES: Record<string, string> = {
   verify: "Check every reference arrived",
   owner: "Sign this Mac in",
   finish: "Switch to your cloud library",
+  "deploy-quiesce": "Finish the current capture",
+  "deploy-preflight": "Check this Mac",
+  "deploy-layout": "Prepare this app’s cloud update",
+  "deploy-schema": "Update the database",
+  "deploy-worker": "Update the cloud library",
+  "deploy-verify": "Verify the cloud update",
   "pull-preflight": "Check this Mac",
   "pull-manifest": "Read the cloud library",
   "pull-d1": "Download the database",

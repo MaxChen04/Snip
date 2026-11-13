@@ -35,7 +35,7 @@ test("an agent turned away for being older is not called offline, and the fix na
 test("an agent turned away for being newer than the cloud library sends the user to update the cloud library", async () => {
   const t = await withWaiting({ lastSeenAt: null, freshness: "never", activity: null, refused: { at: refusedAt, protocol: 5, outdated: "cloud" } })
   const text = await banner(t).innerText()
-  assert.match(text, /Your cloud library is older than this Snip\. Update cloud \(npm run update\)\./)
+  assert.match(text, /Your cloud library is older than this Snip\. In Snip, open Settings → Cloud → Update cloud library, or run npm run update\./)
   assert.doesNotMatch(text, /offline|menu bar|restart Snip/i)
 })
 

@@ -13,7 +13,7 @@ const source = fs.readFileSync(path.join(__dirname, "../main.cjs"), "utf8")
 const lifted = source.match(/^function serviceItems\(key\) \{\n[\s\S]*?\n\}/m)
 assert.ok(lifted, "main.cjs has no serviceItems")
 
-function items(key, { cloudRun = null, mode = "local", webStatus = "running" } = {}) {
+function items(key, { cloudRun = null, cloudUpdatePending = false, mode = "local", webStatus = "running" } = {}) {
   const service = status => ({ status, proc: null, stopping: false })
   const context = vm.createContext({
     services: { web: service(webStatus), capture: service("stopped") },
@@ -24,6 +24,7 @@ function items(key, { cloudRun = null, mode = "local", webStatus = "running" } =
     shutdown: null,
     quitting: false,
     cloudRun,
+    cloudUpdatePending,
   })
   vm.runInContext(lifted[0], context)
   return context.serviceItems(key)
@@ -46,4 +47,9 @@ test("the same items are on again once the run has ended", () => {
 
 test("Start capture agent still waits for the local Worker in local mode", () => {
   assert.equal(enabled(items("capture", { webStatus: "stopped" }), "Start capture agent"), false)
+})
+
+test("a failed cloud update keeps Start capture agent off until cloud is verified or the owner returns to local", () => {
+  assert.equal(enabled(items("capture", { cloudUpdatePending: true, mode: "cloud" }), "Start capture agent"), false)
+  assert.equal(enabled(items("capture", { cloudUpdatePending: true, mode: "local" }), "Start capture agent"), true)
 })

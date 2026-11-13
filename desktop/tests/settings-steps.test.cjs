@@ -29,6 +29,7 @@ test("setup renders guard before resources (contracts v3.10 §1.5)", () => {
 })
 
 test("every command's order matches the published step ids", () => {
+  assert.deepEqual(order("deploy"), ["deploy-quiesce", "deploy-preflight", "deploy-layout", "deploy-schema", "deploy-worker", "deploy-verify"])
   assert.deepEqual(order("pull"), ["pull-preflight", "pull-manifest", "pull-d1", "pull-stage", "pull-files", "pull-verify", "pull-swap", "pull-finish"])
   assert.deepEqual(order("detach"), ["detach-preflight", "detach-finish"])
   assert.deepEqual(order("delete-resources"), ["delete-preflight", "delete-execute", "delete-verify"])

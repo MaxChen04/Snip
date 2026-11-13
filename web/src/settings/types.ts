@@ -186,6 +186,8 @@ export type EngineEvent =
 export interface CloudBridge {
   state(): Promise<CloudSnapshotState>
   enable(options?: { account?: string; domain?: string; login?: string; captureEnv?: string; adoptExisting?: boolean }): Promise<CloudReply>
+  /** Deploy the cloud version bundled with this app, after captures drain. */
+  update(): Promise<CloudReply>
   disable(action: "detach" | "pull"): Promise<CloudReply>
   retryStep(step: string): Promise<CloudReply>
   cancel(): Promise<{ cancelled: boolean }>

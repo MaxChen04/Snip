@@ -15,7 +15,7 @@ export class JobGoneError extends Error {
 export const CAPTURE_PROTOCOL = 4
 export const CAPTURE_PROTOCOL_HEADER = "x-snip-capture-protocol"
 export const AGENT_OLDER_MESSAGE = "This capture agent is older than your cloud library. Update the Snip app."
-export const CLOUD_OLDER_MESSAGE = "Your cloud library is older than this Snip. Update cloud (npm run update)."
+export const CLOUD_OLDER_MESSAGE = "Your cloud library is older than this Snip. In Snip, open Settings → Cloud → Update cloud library, or run npm run update."
 export const MISMATCH_MESSAGE = "This capture agent and your cloud library are on different versions. Update the Snip app, then update cloud (npm run update)."
 
 /**

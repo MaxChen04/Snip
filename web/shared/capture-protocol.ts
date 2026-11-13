@@ -10,7 +10,7 @@ export const CAPTURE_PROTOCOL_HEADER = "x-snip-capture-protocol"
 /** The agent is on a lower protocol than the Worker: the Snip app, which carries the agent, is the older half. */
 export const AGENT_OLDER_MESSAGE = "This capture agent is older than your cloud library. Update the Snip app."
 /** The Worker is on a lower protocol than the agent. The wording of the sign-in handoff's refusal (docs/deploy.md, "Update the Worker together with the app"). */
-export const CLOUD_OLDER_MESSAGE = "Your cloud library is older than this Snip. Update cloud (npm run update)."
+export const CLOUD_OLDER_MESSAGE = "Your cloud library is older than this Snip. In Snip, open Settings → Cloud → Update cloud library, or run npm run update."
 /** A refusal that does not say which: both updates fix it, the app first. */
 export const MISMATCH_MESSAGE = "This capture agent and your cloud library are on different versions. Update the Snip app, then update cloud (npm run update)."
 

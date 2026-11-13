@@ -146,7 +146,7 @@ const DONE_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>Snip<
 p{font-size:15px}</style></head><body><p id="s">Finishing sign-in…</p>
 <script>
 var s=document.getElementById('s'),t=/[#&]token=([^&]*)/.exec(location.hash),n=/[#&]nonce=([^&]*)/.exec(location.hash);
-if(!n){s.textContent='Your cloud library is older than this Snip. Update cloud (npm run update), then sign in again.'}
+if(!n){s.textContent='Your cloud library is older than this Snip. In Snip, open Settings → Cloud → Update cloud library, or run npm run update. Then sign in again.'}
 else fetch('/store',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token:t&&t[1],nonce:n[1]})})
  .then(function(r){if(!r.ok)throw 0;history.replaceState(null,'','/done');s.textContent='You can close this tab and return to Snip.'})
  .catch(function(){s.textContent='Sign-in could not be completed. Return to Snip and try again.'});

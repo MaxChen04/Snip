@@ -119,7 +119,7 @@
     sim.run = run
     sim.lastResult = null
     if (purpose !== "owner-link") {
-      const opening = { pull: "Reading your cloud library.", detach: "Turning off cloud on this Mac.", "owner link": "Creating a sign-in link." }[command] || "Setting up your cloud library."
+      const opening = { deploy: "Finishing the current capture before updating your cloud library.", pull: "Reading your cloud library.", detach: "Turning off cloud on this Mac.", "owner link": "Creating a sign-in link." }[command] || "Setting up your cloud library."
       sendLog("info", opening)
     }
     return { started: true }
@@ -198,6 +198,11 @@
       const reply = startRun("setup", { ...Object.fromEntries(sim.cloudInput), ...(options || {}) })
       if (reply.started) sim.mode = "enabling"
       return reply
+    },
+    update: async () => {
+      record("update", [])
+      if (sim.mode !== "cloud") return { error: "No cloud library is connected." }
+      return startRun("deploy")
     },
     disable: async action => {
       record("disable", [action])

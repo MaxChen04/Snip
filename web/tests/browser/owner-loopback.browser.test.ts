@@ -51,7 +51,7 @@ test("a redirect with another link's nonce is refused: the page says so and the 
 
 test("a redirect with no nonce, from a Worker that was not redeployed, tells the person to update cloud and posts nothing", async () => {
   const { loopback, page, stores } = await openDone(() => "#token=abc")
-  await page.getByText(/Your cloud library is older than this Snip\. Update cloud \(npm run update\), then sign in again\./).waitFor()
+  await page.getByText(/Your cloud library is older than this Snip\. In Snip, open Settings → Cloud → Update cloud library, or run npm run update\. Then sign in again\./).waitFor()
   assert.deepEqual(stores, [], "nothing is posted without a nonce")
   assert.equal(loopback.closed, false)
   loopback.close()
