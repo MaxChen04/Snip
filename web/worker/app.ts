@@ -392,7 +392,7 @@ agent.post("/jobs/claim", async (c) => {
   c.executionCtx.waitUntil(db.cleanupRetiredFiles(c.env.DB, c.env.FILES))
   await db.touchPresence(c.env.DB, job ? "busy" : "idle", job?.id ?? null)
   // Advertise on every claim, including resumed jobs: the destination may have been upgraded since the last one.
-  return job ? c.json({ ...job, recordingFormats: ["gif", "webm"], features: ["sections", "live", "schemes", "icon", "gzip", "sectionThumbs"] }) : c.body(null, 204)
+  return job ? c.json({ ...job, recordingFormats: ["gif", "webm"], features: ["sections", "live", "schemes", "icon", "gzip", "sectionThumbs", "text"] }) : c.body(null, 204)
 })
 
 agent.post("/heartbeat", async (c) => {
@@ -463,6 +463,13 @@ function validSections(sections: unknown): sections is NonNullable<PageUpload["s
 /** Warnings as the agent sends them: the known codes, each at most once. */
 const validWarnings = (warnings: unknown): warnings is PageWarning[] =>
   Array.isArray(warnings) && new Set(warnings).size === warnings.length && warnings.every((code) => (PAGE_WARNINGS as readonly unknown[]).includes(code))
+/** Page text for search, within the caps the capture agent keeps to (capture/src/text.ts). */
+function validText(text: unknown): text is NonNullable<PageUpload["text"]> {
+  if (!text || typeof text !== "object") return false
+  const t = text as Record<string, unknown>
+  return typeof t.body === "string" && t.body.length <= 12_000 &&
+    (t.sections === undefined || (Array.isArray(t.sections) && t.sections.length <= 64 && t.sections.every((s) => typeof s === "string" && s.length <= 1_500)))
+}
 
 agent.post("/jobs/:id/pages", async (c) => {
   const id = c.req.param("id")
@@ -476,6 +483,7 @@ agent.post("/jobs/:id/pages", async (c) => {
   if (alt !== undefined && !(alt && (alt.scheme === "light" || alt.scheme === "dark") && typeof alt.desktopKey === "string" && typeof alt.desktopThumbKey === "string" &&
     num(alt.desktopWidth) && num(alt.desktopHeight) && Array.isArray(alt.sectionKeys) && alt.sectionKeys.length <= 64 && alt.sectionKeys.every((k) => k === null || typeof k === "string")))
     return c.json({ error: "bad altScheme" }, 400)
+  if (page.text !== undefined && !validText(page.text)) return c.json({ error: "bad text" }, 400)
   if (page.warnings !== undefined && !validWarnings(page.warnings)) return c.json({ error: "bad warnings" }, 400)
   const keys = [page.desktopKey, page.desktopThumbKey, page.mobileKey, page.mobileThumbKey, page.snapshotKey, page.stylesKey, ...(page.sections ?? []).flatMap((s) => [s.key, s.thumbKey, s.live?.key]), alt?.desktopKey, alt?.desktopThumbKey, ...(alt?.sectionKeys ?? []), ...page.animations.flatMap((a) => [a.gifKey, a.sheetKey])]
   if (keys.some((key) => key && !key.startsWith(prefix))) return c.json({ error: "bad file key" }, 400)

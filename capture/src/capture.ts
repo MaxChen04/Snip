@@ -7,6 +7,7 @@ import { PAGE_STALL_MS, pageDeadline, within } from "./deadline"
 import { imageSize, type Frame } from "./gif"
 import { allowPrivateUrls, assertPublicUrl, createCaptureNetwork, PrivateAddressError } from "./network-guard"
 import { buildStills, closeRenderer, cropBands, sampleIndexes } from "./sheet"
+import { pageText, TEXT_LIMITS, type TextBlock } from "./text"
 import { encodeRecording, recordingWriter, type Recording } from "./video"
 
 // Playwright's page.screenshot waits for document.fonts.ready before every shot, bounded only by the shot's own 30 s timeout, so one web
@@ -26,6 +27,7 @@ const DISMISS_JS = script("dismiss")
 const TRANSITION_JS = script("transition-ms")
 const SECTIONS_JS = script("sections")
 const MOTION_JS = script("motion")
+const TEXT_JS = script("text")
 const MAX_SECTIONS = 24
 // Live section clips: a section is recorded only if two stills taken LIVE_PROBE_MS apart differ.
 const LIVE_SECTIONS = process.env.SNIP_LIVE_SECTIONS !== "false"
@@ -1555,6 +1557,13 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       const desktopShot = await fullPageShot(dPage, 1, tick)
       const sectionCuts = features.has("sections") ? (await findSections(dPage)).filter((s) => s.y < desktopShot.height) : []
       tick()
+      // Searchable text, read while the page is at the top like the section cuts it is matched to. Losing it loses only search.
+      const text = features.has("text")
+        ? await run<TextBlock[]>(dPage, TEXT_JS, { max: TEXT_LIMITS.blocks }).then((blocks) => pageText(blocks, sectionCuts), (e) => {
+          log("  page text skipped:", (e as Error).message.split("\n")[0])
+          return undefined
+        })
+        : undefined
       // In a crawl, only the first pages get clips: later pages mostly repeat the same chrome, at the same cost.
       const liveOn = features.has("live") && (job.mode !== "crawl" || captured < LIVE_CRAWL_PAGES)
       const inView: InView = { shot: desktopShot.buf, patches: [] }
@@ -1707,6 +1716,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
         sections: await uploadSections(),
         altScheme: await uploadOtherScheme(),
         ...(warnings.length ? { warnings } : {}),
+        ...(text ? { text } : {}),
         animations,
         // Saved with the page, so a crawl whose agent dies is resumed from its last saved page.
         state: { ...checkpoint(), captured: captured + 1, tokens: mergeTokens([...allTokens, styles.tokens]) },

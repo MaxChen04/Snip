@@ -272,9 +272,9 @@ export interface Job {
   recordingFormats?: ("gif" | "webm")[]
   /**
    * What the serving Worker stores beyond the basics: page sections, live clips of them, "icon" (it keeps a site icon saved with the capture), "gzip" (it reads text files
-   * uploaded under a gzipKey), and "sectionThumbs" (it keeps a section's thumbKey). Older Workers omit this. Not persisted.
+   * uploaded under a gzipKey), "sectionThumbs" (it keeps a section's thumbKey), and "text" (page text for search). Older Workers omit this. Not persisted.
    */
-  features?: ("sections" | "live" | "schemes" | "icon" | "gzip" | "sectionThumbs")[]
+  features?: ("sections" | "live" | "schemes" | "icon" | "gzip" | "sectionThumbs" | "text")[]
 }
 
 /** Crawl position, saved with each page and when a capture pauses. */
@@ -319,6 +319,11 @@ export interface PageUpload {
   altScheme?: AltScheme
   /** Each code at most once. Older agents send none. */
   warnings?: PageWarning[]
+  /**
+   * The page's visible text, for search: the whole page, and each section's share of it (same order as sections).
+   * Sent when the Worker advertises "text"; older agents send none.
+   */
+  text?: { body: string; sections?: string[] }
   animations: {
     kind: AnimationKind
     label: string | null

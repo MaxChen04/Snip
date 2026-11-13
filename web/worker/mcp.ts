@@ -8,6 +8,7 @@ import { currentEpoch, isLocalOrigin, signFileUrl } from "./auth"
 import * as db from "./db"
 import { readText } from "./files"
 import { capturedScheme, resolveSelection, type CopiedSelection } from "../shared/selection"
+import { searchPages, searchReferences, searchTerms, type SearchMatch } from "./search"
 import { bounded, decodeCursor, encodeCursor } from "./mcp-bounds"
 import {
   TASKS_EXTENSION, WAIT_DEFAULT_SECONDS, WAIT_MAX_SECONDS, WAIT_STEP_MS,
@@ -42,6 +43,8 @@ const LIMITS = {
 const INSTRUCTIONS = `Snip stores website design references captured by the user: per-page desktop/mobile screenshots, scroll and hover animations, design tokens, computed styles and HTML snapshots.
 
 Collections group work by project or theme. A collection holds whole websites and individually saved pages (e.g. "Pricing pages" gathering pricing pages from many sites). A saved page still belongs to its website and can sit in many collections. To read a collection: list_collections -> search_pages(collection_id) for its pages, search_references(collection_id) for the websites saved whole.
+
+To find something the user saved: search_pages(query) or search_references(query). Both match words in the user's notes (why they saved it), section labels, page titles and the text captured on pages, rank by how many words matched, and say what matched and which section to open. They don't see pixels: confirm a hit with its screenshot.
 
 Typical flow: search_references -> get_reference(id, part "overview") -> get_page(page_id) for a screenshot, get_animation(animation_id) for motion, get_reference(id, part "tokens") or get_page_styles(page_id) for CSS. When the user hands you specific page or animation ids, call those tools directly instead of reading the whole reference. Ids belong to one capture (captureRun): a recapture replaces them. If a copied prompt's ids are not found or its capture run is behind, call resolve_selection with the prompt's Selection.
 
@@ -298,25 +301,36 @@ function buildServer(env: Env, origin: string) {
     {
       title: "Search design references",
       description:
-        "Search saved website design references by text (title, URL or notes), collection id or domain. Returns short summaries with ids. With collection_id this lists websites saved to the collection as a whole; use search_pages(collection_id) for every page in it, including pages saved on their own. Next: get_reference(id, part \"overview\").",
+        "Search saved websites. query is matched word by word against the user's notes on each website (why they saved it), its pages' section labels (hero, pricing, footer...) and titles, the site's title, URL and description, and the visible text captured on its pages; results are ranked by how many words matched and where, and each says what matched (match.matched, match.unmatched, match.in) and its best-matching page. Matching is on words, not on how things look: describe what a page says or is for (\"pricing plans\", \"changelog\", \"testimonials\"), then check screenshots with get_page. With collection_id this lists websites saved to the collection as a whole; use search_pages(collection_id) for every page in it, including pages saved on their own. Next: get_reference(id, part \"overview\") or get_page(bestPage.id).",
       inputSchema: z.object({
-        query: z.string().optional().describe("Text matched against title, URL and description"),
+        query: z.string().optional().describe("Words to look for, e.g. \"pricing plans\" or \"borrow this navigation\""),
         collection_id: z.string().optional().describe("From list_collections"),
         domain: z.string().optional().describe("e.g. linear.app"),
-        sort: z.enum(["newest", "oldest", "name"]).optional(),
+        sort: z.enum(["relevance", "newest", "oldest", "name"]).optional().describe("Default relevance with a query, newest without"),
         limit: z.number().int().min(1).max(50).optional().describe("Default 20"),
         cursor: z.string().optional().describe("nextCursor from a previous call"),
       }),
       annotations: { readOnlyHint: true },
     },
     async (args) => {
+      const ranked = !!args.query && (args.sort ?? "relevance") === "relevance" && searchTerms(args.query).length > 0
+      if (ranked) {
+        const res = await searchReferences(env.DB, { q: args.query!, collectionId: args.collection_id, domain: args.domain, limit: args.limit ?? 20, cursor: args.cursor })
+        return ok({
+          terms: res.terms,
+          items: await Promise.all(res.items.map(async (h) => ({ ...(await summarizeRef(h.reference)), match: h.match, bestPage: h.bestPage }))),
+          nextCursor: res.nextCursor,
+          ...(res.items.length ? {} : { hint: "Nothing matched any of these words. Try other words for what the page says or is for, or list_collections to browse." }),
+        })
+      }
       const res = await db.listReferences(env.DB, {
         q: args.query,
         collectionId: args.collection_id,
         domain: args.domain,
-        sort: args.sort,
+        sort: args.sort === "relevance" ? undefined : args.sort,
         limit: args.limit ?? 20,
         cursor: args.cursor,
+        summary: true,
       })
       return ok({
         items: await Promise.all(res.items.map(summarizeRef)),
@@ -733,28 +747,38 @@ Scroll timing is synthetic playback; hover offsets are measured. Treat easing an
     {
       title: "Search pages",
       description:
-        "List captured pages across all references, newest first. With collection_id, returns the collection's pages: pages saved to it individually (savedTo \"page\") and pages of websites saved to it whole (savedTo \"website\"). Next: get_page(page_id).",
+        "Find captured pages across all references. With query, pages are ranked by how many of its words they match and where: the user's note on the website (why they saved it), the page's section labels, its title and path, the website's title and URL, and the text captured on the page. Each hit says what matched (match), carries the website's notes, the best-matching section (pass section.index to get_page) and a short excerpt. Matching is on words, not on how things look: check the screenshot before relying on a hit. Without query, pages are listed newest first. With collection_id, returns the collection's pages: pages saved to it individually (savedTo \"page\") and pages of websites saved to it whole (savedTo \"website\"). Next: get_page(page_id, section).",
       inputSchema: z.object({
-        query: z.string().optional().describe("Text matched against page title, path and the website's title and URL"),
+        query: z.string().optional().describe("Words to look for, e.g. \"pricing plans\" or \"customer logos\""),
         collection_id: z.string().optional().describe("From list_collections"),
+        reference_id: z.string().optional().describe("Only this website's pages"),
         limit: z.number().int().min(1).max(50).optional().describe("Default 20"),
         cursor: z.string().optional().describe("nextCursor from a previous call"),
       }),
       annotations: { readOnlyHint: true },
     },
     async (args) => {
-      const res = await db.listPages(env.DB, { q: args.query, collectionId: args.collection_id, limit: args.limit ?? 20, cursor: args.cursor })
+      const summarize = async (p: Page & { reference: unknown }, extra: { match?: SearchMatch; notes?: string | null; section?: unknown; excerpt?: string | null } = {}) => ({
+        ...pageSummary(p),
+        referenceId: p.referenceId,
+        thumbUrl: await url(p.desktopThumbKey ?? p.mobileThumbKey),
+        reference: p.reference,
+        collectionIds: p.collectionIds,
+        ...(args.collection_id ? { savedTo: p.collectionIds.includes(args.collection_id) ? "page" : "website" } : {}),
+        ...extra,
+      })
+      if (args.query && searchTerms(args.query).length) {
+        const res = await searchPages(env.DB, { q: args.query, collectionId: args.collection_id, referenceId: args.reference_id, limit: args.limit ?? 20, cursor: args.cursor })
+        return ok({
+          terms: res.terms,
+          items: await Promise.all(res.items.map((h) => summarize({ ...h.page, reference: h.reference }, { match: h.match, notes: h.notes, section: h.section, excerpt: h.excerpt }))),
+          nextCursor: res.nextCursor,
+          ...(res.items.length ? {} : { hint: "Nothing matched any of these words. Try other words for what the page says or is for." }),
+        })
+      }
+      const res = await db.listPages(env.DB, { q: args.query, collectionId: args.collection_id, referenceId: args.reference_id, limit: args.limit ?? 20, cursor: args.cursor })
       return ok({
-        items: await Promise.all(
-          res.items.map(async (p) => ({
-            ...pageSummary(p),
-            referenceId: p.referenceId,
-            thumbUrl: await url(p.desktopThumbKey ?? p.mobileThumbKey),
-            reference: p.reference,
-            collectionIds: p.collectionIds,
-            ...(args.collection_id ? { savedTo: p.collectionIds.includes(args.collection_id) ? "page" : "website" } : {}),
-          })),
-        ),
+        items: await Promise.all(res.items.map((p) => summarize(p))),
         nextCursor: res.nextCursor,
         ...(res.items.length ? {} : { hint: args.collection_id ? "This collection has no pages yet." : "No matches. Try a shorter query." }),
       })
