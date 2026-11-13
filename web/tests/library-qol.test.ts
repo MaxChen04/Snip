@@ -93,7 +93,7 @@ test("agents on an older protocol cannot claim optioned jobs or mutate capture s
     for(const protocol of ['2','3']) for(const [path,method] of [['/jobs/claim','POST'],['/heartbeat','POST'],['/files/no-write','PUT'],['/ping','GET']]) {
       const response=await agent(protocol,path!,method!)
       assert.equal(response.status,426)
-      assert.match(await response.text(),/upgrade required/i)
+      assert.match(await response.text(),/older than your cloud library.*Update the Snip app/)
     }
     assert.equal((await db.getReferenceRecord(database,ref.id))!.status,'queued')
     assert.equal((await db.getPresence(database)).freshness,'never')

@@ -121,7 +121,8 @@ export class CaptureRuntime<B extends Browser> {
           const base = Math.min(60_000, Math.max(1_000, this.options.pollMs) * 2 ** Math.min(errors - 1, 10))
           const retryInMs = Math.min(60_000, Math.round(base * (0.8 + (this.options.random?.() ?? Math.random()) * 0.4)))
           this.emit({ state: "disconnected", error: error instanceof CaptureAuthenticationError ? "Capture token rejected (401). Check your capture token." : error instanceof CaptureUpgradeError ? error.message : "Unable to reach the capture queue", retryInMs })
-          this.options.logError?.("Queue poll failed; retrying.")
+          // The refusal's own words say which half to update, and carry no detail of the library. Everything else stays generic.
+          this.options.logError?.(error instanceof CaptureUpgradeError ? `${error.message} Retrying.` : "Queue poll failed; retrying.")
           if (this.options.once) break
           await this.wait(retryInMs)
           continue

@@ -18,6 +18,7 @@ import {
 import * as db from "./db"
 import { canvas } from "./canvas"
 import { signInPath } from "../shared/safe-next"
+import { CAPTURE_PROTOCOL, CAPTURE_PROTOCOL_HEADER, refusalMessage } from "../shared/capture-protocol"
 import { loginOptions, loginVerify, registerOptions, registerVerify, listDevices, removeDevice } from "./passkeys"
 import { ownerLinkPage, ownerLinkSubmit } from "./owner"
 import { transfer } from "./transfer"
@@ -376,7 +377,9 @@ app.route("/api", api)
 const agent = new Hono<AppEnv>()
 agent.use("*", requireCaptureToken)
 agent.use("*", async (c, next) => {
-  if (c.req.header("x-snip-capture-protocol") !== "4") return c.json({ error: "Capture agent upgrade required. Install the latest Snip capture agent." }, 426)
+  const sent = c.req.header(CAPTURE_PROTOCOL_HEADER)
+  // `expectedProtocol` lets an agent tell which side is out of date from the numbers, which a Worker before 1.5.0 never said.
+  if (sent !== String(CAPTURE_PROTOCOL)) return c.json({ error: refusalMessage(sent), expectedProtocol: CAPTURE_PROTOCOL }, 426)
   await next()
 })
 

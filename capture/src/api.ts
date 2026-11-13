@@ -11,8 +11,33 @@ export class JobGoneError extends Error {
   constructor() { super("The reference was deleted or recaptured during capture") }
 }
 
+// Copies of web/shared/capture-protocol.ts: released apps ship capture/src without web/shared, and web/tests/capture-protocol-copies.test.ts keeps them equal.
+export const CAPTURE_PROTOCOL = 4
+export const CAPTURE_PROTOCOL_HEADER = "x-snip-capture-protocol"
+export const AGENT_OLDER_MESSAGE = "This capture agent is older than your cloud library. Update the Snip app."
+export const CLOUD_OLDER_MESSAGE = "Your cloud library is older than this Snip. Update cloud (npm run update)."
+export const MISMATCH_MESSAGE = "This capture agent and your cloud library are on different versions. Update the Snip app, then update cloud (npm run update)."
+
+/**
+ * The Worker refused this agent's protocol (426). `outdated` is the half that needs updating: "app" is this agent, which the Snip app carries,
+ * "cloud" is the Worker, and null is a refusal that does not say.
+ */
 export class CaptureUpgradeError extends Error {
-  constructor() { super("Capture agent upgrade required. Install the latest Snip capture agent.") }
+  constructor(readonly outdated: "app" | "cloud" | null = null) {
+    super(outdated === "app" ? AGENT_OLDER_MESSAGE : outdated === "cloud" ? CLOUD_OLDER_MESSAGE : MISMATCH_MESSAGE)
+  }
+}
+
+/**
+ * Which half a 426 says is out of date. A Worker from 1.5.0 names the protocol it expects, so the numbers decide. Worker 1.4.0 and
+ * earlier answer with JSON that carries only an `error`, and speak a protocol below every agent that reads this, so the Worker is the older one.
+ * Anything that is not a Snip Worker's JSON is not blamed on either side.
+ */
+async function outdatedHalf(res: Response): Promise<"app" | "cloud" | null> {
+  const body = (await res.json().catch(() => null)) as { error?: unknown; expectedProtocol?: unknown } | null
+  if (!body || typeof body !== "object") return null
+  if (typeof body.expectedProtocol === "number") return body.expectedProtocol > CAPTURE_PROTOCOL ? "app" : "cloud"
+  return typeof body.error === "string" ? "cloud" : null
 }
 
 export class SnipApi {
@@ -30,16 +55,13 @@ export class SnipApi {
     const res = await fetch(`${this.base}${path}`, {
       ...init,
       signal: init.signal ?? AbortSignal.timeout(path === "/agent/jobs/claim" ? this.claimTimeoutMs : this.requestTimeoutMs),
-      headers: { authorization: `Bearer ${this.token}`, "x-snip-capture-protocol": "4", ...(this.lease ? { "x-snip-capture-lease": this.lease } : {}), ...(init.headers ?? {}) },
+      headers: { authorization: `Bearer ${this.token}`, [CAPTURE_PROTOCOL_HEADER]: String(CAPTURE_PROTOCOL), ...(this.lease ? { "x-snip-capture-lease": this.lease } : {}), ...(init.headers ?? {}) },
     })
     if (res.status === 401) {
       await res.body?.cancel()
       throw new CaptureAuthenticationError()
     }
-    if (res.status === 426) {
-      await res.body?.cancel()
-      throw new CaptureUpgradeError()
-    }
+    if (res.status === 426) throw new CaptureUpgradeError(await outdatedHalf(res))
     if (res.status === 410) {
       await res.body?.cancel()
       throw new JobGoneError()
