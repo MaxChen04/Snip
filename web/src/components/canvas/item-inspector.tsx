@@ -26,7 +26,7 @@ import { SiteIcon } from "@/components/site-icon"
 import { TokensPanel } from "@/components/tokens-panel"
 import { Segmented } from "@/components/top-bar"
 import { Button } from "@/components/ui/button"
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogOverlay, DialogPortal, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogOverlay, DialogPortal, DialogTitle, wrapTab } from "@/components/ui/dialog"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -122,6 +122,7 @@ export function ItemInspector({
   const [tab, setTab] = useState<Tab>("sections")
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    wrapTab(e)
     if ((e.key !== "ArrowLeft" && e.key !== "ArrowRight") || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return
     const t = e.target as HTMLElement
     // Menus and popovers portal out of the popup; tabs and fields use the arrows themselves.
