@@ -87,3 +87,21 @@ the destination's `/transfer/status` and stops with `DESTINATION_TOO_OLD` unless
 `reads` lists `gzip`. Nothing is copied. This covers copies made by Snip 1.4.0
 or later. A pull to this Mac needs no check, because the destination is the app's
 own Worker. Copies made by an older app, and hosted rollbacks, are not covered.
+
+## Split styles
+
+From Worker 1.5.0, when the Worker lists `style-parts` in the job's `features`, the
+capture agent also uploads `styles-parts.gzm` next to each page's styles file. It
+is a run of independent gzip members: a search index (each element's selector and
+own text, lowercased), the rules (keyframes, hover rules, font faces, CSS
+variables), then the elements in chunks of 250. The page row keeps a small summary
+(`pages.styles_summary_json`) with the counts and each member's byte range, so MCP
+`get_page_styles` answers "summary" from the row and reads only the members a call
+needs with R2 range reads. The full styles file is still written and still serves
+`computedStylesUrl`, downloads and the page viewer.
+
+Pages captured earlier have no summary. Their first `get_page_styles` call reads
+the full file as before and then writes the parts file and summary in the
+background. A summary whose parts can't be read falls back to the full file. The
+`.gzm` name doesn't match the gzip naming rule above, so `/files/*` and transfers
+treat it as plain bytes. Older Workers ignore both the column and the file.

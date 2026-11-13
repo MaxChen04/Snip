@@ -1,6 +1,7 @@
 import { gzip as zlibGzip } from "node:zlib"
 import { promisify } from "node:util"
 import type { CaptureControl, CrawlState, Job, JobComplete, PageUpload } from "../../web/shared/types"
+import { packStyles, stylePartsKey, type CapturedStyles, type StylesSummary } from "./style-parts"
 
 export class CaptureAuthenticationError extends Error {
   constructor() { super("Snip rejected the capture token (401)") }
@@ -142,3 +143,22 @@ const json = (body: unknown): RequestInit => ({
   body: JSON.stringify(body),
   headers: { "content-type": "application/json" },
 })
+
+/**
+ * Uploads the split styles file next to `stylesKey` and returns the summary that points into it, for a Worker that
+ * advertises "style-parts". A failed upload costs only the split: the page keeps its full styles file and goes without
+ * a summary, which the Worker reads the slow way.
+ */
+export async function uploadStyleParts(api: Pick<SnipApi, "upload">, stylesKey: string, styles: CapturedStyles): Promise<StylesSummary | undefined> {
+  const key = stylePartsKey(stylesKey)
+  if (!key) return undefined
+  try {
+    const { bytes, summary } = await packStyles(styles, key)
+    await api.upload(key, Buffer.from(bytes), "application/octet-stream")
+    return summary
+  } catch (error) {
+    if (error instanceof JobGoneError) throw error
+    console.log("  split styles not uploaded:", (error as Error).message.split("\n")[0])
+    return undefined
+  }
+}

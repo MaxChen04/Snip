@@ -304,7 +304,9 @@ test("a board lists every member kind with positions, notes and groups", async (
     const [sticky, ref, page, img] = canvas.items
     assert.deepEqual(ref!.reference, (await db.listReferences(database, { collectionId: moodboard })).items[0])
     assert.deepEqual(ref!.reference!.previewKeys, [stripe.pages[0]!.desktopThumbKey])
-    assert.deepEqual(page!.page, { ...(await db.getPage(database, linear.pages[1]!.id))!, reference: { id: linear.reference.id, title: "https://linear.app", domain: "linear.app", favicon: null } })
+    // getPage adds the page's styles summary, which a board item doesn't carry.
+    const { stylesSummary: _summary, ...stored } = (await db.getPage(database, linear.pages[1]!.id))!
+    assert.deepEqual(page!.page, { ...stored, reference: { id: linear.reference.id, title: "https://linear.app", domain: "linear.app", favicon: null } })
     assert.deepEqual(page!.page!.collectionIds, [moodboard])
     assert.deepEqual(img!.image, image)
     assert.equal(sticky!.text, "Warm, quiet")

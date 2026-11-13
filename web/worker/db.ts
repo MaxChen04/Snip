@@ -27,6 +27,7 @@ import { ABANDONED, STOPPED_EMPTY, WAITING } from "../shared/capture-errors"
 import { checkSiteUrl } from "../shared/site-url"
 import { outdatedHalf } from "../shared/capture-protocol"
 import { agentAdvice, agentState } from "../shared/agent-state"
+import type { StylesSummary } from "../shared/style-parts"
 
 // Data access shared by the HTTP API and the MCP server.
 
@@ -110,7 +111,7 @@ export function toPage(r: Row): Page {
  * them (toPage gives null). Alias the pages table as `t`.
  */
 export const PAGE_LIST_COLUMNS = `t.id, t.reference_id, t.url, t.path, t.title, t.ord, t.desktop_key, t.desktop_thumb_key, t.desktop_width, t.desktop_height,
-  t.mobile_key, t.mobile_thumb_key, t.mobile_width, t.mobile_height, t.snapshot_key, t.styles_key, t.sections_json, t.alt_scheme_json, t.created_at, p.warnings_json`
+  t.mobile_key, t.mobile_thumb_key, t.mobile_width, t.mobile_height, t.snapshot_key, t.styles_key, t.sections_json, t.alt_scheme_json, t.created_at, t.warnings_json`
 
 /** Selects a page row plus the collections it was saved to individually. Alias the pages table as `t`. */
 export const PAGE_COLLECTIONS = `(SELECT group_concat(pc.collection_id) FROM page_collections pc WHERE pc.reference_id = t.reference_id AND pc.page_path = t.path) AS collection_ids`
@@ -244,9 +245,69 @@ export async function getAnimation(db: D1Database, id: string) {
   return r ? { ...toAnimation(r), captureRun: (r.ref_capture_run as number) ?? 1 } : null
 }
 
-export async function getPage(db: D1Database, id: string) {
+/** One page with everything stored on its row, including its styles summary (null for pages captured before it). */
+export async function getPage(db: D1Database, id: string): Promise<(Page & { stylesSummary: StylesSummary | null }) | null> {
   const r = await db.prepare(`SELECT t.*, ${PAGE_COLLECTIONS} FROM pages t WHERE t.id = ?`).bind(id).first<Row>()
-  return r ? toPage(r) : null
+  return r ? { ...toPage(r), stylesSummary: parse<StylesSummary>(r.styles_summary_json) } : null
+}
+
+/** Saves a styles summary for a page captured before summaries existed, unless its styles file has changed since. */
+export async function setStylesSummary(db: D1Database, pageId: string, stylesKey: string, summary: StylesSummary) {
+  const result = await db.prepare(`UPDATE pages SET styles_summary_json = ? WHERE id = ? AND styles_key = ? AND styles_summary_json IS NULL`).bind(JSON.stringify(summary), pageId, stylesKey).run()
+  return result.meta.changes > 0
+}
+
+/** Records the intent to write a page's split styles file, only while the page still exists without one (see beginUpload). */
+export async function beginStylePartsUpload(db: D1Database, pageId: string, stylesKey: string, key: string) {
+  const upload = crypto.randomUUID()
+  const result = await db.prepare(`INSERT INTO capture_uploads (id, object_key)
+    SELECT ?, ? WHERE EXISTS (SELECT 1 FROM pages WHERE id = ? AND styles_key = ? AND styles_summary_json IS NULL)`)
+    .bind(upload, key, pageId, stylesKey).run()
+  return result.meta.changes ? upload : null
+}
+
+export async function pageHasStyles(db: D1Database, pageId: string, stylesKey: string) {
+  return !!(await db.prepare(`SELECT 1 FROM pages WHERE id = ? AND styles_key = ?`).bind(pageId, stylesKey).first())
+}
+
+// Ordered reads of one reference's pages and animations, a page at a time. The key is the last row's sort key, so a
+// page reads about `limit` rows however large the reference is (indexes pages_ref_order and animations_ref_order).
+// Rows leave out page tokens, sections and styles summaries, and animation metadata: a list doesn't show them.
+
+export type PageKey = [ord: number, createdAt: string, id: string]
+export type AnimationKey = [createdAt: string, id: string]
+
+const LISTED_PAGE_COLUMNS = `t.id, t.reference_id, t.url, t.path, t.title, t.ord, t.desktop_key, t.desktop_thumb_key, t.desktop_width, t.desktop_height,
+  t.mobile_key, t.mobile_thumb_key, t.mobile_width, t.mobile_height, t.snapshot_key, t.styles_key, t.warnings_json, t.created_at`
+
+export async function listReferencePages(db: D1Database, referenceId: string, after: PageKey | null, limit: number) {
+  const { results } = await db
+    .prepare(
+      `SELECT ${LISTED_PAGE_COLUMNS} FROM pages t WHERE t.reference_id = ? ${after ? "AND (t.ord, t.created_at, t.id) > (?, ?, ?)" : ""}
+       ORDER BY t.ord, t.created_at, t.id LIMIT ?`,
+    )
+    .bind(referenceId, ...(after ?? []), limit)
+    .all<Row>()
+  return results.map((r) => ({ ...toPage(r), key: [r.ord, r.created_at, r.id] as PageKey }))
+}
+
+export type ListedAnimation = Omit<Animation, "meta"> & { frameCount: number; pagePath: string | null; key: AnimationKey }
+
+export async function listReferenceAnimations(db: D1Database, referenceId: string, after: AnimationKey | null, limit: number): Promise<ListedAnimation[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT a.id, a.reference_id, a.page_id, a.kind, a.label, a.selector, a.viewport, a.gif_key, a.width, a.height, a.sheet_key, a.created_at,
+         coalesce(json_array_length(a.meta_json, '$.frames'), 0) AS frame_count, p.path AS page_path
+       FROM animations a LEFT JOIN pages p ON p.id = a.page_id
+       WHERE a.reference_id = ? ${after ? "AND (a.created_at, a.id) > (?, ?)" : ""}
+       ORDER BY a.created_at, a.id LIMIT ?`,
+    )
+    .bind(referenceId, ...(after ?? []), limit)
+    .all<Row>()
+  return results.map((r) => {
+    const { meta: _meta, ...a } = toAnimation(r)
+    return { ...a, frameCount: (r.frame_count as number) ?? 0, pagePath: (r.page_path as string) ?? null, key: [r.created_at, r.id] as AnimationKey }
+  })
 }
 
 /** A page plus its reference's capture run and options, so a single page read over MCP can say which capture it came from. */
@@ -730,14 +791,14 @@ export async function addPage(db: D1Database, referenceId: string, lease: string
     db
       .prepare(
         `INSERT INTO pages (id, reference_id, url, path, title, ord, desktop_key, desktop_thumb_key, desktop_width, desktop_height,
-          mobile_key, mobile_thumb_key, mobile_width, mobile_height, snapshot_key, styles_key, tokens_json, sections_json, alt_scheme_json, warnings_json, created_at)
-         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM refs WHERE id = ? AND status = 'capturing' AND capture_lease = ?)`,
+          mobile_key, mobile_thumb_key, mobile_width, mobile_height, snapshot_key, styles_key, tokens_json, sections_json, alt_scheme_json, warnings_json, styles_summary_json, created_at)
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM refs WHERE id = ? AND status = 'capturing' AND capture_lease = ?)`,
       )
       .bind(
         pageId, referenceId, p.url, p.path, p.title, p.ord,
         p.desktopKey, p.desktopThumbKey, p.desktopWidth, p.desktopHeight,
         p.mobileKey, p.mobileThumbKey, p.mobileWidth, p.mobileHeight,
-        p.snapshotKey, p.stylesKey, p.tokens ? JSON.stringify(p.tokens) : null, Array.isArray(p.sections) ? JSON.stringify(p.sections) : null, p.altScheme ? JSON.stringify(p.altScheme) : null, p.warnings?.length ? JSON.stringify(p.warnings) : null, ts, referenceId, lease,
+        p.snapshotKey, p.stylesKey, p.tokens ? JSON.stringify(p.tokens) : null, Array.isArray(p.sections) ? JSON.stringify(p.sections) : null, p.altScheme ? JSON.stringify(p.altScheme) : null, p.warnings?.length ? JSON.stringify(p.warnings) : null, p.stylesSummary && p.stylesKey ? JSON.stringify(p.stylesSummary) : null, ts, referenceId, lease,
       ),
   ]
   // What search reads besides the page row (see search.ts). Section labels come from the sections themselves,

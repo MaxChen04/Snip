@@ -2,8 +2,9 @@ import { existsSync, readFileSync } from "node:fs"
 import sharp from "sharp"
 import type { Browser, BrowserContext, BrowserContextOptions, CDPSession, Page as PwPage } from "playwright"
 import type { CrawlState, DesignTokens, Job, MotionEntry, PageSection, PageUpload, PageWarning } from "../../web/shared/types"
-import { JobGoneError, uploadText, type SnipApi } from "./api"
+import { JobGoneError, uploadStyleParts, uploadText, type SnipApi } from "./api"
 import { PAGE_STALL_MS, pageDeadline, within } from "./deadline"
+import type { CapturedStyles } from "./style-parts"
 import { imageSize, type Frame } from "./gif"
 import { allowPrivateUrls, assertPublicUrl, createCaptureNetwork, PrivateAddressError } from "./network-guard"
 import { buildStills, closeRenderer, cropBands, sampleIndexes } from "./sheet"
@@ -1579,7 +1580,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       const desktopThumb = await viewportThumb(dPage, THUMB.desktop)
       tick()
       const other = features.has("schemes") ? await captureOtherScheme(dPage, job.options?.colorScheme === "dark" ? "dark" : "light", tick) : null
-      const styles = await run<{ tokens: DesignTokens }>(dPage, STYLES_JS, { maxElements: 3000 })
+      const styles = await run<{ tokens: DesignTokens } & CapturedStyles>(dPage, STYLES_JS, { maxElements: 3000 })
       tick()
       const html = await buildSnapshot(dPage, desktop, sidecar, tick)
       const hovers = await recordHovers(dPage, hoverSeen, recordingFormat, tick)
@@ -1697,6 +1698,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       const warnings: PageWarning[] = []
       if ((failedLoads > 0 || empty) && await isFlat(desktopShot.buf)) warnings.push("blank")
       if (desktopShot.truncated) warnings.push("truncated")
+      const stylesKey = await uploadText(api, `${p}/styles.json`, JSON.stringify(styles), "application/json", features.has("gzip"))
       const upload: PageUpload = {
         url,
         path,
@@ -1711,7 +1713,8 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
         mobileWidth: mobileShot?.width ?? null,
         mobileHeight: mobileShot?.height ?? null,
         snapshotKey: await uploadText(api, `${p}/snapshot.html`, html, "text/html; charset=utf-8", features.has("gzip")),
-        stylesKey: await uploadText(api, `${p}/styles.json`, JSON.stringify(styles), "application/json", features.has("gzip")),
+        stylesKey,
+        stylesSummary: features.has("style-parts") ? await uploadStyleParts(api, stylesKey, styles) : undefined,
         tokens: styles.tokens,
         sections: await uploadSections(),
         altScheme: await uploadOtherScheme(),
