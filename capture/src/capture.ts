@@ -474,8 +474,8 @@ function pixelShare(x: Buffer, y: Buffer) {
   return changed / (x.length / 3)
 }
 
-/** Part of the page as it looked scrolled into view: `jpeg` covers `height` CSS px from document y `y`, at page width. */
-export type InViewPatch = { y: number; height: number; jpeg: Buffer }
+/** Part of the page as it looked scrolled into view: `jpeg` covers `height` CSS px from document y `y`, at page width (or `width` CSS px from `x`). */
+export type InViewPatch = { y: number; height: number; jpeg: Buffer; x?: number; width?: number }
 /** The full-page shot to compare sections against, taken at `dpr` image px per CSS px (1 if left out), and the patches found. */
 export type InView = { shot: Buffer; patches: InViewPatch[]; dpr?: number }
 
@@ -486,11 +486,14 @@ export type InView = { shot: Buffer; patches: InViewPatch[]; dpr?: number }
 export async function patchInView(shot: Buffer, patches: InViewPatch[], dpr = 1): Promise<Buffer> {
   if (!patches.length) return shot
   const { width, height } = imageSize(shot)
-  const inputs = await Promise.all(patches.filter((p) => Math.round(p.y * dpr) < height).map(async (p) => ({
-    input: await sharp(p.jpeg).resize({ width, height: Math.max(1, Math.min(Math.round(p.height * dpr), height - Math.round(p.y * dpr))), fit: "fill" }).toBuffer(),
-    left: 0,
-    top: Math.round(p.y * dpr),
-  })))
+  const inputs = await Promise.all(patches.filter((p) => Math.round(p.y * dpr) < height).map(async (p) => {
+    const left = Math.round((p.x ?? 0) * dpr)
+    return {
+      input: await sharp(p.jpeg).resize({ width: p.width === undefined ? width : Math.max(1, Math.min(Math.round(p.width * dpr), width - left)), height: Math.max(1, Math.min(Math.round(p.height * dpr), height - Math.round(p.y * dpr))), fit: "fill" }).toBuffer(),
+      left,
+      top: Math.round(p.y * dpr),
+    }
+  }))
   return sharp(shot).composite(inputs).jpeg({ quality: 80 }).toBuffer()
 }
 
@@ -535,8 +538,10 @@ const likelyInView = (page: PwPage, cuts: Omit<PageSection, "key">[]) =>
  * dropped, since it wouldn't loop. Oversized clips are re-encoded smaller from the frames already held, then
  * dropped if still over the per-clip or per-page byte budget.
  *
- * Fixed and sticky bars are hidden below the top of the page, since the full-page screenshot shows them only
- * there. Frames come from the screencast at viewport size and are cropped by the encoder. `seen` holds clips
+ * Fixed and sticky bars (a header, a floating widget) are hidden below the top of the page, since the full-page
+ * screenshot shows each once, in the first viewport. Where a frame with them hidden is patched over the place a
+ * bar has there, the bar comes back from the screenshot. Frames come from the screencast at viewport size and are
+ * cropped by the encoder. `seen` holds clips
  * uploaded for earlier pages of this capture, by liveSignature: a single-section clip found there is reused
  * instead of probed and recorded. Returns one entry per section (sections in one band share the clip), null where
  * still or not recorded. Leaves the page scrolled to the top with its bars restored.
@@ -557,24 +562,25 @@ export async function recordLiveSections(
   const { width: vw, height: vh } = page.viewportSize()!
   const cdp = await page.context().newCDPSession(page)
   /**
-   * Hide the page's bars while it is scrolled away from the top: the full-page shot shows a fixed header only at
-   * the top, so a clip or in-view frame must not show it over another section. A bar is a fixed element, or a
-   * sticky one that is currently stuck (a sticky one still in its place in the flow is part of the page), that is
-   * less than half the viewport tall and sits in the top or bottom quarter of it. A fixed wrapper with no height
-   * of its own stands for what it holds, which is tested instead.
-   * Fixed backgrounds and pinned content inside a section (a sticky image column) are larger or
-   * not stuck, so they stay. "all" hides top and bottom bars; "bottom" only bottom ones (chat bubbles, cookie bars).
+   * Hide the page's bars while it is scrolled away from the top: the full-page shot shows a fixed element (a header,
+   * a floating widget) once, in the first viewport, so a clip or in-view frame scrolled further down must not show
+   * it over another section. A bar is a fixed element, or a sticky one that is currently stuck (a sticky one still in
+   * its place in the flow is part of the page), that is less than half the viewport tall and sits in the top or
+   * bottom quarter of it. A fixed wrapper with no height of its own stands for what it holds, which is tested instead.
+   * Fixed backgrounds and pinned content inside a section (a sticky image column) are larger or not stuck, so they stay.
    * A bar is clipped away at once (no transition), not made invisible: its children can set visibility again.
    * Call it once the page has settled at its scroll position: what is stuck, and what has faded in, depends on it.
+   * Returns where the bars it hid are in the viewport.
    */
-  const bars = (hide: "none" | "bottom" | "all") => page.evaluate((hide) => {
+  const bars = (hide: "none" | "all") => page.evaluate((hide) => {
+    const hidden: { x: number; y: number; width: number; height: number }[] = []
     document.querySelectorAll<HTMLElement>("[data-snip-live-hidden]").forEach((el) => {
       const [clipPath, transition] = JSON.parse(el.dataset.snipLiveHidden!) as string[]
       el.style.clipPath = clipPath!
       el.style.transition = transition!
       delete el.dataset.snipLiveHidden
     })
-    if (hide === "none") return
+    if (hide === "none") return hidden
     for (const el of document.querySelectorAll<HTMLElement>("body *")) {
       const cs = getComputedStyle(el)
       if (cs.position !== "fixed" && cs.position !== "sticky") continue
@@ -593,15 +599,15 @@ export async function recordLiveSections(
         const r = bar.getBoundingClientRect()
         if (r.height < 1) todo.push(...bar.children)
         if (r.width < 1 || r.height < 1 || r.height > innerHeight / 2 || bar.dataset.snipLiveHidden !== undefined) continue
-        const top = r.top < innerHeight / 4
-        const bottom = r.bottom > (innerHeight * 3) / 4
-        if (hide === "all" ? top || bottom : bottom) {
+        if (r.top < innerHeight / 4 || r.bottom > (innerHeight * 3) / 4) {
           bar.dataset.snipLiveHidden = JSON.stringify([bar.style.clipPath, bar.style.transition])
           bar.style.clipPath = "inset(100%)"
           bar.style.transition = "none"
+          hidden.push({ x: r.left, y: r.top, width: r.width, height: r.height })
         }
       }
     }
+    return hidden
   }, hide)
   /**
    * Scroll so document y `y` is as near the top as the page allows, and let animations it set off finish.
@@ -622,8 +628,10 @@ export async function recordLiveSections(
       return Number(t.endTime) - Number(t.localTime ?? 0)
     }))).catch(() => 0)
     await sleep(Math.min(LIVE_SETTLE_MS, left))
-    await bars(y > 0 ? "all" : "bottom")
-    return y - (await page.evaluate(() => Math.round(window.scrollY)))
+    const scroll = await page.evaluate(() => Math.round(window.scrollY))
+    // At the top nothing is hidden: that is what a visitor first sees, and what the full-page shot shows there.
+    await bars(scroll > 0 ? "all" : "none")
+    return y - scroll
   }
   /** Screencast frames (JPEG, viewport size) for `ms`, with when each arrived. */
   const screencast = async (ms: number, everyNthFrame: number, maxHeight = vh) => {
@@ -705,6 +713,14 @@ export async function recordLiveSections(
   const scale = async (frame: string) => imageSize(Buffer.from(frame, "base64")).width / vw // screencast pixels per CSS px
   // A viewport still at the page's DPR: CDP's own captureScreenshot is at DPR 1 under mobile emulation.
   const still = () => page.screenshot({ type: "jpeg", quality: 90 })
+  // Where the page's bars sit in the first viewport, and the patches cut from frames with them hidden (scrolled away from the top).
+  let pinned: { x: number; y: number; width: number; height: number }[] = []
+  const barless: InViewPatch[] = []
+  /** Keep a patch cut from a frame taken at scroll position `scroll`. */
+  const addPatch = (patch: InViewPatch, scroll: number) => {
+    inView!.patches.push(patch)
+    if (scroll > 0) barless.push(patch)
+  }
 
   /**
    * The section as it looks scrolled into view, against the full-page shot. Content whose state follows the scroll
@@ -722,7 +738,7 @@ export async function recordLiveSections(
     const shown = await bandPixels(shot, bandRows(s.y, height, d, imageSize(shot).height), out)
     if (pixelShare(seen, shown) < IN_VIEW_CHANGED) return
     const piece = async (img: Buffer, at: number, viewTop: number, h: number) =>
-      inView!.patches.push({ y: at, height: h, jpeg: await sharp(img).extract({ left: 0, width: Math.round(vw * k), ...bandRows(viewTop, h, k, imageSize(img).height) }).jpeg({ quality: 90 }).toBuffer() })
+      addPatch({ y: at, height: h, jpeg: await sharp(img).extract({ left: 0, width: Math.round(vw * k), ...bandRows(viewTop, h, k, imageSize(img).height) }).jpeg({ quality: 90 }).toBuffer() }, at - viewTop)
     await piece(frame, s.y, top, height)
     // The rest of a tall section, a viewport at a time, up to the shot's bottom.
     for (let off = height, extra = 0; off < s.height && extra < IN_VIEW_EXTRA; extra++) {
@@ -736,6 +752,10 @@ export async function recordLiveSections(
   }
   try {
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur?.()).catch(() => {}) // no caret
+    if (inView) {
+      pinned = await bars("all").catch(() => [])
+      await bars("none").catch(() => {})
+    }
 
     // ---- Which sections move ----
     const moving = cuts.map(() => false)
@@ -807,7 +827,7 @@ export async function recordLiveSections(
             const jpeg = height < reuse.height
               ? await sharp(reuse.still).extract({ left: 0, top: 0, width: size.width, height: Math.max(1, Math.round((size.height * height) / reuse.height)) }).jpeg({ quality: 90 }).toBuffer()
               : reuse.still
-            inView.patches.push({ y, height, jpeg })
+            addPatch({ y, height, jpeg }, y)
           }
           continue
         }
@@ -860,7 +880,7 @@ export async function recordLiveSections(
         // The clip's first frame becomes this band of the full-page shot (after any in-view patch of it, so it
         // wins): the viewer can then swap screenshot and clip with nothing moving.
         const still = await sharp(Buffer.from(frames[0]!.data, "base64")).extract({ left: crop.x, top: crop.y, width: crop.width, height: crop.height }).jpeg({ quality: 90 }).toBuffer()
-        inView?.patches.push({ y, height: clipHeight, jpeg: still })
+        if (inView) addPatch({ y, height: clipHeight, jpeg: still }, y - top)
         const clip: LiveClip = { recording, y, height: clipHeight, durationMs, sig, still }
         for (let n = i; n <= j; n++) out[n] = clip
         made++
@@ -870,6 +890,22 @@ export async function recordLiveSections(
         if (tall) await viewport(vh).catch(() => {})
         tall = false
         i = j
+      }
+    }
+    // A bar shows once, where the full-page shot has it in the first viewport. A frame taken further down has it hidden, so
+    // where one was pasted over a bar (a short header section, then a hero that starts below it), the shot's own pixels come back.
+    if (inView) {
+      const d = inView.dpr ?? 1
+      const size = imageSize(inView.shot)
+      for (const bar of pinned) {
+        for (const p of barless) {
+          const [x0, x1, y0, y1] = [Math.max(0, bar.x), Math.min(vw, bar.x + bar.width), Math.max(bar.y, p.y), Math.min(bar.y + bar.height, p.y + p.height)]
+          const left = Math.round(x0 * d)
+          const top = Math.round(y0 * d)
+          const [width, height] = [Math.min(size.width - left, Math.round(x1 * d) - left), Math.min(size.height - top, Math.round(y1 * d) - top)]
+          if (width < 1 || height < 1) continue
+          inView.patches.push({ x: x0, y: y0, width: x1 - x0, height: y1 - y0, jpeg: await sharp(inView.shot).extract({ left, top, width, height }).jpeg({ quality: 90 }).toBuffer() })
+        }
       }
     }
   } finally {
