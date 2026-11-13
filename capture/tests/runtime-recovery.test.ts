@@ -2,7 +2,7 @@ import { test, mock } from "node:test"
 import assert from "node:assert/strict"
 import type { CrawlState, Job, JobComplete, PageUpload } from "../../web/shared/types"
 import { JobGoneError, SnipApi } from "../src/api"
-import { PAGE_DEADLINE_MS } from "../src/deadline"
+import { PAGE_STALL_MS } from "../src/deadline"
 import { CaptureRuntime } from "../src/runtime"
 
 // Regression tests for runtime recovery bugs (hung capture, local stop, lost lease).
@@ -67,7 +67,7 @@ test("a capture that never settles is failed within 10 minutes, its heartbeat st
   }
 })
 
-test("a capture the page deadline cannot reach is failed at twice the page deadline, not before, and its heartbeat stops with it", async () => {
+test("a capture no page deadline can reach is failed at twice the page stall window, not before, and its heartbeat stops with it", async () => {
   mock.timers.enable({ apis: ["setTimeout", "setInterval"] })
   try {
     const queue: (Job | null)[] = [job1, null]
@@ -82,10 +82,10 @@ test("a capture the page deadline cannot reach is failed at twice the page deadl
     })
     void runtime.run()
     await flush()
-    // The watchdog is a multiple of the page deadline, not a number of its own: a page that is merely slow is the deadline's to end.
-    mock.timers.tick(2 * PAGE_DEADLINE_MS - 1_000)
+    // The watchdog is a multiple of the page's stall window, not a number of its own: a page that stops finishing steps is the deadline's to end.
+    mock.timers.tick(2 * PAGE_STALL_MS - 1_000)
     await flush()
-    assert.deepEqual(failed, [], "still waiting just short of twice the page deadline")
+    assert.deepEqual(failed, [], "still waiting just short of twice the stall window")
     assert.ok(heartbeats.length > 0, "and beating while it waits")
     mock.timers.tick(1_000)
     await flush()

@@ -3,7 +3,7 @@ import sharp from "sharp"
 import type { Browser, BrowserContext, BrowserContextOptions, CDPSession, Page as PwPage } from "playwright"
 import type { CrawlState, DesignTokens, Job, MotionEntry, PageSection, PageUpload, PageWarning } from "../../web/shared/types"
 import { JobGoneError, uploadText, type SnipApi } from "./api"
-import { PAGE_DEADLINE_MS, pageDeadline, within } from "./deadline"
+import { PAGE_STALL_MS, pageDeadline, within } from "./deadline"
 import { imageSize, type Frame } from "./gif"
 import { allowPrivateUrls, assertPublicUrl, createCaptureNetwork, PrivateAddressError } from "./network-guard"
 import { buildStills, closeRenderer, cropBands, sampleIndexes } from "./sheet"
@@ -80,11 +80,16 @@ const STOPPED_EMPTY = "Stopped before any pages were captured"
 const FONT_BUDGET = 4_000_000
 // Closing what a page opened (its tabs, the helper page) is waited on this long: a browser that no longer answers must not hold up the next page.
 const TEARDOWN_MS = 10_000
+// Fonts a site starts loading late may never be answered (document.fonts.ready then never settles): they are waited on this long, not for ever.
+const FONTS_WAIT_MS = 5_000
 
 const MOBILE_UA =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+/** Says a real step of the page's capture finished (see pageDeadline). Called when a call into the page returned or a response arrived, never because time passed. */
+type Tick = () => void
+const noTick: Tick = () => {}
 const log = (...a: unknown[]) => console.log(new Date().toISOString().slice(11, 19), ...a)
 
 const sameSite = (a: URL, b: URL) => a.hostname.replace(/^www\./, "") === b.hostname.replace(/^www\./, "")
@@ -197,7 +202,7 @@ async function sitemapUrls(context: BrowserContext, root: URL): Promise<string[]
 type CaptureNetwork = Awaited<ReturnType<typeof createCaptureNetwork>> | null
 
 /** Loads the page and returns the HTTP status of the document it landed on, or null if there was no response. */
-async function load(page: PwPage, url: string, network: CaptureNetwork) {
+async function load(page: PwPage, url: string, network: CaptureNetwork, tick: Tick = noTick) {
   let status: number | null = null
   try {
     status = (await page.goto(url, { waitUntil: "load", timeout: 45_000 }))?.status() ?? null
@@ -206,15 +211,16 @@ async function load(page: PwPage, url: string, network: CaptureNetwork) {
     throw error
   }
   network?.assertAllowed()
-  await page.waitForLoadState("networkidle", { timeout: 8_000 }).catch(() => {})
-  await dismissBanners(page)
-  await page.evaluate(() => document.fonts?.ready).catch(() => {})
+  tick()
+  await page.waitForLoadState("networkidle", { timeout: 8_000 }).catch(() => {}) // a page that never goes idle is normal: no tick for giving up on it
+  await dismissBanners(page, tick)
+  await within(FONTS_WAIT_MS, page.evaluate(() => document.fonts?.ready).then(() => tick()))
   await sleep(600)
   return status
 }
 
 /** Close cookie banners and popups in the page and its frames. Banners often animate in late, so try twice. */
-export async function dismissBanners(page: PwPage) {
+export async function dismissBanners(page: PwPage, tick: Tick = noTick) {
   if (!DISMISS_POPUPS) return
   let total = { clicked: 0, hidden: 0 }
   for (let pass = 0; pass < 2; pass++) {
@@ -222,12 +228,15 @@ export async function dismissBanners(page: PwPage) {
       const r = await frame
         .evaluate(`(${DISMISS_JS})(null)`)
         .catch(() => null) as { clicked: number; hidden: number } | null
-      if (r) total = { clicked: total.clicked + r.clicked, hidden: total.hidden + r.hidden }
+      if (r) {
+        total = { clicked: total.clicked + r.clicked, hidden: total.hidden + r.hidden }
+        tick()
+      }
     }
     await sleep(pass === 0 ? 700 : 300)
   }
   // Anything a click revealed (e.g. a second consent step) gets hidden rather than clicked again.
-  await run(page, DISMISS_JS, { hideOnly: true }).catch(() => {})
+  await run(page, DISMISS_JS, { hideOnly: true }).then(() => tick(), () => {})
   if (total.clicked || total.hidden) log(`  closed popups: ${total.clicked} clicked, ${total.hidden} hidden`)
 }
 
@@ -286,10 +295,11 @@ export async function screencast(cdp: CDPSession, width: number, height: number,
 }
 
 /** Scroll through the page recording a video; also triggers lazy loading and scroll-reveal content. */
-export async function recordScroll(page: PwPage, record: boolean, recordingFormat: Recording["ext"] = "gif") {
+export async function recordScroll(page: PwPage, record: boolean, recordingFormat: Recording["ext"] = "gif", tick: Tick = noTick) {
   const frames: Frame[] = []
   const { width: vw, height: vh } = page.viewportSize()!
   let height = await docHeight(page)
+  tick()
   const travel = Math.max(0, height - vh)
   // Small fixed steps for smooth motion; long pages take bigger steps to stay under the frame cap.
   const step = record ? Math.max(SCROLL_STEP, Math.ceil(travel / (MAX_SCROLL_FRAMES - 1))) : 400
@@ -306,6 +316,7 @@ export async function recordScroll(page: PwPage, record: boolean, recordingForma
     return Buffer.from(data, "base64")
   }
   const writer = record ? await recordingWriter(page.context().browser()!, { format: recordingFormat }) : null
+  tick()
   // Video takes JPEG frames: fewer bytes to pass along and cheaper for Chromium to encode than PNG. At quality 97
   // the video is ~10% bigger than from PNG (90 made it 50% bigger: VP9 spends bits on JPEG noise). A GIF's palette
   // is built best from PNG.
@@ -339,6 +350,7 @@ export async function recordScroll(page: PwPage, record: boolean, recordingForma
     // The sample plan follows the page's current height; buildStills uses the nearest still if it grew later.
     if (frame && (last || sampleIndexes(frameCount(height)).includes(frames.length - 1)))
       frame.still = { jpeg: await shot({ format: "jpeg", quality: 82, optimizeForSpeed: true }), width: vw, height: vh }
+    tick() // one scroll step done, frame and still included
     if (last) break
   }
   await encode(frames.at(-1), LAST_FRAME_MS)
@@ -346,11 +358,13 @@ export async function recordScroll(page: PwPage, record: boolean, recordingForma
   await cdp?.detach().catch(() => {})
   if (fallbacks) log(`  scroll: ${fallbacks}/${frames.length} frames fell back to screenshots`)
   await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" as ScrollBehavior }))
+  tick()
   await sleep(400)
   let recording: Recording | null = null
   if (frames.length > 1) {
     try {
       recording = await writer!.finish()
+      tick()
     } catch (e) {
       log("  scroll recording failed:", (e as Error).message.split("\n")[0])
     }
@@ -555,6 +569,7 @@ export async function recordLiveSections(
   format: Recording["ext"],
   seen: ReadonlyMap<string, LiveReuse> = new Map(),
   inView?: InView,
+  tick: Tick = noTick,
 ): Promise<(LiveClip | null)[]> {
   const out: (LiveClip | null)[] = cuts.map(() => null)
   const live = LIVE_SECTIONS && format === "webm" && MAX_LIVE > 0
@@ -634,6 +649,7 @@ export async function recordLiveSections(
     const scroll = await page.evaluate(() => Math.round(window.scrollY))
     // At the top nothing is hidden: that is what a visitor first sees, and what the full-page shot shows there.
     await bars(scroll > 0 ? "all" : "none")
+    tick()
     return y - scroll
   }
   /** Screencast frames (JPEG, viewport size) for `ms`, with when each arrived. */
@@ -647,9 +663,11 @@ export async function recordLiveSections(
     cdp.on("Page.screencastFrame", onFrame)
     const from = Date.now()
     await cdp.send("Page.startScreencast", { format: "jpeg", quality: FRAME_JPEG_QUALITY, maxWidth: vw, maxHeight, everyNthFrame })
+    tick()
     await sleep(ms)
     await cdp.send("Page.stopScreencast").catch(() => {})
     cdp.off("Page.screencastFrame", onFrame)
+    if (frames.length) tick() // the window brought frames: the page is painting, not just waited on
     return { frames, from, to: Date.now() }
   }
   const holdResize = (on: boolean) => page.evaluate((on) => new Promise<void>((done) => {
@@ -680,7 +698,7 @@ export async function recordLiveSections(
     }
     return { count: all.length, at }
   })
-  const measure = () => Promise.all([docHeight(page), layout()]).catch((e) => {
+  const measure = () => Promise.all([docHeight(page), layout()]).then((both) => { tick(); return both }).catch((e) => {
     log("  page layout not measured:", (e as Error).message.split("\n")[0])
     return null
   })
@@ -706,6 +724,7 @@ export async function recordLiveSections(
     if (grow && !before) return false
     await holdResize(true)
     await page.setViewportSize({ width: vw, height })
+    tick()
     await holdResize(grow)
     if (!grow) return true
     const after = await measure()
@@ -758,11 +777,13 @@ export async function recordLiveSections(
     if (inView) {
       pinned = await bars("all").catch(() => [])
       await bars("none").catch(() => {})
+      tick()
     }
 
     // ---- Which sections move ----
     const moving = cuts.map(() => false)
     const likely = patchOnly ? await likelyInView(page, cuts) : []
+    tick()
     for (const [i, s] of cuts.entries()) {
       if (patchOnly) {
         if (!likely[i]) continue
@@ -771,6 +792,7 @@ export async function recordLiveSections(
           const height = Math.min(s.height, vh - top)
           if (top < 0 || height < 40) continue
           const frame = await still()
+          tick()
           await collectInView(s, top, height, imageSize(frame).width / vw, frame)
         } catch (e) {
           log(`  in-view check of "${s.label}" skipped:`, (e as Error).message.split("\n")[0])
@@ -804,6 +826,7 @@ export async function recordLiveSections(
         // Frames kept coming but the section hasn't changed: its motion may hold still (a video on its last frame) or start a beat
         // after it scrolls in (a demo that loads on view). Watch on before calling it still.
         if (!moving[i] && frames.length >= LIVE_BUSY_FRAMES) moving[i] = await changes([...frames, ...(await screencast(LIVE_RECHECK_MS, 1)).frames])
+        tick()
       } catch (e) {
         log(`  live probe of "${s.label}" skipped:`, (e as Error).message.split("\n")[0])
       }
@@ -862,8 +885,11 @@ export async function recordLiveSections(
           for (let f = 0; f < kept.length; f++) {
             const next = kept[f + 1]?.t ?? kept[0]!.t + durationMs
             await writer.add(Buffer.from(kept[f]!.data, "base64"), next - kept[f]!.t, crop)
+            tick()
           }
-          return writer.finish()
+          const clip = await writer.finish()
+          tick()
+          return clip
         }
         let recording = await encode(LIVE_QUANTIZER, 1)
         if (!recording) break
@@ -887,6 +913,7 @@ export async function recordLiveSections(
         const clip: LiveClip = { recording, y, height: clipHeight, durationMs, sig, still }
         for (let n = i; n <= j; n++) out[n] = clip
         made++
+        tick()
       } catch (e) {
         log(`  live clip of "${cuts[i]!.label}" skipped:`, (e as Error).message.split("\n")[0])
       } finally {
@@ -927,22 +954,26 @@ export async function recordLiveSections(
  * change (their own motion only). If it does, returns that scheme's full-page shot and thumbnail. Always leaves
  * the page back in its own scheme, scrolled where it was (the top).
  */
-export async function captureOtherScheme(page: PwPage, base: "light" | "dark") {
+export async function captureOtherScheme(page: PwPage, base: "light" | "dark", tick: Tick = noTick) {
   const scheme = base === "dark" ? ("light" as const) : ("dark" as const)
   try {
     const before = await page.screenshot({ type: "jpeg", quality: 70 })
+    tick()
     await page.emulateMedia({ colorScheme: scheme })
+    tick()
     await sleep(400)
     const after = await page.screenshot({ type: "jpeg", quality: 70 })
+    tick()
     if ((await changedShare(before, after, { top: 0, height: imageSize(before).height })) < OTHER_SCHEME_CHANGED) return null
-    const shot = await fullPageShot(page, 1)
+    const shot = await fullPageShot(page, 1, tick)
     const thumb = await thumbnail(await page.screenshot({ type: "jpeg", quality: 75 }), THUMB_WIDTH.desktop)
+    tick()
     return { scheme, shot, thumb }
   } catch (e) {
     log(`  ${scheme} scheme skipped:`, (e as Error).message.split("\n")[0])
     return null
   } finally {
-    await page.emulateMedia({ colorScheme: base }).catch(() => {})
+    await page.emulateMedia({ colorScheme: base }).then(() => tick(), () => {})
     await sleep(300)
   }
 }
@@ -977,8 +1008,9 @@ export async function isFlat(shot: Buffer) {
   return (await sharp(shot).stats()).channels.every((c) => c.max - c.min <= FLAT_RANGE)
 }
 
-async function fullPageShot(page: PwPage, dpr: number) {
+async function fullPageShot(page: PwPage, dpr: number, tick: Tick = noTick) {
   const height = await docHeight(page)
+  tick()
   const width = page.viewportSize()!.width
   const clipH = Math.min(height, Math.floor(MAX_SHOT_PX / dpr))
   // content-visibility: auto parts of the page outside the viewport aren't painted in a full-page capture (blank
@@ -995,6 +1027,7 @@ async function fullPageShot(page: PwPage, dpr: number) {
   }).catch(() => {})
   try {
     const buf = await page.screenshot({ type: "jpeg", quality: 80, fullPage: true, clip: { x: 0, y: 0, width, height: clipH } })
+    tick()
     return { buf, width: Math.round(width * dpr), height: Math.round(clipH * dpr), truncated: height > clipH }
   } finally {
     // Late resize events from restoring the viewport are held too: wait two frames before letting them through.
@@ -1010,8 +1043,9 @@ async function fullPageShot(page: PwPage, dpr: number) {
   }
 }
 
-async function recordHovers(page: PwPage, seen: Set<string>, recordingFormat: Recording["ext"]) {
+async function recordHovers(page: PwPage, seen: Set<string>, recordingFormat: Recording["ext"], tick: Tick = noTick) {
   const found = await run<{ i: number; label: string; selector: string }[]>(page, HOVER_JS, { max: MAX_HOVERS * 2 })
+  tick()
   // Shared chrome (nav links, footer buttons) repeats on every page: record each effect once per site.
   const targets = found.filter((t) => !seen.has(`${t.selector}|${t.label}`)).slice(0, MAX_HOVERS)
   const out: { recording: Recording; label: string; selector: string; frames: Frame[]; observedStyles: Record<string, string> | null; motion: MotionEntry[] }[] = []
@@ -1021,7 +1055,9 @@ async function recordHovers(page: PwPage, seen: Set<string>, recordingFormat: Re
     try {
       const el = page.locator(`[data-rs-hover="${t.i}"]`).first()
       await el.scrollIntoViewIfNeeded({ timeout: 2000 })
+      tick()
       await page.mouse.move(2, 2)
+      tick()
       await sleep(HOVER_SETTLE_MS)
       const box = await el.boundingBox()
       if (!box) continue
@@ -1070,6 +1106,7 @@ async function recordHovers(page: PwPage, seen: Set<string>, recordingFormat: Re
         if (wait > 0) await sleep(wait)
         started = Date.now()
         const { data } = await cdp.send("Page.captureScreenshot", { format: "png", optimizeForSpeed: true, clip: shotClip } as { format: "png" })
+        tick()
         const png = Buffer.from(data, "base64")
         const now = Date.now()
         const prev = frames.at(-1)
@@ -1096,11 +1133,13 @@ async function recordHovers(page: PwPage, seen: Set<string>, recordingFormat: Re
       await takeMotion(page) // the resting state's; the clock restarts as the pointer arrives
       phase = "enter"
       await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 4 })
+      tick()
       const hoverMs = cssTiming()
       await recordPhase(HOVER_ENTER, hoverMs, (elapsed, least) => { if (elapsed > least / 2) phase = "hold" })
       frames[frames.length - 1]!.delay = 700
       phase = "leave"
       await page.mouse.move(2, 2, { steps: 4 })
+      tick()
       await recordPhase(HOVER_LEAVE, Promise.resolve(restMs))
       frames[frames.length - 1]!.delay = 900
       const motion = await takeMotion(page)
@@ -1109,6 +1148,7 @@ async function recordHovers(page: PwPage, seen: Set<string>, recordingFormat: Re
       if (frames.length < 2) continue
       const scale = clip.width > 700 ? 2 : 1
       const recording = await encodeRecording(page.context().browser()!, frames, { scale, format: recordingFormat })
+      tick()
       seen.add(`${t.selector}|${t.label}`)
       out.push({ recording, label: t.label, selector: t.selector, frames, observedStyles, motion })
     } catch (e) {
@@ -1120,8 +1160,9 @@ async function recordHovers(page: PwPage, seen: Set<string>, recordingFormat: Re
 }
 
 /** Fetch linked CSS, absolutize url()s and inline small web fonts. */
-async function buildSnapshot(page: PwPage, context: BrowserContext, sidecar: BrowserContext) {
+async function buildSnapshot(page: PwPage, context: BrowserContext, sidecar: BrowserContext, tick: Tick = noTick) {
   const snap = await run<{ html: string; sheets: { href: string; inline: string | null }[]; token: string }>(page, SNAPSHOT_JS)
+  tick()
   let fontBytes = 0
   const fontCache = new Map<string, string>()
 
@@ -1148,6 +1189,7 @@ async function buildSnapshot(page: PwPage, context: BrowserContext, sidecar: Bro
         if (!data && fontBytes < FONT_BUDGET) {
           try {
             const res = await sidecar.request.get(u, { timeout: 10_000 })
+            tick() // answered; a request that times out is not progress, or a page of slow-dying requests would never run out
             if (res.ok()) {
               const body = await res.body()
               fontBytes += body.length
@@ -1173,6 +1215,7 @@ async function buildSnapshot(page: PwPage, context: BrowserContext, sidecar: Bro
     if (css == null) {
       try {
         const res = await context.request.get(s.href, { timeout: 15_000 })
+        tick()
         css = res.ok() ? await res.text() : `/* failed to fetch ${s.href} */`
       } catch {
         css = `/* failed to fetch ${s.href} */`
@@ -1231,9 +1274,9 @@ export function signedInState(env = process.env): string {
 
 /**
  * `signal` asks the crawl to wind down at its next page boundary; `progress` tells the runtime the capture is still moving.
- * A page that is not captured within `pageDeadlineMs` (see PAGE_DEADLINE_MS) is given up on like any page that fails.
+ * A page that finishes no step for `pageStallMs` (see PAGE_STALL_MS) is given up on like any page that fails.
  */
-export async function captureJob(browser: Browser, api: SnipApi, job: Job, signal = new AbortController().signal, progress = () => {}, { pageDeadlineMs = PAGE_DEADLINE_MS }: { pageDeadlineMs?: number } = {}) {
+export async function captureJob(browser: Browser, api: SnipApi, job: Job, signal = new AbortController().signal, progress = () => {}, { pageStallMs = PAGE_STALL_MS }: { pageStallMs?: number } = {}) {
   await assertPublicUrl(job.url)
   const options = job.options ?? {}
   const colorScheme = options.colorScheme === "dark" ? "dark" : "light"
@@ -1261,14 +1304,14 @@ export async function captureJob(browser: Browser, api: SnipApi, job: Job, signa
       upload: { value: (...file: Parameters<SnipApi["upload"]>) => { progress(); return api.upload(...file).finally(progress) } },
       addPage: { value: (...page: Parameters<SnipApi["addPage"]>) => { progress(); return api.addPage(...page).finally(progress) } },
     })
-    await capturePages(browser, reporting, job, desktop, mobile, sidecar, network, signal, progress, pageDeadlineMs)
+    await capturePages(browser, reporting, job, desktop, mobile, sidecar, network, signal, progress, pageStallMs)
   } finally {
     await Promise.allSettled(contexts.map(context => context.close()))
     await Promise.all([network?.close(), sidecarNetwork?.close()])
   }
 }
 
-async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: BrowserContext, mobile: BrowserContext, sidecar: BrowserContext, network: CaptureNetwork, signal: AbortSignal, progress: () => void, pageDeadlineMs: number) {
+async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: BrowserContext, mobile: BrowserContext, sidecar: BrowserContext, network: CaptureNetwork, signal: AbortSignal, progress: () => void, pageStallMs: number) {
   const root = new URL(job.url)
   const prefix = `refs/${job.id}/${job.attempt}`
   // Protocol 3 predates video. Missing capabilities mean the Worker still renders recordings as GIF images.
@@ -1343,6 +1386,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
   while (queue.length && captured < job.maxPages) {
     progress()
     const next = await windDown()
+    progress() // a Worker call that answered, however slowly
     if (next === "paused" || next === "handed back") {
       log(`[${job.id}] ${next} after ${captured} page(s)`)
       return
@@ -1361,15 +1405,19 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
     // reported without one rather than as "1 of 1".
     const total = job.mode !== "crawl" ? 1 : !navLinksQueued && !queue.length && job.maxPages > 1 ? null : Math.min(job.maxPages, captured + 1 + queue.length)
     await api.progress(job.id, total === null ? `Capturing page ${captured + 1}: ${path}` : `Capturing ${captured + 1}/${total}: ${path}`)
+    progress()
     log(`[${job.id}] ${url}`)
     const p = `${prefix}/p${ord}`
     // Each viewport gets a fresh page that closes once captured. The mobile page loads and screenshots while
     // the desktop page records, so at most two of the site's renderers are alive at once.
     // The contexts live for the whole job and keep cookies (dismissed banners stay dismissed).
     const open: PwPage[] = []
-    // The page's one deadline (see PAGE_DEADLINE_MS) covers everything the site can slow down, up to the screenshots, recordings and
-    // snapshot being in hand. Its uploads are not part of it: they depend on the connection to the Worker, and every one reports progress.
-    const deadline = pageDeadline(pageDeadlineMs)
+    // The page's one deadline (see PAGE_STALL_MS) covers everything the site can slow down, up to the screenshots, recordings and
+    // snapshot being in hand. It runs out when no step of the page finishes for a while, not when the page takes long. Each finished
+    // step is a tick, and also tells the runtime the capture is moving. The uploads are not part of it: they depend on the
+    // connection to the Worker, and every one reports progress.
+    const deadline = pageDeadline(pageStallMs)
+    const tick = () => { if (deadline.tick()) progress() }
     const newPage = async (context: BrowserContext) => {
       const page = await context.newPage()
       open.push(page)
@@ -1378,6 +1426,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
         await page.close().catch(() => {})
         throw deadline.error
       }
+      tick()
       return page
     }
     const closePages = () => Promise.allSettled(open.map((page) => page.close()))
@@ -1390,8 +1439,9 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       let failedLoads = 0
       dPage.on("requestfailed", (r) => { if (!r.isNavigationRequest() && r.failure()?.errorText !== "net::ERR_ABORTED" && r.frame() === dPage.mainFrame()) failedLoads++ })
       dPage.on("response", (r) => { if (r.status() >= 400 && !r.request().isNavigationRequest() && r.frame() === dPage.mainFrame()) failedLoads++ })
-      const status = await load(dPage, url, network)
+      const status = await load(dPage, url, network, tick)
       const pageMeta = await run<{ canonical: string | null; title: string | null; description: string | null; favicon: string | null; links: { href: string; nav: boolean }[] }>(dPage, META_JS)
+      tick()
       // Both checks run before any screenshots or recordings. A skipped URL stays in `visited`, so it is not queued again, and it is not counted as captured.
       // A crawled link that errored or redirected off the site (e.g. to a Slack invite) is not a page of it. The start page and single-page captures keep whatever they get.
       const skip = job.mode === "crawl" && url !== start ? skipReason(dPage.url(), status, root) : null
@@ -1426,20 +1476,23 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
         let mPage: PwPage | undefined
         try {
           mPage = await newPage(mobile)
-          await load(mPage, url, network)
-          await recordScroll(mPage, false)
-          const shot = await fullPageShot(mPage, MOBILE_DPR)
+          await load(mPage, url, network, tick)
+          await recordScroll(mPage, false, "gif", tick)
+          const shot = await fullPageShot(mPage, MOBILE_DPR, tick)
           // Sections that look different in view are patched into the shot; mobile sections are not stored.
           const cuts = features.has("sections") ? await findSections(mPage) : []
+          tick()
           const inView: InView = { shot: shot.buf, patches: [], dpr: MOBILE_DPR }
-          await recordLiveSections(mPage, cuts, "gif", undefined, inView)
+          await recordLiveSections(mPage, cuts, "gif", undefined, inView, tick)
           if (inView.patches.length) {
             shot.buf = await patchInView(shot.buf, inView.patches, MOBILE_DPR).catch((e) => {
               log("  mobile in-view patches skipped:", (e as Error).message.split("\n")[0])
               return shot.buf
             })
+            tick()
           }
           const thumb = await thumbnail(await mPage.screenshot({ type: "jpeg", quality: 75 }), THUMB_WIDTH.mobile)
+          tick()
           return { shot, thumb, patches: inView.patches.length }
         } catch (e) {
           log("  mobile capture failed:", (e as Error).message.split("\n")[0])
@@ -1450,30 +1503,37 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
         }
       })()
 
-      await run(dPage, MOTION_JS, { op: "install" }).catch(() => {})
-      const scroll = await recordScroll(dPage, true, recordingFormat)
+      await run(dPage, MOTION_JS, { op: "install" }).then(() => tick(), () => {})
+      const scroll = await recordScroll(dPage, true, recordingFormat, tick)
       const scrollMotion = await takeMotion(dPage)
-      await dismissBanners(dPage) // popups that only appear after scrolling
-      const desktopShot = await fullPageShot(dPage, 1)
+      tick()
+      await dismissBanners(dPage, tick) // popups that only appear after scrolling
+      const desktopShot = await fullPageShot(dPage, 1, tick)
       const sectionCuts = features.has("sections") ? (await findSections(dPage)).filter((s) => s.y < desktopShot.height) : []
+      tick()
       // In a crawl, only the first pages get clips: later pages mostly repeat the same chrome, at the same cost.
       const liveOn = features.has("live") && (job.mode !== "crawl" || captured < LIVE_CRAWL_PAGES)
       const inView: InView = { shot: desktopShot.buf, patches: [] }
-      const liveClips = await recordLiveSections(dPage, sectionCuts, liveOn ? recordingFormat : "gif", liveSeen, inView)
+      const liveClips = await recordLiveSections(dPage, sectionCuts, liveOn ? recordingFormat : "gif", liveSeen, inView, tick)
       // Sections that look different scrolled into view replace their band in the full-page shot, before it is cut.
       if (inView.patches.length) {
         desktopShot.buf = await patchInView(desktopShot.buf, inView.patches).catch((e) => {
           log("  in-view patches skipped:", (e as Error).message.split("\n")[0])
           return desktopShot.buf
         })
+        tick()
       }
       const desktopThumb = await thumbnail(await dPage.screenshot({ type: "jpeg", quality: 75 }), THUMB_WIDTH.desktop)
-      const other = features.has("schemes") ? await captureOtherScheme(dPage, job.options?.colorScheme === "dark" ? "dark" : "light") : null
+      tick()
+      const other = features.has("schemes") ? await captureOtherScheme(dPage, job.options?.colorScheme === "dark" ? "dark" : "light", tick) : null
       const styles = await run<{ tokens: DesignTokens }>(dPage, STYLES_JS, { maxElements: 3000 })
-      const html = await buildSnapshot(dPage, desktop, sidecar)
-      const hovers = await recordHovers(dPage, hoverSeen, recordingFormat)
+      tick()
+      const html = await buildSnapshot(dPage, desktop, sidecar, tick)
+      const hovers = await recordHovers(dPage, hoverSeen, recordingFormat, tick)
       const empty = await dPage.evaluate(() => !document.body?.innerText.trim() && !document.querySelector("img, picture, video, canvas, svg, iframe, object, embed")).catch(() => false)
+      tick()
       await dPage.close()
+      tick()
       const mobileShots = await mobileTask
       const mobileShot = mobileShots?.shot ?? null
       const mobileThumb = mobileShots?.thumb ?? null
@@ -1668,3 +1728,4 @@ export const HOLD_RESIZE_FOR_TEST = HOLD_RESIZE_JS
 export const OBSERVED_FOR_TEST = OBSERVED_JS
 export const likelyInViewForTest = likelyInView
 export const fullPageShotAtForTest = fullPageShot
+export const loadForTest = load

@@ -1,5 +1,5 @@
 import { CaptureAuthenticationError, CaptureUpgradeError, JobGoneError } from "./api"
-import { PAGE_DEADLINE_MS } from "./deadline"
+import { PAGE_STALL_MS } from "./deadline"
 import type { Job } from "../../web/shared/types"
 
 export type CaptureStatus = {
@@ -17,13 +17,14 @@ export const idlePollDelay = (pollMs: number, emptyPolls: number) =>
   Math.min(Math.max(pollMs, IDLE_POLL_MAX_MS), pollMs * 2 ** Math.min(Math.max(0, emptyPolls - 1), 20))
 
 /**
- * A capture that reports nothing for this long is hung: its job is failed and the worker takes the next one. A page that hangs
- * never gets this far, because it is given up on at PAGE_DEADLINE_MS and the capture goes on to the next. This is the backstop
- * for what that cannot reach, such as a browser that has stopped answering altogether or a Worker call that never returns.
- * Twice the page deadline outlasts the longest a single Worker request waits (120 s), and every upload and page save reports
- * progress at both ends, so only a call that is truly stuck can run it out.
+ * A capture that reports nothing for this long is hung: its job is failed and the worker takes the next one. Every step a page
+ * finishes, every upload and every Worker call between pages reports progress when it ends (uploads and page saves also when
+ * they start), and a page that stops finishing steps is given up on at PAGE_STALL_MS and the capture goes on. So this is the
+ * backstop for what that cannot reach: a browser that has stopped answering altogether, or a Worker call that never returns.
+ * The longest stretch a healthy capture reports nothing is the longer of one Worker request (120 s at most) and a page's stall
+ * window with its teardown (PAGE_STALL_MS and 20 s); twice the stall window outlasts both.
  */
-const STALL_MS = 2 * PAGE_DEADLINE_MS
+const STALL_MS = 2 * PAGE_STALL_MS
 
 /** How often a running capture tells the Worker its agent is alive. The Worker counts an agent as gone after three missed beats (AGENT_ALIVE_SECONDS in web/worker/db.ts). */
 const HEARTBEAT_MS = 30_000
