@@ -203,7 +203,7 @@ const killTree = (proc: ChildProcess) => {
 
 export async function startApp() {
   const { proc, url } = await startVite()
-  const browser: Browser = await chromium.launch()
+  const browser: Browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined })
   const contexts: Page[] = []
   // Make sure a crash of the test process does not leave the server behind.
   const bye = () => killTree(proc)

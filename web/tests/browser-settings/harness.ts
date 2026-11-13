@@ -76,7 +76,7 @@ export async function startVite(): Promise<Server> {
 }
 
 export async function launch(): Promise<Browser> {
-  return chromium.launch()
+  return chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined })
 }
 
 export interface Opened {

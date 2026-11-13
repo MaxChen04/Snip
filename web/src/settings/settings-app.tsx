@@ -191,6 +191,7 @@ export function SettingsApp() {
               <CloudPanels
                 cloud={cloud}
                 onOpen={openCloud}
+                onUpdate={() => void cloud.begin("deploy", () => cloud.bridge!.update())}
                 onTurnOff={() => {
                   setTurnOffChoice("stay")
                   setDialog("turn-off")
@@ -413,6 +414,7 @@ function LocalPanels({
 function CloudPanels({
   cloud,
   onOpen,
+  onUpdate,
   onTurnOff,
   onRestore,
   onDeleteSnapshot,
@@ -424,6 +426,7 @@ function CloudPanels({
 }: {
   cloud: ReturnType<typeof useCloud>
   onOpen: () => void
+  onUpdate: () => void
   onTurnOff: () => void
   onRestore: () => void
   onDeleteSnapshot: () => void
@@ -466,6 +469,16 @@ function CloudPanels({
             <Button variant="outline" size="sm" onClick={onOpen}>
               Open
               <ArrowUpRightIcon data-icon="inline-end" />
+            </Button>
+          }
+        />
+        <Row
+          icon={<RefreshCwIcon className="size-4" />}
+          title="Update cloud library"
+          body="Install the cloud version included with this app. Captures pause until the update is verified."
+          action={
+            <Button variant="outline" size="sm" onClick={onUpdate} disabled={!cloud.bridge || !cloud.engineAvailable || cloud.snapshot.ready === false}>
+              Update cloud library
             </Button>
           }
         />
@@ -639,6 +652,7 @@ function ProgressView({
   const percent = ids.length ? Math.round((doneCount / ids.length) * 100) : 0
   const copy = {
     setup: { title: "Setting up your cloud library", body: "Keep this window open. Cloudflare asks for two approvals: your account, and R2 if it's off." },
+    deploy: { title: "Updating your cloud library", body: "Snip finishes the current capture, installs this app’s cloud update, and verifies it before captures resume. Keep this window open." },
     pull: { title: "Bringing your cloud library back", body: "Snip downloads a fresh copy, checks it, then switches this Mac to it." },
     detach: { title: "Turning off cloud", body: "This Mac goes back to its local library. The cloud copy stays live." },
     "delete-resources": { title: "Deleting cloud resources", body: "Removing the Worker, database, KV and stored files from Cloudflare." },

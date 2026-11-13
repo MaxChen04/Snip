@@ -303,6 +303,14 @@ export function createFixtureBridge(): CloudBridge {
       })
       return { started: true }
     },
+    async update() {
+      set({ ...state, busy: true, running: { command: "deploy", step: null } })
+      runCommand("deploy", () => {
+        set({ ...state, busy: false, running: null })
+        emit({ v: 1, event: "result", ok: true, code: "OK", mode: "cloud" })
+      })
+      return { started: true }
+    },
     async disable(action) {
       const command = action === "pull" ? "pull" : "detach"
       const next = seeded(command, 0)

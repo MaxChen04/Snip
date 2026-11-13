@@ -282,8 +282,9 @@ The same checks CI runs:
 ```bash
 npm run typecheck
 npm run build -w web
-npx playwright install chromium # needed by the network regression tests
-npm test               # web, capture (including MCP response budgets) and desktop unit tests
+npx playwright install chromium # needed by the capture and UI browser tests
+npm test               # web, capture (including MCP response budgets), desktop and UI browser tests
+npm run test:browser   # gallery and Settings browser suites, one test file at a time
 ```
 
 `npm run test:desktop` runs the Mac app smoke test.
