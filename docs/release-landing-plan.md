@@ -6,6 +6,7 @@ Updated 2026-11-13. These are review candidates, not a merged or deployed releas
 
 | Candidate | GitHub | Role |
 | --- | --- | --- |
+| CLA prerequisite | [PR #65](https://github.com/MaxChen04/Snip/pull/65), `codex/snip-cla-maintainer-identity` → `main` | Allow the exact unlinked Claude author name on maintainer-owned PRs before checking the release stack |
 | A | [PR #63](https://github.com/MaxChen04/Snip/pull/63), `codex/snip-release-hardening` → `main` | The `sharp-ramanujan` hardening baseline plus capture, browser CI and explicit cloud-update fixes |
 | B | [PR #64](https://github.com/MaxChen04/Snip/pull/64), `codex/snip-integration-candidate` → A | Reconciled #57, #59, #58, #60 and #61; the narrow #62 spring-easing correction |
 
@@ -25,10 +26,20 @@ The original `sharp-ramanujan` branch does not have **Update cloud library**. Th
 
 ## Exact merge strategy
 
-1. Validate A on its own and B as the combined candidate; wait for required reviews and checks. Keep both draft until the outstanding gates below are satisfied.
-2. Merge A with **Create a merge commit**. The repository permits merge commits even though its recent history uses squash merges. This is an explicit exception for this stack.
+1. Review and land the small CLA prerequisite #65, then trigger fresh A/B checks against the updated base workflow. `pull_request_target` runs trusted base code, so an allowlist change sitting only in a release PR cannot clear its own check. No CLA signature is fabricated, and the exact-name exemption applies only to MaxChen04-owned PRs. Validate A on its own and B as the combined candidate; keep both draft until the outstanding gates below are satisfied.
+2. Merge A using an explicit command-line merge method, not the browser's default button. The repository permits merge commits even though its recent history uses squash merges. This is an explicit exception for this stack.
 3. Retarget B to main, inspect the resulting diff, update from main if needed, and rerun affected checks on the actual result. It must contain the features, not replay the hardening baseline. Merge B with a merge commit as well.
-4. Confirm the final main commit passes checks before selecting a stable release tag. Only then close or mark the old feature PRs superseded; do not merge them independently.
+4. Confirm the final main commit passes checks before selecting a stable release tag. Only then close or mark the old feature PRs superseded; do not merge them independently. #62 has already been converted to draft to prevent accidentally landing its incompatible overlapping changes.
+
+After approval and green checks, resolve and inspect each current head, then use an explicit method and head-match guard:
+
+```sh
+gh pr merge 63 --repo MaxChen04/Snip --merge --match-head-commit <reviewed-A-SHA>
+# Retarget and validate B against main before running the second command.
+gh pr merge 64 --repo MaxChen04/Snip --merge --match-head-commit <reviewed-B-SHA>
+```
+
+These are the planned landing commands, not commands already executed. No repository-wide squash setting or branch-protection rule has been changed.
 
 If A is squash-merged instead, **stop before retargeting/landing B**. Reconstruct B's net feature diff on the resulting main (or carefully rebase the integration history), compare the resulting tree with the tested combined candidate, and rerun validation. An ordinary retarget, or a blind rebase of this merge-rich branch, is not sufficient.
 
@@ -84,4 +95,6 @@ The two cloud-engine/provisioning suites were rerun after publication: **127 pas
 
 The local history rehearsal passed all **five histories using Wrangler 4.157.0 / local D1**, with all 22 migration filenames recorded once, preserved data/backfill, no foreign-key violations, and a no-op repeat apply. Renaming already-applied feature migrations to 0021/0022 failed as expected without changing the recorded history. This is local D1 evidence, not hosted-deployment proof.
 
-The corrected native job has passed the previously failing desktop test step; its remaining package checks and the rest of final CI are still running. Representative live-site capture and signed Mac/hosted-cloud upgrade acceptance remain pending. Nothing in this document authorizes bypassing those checks or claims deployment has happened.
+The distinction between test steps matters: at A `a725e1a`, **`test:app` passed but `test:desktop` failed**. The native smoke waited for a claim, then quit before navigation, and called Playwright's disposed application handle after exit. The corrected fixture waits for a real page request, holds its response through the shutdown interval, retains the native child handle before close, and still requires a persisted ready capture. The packaged macOS run must prove this fix; Linux lifecycle tests alone do not.
+
+CI also found browser interaction failures and a B-only migration-test fixture that excluded every `0017` file. The migration test now holds back only `0017_board_item_z.sql`, preserving the separate style-parts migration; its focused real-D1 test passes. Browser corrections and latest-head CI remain release gates. Representative live-site capture and signed Mac/hosted-cloud upgrade acceptance also remain pending. Nothing in this document authorizes bypassing those checks or claims deployment has happened.
