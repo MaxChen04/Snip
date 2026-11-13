@@ -69,14 +69,17 @@ test("a page whose addPage failed does not lend its ord (file prefix) to the nex
   })
 })
 
-test("complete() carries the stored icon key even when the icon is slower than the whole page capture", { timeout: 240_000 }, async () => {
+test("complete() waits for a pending icon upload and carries its stored key", { timeout: 240_000 }, async () => {
   let releaseIcon!: () => void
   const iconGate = new Promise<void>((resolve) => { releaseIcon = resolve })
   let iconRequested = false
+  let iconStored = false
   await withServer((req, res) => {
     if (req.url === "/icon.png") {
       iconRequested = true
-      void iconGate.then(() => { res.writeHead(200, { "content-type": "image/png" }); res.end(PNG) })
+      // The HTTP response is delayed but within storeIcon's ten-second fetch budget. Hold the upload below, not
+      // this response: a browser also asks for the favicon, which can hold both viewports' network-idle waits.
+      setTimeout(() => { res.writeHead(200, { "content-type": "image/png" }); res.end(PNG) }, 100)
       return
     }
     res.writeHead(200, { "content-type": "text/html" })
@@ -89,10 +92,20 @@ test("complete() carries the stored icon key even when the icon is slower than t
       const api = {
         control: async () => null,
         progress: async () => {},
-        upload: async (key: string) => { uploads.push(key); return key },
-        // The page has landed; the icon answers only well after that, but within its own 10 s fetch timeout.
-        addPage: async () => { setTimeout(releaseIcon, 1500) },
-        complete: async (_id: string, c: JobComplete) => { completed = c },
+        upload: async (key: string) => {
+          uploads.push(key)
+          if (key.endsWith("/icon.png")) { await iconGate; iconStored = true }
+          return key
+        },
+        addPage: async () => {
+          assert.ok(iconRequested, "the icon fetch started before the page was saved")
+          assert.equal(iconStored, false, "the page is saved while its icon is still uploading")
+          setTimeout(releaseIcon, 1500)
+        },
+        complete: async (_id: string, c: JobComplete) => {
+          assert.ok(iconStored, "completion waits for the icon upload")
+          completed = c
+        },
       }
       await captureJob(browser, api as never, { id: "slow-icon", url: base, mode: "single", maxPages: 1, attempt, resume: null, options: null, features: ["icon"] } as unknown as Job)
       assert.ok(iconRequested, "the icon fetch started")
@@ -101,6 +114,38 @@ test("complete() carries the stored icon key even when the icon is slower than t
       assert.ok(uploads.some((k) => k.endsWith("icon.png")), "the icon was uploaded")
     } finally {
       releaseIcon()
+      await closeRenderer()
+      await browser.close()
+    }
+  })
+})
+
+test("an icon whose HTTP response never arrives falls back without failing or holding completion forever", { timeout: 90_000 }, async () => {
+  let iconRequested = false
+  await withServer((req, res) => {
+    if (req.url === "/hang.ico") { iconRequested = true; return }
+    res.writeHead(200, { "content-type": "text/html" })
+    res.end(`<!doctype html><title>Hanging icon</title><link rel="icon" href="/hang.ico"><body><h1>Hanging icon</h1></body>`)
+  }, async (base) => {
+    const browser = await launch()
+    try {
+      const pages: PageUpload[] = []
+      const uploads: string[] = []
+      let completed: JobComplete | null = null
+      const api = {
+        control: async () => null,
+        progress: async () => {},
+        upload: async (key: string) => { uploads.push(key); return key },
+        addPage: async (_id: string, page: PageUpload) => { pages.push(page) },
+        complete: async (_id: string, c: JobComplete) => { completed = c },
+      }
+      await captureJob(browser, api as never, { id: "hung-icon", url: base, mode: "single", maxPages: 1, attempt, resume: null, options: null, features: ["icon"] } as unknown as Job)
+      assert.ok(iconRequested, "the icon request really hung")
+      assert.equal(pages.length, 1, "the real page still saves")
+      assert.ok(completed, "the capture finishes despite the unanswered request")
+      assert.equal(completed!.favicon, `${base}hang.ico`, "the Worker receives the unsaved URL, not a nonexistent stored key")
+      assert.ok(uploads.every((key) => !/\/icon\.[a-z]+$/.test(key)), "no fake icon artifact was uploaded")
+    } finally {
       await closeRenderer()
       await browser.close()
     }
