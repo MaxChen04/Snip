@@ -180,6 +180,13 @@ export function skipReason(finalUrl: string, status: number | null, root: URL): 
   return host ? `left the site (${host})` : null
 }
 
+/** A starting page's HTTP error must fail the job, even when its sitemap lists other pages. */
+class InitialPageHttpError extends Error {
+  constructor(status: number) {
+    super(`The site returned HTTP ${status} for the requested page.`)
+  }
+}
+
 /**
  * The page this one duplicates, or null. `titles` holds every page captured in this run (a failed or skipped
  * URL is not in it) with its title. Redirecting to a different same-site URL in it always counts. A canonical
@@ -1491,15 +1498,18 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       dPage.on("requestfailed", (r) => { if (!r.isNavigationRequest() && r.failure()?.errorText !== "net::ERR_ABORTED" && r.frame() === dPage.mainFrame()) failedLoads++ })
       dPage.on("response", (r) => { if (r.status() >= 400 && !r.request().isNavigationRequest() && r.frame() === dPage.mainFrame()) failedLoads++ })
       const status = await load(dPage, url, network, tick)
-      const pageMeta = await run<{ canonical: string | null; title: string | null; description: string | null; favicon: string | null; links: { href: string; nav: boolean }[] }>(dPage, META_JS)
-      tick()
-      // Both checks run before any screenshots or recordings. A skipped URL stays in `visited`, so it is not queued again, and it is not counted as captured.
-      // A crawled link that errored or redirected off the site (e.g. to a Slack invite) is not a page of it. The start page and single-page captures keep whatever they get.
+      // An error document is not a successful capture of the requested site. Child links can be skipped, but the
+      // starting page fails the whole job instead of silently saving an error page or completing from sitemap links.
+      if (status !== null && status >= 400 && (job.mode === "single" || url === start)) throw new InitialPageHttpError(status)
+      // These checks run before extraction, screenshots or recordings. A skipped URL stays in `visited`, so it is
+      // not queued again or counted as captured. Successful redirects from the starting page remain supported.
       const skip = job.mode === "crawl" && url !== start ? skipReason(dPage.url(), status, root) : null
       if (skip) {
         log(`  - ${path} ${skip}, skipped`)
         return
       }
+      const pageMeta = await run<{ canonical: string | null; title: string | null; description: string | null; favicon: string | null; links: { href: string; nav: boolean }[] }>(dPage, META_JS)
+      tick()
       const duplicate = duplicateOf(url, dPage.url(), pageMeta.canonical, pageMeta.title, root, titles)
       if (duplicate) {
         log(`  - ${path} duplicates ${duplicate}, skipped`)
@@ -1757,6 +1767,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
         queue.unshift(url)
         continue
       }
+      if (e instanceof InitialPageHttpError) throw e
       failures++
       log(`  ✗ ${url}: ${(e as Error).message.split("\n")[0]}`)
       if (captured === 0 && job.mode === "single") throw e
