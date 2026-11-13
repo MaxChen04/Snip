@@ -562,6 +562,12 @@ export async function cleanupRetiredFiles(db: D1Database, files: R2Bucket) {
 
 /** Whether a refs row has saved pages. A capture with pages is resumed in its attempt; one without starts fresh. */
 const HAS_PAGES = `EXISTS (SELECT 1 FROM pages WHERE reference_id = refs.id)`
+/**
+ * A refs row whose crawl checkpoint is missing (or is no object). A resume is only as good as its checkpoint: the queue is what is left to
+ * visit, and an agent given an empty one takes the crawl for finished and completes with what it has. A protocol 3 agent never saved a
+ * checkpoint with its pages, so a crawl cut off by the upgrade has pages and none. Nothing says what was left, so it is never resumed (claimJob).
+ */
+const NO_CHECKPOINT = `coalesce(json_type(CASE WHEN json_valid(crawl_state) THEN crawl_state END), '') != 'object'`
 /** Reclaims in a row that saved no page in between. A page saved under the lease starts the count again (addPage), so a Mac that sleeps now and then is not abandoned. */
 const MAX_STALE_RECLAIMS = 3
 
@@ -602,14 +608,18 @@ export const sweepAbandoned = (db: D1Database) => db.batch(settleAbandoned(db, n
  * The agent numbers a page, and names its files, by its place in `visited`, so `visited` is filled up to each
  * saved page's ord: the next page takes a number, and a file prefix, no saved page has.
  */
-function resumeState(checkpoint: CrawlState | null, pages: [url: string, ord: number][]): CrawlState {
-  const base = checkpoint ?? { version: 1, queue: [], visited: [], captured: 0, failures: 0, navLinksQueued: false, hoverSeen: [], meta: null, tokens: null }
+function resumeState(base: CrawlState, pages: [url: string, ord: number][]): CrawlState {
   const since = pages.slice(base.captured)
   const visited = [...base.visited]
   for (const [url, ord] of since) do visited.push(url); while (visited.length <= ord)
   return { ...base, queue: base.queue.filter((url) => !since.some(([saved]) => saved === url)), visited, captured: pages.length }
 }
 
+/**
+ * Hands out the next capture. The Worker owns the rule for what is resumed: a capture with pages and a checkpoint continues in its attempt,
+ * one with pages and no checkpoint starts over from the root as a fresh attempt (its pages and files are dropped, as a recapture drops them),
+ * and one without pages starts fresh. The agent follows `resume` as given and never second-guesses it.
+ */
 export async function claimJob(db: D1Database): Promise<Job | null> {
   const ts = now()
   const stale = staleBefore(ts)
@@ -618,16 +628,22 @@ export async function claimJob(db: D1Database): Promise<Job | null> {
   // D1 batches are transactions. Record the old namespace before the claim replaces the attempt.
   const results = await db.batch([
     ...settleAbandoned(db, ts),
-    db.prepare(`INSERT OR IGNORE INTO capture_cleanup (prefix) SELECT 'refs/' || id || '/' || coalesce(capture_attempt || '/', 'p') FROM refs WHERE id = (${candidate}) AND NOT ${HAS_PAGES}`).bind(stale),
+    db.prepare(`INSERT OR IGNORE INTO capture_cleanup (prefix) SELECT 'refs/' || id || '/' || coalesce(capture_attempt || '/', 'p') FROM refs WHERE id = (${candidate}) AND (NOT ${HAS_PAGES} OR ${NO_CHECKPOINT})`).bind(stale),
+    // Pages and no checkpoint: start over. The pages go (animations cascade) and what was counted or chosen from them with them, before the claim sees them.
+    db.prepare(`UPDATE refs SET page_count = 0, animation_count = 0, cover_key = NULL, favicon = NULL, tokens_json = NULL WHERE id = (${candidate}) AND ${HAS_PAGES} AND ${NO_CHECKPOINT}`).bind(stale),
+    db.prepare(`DELETE FROM pages WHERE reference_id IN (SELECT id FROM refs WHERE id = (${candidate}) AND ${NO_CHECKPOINT})`).bind(stale),
     // Every claim, a stale reclaim and a resume included, issues a new lease: the attempt only names the files.
     db.prepare(`UPDATE refs SET stale_reclaims = stale_reclaims + (status = 'capturing'), status = 'capturing', claimed_at = ?2, updated_at = ?2, capture_lease = ?4,
-      capture_attempt = CASE WHEN ${HAS_PAGES} THEN capture_attempt ELSE ?1 END, progress = CASE WHEN ${HAS_PAGES} THEN 'Resuming capture' ELSE 'Starting capture' END
+      capture_attempt = CASE WHEN ${HAS_PAGES} THEN capture_attempt ELSE ?1 END, progress = CASE WHEN ${HAS_PAGES} THEN 'Resuming capture' ELSE 'Starting capture' END,
+      crawl_state = CASE WHEN ${HAS_PAGES} THEN crawl_state END
       WHERE id = (${candidate.replace("?", "?3")}) RETURNING id, url, mode, max_pages, capture_attempt, capture_lease, capture_options, crawl_state,
       (SELECT json_group_array(json_array(url, ord)) FROM (SELECT url, ord FROM pages WHERE reference_id = refs.id ORDER BY ord)) AS pages`).bind(token(), ts, stale, token()),
   ])
   const r = results[results.length - 1]?.results[0] as Row | undefined
   if (!r) return null
   const pages = parse<[string, number][]>(r.pages) ?? []
+  // Pages left here have a checkpoint: the statements above dropped those that had none.
+  const checkpoint = parse<CrawlState>(r.crawl_state)
   return {
     id: r.id as string,
     url: r.url as string,
@@ -635,7 +651,7 @@ export async function claimJob(db: D1Database): Promise<Job | null> {
     maxPages: r.max_pages as number,
     attempt: r.capture_attempt as string,
     lease: r.capture_lease as string,
-    resume: pages.length ? resumeState(parse<CrawlState>(r.crawl_state), pages) : null,
+    resume: pages.length && checkpoint ? resumeState(checkpoint, pages) : null,
     options: parse<CaptureOptions>(r.capture_options),
   }
 }
