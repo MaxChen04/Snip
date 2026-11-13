@@ -58,8 +58,10 @@ const MOBILE = { width: 390, height: 844 }
 const MOBILE_DPR = 1.5
 const MAX_SHOT_PX = 16000 // Chromium texture limit for full-page screenshots
 // Gallery thumbnails render 230-600 css px wide (950 device px at 2x on the large grid); the mobile one is a ~210 css px tall inset.
-const THUMB_WIDTH = { desktop: 960, mobile: 320 }
-const thumbnail = (jpeg: Buffer, width: number) => sharp(jpeg).resize({ width, withoutEnlargement: true }).jpeg({ quality: 75 }).toBuffer()
+// A section crop is cut 1440 px wide: the home gallery's copy is 640 wide, or 160 tall where that is a strip, and none for a crop that does not shrink.
+const THUMB = { desktop: { width: 960 }, mobile: { width: 320 }, section: { width: 640, height: 160 } }
+const thumbnail = (jpeg: Buffer, size: { width: number; height?: number }) => sharp(jpeg).resize({ ...size, fit: "outside", withoutEnlargement: true }).jpeg({ quality: 75 }).toBuffer()
+const viewportThumb = async (page: PwPage, size: { width: number }) => thumbnail(await screenshot(page, { type: "jpeg", quality: 75 }), size)
 /** A shot is flat when no channel strays more than this from one level, such as a page of background and film grain. Any text or picture on it strays far more. */
 const FLAT_RANGE = 32
 // Scroll recording: frames are captured at fixed scroll increments and played back at a fixed rate,
@@ -408,6 +410,23 @@ async function retryOnce<T>(fn: () => Promise<T>): Promise<T> {
     if (e instanceof JobGoneError) throw e
     return fn()
   }
+}
+
+/** For a file the capture can do without: runs `work`, and if it fails logs that `what` was skipped and gives null. A job that is gone still ends the capture. */
+async function optional<T>(what: string, work: () => Promise<T>): Promise<T | null> {
+  try {
+    return await work()
+  } catch (e) {
+    if (e instanceof JobGoneError) throw e
+    log(`  ${what} not uploaded:`, (e as Error).message.split("\n")[0])
+    return null
+  }
+}
+
+/** Stores the home gallery's copy of a section crop. Null for a crop that would not get smaller (a strip under 160 px tall). */
+async function uploadSectionThumb(api: SnipApi, key: string, crop: Buffer) {
+  const thumb = await thumbnail(crop, THUMB.section)
+  return imageSize(thumb).width < imageSize(crop).width ? retryOnce(() => api.upload(key, thumb, "image/jpeg")) : null
 }
 
 const ICON_MAX_BYTES = 256 * 1024
@@ -991,7 +1010,7 @@ export async function captureOtherScheme(page: PwPage, base: "light" | "dark", t
     tick()
     if ((await changedShare(before, after, { top: 0, height: imageSize(before).height })) < OTHER_SCHEME_CHANGED) return null
     const shot = await fullPageShot(page, 1, tick)
-    const thumb = await thumbnail(await screenshot(page, { type: "jpeg", quality: 75 }), THUMB_WIDTH.desktop)
+    const thumb = await viewportThumb(page, THUMB.desktop)
     tick()
     return { scheme, shot, thumb }
   } catch (e) {
@@ -1516,7 +1535,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
             })
             tick()
           }
-          const thumb = await thumbnail(await screenshot(mPage, { type: "jpeg", quality: 75 }), THUMB_WIDTH.mobile)
+          const thumb = await viewportThumb(mPage, THUMB.mobile)
           tick()
           return { shot, thumb, patches: inView.patches.length }
         } catch (e) {
@@ -1548,7 +1567,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
         })
         tick()
       }
-      const desktopThumb = await thumbnail(await screenshot(dPage, { type: "jpeg", quality: 75 }), THUMB_WIDTH.desktop)
+      const desktopThumb = await viewportThumb(dPage, THUMB.desktop)
       tick()
       const other = features.has("schemes") ? await captureOtherScheme(dPage, job.options?.colorScheme === "dark" ? "dark" : "light", tick) : null
       const styles = await run<{ tokens: DesignTokens }>(dPage, STYLES_JS, { maxElements: 3000 })
@@ -1618,17 +1637,10 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
             if (clip.reuse) return Promise.resolve(clip.reuse.key)
             if (!clipKeys.has(clip)) {
               const rec = clip.recording!
-              clipKeys.set(clip, retryOnce(() => api.upload(`${p}/section-${i}-live.webm`, rec.bytes, rec.contentType)).then(
-                (key) => {
-                  if (clip.sig) newClips.set(clip.sig, { key, height: clip.height, durationMs: clip.durationMs, still: clip.still })
-                  return key
-                },
-                (e) => {
-                  if (e instanceof JobGoneError) throw e
-                  log(`  live clip of "${sectionCuts[i]!.label}" not uploaded:`, (e as Error).message.split("\n")[0])
-                  return null
-                },
-              ))
+              clipKeys.set(clip, optional(`live clip of "${sectionCuts[i]!.label}"`, () => retryOnce(() => api.upload(`${p}/section-${i}-live.webm`, rec.bytes, rec.contentType))).then((key) => {
+                if (key && clip.sig) newClips.set(clip.sig, { key, height: clip.height, durationMs: clip.durationMs, still: clip.still })
+                return key
+              }))
             }
             return clipKeys.get(clip)!
           }
@@ -1636,8 +1648,9 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
             const clip = liveClips[i]
             const key = clip ? await clipKey(clip, i) : null
             const live = clip && key ? { key, y: clip.y, height: clip.height, durationMs: clip.durationMs } : null
+            const thumbKey = features.has("sectionThumbs") ? await optional(`thumbnail of "${s.label}"`, () => uploadSectionThumb(api, `${p}/section-${i}-thumb.jpg`, crops[i]!)) : null
             const { fp: _fp, ...section } = s as SectionCut
-            return { ...section, key: await retryOnce(() => api.upload(`${p}/section-${i}.jpg`, crops[i]!, "image/jpeg")), ...(live ? { live } : {}) }
+            return { ...section, key: await retryOnce(() => api.upload(`${p}/section-${i}.jpg`, crops[i]!, "image/jpeg")), ...(thumbKey ? { thumbKey } : {}), ...(live ? { live } : {}) }
           })
         } catch (e) {
           if (e instanceof JobGoneError) throw e
