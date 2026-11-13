@@ -19,6 +19,12 @@ test("easings are told apart by shape, and overshooting curves report how far th
   assert.equal(easingShape("var(--x)").shape, "unknown")
 })
 
+test("unevenly spaced delays are not reported as a stagger", () => {
+  const profile = (delays: number[]) => motionProfile({ load: delays.map((delayMs) => entry({ delayMs })), scroll: [], hovers: [], files: [], cssVariables: {}, keyframes: [], motionRules: { scrollDriven: [], viewTransitions: false } })
+  assert.deepEqual(profile([0, 100, 10000]).staggers, [])
+  assert.equal(profile([0, 100, 201, 300]).staggers[0]?.stepMs, 100, "a millisecond of rounding still counts as even")
+})
+
 test("a profile finds staggers, motion tokens and pixel-only canvases", () => {
   const p = motionProfile({
     load: [0, 20, 40, 60].map((delayMs) => entry({ delayMs, easing: "cubic-bezier(0.22, 1, 0.36, 1)" })),

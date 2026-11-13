@@ -35,7 +35,8 @@
       if (!e || !e.getKeyframes) return null
       const t = e.getTiming()
       const name = a.constructor && a.constructor.name
-      const keyframes = e.getKeyframes().slice(0, 8).map((k) => {
+      const raw = e.getKeyframes()
+      const keyframes = raw.slice(0, 8).map((k) => {
         const o = {}
         for (const [p, v] of Object.entries(k)) {
           if (v == null || p === "computedOffset" || p === "composite" || (p === "easing" && v === "linear")) continue
@@ -51,7 +52,8 @@
         durationMs: round(typeof t.duration === "number" ? t.duration : 0),
         delayMs: round(t.delay),
         // A CSS animation's animation-timing-function lives on its keyframes; its own timing is always linear.
-        easing: name === "CSSAnimation" && keyframes[0] && keyframes[0].easing ? keyframes[0].easing : t.easing,
+        // Read from the untruncated keyframe: a sampled spring's linear(...) runs well past the 200 characters kept above.
+        easing: name === "CSSAnimation" && raw[0] && raw[0].easing ? raw[0].easing : t.easing,
         iterations: t.iterations === Infinity ? "infinite" : t.iterations,
         keyframes,
         startMs,

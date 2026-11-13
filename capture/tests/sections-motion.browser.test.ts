@@ -76,6 +76,9 @@ test("installed before load, motion and canvas logging see what plays as the pag
   }
 })
 
+// A sampled spring, as Motion and Tailwind plugins emit it: 60 stops, far longer than a keyframe value is kept.
+const SPRING = `linear(${Array.from({ length: 60 }, (_, i) => (1 - Math.exp(-i / 8) * Math.cos(i / 3)).toFixed(4)).join(", ")})`
+
 test("motion logging reports transitions, CSS animations and element.animate() with their real timing", async () => {
   const browser = await launch()
   try {
@@ -84,7 +87,8 @@ test("motion logging reports transitions, CSS animations and element.animate() w
       #card { transition: transform 300ms cubic-bezier(0.2, 0, 0, 1) 50ms } #card.on { transform: translateY(-8px) }
       .spin { animation: spin 1s linear infinite } @keyframes spin { to { rotate: 1turn } }
       .pop { animation: pop 400ms ease-out } @keyframes pop { from { opacity: 0 } }
-    </style><div id="card">card</div><div class="spin">loading</div><div id="pop">pop</div><div id="wa">wa</div>`)
+      .spring { animation: pop 600ms ${SPRING} }
+    </style><div id="card">card</div><div class="spin">loading</div><div id="pop">pop</div><div id="spring">spring</div><div id="wa">wa</div>`)
     const motion = (arg: object) => page.evaluate(`(${MOTION_JS})(${JSON.stringify(arg)})`) as Promise<Record<string, unknown>[]>
     await motion({ op: "install" })
     assert.deepEqual(await motion({ op: "take" }), [], "animations running before install don't count")
@@ -92,6 +96,7 @@ test("motion logging reports transitions, CSS animations and element.animate() w
     await page.evaluate(() => {
       document.querySelector("#card")!.classList.add("on")
       document.querySelector("#pop")!.classList.add("pop")
+      document.querySelector("#spring")!.classList.add("spring")
       document.querySelector("#wa")!.animate([{ opacity: 0, transform: "scale(0.9)" }, { opacity: 1, transform: "none" }], { duration: 250, easing: "ease-in-out" })
     })
     await page.waitForTimeout(100)
@@ -106,10 +111,12 @@ test("motion logging reports transitions, CSS animations and element.animate() w
     assert.equal(by("div#pop").type, "animation")
     assert.equal(by("div#pop").property, "pop")
     assert.equal(by("div#pop").durationMs, 400)
+    const spring = by("div#spring").easing as string
+    assert.ok(spring.length > 200 && spring.startsWith("linear(") && spring.endsWith(")"), "a long linear() easing is kept whole")
     assert.equal(by("div#wa").type, "web-animation")
     assert.equal(by("div#wa").easing, "ease-in-out")
     assert.ok(!entries.some((e) => e.property === "spin"), "the spinner was already running")
-    assert.equal(entries.length, 3)
+    assert.equal(entries.length, 4)
     assert.deepEqual(await motion({ op: "take" }), [], "each entry is reported once")
 
     // Keyframes are read when the log is taken, so an effect that already finished is still described.

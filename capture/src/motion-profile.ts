@@ -101,7 +101,8 @@ export function motionProfile(input: MotionInput): MotionProfile {
       if (sorted.length < 3) continue
       const steps = sorted.slice(1).map((d, i) => d - sorted[i]!).sort((a, b) => a - b)
       const stepMs = steps[Math.floor(steps.length / 2)]!
-      if (stepMs <= 0) continue
+      // Evenly spaced means the gaps agree: 0, 100 and 10000 ms are three delays, not a stagger.
+      if (stepMs <= 0 || steps.at(-1)! - steps[0]! > Math.max(4, stepMs * 0.25)) continue
       staggers.push({ property: e.property, stepMs, items: sorted.length, durationMs: e.durationMs, easing: e.easing, phase })
     }
   }
