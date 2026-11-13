@@ -58,8 +58,8 @@ jobs:
       - run: npm ci
       - run: npm ci --prefix desktop
       - run: npm run build -w web
-      - run: npm test
       - run: npx --no-install playwright install chromium
+      - run: npm test
       - run: npm run test:desktop
       - name: Import Developer ID certificate
         env:

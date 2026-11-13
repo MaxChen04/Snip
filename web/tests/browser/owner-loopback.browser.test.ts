@@ -10,7 +10,7 @@ type Loopback = { listening: Promise<number>; token: Promise<string>; nonce: str
 const { startLoopback } = createRequire(import.meta.url)("../../../desktop/provision/transfer.cjs") as { startLoopback(options: { timeoutMs: number }): Loopback }
 
 let browser: Browser
-before(async () => void (browser = await chromium.launch()))
+before(async () => void (browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined })))
 after(async () => browser?.close())
 
 async function openDone(fragment: (nonce: string) => string, loopback?: Loopback) {
