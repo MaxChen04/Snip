@@ -516,10 +516,8 @@ function schemaStep() {
     title: 'Applying database migrations',
     async run(ctx) {
       const result = await ctx.deps.deploy.applyMigrations(ctx.wrangler, { dataRoot: ctx.dataRoot, accountId: ctx.cloud.accountId, remote: true, retry: retryOf(ctx) });
-      const text = `${result.stdout}${result.stderr}`;
-      const applied = (text.match(/Migrations to be applied:/) ? text.split('Migrations to be applied:')[1] : '')
-        .split('\n').map((line) => line.trim()).filter((line) => /^\d{4}_/.test(line));
-      return { message: applied.length ? `Applied ${applied.length} migration${applied.length === 1 ? '' : 's'}` : 'Database is up to date', detail: applied.join(', ') };
+      const applied = deploy.appliedMigrations(result);
+      return { message: deploy.migrationSummary(applied), detail: applied.join(', ') };
     },
     async verify(ctx) {
       const result = await ctx.deps.deploy.listMigrations(ctx.wrangler, { dataRoot: ctx.dataRoot, accountId: ctx.cloud.accountId, remote: true });

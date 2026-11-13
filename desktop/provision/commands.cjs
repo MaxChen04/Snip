@@ -453,50 +453,75 @@ function pullFinishStep() {
 
 // ---------- deploy / migrate ----------
 
+// `deploy` and `migrate` are built from the same three steps. <dataRoot>/cloud is
+// a copy of this build that wrangler reads: the schema step reads its migrations
+// and the Worker step uploads its bundle. The layout step is the only thing that
+// refreshes that copy, and it runs before either of them, so neither can act on
+// the previous release's files.
+
+function cloudPreflightStep(id) {
+  return {
+    id,
+    title: 'Checking this Mac',
+    async run(ctx) {
+      if (!ctx.deps.deploy.configExists(ctx.dataRoot)) {
+        throw new StepError('NOT_PROVISIONED', 'This Mac has no cloud deploy configuration yet.', { hint: 'Run `setup` first.' });
+      }
+      const problem = ctx.deps.deploy.runtimeProblem(ctx.root);
+      if (problem) throw new StepError('NO_BUILD', problem.message, { hint: problem.hint });
+      return { message: 'Ready' };
+    },
+    async verify() { return true; },
+  };
+}
+
+function cloudLayoutStep(id, record) {
+  return {
+    id,
+    title: 'Preparing the deploy',
+    async run(ctx) {
+      ctx.deps.deploy.prepareDeployLayout({
+        root: ctx.root,
+        dataRoot: ctx.dataRoot,
+        d1Id: record.d1 && record.d1.id,
+        kvId: record.kv && record.kv.id,
+        login: record.login || undefined,
+        url: record.url,
+      });
+      return { message: 'This build is ready to deploy' };
+    },
+    async verify() { return true; },
+  };
+}
+
+/** `outcome.applied` names the migrations this run applied, for the result. */
+function cloudSchemaStep(id, record, outcome) {
+  return {
+    id,
+    title: 'Applying database migrations',
+    async run(ctx) {
+      const result = await ctx.deps.deploy.applyMigrations(ctx.wrangler, { dataRoot: ctx.dataRoot, accountId: record.accountId, remote: true, retry: retryOf(ctx) });
+      outcome.applied = deploy.appliedMigrations(result);
+      return { message: deploy.migrationSummary(outcome.applied), detail: outcome.applied.join(', ') };
+    },
+    async verify() { return true; },
+  };
+}
+
 async function commandDeploy(ctx) {
   ctx.reload();
   const record = requireCloud(ctx);
+  const outcome = { applied: [] };
   const steps = [
-    {
-      id: 'deploy-preflight',
-      title: 'Checking this Mac',
-      async run(ctx2) {
-        if (!ctx2.deps.deploy.configExists(ctx2.dataRoot)) {
-          throw new StepError('NOT_PROVISIONED', 'This Mac has no cloud deploy configuration yet.', { hint: 'Run `setup` first.' });
-        }
-        if (ctx2.deps.deploy.runtimeProblem(ctx2.root)) {
-          const problem = ctx2.deps.deploy.runtimeProblem(ctx2.root);
-          throw new StepError('NO_BUILD', problem.message, { hint: problem.hint });
-        }
-        return { message: 'Ready' };
-      },
-      async verify() { return true; },
-    },
-    {
-      id: 'deploy-schema',
-      title: 'Applying database migrations',
-      async run(ctx2) {
-        await ctx2.deps.deploy.applyMigrations(ctx2.wrangler, { dataRoot: ctx2.dataRoot, accountId: record.accountId, remote: true, retry: retryOf(ctx2) });
-        return { message: 'Database is up to date' };
-      },
-      async verify() { return true; },
-    },
+    cloudPreflightStep('deploy-preflight'),
+    cloudLayoutStep('deploy-layout', record),
+    // Migrations before the Worker: an old Worker on the new schema is safe, a new
+    // Worker on the old schema is not.
+    cloudSchemaStep('deploy-schema', record, outcome),
     {
       id: 'deploy-worker',
       title: 'Deploying the Worker',
       async run(ctx2) {
-        // Refresh the copy first, so a new bundle is never shadowed by a stale one.
-        const stored = ctx2.secrets() || {};
-        const layout = ctx2.deps.deploy.prepareDeployLayout({
-          root: ctx2.root,
-          dataRoot: ctx2.dataRoot,
-          d1Id: record.d1 && record.d1.id,
-          kvId: record.kv && record.kv.id,
-          login: record.login || undefined,
-          url: record.url,
-        });
-        void stored;
-        void layout;
         await ctx2.deps.deploy.deployWorker(ctx2.wrangler, { dataRoot: ctx2.dataRoot, accountId: record.accountId, retry: retryOf(ctx2) });
         ctx2.setCloud({ lastDeployedAt: NOW(), bundleHash: setupSteps.bundleHash(ctx2.dataRoot) });
         return { message: `Live at ${record.url}` };
@@ -540,35 +565,21 @@ async function commandDeploy(ctx) {
   // calls this after every build.
   const result = await require('./engine.cjs').runSteps(steps, ctx, { journal: false });
   ctx.reload();
-  return { ok: true, code: 'OK', mode: ctx.state().mode, data: { url: record.url, steps: result.completed }, message: `Deployed ${record.url}` };
+  return { ok: true, code: 'OK', mode: ctx.state().mode, data: { url: record.url, steps: result.completed, migrations: outcome.applied }, message: `Deployed ${record.url}` };
 }
 
 async function commandMigrate(ctx) {
   ctx.reload();
   const record = requireCloud(ctx);
+  const outcome = { applied: [] };
   const steps = [
-    {
-      id: 'migrate-preflight',
-      title: 'Checking this Mac',
-      async run(ctx2) {
-        if (!ctx2.deps.deploy.configExists(ctx2.dataRoot)) throw new StepError('NOT_PROVISIONED', 'This Mac has no cloud deploy configuration yet.', { hint: 'Run `setup` first.' });
-        return { message: 'Ready' };
-      },
-      async verify() { return true; },
-    },
-    {
-      id: 'migrate-apply',
-      title: 'Applying database migrations',
-      async run(ctx2) {
-        await ctx2.deps.deploy.applyMigrations(ctx2.wrangler, { dataRoot: ctx2.dataRoot, accountId: record.accountId, remote: true, retry: retryOf(ctx2) });
-        return { message: 'Database is up to date' };
-      },
-      async verify() { return true; },
-    },
+    cloudPreflightStep('migrate-preflight'),
+    cloudLayoutStep('migrate-layout', record),
+    cloudSchemaStep('migrate-apply', record, outcome),
   ];
   // Same reason as deploy: migrating is the action, so it always runs.
   await require('./engine.cjs').runSteps(steps, ctx, { journal: false });
-  return { ok: true, code: 'OK', mode: ctx.state().mode, data: {}, message: 'Migrations applied' };
+  return { ok: true, code: 'OK', mode: ctx.state().mode, data: { migrations: outcome.applied }, message: deploy.migrationSummary(outcome.applied) };
 }
 
 // ---------- detach / delete / snapshot ----------

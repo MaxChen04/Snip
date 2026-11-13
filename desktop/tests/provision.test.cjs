@@ -2754,6 +2754,7 @@ test('every deploy uploads the bundle again instead of replaying a journaled run
     // A finished earlier deploy in the journal.
     next.steps = [
       { id: 'deploy-preflight', status: 'done', at: new Date().toISOString(), detail: '' },
+      { id: 'deploy-layout', status: 'done', at: new Date().toISOString(), detail: '' },
       { id: 'deploy-schema', status: 'done', at: new Date().toISOString(), detail: '' },
       { id: 'deploy-worker', status: 'done', at: new Date().toISOString(), detail: '' },
       { id: 'deploy-verify', status: 'done', at: new Date().toISOString(), detail: '' },
@@ -2788,8 +2789,210 @@ test('every deploy uploads the bundle again instead of replaying a journaled run
   assert.equal(uploads, 1, 'the bundle is uploaded even though the journal says it was done');
   assert.equal(migrations, 1, 'migrations are re-applied too');
   const started = emitter.events.filter((event) => event.event === 'step' && event.status === 'started').map((event) => event.step);
-  assert.deepEqual(started, ['deploy-preflight', 'deploy-schema', 'deploy-worker', 'deploy-verify']);
+  assert.deepEqual(started, ['deploy-preflight', 'deploy-layout', 'deploy-schema', 'deploy-worker', 'deploy-verify']);
   assert.equal(stateModule.readState(library.root).cloud.workerVersion, '1.1.3');
+});
+
+// ---------- deploy and migrate apply THIS build's migrations ----------
+//
+// `<dataRoot>/cloud` is a copy of the build, refreshed by the deploy layout. The
+// database step reads the migrations from that copy, so the copy has to be
+// refreshed before the step runs, or the first update after a release applies the
+// previous release's migrations and the new Worker goes live on the old schema.
+
+const OLD_MIGRATIONS = ['0001_init.sql', '0002_boards.sql'];
+const NEW_MIGRATIONS = [...OLD_MIGRATIONS, '0003_board_item_z.sql', '0004_capture_lease.sql'];
+const NEWLY_ADDED = ['0003_board_item_z.sql', '0004_capture_lease.sql'];
+
+function writeBuild(root, { migrations, bundle }) {
+  const dir = path.join(root, 'web/migrations');
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  for (const name of migrations) fs.writeFileSync(path.join(dir, name), `-- ${name}\n`);
+  fs.writeFileSync(path.join(root, 'web/dist/snip/index.js'), `export default { bundle: "${bundle}" }\n`);
+}
+
+/**
+ * The state `npm run update` finds: the previous deploy laid out cloud/ from the
+ * OLD build, and the checkout now holds the NEW build.
+ */
+function cloudInstallAfterUpdate() {
+  const library = fakeLibrary();
+  writeBuild(library.root, { migrations: OLD_MIGRATIONS, bundle: 'old-bundle' });
+  deploy.prepareDeployLayout({ root: library.root, dataRoot: library.root, d1Id: 'd1', kvId: 'kv', login: 'tester', url: PROVIDED });
+  writeBuild(library.root, { migrations: NEW_MIGRATIONS, bundle: 'new-bundle' });
+  stateModule.setMode(library.root, 'cloud');
+  stateModule.updateState(library.root, (next) => {
+    next.cloud = { url: PROVIDED, accountId: 'acct', d1: { name: 'snip', id: 'd1' }, kv: { name: 'OAUTH_KV', id: 'kv' }, bucket: 'snip-files', workerVersion: '1.4.0' };
+    return next;
+  });
+  return library;
+}
+
+/**
+ * wrangler's own listing, in the shape the real one prints (boxed tables with a rule
+ * between rows): the pending names, then the same names again with a status.
+ */
+function appliedListing(names) {
+  const pending = ['┌────────────────────────┐', '│ name                   │', '├────────────────────────┤', names.map((name) => `│ ${name.padEnd(22)} │`).join('\n├────────────────────────┤\n'), '└────────────────────────┘'];
+  const done = ['┌────────────────────────┬────────┐', '│ name                   │ status │', '├────────────────────────┼────────┤', names.map((name) => `│ ${name.padEnd(22)} │ ✅     │`).join('\n├────────────────────────┼────────┤\n'), '└────────────────────────┴────────┘'];
+  return `Migrations to be applied:\n${pending.join('\n')}\n? About to apply ${names.length} migration(s)\n🤖 Using fallback value in non-interactive context: yes\n${done.join('\n')}`;
+}
+
+/**
+ * A wrangler double that reads what the real one reads: the migrations folder the
+ * deploy config points at, and the bundle in cloud/snip at the moment of `deploy`.
+ */
+function orderWrangler(dataRoot, applied) {
+  const ledger = new Set(applied);
+  const calls = [];
+  const reply = (stdout) => ({ ok: true, code: 0, stdout, stderr: '', output: stdout });
+  return {
+    bin: '/fake/wrangler.js',
+    calls,
+    ledger,
+    async run(args) {
+      if (args[0] === 'd1' && args[1] === 'migrations' && args[2] === 'apply') {
+        const config = args[args.indexOf('--config') + 1];
+        const folder = path.resolve(path.dirname(config), JSON.parse(fs.readFileSync(config, 'utf8')).d1_databases[0].migrations_dir);
+        const pending = fs.readdirSync(folder).filter((name) => name.endsWith('.sql')).sort().filter((name) => !ledger.has(name));
+        calls.push({ kind: 'migrate', pending });
+        for (const name of pending) ledger.add(name);
+        return reply(pending.length ? appliedListing(pending) : '✅ No migrations to apply!');
+      }
+      if (args[0] === 'deploy') {
+        calls.push({ kind: 'deploy', bundle: fs.readFileSync(path.join(dataRoot, 'cloud/snip/index.js'), 'utf8'), schema: [...ledger].sort() });
+        return reply('Uploaded snip');
+      }
+      calls.push({ kind: args.join(' ') });
+      return reply('');
+    },
+  };
+}
+
+function updateContext(library, wrangler) {
+  const emitter = collectedEmitter();
+  const layouts = [];
+  const ctx = createContext({
+    root: library.root, dataRoot: library.root, flags: {}, emit: emitter.emit, api: {}, wrangler,
+    deps: {
+      fetch: async () => { throw new Error('no network'); },
+      sleep: async () => {},
+      cloud: { ...cloudModule, putSecrets: async () => {}, deleteSecret: async () => {} },
+      // The real layout, counted: one refresh per command is the contract.
+      deploy: { ...deploy, prepareDeployLayout: (options) => { layouts.push(options); return deploy.prepareDeployLayout(options); } },
+      transferOf: () => ({ status: async () => ({ version: '1.5.0' }) }),
+    },
+  });
+  ctx.reload();
+  return { ctx, events: emitter.events, layouts };
+}
+
+const startedSteps = (events) => events.filter((event) => event.event === 'step' && event.status === 'started').map((event) => event.step);
+const stepMessage = (events, step) => events.find((event) => event.event === 'step' && event.step === step && event.status === 'ok').message;
+const kinds = (wrangler) => wrangler.calls.map((call) => call.kind).filter((kind) => kind === 'migrate' || kind === 'deploy');
+
+test('deploy applies the new build\'s migrations, and only then deploys the Worker', async () => {
+  const library = cloudInstallAfterUpdate();
+  const wrangler = orderWrangler(library.root, OLD_MIGRATIONS);
+  const { ctx, events, layouts } = updateContext(library, wrangler);
+
+  const result = await commands.commandDeploy(ctx);
+
+  assert.equal(result.ok, true);
+  const migrate = wrangler.calls.find((call) => call.kind === 'migrate');
+  assert.deepEqual(migrate.pending, NEWLY_ADDED, 'the migrations applied are the new release\'s, not the previous one\'s');
+  assert.deepEqual(kinds(wrangler), ['migrate', 'deploy'], 'the schema is migrated before the Worker goes live');
+  const worker = wrangler.calls.find((call) => call.kind === 'deploy');
+  assert.deepEqual(worker.schema, NEW_MIGRATIONS, 'the new Worker only ever goes live on the new schema');
+  assert.match(worker.bundle, /new-bundle/, 'and the Worker uploaded is the new build');
+  assert.equal(layouts.length, 1, 'the deploy layout is refreshed in exactly one place');
+  const order = startedSteps(events);
+  assert.ok(order.indexOf('deploy-layout') !== -1 && order.indexOf('deploy-layout') < order.indexOf('deploy-schema'), 'the layout is refreshed before anything reads it');
+  assert.ok(order.indexOf('deploy-schema') < order.indexOf('deploy-worker'));
+  assert.equal(stepMessage(events, 'deploy-schema'), 'Applied 2 migrations');
+  assert.deepEqual(result.data.migrations, NEWLY_ADDED);
+});
+
+test('deploy says so when no migration is pending', async () => {
+  const library = cloudInstallAfterUpdate();
+  const wrangler = orderWrangler(library.root, NEW_MIGRATIONS);
+  const { ctx, events, layouts } = updateContext(library, wrangler);
+
+  const result = await commands.commandDeploy(ctx);
+
+  assert.equal(result.ok, true);
+  assert.equal(stepMessage(events, 'deploy-schema'), 'Database is up to date');
+  assert.deepEqual(result.data.migrations, []);
+  assert.deepEqual(kinds(wrangler), ['migrate', 'deploy']);
+  assert.equal(layouts.length, 1);
+});
+
+test('migrate applies the new build\'s migrations from a copy it refreshed itself', async () => {
+  const library = cloudInstallAfterUpdate();
+  const wrangler = orderWrangler(library.root, OLD_MIGRATIONS);
+  const { ctx, events, layouts } = updateContext(library, wrangler);
+
+  const result = await commands.commandMigrate(ctx);
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(wrangler.calls.find((call) => call.kind === 'migrate').pending, NEWLY_ADDED);
+  assert.deepEqual(kinds(wrangler), ['migrate'], 'migrate never deploys the Worker');
+  assert.equal(layouts.length, 1, 'the same single layout step as deploy');
+  const order = startedSteps(events);
+  assert.ok(order.indexOf('migrate-layout') !== -1 && order.indexOf('migrate-layout') < order.indexOf('migrate-apply'));
+  assert.equal(stepMessage(events, 'migrate-apply'), 'Applied 2 migrations');
+  assert.equal(result.message, 'Applied 2 migrations');
+  assert.deepEqual(result.data.migrations, NEWLY_ADDED);
+});
+
+test('migrate says so when no migration is pending', async () => {
+  const library = cloudInstallAfterUpdate();
+  const wrangler = orderWrangler(library.root, NEW_MIGRATIONS);
+  const { ctx } = updateContext(library, wrangler);
+
+  const result = await commands.commandMigrate(ctx);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.message, 'Database is up to date');
+  assert.deepEqual(result.data.migrations, []);
+});
+
+test('migrate, then deploy by hand, leaves the new schema under the new Worker', async () => {
+  const library = cloudInstallAfterUpdate();
+  const wrangler = orderWrangler(library.root, OLD_MIGRATIONS);
+
+  await commands.commandMigrate(updateContext(library, wrangler).ctx);
+  const deployed = updateContext(library, wrangler);
+  const result = await commands.commandDeploy(deployed.ctx);
+
+  assert.equal(result.ok, true);
+  const migrations = wrangler.calls.filter((call) => call.kind === 'migrate');
+  assert.deepEqual(migrations.map((call) => call.pending), [NEWLY_ADDED, []], 'the deploy has nothing left to apply');
+  const worker = wrangler.calls.find((call) => call.kind === 'deploy');
+  assert.deepEqual(worker.schema, NEW_MIGRATIONS);
+  assert.match(worker.bundle, /new-bundle/);
+});
+
+test('deploy and migrate stop before touching Cloudflare when the build is gone, instead of using the old copy', async () => {
+  for (const [command, run] of [['deploy', commands.commandDeploy], ['migrate', commands.commandMigrate]]) {
+    const library = cloudInstallAfterUpdate();
+    fs.rmSync(path.join(library.root, 'web/migrations'), { recursive: true, force: true });
+    const wrangler = orderWrangler(library.root, OLD_MIGRATIONS);
+    const { ctx, layouts } = updateContext(library, wrangler);
+    await assert.rejects(() => run(ctx), (error) => error.code === 'NO_BUILD', `${command} reports the missing build`);
+    assert.deepEqual(wrangler.calls, [], `${command} did not apply the previous release's migrations`);
+    assert.equal(layouts.length, 0, `${command} did not half-refresh the copy`);
+  }
+});
+
+test('the applied migrations are read from wrangler\'s listing, whatever form it prints them in', () => {
+  const at = (stdout, stderr = '') => deploy.appliedMigrations({ stdout, stderr });
+  assert.deepEqual(at(appliedListing(NEWLY_ADDED)), NEWLY_ADDED, 'a boxed table, listed again with a status, counts each once');
+  assert.deepEqual(at('✅ No migrations to apply!'), []);
+  assert.deepEqual(at('', appliedListing(['0001_init.sql'])), ['0001_init.sql'], 'stderr is read too');
+  assert.deepEqual(at('Migrations to be applied:\n0001_init.sql\n\n✅ Applied 1 migration'), ['0001_init.sql'], 'a plain list works');
+  assert.deepEqual(at(''), []);
 });
 
 // ---------- transient Cloudflare failures ----------

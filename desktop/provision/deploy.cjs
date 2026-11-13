@@ -270,6 +270,29 @@ async function applyMigrations(wrangler, { dataRoot, accountId, remote = true, l
   return result;
 }
 
+/**
+ * The migrations a `d1 migrations apply` run applied, in order, read from the
+ * "Migrations to be applied:" listing wrangler prints. Wrangler draws that list as
+ * a boxed table and prints the names again, with a status, once they are applied,
+ * so each name counts once. An empty list means nothing was pending.
+ */
+function appliedMigrations(result) {
+  const text = `${(result && result.stdout) || ''}\n${(result && result.stderr) || ''}`;
+  const marker = 'Migrations to be applied:';
+  const at = text.indexOf(marker);
+  if (at < 0) return [];
+  const names = [];
+  for (const match of text.slice(at + marker.length).matchAll(/\b(\d{4}_[A-Za-z0-9_.-]*\.sql)\b/g)) {
+    if (!names.includes(match[1])) names.push(match[1]);
+  }
+  return names;
+}
+
+/** What a step says about a migration run: how many were applied, or that none were pending. */
+function migrationSummary(applied) {
+  return applied.length ? `Applied ${applied.length} migration${applied.length === 1 ? '' : 's'}` : 'Database is up to date';
+}
+
 async function listMigrations(wrangler, { dataRoot, accountId, remote = true }) {
   const file = configPath(dataRoot);
   const args = ['d1', 'migrations', 'list', 'DB', '--config', file, remote ? '--remote' : '--local'];
@@ -416,6 +439,7 @@ async function importLocal(wrangler, { dataRoot, persistTo, statements, config }
 }
 
 module.exports = {
+  appliedMigrations,
   applyMigrations,
   libraryStatements,
   bucketName: BUCKET_NAME,
@@ -432,6 +456,7 @@ module.exports = {
   listMigrations,
   localConfigPath,
   localQuery,
+  migrationSummary,
   prepareDeployLayout,
   readDeployConfig,
   remoteQuery,
