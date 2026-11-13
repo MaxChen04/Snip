@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
 import { TriangleAlertIcon } from "@/components/icons"
 import { api, type AgentPresence } from "@/lib/api"
-import { CLOUD_OLDER_MESSAGE } from "../../shared/capture-protocol"
+import { agentAdvice, agentState } from "../../shared/agent-state"
 
 const CHECK_MS = 30_000
 
@@ -34,37 +34,16 @@ export function AgentBanner() {
     }
   }, [])
 
-  if (!state?.waiting || state.presence.freshness === "recent") return null
-  // An agent the Worker turned away for its version is running, just not one it can work with: offline is the wrong word and the wrong advice.
-  const refused = state.presence.refused
-  const seen = state.presence.lastSeenAt ? new Date(state.presence.lastSeenAt) : null
-  const when = seen
-    ? seen.toDateString() === new Date().toDateString()
-      ? seen.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
-      : seen.toLocaleDateString([], { month: "short", day: "numeric" })
-    : null
-  const desktop = typeof window !== "undefined" && !!window.snipDesktop
+  const agent = state?.waiting ? agentState(state.presence) : null
+  if (!agent || agent.kind === "online") return null
+  const { headline, action } = agentAdvice(agent, typeof window !== "undefined" && window.snipDesktop ? "desktop" : "browser")
   return (
     <div role="status" className="mx-4 mt-3 flex items-start gap-2.5 rounded-xl bg-ink-2 px-3.5 py-2.5 text-xs text-ink-12 shadow-[0_0_0_0.5px_var(--ink-6)] sm:mx-6 dark:bg-ink-3">
       <TriangleAlertIcon className="mt-px size-3.5 shrink-0 text-(--red-11)" />
-      {refused ? (
-        <p>
-          {refused.outdated === "cloud" ? (
-            <span className="font-medium">{CLOUD_OLDER_MESSAGE}</span>
-          ) : (
-            <>
-              <span className="font-medium">A capture agent is running an older version.</span> Update the Snip app.
-            </>
-          )}{" "}
-          Queued captures wait until then.
-        </p>
-      ) : (
-        <p>
-          <span className="font-medium">{when ? `Capture agent offline since ${when}.` : "No capture agent has connected yet."}</span>{" "}
-          Queued captures wait until it runs.{" "}
-          {desktop ? "Use Retry in Snip's menu bar, or restart Snip." : <>Start it with <code className="rounded bg-ink-4 px-1 py-px font-mono">npm run capture</code>, or open Snip.app.</>}
-        </p>
-      )}
+      <p>
+        <span className="font-medium">{headline}</span>{" "}
+        {action.split("`").map((part, i) => (i % 2 ? <code key={i} className="rounded bg-ink-4 px-1 py-px font-mono">{part}</code> : part))}
+      </p>
     </div>
   )
 }

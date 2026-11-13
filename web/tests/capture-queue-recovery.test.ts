@@ -6,6 +6,7 @@ import * as db from "../worker/db"
 import { applyMigrations } from "./helpers/d1"
 import type { CrawlState, Job, PageUpload } from "../shared/types"
 import { ABANDONED, STOPPED_EMPTY, diagnoseCaptureError } from "../shared/capture-errors"
+import { agentState } from "../shared/agent-state"
 
 // Regression tests for capture-queue recovery bugs found by a code audit. Each asserts the CORRECT behaviour,
 // so each fails until the matching bug is fixed.
@@ -734,9 +735,14 @@ test("one threshold for the agent being there: the offline banner, quietSince, r
       const status = await db.getCaptureStatus(database, (await db.getReference(database, id))!.reference)
       const quiet = (await db.getReference(database, id))!.reference.quietSince !== null
       const apiAgent = (await (await app.request("http://localhost/api/agent", {}, env, ctx)).json()) as { freshness: string }
-      assert.equal(status.worker.freshness, (await db.getPresence(database)).freshness, "every reader of presence agrees")
+      const presence = await db.getPresence(database)
+      assert.equal(status.worker.freshness, presence.freshness, "every reader of presence agrees")
       assert.equal(apiAgent.freshness, status.worker.freshness)
-      return { banner: status.worker.freshness === "recent" ? "online" : "offline", quiet }
+      assert.deepEqual(status.worker.refused, presence.refused, "and of the last agent turned away for its version")
+      // The banner, the MCP status and the setup check read one state: an agent that is checking in is online whatever else was refused.
+      const kind = agentState(presence).kind
+      assert.equal(kind === "online", status.worker.freshness === "recent", "online is exactly a recent agent")
+      return { banner: kind === "online" ? "online" : "offline", quiet }
     }
 
     const a = await crawl("https://a.example")
@@ -749,6 +755,13 @@ test("one threshold for the agent being there: the offline banner, quietSince, r
     assert.deepEqual(await shown(a.id), { banner: "offline", quiet: true }, "95 s: the banner and the card turn together")
     assert.equal((await db.getReference(database, a.id))!.reference.quietSince, (await db.getReference(database, a.id))!.reference.claimedAt)
 
+    // An agent turned away for its version in that silence is not presence: the readers still see no agent checking in, and all of them know why.
+    assert.equal(agentState(await db.getPresence(database)).kind, "offline")
+    await db.noteRefusedAgent(database, 3)
+    assert.deepEqual(await shown(a.id), { banner: "offline", quiet: true }, "turned away is not online")
+    assert.equal((await db.getPresence(database)).refused?.outdated, "app")
+    assert.equal(agentState(await db.getPresence(database)).kind, "refused")
+
     // Reclaim: the next agent that asks gets it at once, with a new lease; the first is fenced.
     const next = (await db.claimJob(database))!
     assert.equal(next.id, a.id)
@@ -756,6 +769,8 @@ test("one threshold for the agent being there: the offline banner, quietSince, r
     assert.equal(await db.renewLease(database, a.id, a.job.lease), false)
     await db.touchPresence(database, "busy", a.id) // what the claim route does
     assert.deepEqual(await shown(a.id), { banner: "online", quiet: false }, "the claim is itself a sign of life")
+    assert.equal(agentState(await db.getPresence(database)).kind, "online", "an agent that is checking in wins over the refusal still on record")
+    assert.ok((await db.getPresence(database)).refused, "which is still reported")
 
     // Stop and Pause settle on a silent agent at the same threshold, and wait for a live one.
     const live = await crawl("https://live.example")

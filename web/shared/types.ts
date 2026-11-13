@@ -349,6 +349,8 @@ export interface CaptureStatus {
     freshness: "recent" | "stale" | "never"
     activity: "idle" | "busy" | null
     currentJobId: string | null
+    /** The last agent the Worker turned away for its capture protocol while it would still count as alive (see AgentPresence), or null. */
+    refused: AgentPresence["refused"]
   }
   pollAfterSeconds: number | null
   advice: string

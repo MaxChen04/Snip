@@ -26,6 +26,7 @@ import {
 import { ABANDONED, STOPPED_EMPTY, WAITING } from "../shared/capture-errors"
 import { checkSiteUrl } from "../shared/site-url"
 import { outdatedHalf } from "../shared/capture-protocol"
+import { agentAdvice, agentState } from "../shared/agent-state"
 
 // Data access shared by the HTTP API and the MCP server.
 
@@ -853,7 +854,8 @@ export async function noteRefusedAgent(db: D1Database, protocol: number | null) 
     .run()
 }
 
-export async function getPresence(db: D1Database): Promise<AgentPresence> {
+/** The one reader of presence: the agent's contact and the last refusal in one query, plus the job the agent last said it was on. */
+async function readPresence(db: D1Database): Promise<{ presence: AgentPresence; jobId: string | null }> {
   const rows = await db.prepare(`SELECT * FROM worker_presence WHERE id IN (?, ?)`).bind(PRESENCE_ID, REFUSED_ID).all<Row>()
   const w = rows.results.find((r) => r.id === PRESENCE_ID)
   const turnedAway = rows.results.find((r) => r.id === REFUSED_ID)
@@ -862,12 +864,17 @@ export async function getPresence(db: D1Database): Promise<AgentPresence> {
   const refusedAt = (turnedAway?.last_seen_at as string) ?? null
   const protocol = (turnedAway?.protocol as number | null) ?? null
   return {
-    lastSeenAt,
-    freshness: freshnessOf(lastSeenAt),
-    activity: (w?.activity as "idle" | "busy") ?? null,
-    refused: refusedAt && freshnessOf(refusedAt) === "recent" ? { at: refusedAt, protocol, outdated: outdatedHalf(protocol) } : null,
+    presence: {
+      lastSeenAt,
+      freshness: freshnessOf(lastSeenAt),
+      activity: (w?.activity as "idle" | "busy") ?? null,
+      refused: refusedAt && freshnessOf(refusedAt) === "recent" ? { at: refusedAt, protocol, outdated: outdatedHalf(protocol) } : null,
+    },
+    jobId: (w?.job_id as string) ?? null,
   }
 }
+
+export const getPresence = async (db: D1Database): Promise<AgentPresence> => (await readPresence(db)).presence
 
 // ---------- Storage ----------
 
@@ -893,12 +900,12 @@ export async function storageUsage(files: R2Bucket): Promise<StorageUsage> {
 }
 
 export async function getCaptureStatus(db: D1Database, ref: Reference): Promise<CaptureStatus> {
-  const w = await db.prepare(`SELECT * FROM worker_presence WHERE id = ?`).bind(PRESENCE_ID).first<Row>()
-  const lastSeenAt = (w?.last_seen_at as string) ?? null
+  const { presence, jobId: currentJobId } = await readPresence(db)
+  const { lastSeenAt, freshness, activity, refused } = presence
   const secondsSinceSeen = lastSeenAt ? Math.max(0, Math.round((Date.now() - Date.parse(lastSeenAt)) / 1000)) : null
-  const freshness = freshnessOf(lastSeenAt)
-  const activity = (w?.activity as "idle" | "busy") ?? null
-  const currentJobId = (w?.job_id as string) ?? null
+  const state = agentState(presence)
+  const agent = agentAdvice(state, "assistant")
+  const online = state.kind === "online"
   let advice: string
   let pollAfterSeconds: number | null = null
   switch (ref.status) {
@@ -912,24 +919,14 @@ export async function getCaptureStatus(db: D1Database, ref: Reference): Promise<
       advice = `Capture failed${ref.error ? `: ${ref.error}` : ""}. Tell the user; they can recapture from the Snip app.`
       break
     case "queued":
-      // Queued means waiting for the capture agent, whether it is busy or absent.
+      // Queued means waiting for the capture agent, whether it is busy, absent or turned away for its version.
       // The phrase matches the gallery card, so an agent relays it verbatim.
-      if (freshness === "recent") {
-        advice =
-          activity === "busy"
-            ? `${WAITING}: it is finishing another job and will pick this up next.`
-            : `${WAITING}: it is online and should pick this up shortly.`
-        pollAfterSeconds = activity === "busy" ? 60 : 15
-      } else {
-        advice =
-          freshness === "never"
-            ? `${WAITING}: none has ever contacted Snip. Ask the user to run \`npm run capture\` on their Mac. Stop polling until they do.`
-            : `${WAITING}: it was last seen ${secondsSinceSeen}s ago and is probably not running. Ask the user to start \`npm run capture\`. Stop polling until they do.`
-      }
+      advice = `${WAITING}: ${agent.headline} ${agent.action}`
+      if (online) pollAfterSeconds = activity === "busy" ? 60 : 15
       break
     case "capturing": {
-      if (freshness !== "recent") {
-        advice = `The capture was in progress but the worker has not been seen for ${secondsSinceSeen ?? "?"}s. It may have stopped; it will be retried when a worker reconnects. Ask the user to check \`npm run capture\`.`
+      if (!online) {
+        advice = `The capture was in progress. ${agent.headline} It is retried when an agent that works with this library connects. ${agent.action}`
       } else if (currentJobId && currentJobId !== ref.id) {
         advice = "The worker is online but busy with a different job; this capture may have been interrupted and will be retried."
         pollAfterSeconds = 60
@@ -947,7 +944,7 @@ export async function getCaptureStatus(db: D1Database, ref: Reference): Promise<
     error: ref.error,
     // claimed_at is refreshed on every heartbeat and progress report, so it is the last sign of life, not the attempt start.
     lastProgressAt: ref.status === "capturing" ? ref.claimedAt : null,
-    worker: { lastSeenAt, secondsSinceSeen, freshness, activity, currentJobId },
+    worker: { lastSeenAt, secondsSinceSeen, freshness, activity, currentJobId, refused },
     pollAfterSeconds,
     advice,
   }

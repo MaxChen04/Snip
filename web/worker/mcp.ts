@@ -3,6 +3,7 @@ import { McpServer, ProtocolError, ProtocolErrorCode, type CallToolResult } from
 import { z } from "zod"
 import { isVideoKey, type Animation, type DesignTokens, type Page, type Reference } from "../shared/types"
 import { pageSummary } from "../shared/page-summary"
+import { agentAdvice, agentState } from "../shared/agent-state"
 import { currentEpoch, isLocalOrigin, signFileUrl } from "./auth"
 import * as db from "./db"
 import { readText } from "./files"
@@ -928,7 +929,7 @@ Scroll timing is synthetic playback; hover offsets are measured. Treat easing an
       {
         title: "Get cloud setup status",
         description:
-          "Report what this Snip Worker can see about cloud setup: whether the request arrived on a local origin, whether an owner is configured, and whether a capture agent has been seen. This tool runs inside the Worker and cannot inspect the user's Mac, so it also returns the command to run for full status.",
+          "Report what this Snip Worker can see about cloud setup: whether the request arrived on a local origin, whether an owner is configured, and whether a capture agent is online. This tool runs inside the Worker and cannot inspect the user's Mac, so it also returns the command to run for full status.",
         inputSchema: z.object({
           command: z.enum(["setup", "pull"]).optional().describe("Which runbook to prepare. Default setup"),
         }),
@@ -937,7 +938,7 @@ Scroll timing is synthetic playback; hover offsets are measured. Treat easing an
       async ({ command }) => {
         const local = isLocalOrigin(origin)
         const [owner, presence] = await Promise.all([db.firstOwner(env.DB), db.getPresence(env.DB)])
-        const seconds = presence.lastSeenAt ? Math.max(0, Math.round((Date.now() - Date.parse(presence.lastSeenAt)) / 1000)) : null
+        const agent = agentState(presence)
         return ok({
           mode: local ? "local" : "cloud",
           origin,
@@ -945,7 +946,7 @@ Scroll timing is synthetic playback; hover offsets are measured. Treat easing an
           checks: [
             { id: "origin-local", ok: local },
             { id: "owner-configured", ok: !!owner },
-            { id: "capture-agent", ok: presence.freshness === "recent", detail: seconds == null ? "never seen" : `seen ${seconds}s ago` },
+            { id: "capture-agent", ok: agent.kind === "online", detail: agentAdvice(agent, "assistant").headline },
           ],
           next: {
             run: command === "pull" ? "npm run setup:cloudflare -- pull --json" : "npm run setup:cloudflare -- setup --check --json",
