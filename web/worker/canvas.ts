@@ -222,6 +222,7 @@ async function listSections(database: D1Database, f: db.ListFilter): Promise<Pag
       kind: s.kind,
       label: s.label,
       key: s.key,
+      thumbKey: s.thumbKey ?? null,
       // Sections are cut from the desktop screenshot, which every page with sections has.
       width: (r.desktop_width as number) ?? 1440,
       height: s.height,

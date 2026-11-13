@@ -133,6 +133,12 @@ export interface PageSection {
   /** JPEG of just this section, at desktop width. */
   key: string
   /**
+   * The same crop at 640 px wide (or 160 px tall, for a strip), which the home gallery draws instead: it zooms hundreds of
+   * sections, and decoding full crops at each zoom was its slowest frame. Absent for captures from before it, and for a crop
+   * too small to shrink; then `key` is what shows. Only the home tile uses it.
+   */
+  thumbKey?: string
+  /**
    * A short looping WebM of the section playing in real time (canvas and WebGL backgrounds, marquees, carousels),
    * recorded only when something in it moved. It covers `height` CSS px from its own `y` (at most one viewport),
    * at desktop width, with the page's fixed bars hidden so it lines up with the screenshot. Touching sections
@@ -265,10 +271,10 @@ export interface Job {
   /** Formats the serving Worker can display. Older Workers omit this and require GIF. Not persisted. */
   recordingFormats?: ("gif" | "webm")[]
   /**
-   * What the serving Worker stores beyond the basics: page sections, live clips of them, "icon" (it keeps a site icon saved with the capture), and "gzip" (it reads text files
-   * uploaded under a gzipKey). Older Workers omit this. Not persisted.
+   * What the serving Worker stores beyond the basics: page sections, live clips of them, "icon" (it keeps a site icon saved with the capture), "gzip" (it reads text files
+   * uploaded under a gzipKey), and "sectionThumbs" (it keeps a section's thumbKey). Older Workers omit this. Not persisted.
    */
-  features?: ("sections" | "live" | "schemes" | "icon" | "gzip")[]
+  features?: ("sections" | "live" | "schemes" | "icon" | "gzip" | "sectionThumbs")[]
 }
 
 /** Crawl position, saved with each page and when a capture pauses. */
@@ -424,6 +430,8 @@ export interface SectionItem {
   label: string
   /** JPEG of just this section (PageSection.key). */
   key: string
+  /** Its smaller copy for the home gallery (PageSection.thumbKey); null where the capture stored none. */
+  thumbKey: string | null
   /** Size in desktop CSS px: the page's desktop width by the section's height. */
   width: number
   height: number

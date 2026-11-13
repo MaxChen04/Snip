@@ -54,8 +54,8 @@ async function setup() {
   return { mf, database, files, env, ctx, pending, call, get, upload, uploaded, board, rows }
 }
 
-/** A captured website with these pages, each cut into `sections` sections. */
-async function capture(database: D1Database, url: string, pages: { path: string; sections?: number }[]) {
+/** A captured website with these pages, each cut into `sections` sections; `thumbs` gives each a thumbnail, as a capture by a current agent does. */
+async function capture(database: D1Database, url: string, pages: { path: string; sections?: number; thumbs?: boolean }[]) {
   const ref = await db.createReference(database, { url, mode: "crawl" })
   const job = (await db.claimJob(database))!
   for (const [i, p] of pages.entries()) {
@@ -64,7 +64,7 @@ async function capture(database: D1Database, url: string, pages: { path: string;
       url: new URL(p.path, url).toString(), path: p.path, title: `Page ${p.path}`, ord: i,
       desktopKey: `${base}/desktop.jpg`, desktopThumbKey: `${base}/desktop-thumb.webp`, desktopWidth: 1280, desktopHeight: 3000,
       mobileKey: null, mobileThumbKey: null, mobileWidth: null, mobileHeight: null, snapshotKey: null, stylesKey: null, tokens: null,
-      sections: Array.from({ length: p.sections ?? 0 }, (_, s) => ({ kind: "section" as const, label: `Section ${s}`, y: s * 100, height: 100 + s, key: `${base}/section-${s}.jpg` })),
+      sections: Array.from({ length: p.sections ?? 0 }, (_, s) => ({ kind: "section" as const, label: `Section ${s}`, y: s * 100, height: 100 + s, key: `${base}/section-${s}.jpg`, ...(p.thumbs ? { thumbKey: `${base}/section-${s}-thumb.jpg` } : {}) })),
       animations: [],
     })
   }
@@ -212,7 +212,7 @@ test("images list newest first, filter by title and board, and serve only with a
 test("sections flatten every page in order and page without gaps or repeats", async () => {
   const { mf, database, get, board } = await setup()
   try {
-    const stripe = await capture(database, "https://stripe.com", [{ path: "/", sections: 3 }, { path: "/pricing", sections: 2 }, { path: "/old" }])
+    const stripe = await capture(database, "https://stripe.com", [{ path: "/", sections: 3, thumbs: true }, { path: "/pricing", sections: 2 }, { path: "/old" }])
     const linear = await capture(database, "https://linear.app", [{ path: "/", sections: 4 }, { path: "/method", sections: 1 }])
 
     const full = await get<Paged<SectionItem>>("/api/sections?limit=100")
@@ -228,9 +228,14 @@ test("sections flatten every page in order and page without gaps or repeats", as
     const first = full.items.find((s) => s.id === `${pricing.id}:1`)!
     assert.deepEqual(first, {
       id: `${pricing.id}:1`, pageId: pricing.id, referenceId: stripe.reference.id, index: 1, kind: "section", label: "Section 1",
-      key: pricing.sections[1]!.key, width: 1280, height: 101, path: "/pricing", url: "https://stripe.com/pricing",
+      key: pricing.sections[1]!.key, thumbKey: null, width: 1280, height: 101, path: "/pricing", url: "https://stripe.com/pricing",
       reference: { id: stripe.reference.id, title: "https://stripe.com", domain: "stripe.com", favicon: null }, createdAt: pricing.createdAt,
     })
+
+    // A section carries the thumbnail it was stored with; one captured without has none, and the full crop is what it shows.
+    const home = stripe.pages[0]!
+    assert.deepEqual(full.items.filter((s) => s.pageId === home.id).map((s) => [s.key, s.thumbKey]), home.sections.map((s) => [s.key, s.key.replace(/\.jpg$/, "-thumb.jpg")]))
+    assert.deepEqual(full.items.filter((s) => s.pageId !== home.id).map((s) => s.thumbKey), Array(7).fill(null))
 
     // Same q and collection semantics as the pages feed.
     assert.deepEqual((await get<Paged<SectionItem>>("/api/sections?q=pricing")).items.map((s) => s.id), [`${pricing.id}:0`, `${pricing.id}:1`])
