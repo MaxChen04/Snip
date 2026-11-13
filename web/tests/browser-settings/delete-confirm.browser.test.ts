@@ -28,13 +28,17 @@ test("with no cloud library on record the delete button stays disabled", async (
 })
 
 test("typing the library's host arms the delete button", async () => {
+  const host = "snip.example.workers.dev"
   const { page, close } = await openSettings(browser, server, { mode: "cloud", search: "?dialog=delete", awaitFirstPaint: false })
   try {
     const dialog = page.getByRole("dialog")
     const confirm = dialog.getByRole("button", { name: "Delete cloud resources" })
-    await confirm.waitFor()
+    // ?dialog=delete opens the dialog before main's first state() reply, so at first it names
+    // no host and the button is disabled whatever is typed. Wait for the host to be on screen:
+    // only then do "disabled until typed" and "armed once typed" say anything about the gate.
+    await dialog.getByText(host, { exact: true }).waitFor()
     assert.equal(await confirm.isDisabled(), true)
-    await dialog.getByRole("textbox").fill("snip.example.workers.dev")
+    await dialog.getByRole("textbox").fill(host)
     assert.equal(await confirm.isDisabled(), false)
   } finally {
     await close()
