@@ -193,9 +193,11 @@ function SourceChip({ src, ref, onLeave }: { src: NonNullable<ReturnType<typeof 
 }
 
 // The home tile's face. `in-data-far` is set on the canvas's world layer while zoomed far out (see FAR_ZOOM): there a
-// tile is a few dozen px wide, so its three blurred shadows, hover wash and transitions are paid for and unseen.
+// tile is a few dozen px wide, so its three blurred shadows, hover wash and transitions are paid for and unseen. Only
+// `scale` (the press) transitions: with box-shadow in the list, zooming back in past FAR_ZOOM started a 150 ms shadow
+// transition on each of the 320 or so mounted tiles, and style recalculation took 154 ms in that frame, against 14 ms.
 const HOME_FACE =
-  "absolute cursor-pointer overflow-hidden rounded-md bg-ink-3 text-left shadow-card select-none transition-[scale,opacity,box-shadow] duration-150 ease-out active:scale-[0.99] motion-reduce:active:scale-100 " +
+  "absolute cursor-pointer overflow-hidden rounded-md bg-ink-3 text-left shadow-card select-none transition-[scale] duration-150 ease-out active:scale-[0.99] motion-reduce:active:scale-100 " +
   "after:pointer-events-none after:absolute after:inset-0 after:bg-black/0 after:transition-colors after:duration-150 after:ease-out hover:after:bg-black/[0.03] " +
   "in-data-far:shadow-[0_0_0_1px_var(--ink-5)] in-data-far:transition-none in-data-far:after:hidden in-data-far:rounded-none in-data-far:overflow-visible"
 
