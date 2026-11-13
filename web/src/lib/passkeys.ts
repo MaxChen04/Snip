@@ -38,6 +38,11 @@ export const passkeyUnsupported = () =>
 /**
  * Maps a WebAuthn failure to a sentence. InvalidStateError means the authenticator already holds a
  * credential this library asked it to exclude, i.e. this device is already registered.
+ *
+ * NotAllowedError stays generic on purpose. A device whose passkey was removed gets it too: the allow list no longer holds the
+ * credential, and the browser answers exactly as for a cancel or a timeout (same name, same message in Chromium; the spec calls
+ * for it, so a page cannot probe what a device holds) without asking the server. A library with no passkeys left, or a passkey it
+ * has never heard of, is told by the server instead, and that text comes through here as a PasskeyError.
  */
 export function passkeyError(error: unknown): PasskeyError {
   if (error instanceof PasskeyError) return error

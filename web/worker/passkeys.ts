@@ -134,7 +134,7 @@ export async function loginVerify(c: Context<AppEnv>) {
   if (!body?.response?.id) return c.json(badRequest("Expected an authentication response"), 400)
 
   const context = await db.getPasskeyLogin(c.env.DB, body.response.id)
-  if (!context) return c.json(badRequest("This passkey is not registered on this Snip library."), 400)
+  if (!context) return c.json(badRequest("This passkey is no longer registered for this Snip library. Use the owner link or GitHub to sign in."), 400)
   const { passkey, owner, epoch } = context
 
   const { rpID, origin } = relyingParty(c.env)
