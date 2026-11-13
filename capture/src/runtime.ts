@@ -1,4 +1,5 @@
 import { CaptureAuthenticationError, CaptureUpgradeError, JobGoneError } from "./api"
+import { PAGE_DEADLINE_MS } from "./deadline"
 import type { Job } from "../../web/shared/types"
 
 export type CaptureStatus = {
@@ -15,8 +16,17 @@ const IDLE_POLL_MAX_MS = 10_000
 export const idlePollDelay = (pollMs: number, emptyPolls: number) =>
   Math.min(Math.max(pollMs, IDLE_POLL_MAX_MS), pollMs * 2 ** Math.min(Math.max(0, emptyPolls - 1), 20))
 
-/** A capture that reports nothing for this long is hung: its job is failed and the worker takes the next one. */
-const STALL_MS = 5 * 60_000
+/**
+ * A capture that reports nothing for this long is hung: its job is failed and the worker takes the next one. A page that hangs
+ * never gets this far, because it is given up on at PAGE_DEADLINE_MS and the capture goes on to the next. This is the backstop
+ * for what that cannot reach, such as a browser that has stopped answering altogether or a Worker call that never returns.
+ * Twice the page deadline outlasts the longest a single Worker request waits (120 s), and every upload and page save reports
+ * progress at both ends, so only a call that is truly stuck can run it out.
+ */
+const STALL_MS = 2 * PAGE_DEADLINE_MS
+
+/** How often a running capture tells the Worker its agent is alive. The Worker counts an agent as gone after three missed beats (AGENT_ALIVE_SECONDS in web/worker/db.ts). */
+const HEARTBEAT_MS = 30_000
 
 type Browser = { isConnected(): boolean; close(): Promise<void> }
 type Api = { claim(): Promise<Job | null>; heartbeat(id: string | null): Promise<void>; fail(id: string, error: string): Promise<void> }
@@ -41,6 +51,7 @@ export class CaptureRuntime<B extends Browser> {
     pollMs: number
     idleMs: number
     once: boolean
+    heartbeatMs?: number
     random?: () => number
     logError?: (message: string) => void
   }) {}
@@ -136,7 +147,7 @@ export class CaptureRuntime<B extends Browser> {
               clearInterval(beat)
               abort.abort()
             })
-          }, 30_000)
+          }, this.options.heartbeatMs ?? HEARTBEAT_MS)
           try {
             // The hang timeout starts with the capture itself: launching can include a one-time browser download.
             const capture = (async () => { const browser = await this.getBrowser(job); progress(); return this.options.capture(browser, job, abort.signal, progress) })()

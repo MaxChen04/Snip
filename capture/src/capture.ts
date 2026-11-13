@@ -3,6 +3,7 @@ import sharp from "sharp"
 import type { Browser, BrowserContext, BrowserContextOptions, CDPSession, Page as PwPage } from "playwright"
 import type { CrawlState, DesignTokens, Job, MotionEntry, PageSection, PageUpload, PageWarning } from "../../web/shared/types"
 import { JobGoneError, uploadText, type SnipApi } from "./api"
+import { PAGE_DEADLINE_MS, pageDeadline, within } from "./deadline"
 import { imageSize, type Frame } from "./gif"
 import { allowPrivateUrls, assertPublicUrl, createCaptureNetwork, PrivateAddressError } from "./network-guard"
 import { buildStills, closeRenderer, cropBands, sampleIndexes } from "./sheet"
@@ -77,6 +78,8 @@ const MAX_SAVED_QUEUE = 2000 // URLs kept when a crawl pauses
 // web/shared, so the agent may only import types from there.
 const STOPPED_EMPTY = "Stopped before any pages were captured"
 const FONT_BUDGET = 4_000_000
+// Closing what a page opened (its tabs, the helper page) is waited on this long: a browser that no longer answers must not hold up the next page.
+const TEARDOWN_MS = 10_000
 
 const MOBILE_UA =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
@@ -1226,8 +1229,11 @@ export function signedInState(env = process.env): string {
   return file
 }
 
-/** `signal` asks the crawl to wind down at its next page boundary; `progress` tells the runtime the capture is still moving. */
-export async function captureJob(browser: Browser, api: SnipApi, job: Job, signal = new AbortController().signal, progress = () => {}) {
+/**
+ * `signal` asks the crawl to wind down at its next page boundary; `progress` tells the runtime the capture is still moving.
+ * A page that is not captured within `pageDeadlineMs` (see PAGE_DEADLINE_MS) is given up on like any page that fails.
+ */
+export async function captureJob(browser: Browser, api: SnipApi, job: Job, signal = new AbortController().signal, progress = () => {}, { pageDeadlineMs = PAGE_DEADLINE_MS }: { pageDeadlineMs?: number } = {}) {
   await assertPublicUrl(job.url)
   const options = job.options ?? {}
   const colorScheme = options.colorScheme === "dark" ? "dark" : "light"
@@ -1250,16 +1256,19 @@ export async function captureJob(browser: Browser, api: SnipApi, job: Job, signa
       sidecar = await browser.newContext({ ...common, proxy: sidecarNetwork.proxy })
       contexts.push(sidecar)
     }
-    // Every upload counts as progress, so a slow connection is not taken for a hung step.
-    const reporting: SnipApi = Object.create(api, { upload: { value: (...file: Parameters<SnipApi["upload"]>) => { progress(); return api.upload(...file) } } })
-    await capturePages(browser, reporting, job, desktop, mobile, sidecar, network, signal, progress)
+    // Every upload and page save counts as progress, at its start and again when it ends, so a slow connection is not taken for a hung step.
+    const reporting: SnipApi = Object.create(api, {
+      upload: { value: (...file: Parameters<SnipApi["upload"]>) => { progress(); return api.upload(...file).finally(progress) } },
+      addPage: { value: (...page: Parameters<SnipApi["addPage"]>) => { progress(); return api.addPage(...page).finally(progress) } },
+    })
+    await capturePages(browser, reporting, job, desktop, mobile, sidecar, network, signal, progress, pageDeadlineMs)
   } finally {
     await Promise.allSettled(contexts.map(context => context.close()))
     await Promise.all([network?.close(), sidecarNetwork?.close()])
   }
 }
 
-async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: BrowserContext, mobile: BrowserContext, sidecar: BrowserContext, network: CaptureNetwork, signal: AbortSignal, progress: () => void) {
+async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: BrowserContext, mobile: BrowserContext, sidecar: BrowserContext, network: CaptureNetwork, signal: AbortSignal, progress: () => void, pageDeadlineMs: number) {
   const root = new URL(job.url)
   const prefix = `refs/${job.id}/${job.attempt}`
   // Protocol 3 predates video. Missing capabilities mean the Worker still renders recordings as GIF images.
@@ -1358,11 +1367,23 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
     // the desktop page records, so at most two of the site's renderers are alive at once.
     // The contexts live for the whole job and keep cookies (dismissed banners stay dismissed).
     const open: PwPage[] = []
-    const newPage = async (context: BrowserContext) => { const page = await context.newPage(); open.push(page); return page }
+    // The page's one deadline (see PAGE_DEADLINE_MS) covers everything the site can slow down, up to the screenshots, recordings and
+    // snapshot being in hand. Its uploads are not part of it: they depend on the connection to the Worker, and every one reports progress.
+    const deadline = pageDeadline(pageDeadlineMs)
+    const newPage = async (context: BrowserContext) => {
+      const page = await context.newPage()
+      open.push(page)
+      // A page opened after the deadline gave up on this one (the mobile page, still starting) is closed here: nothing else would.
+      if (deadline.expired) {
+        await page.close().catch(() => {})
+        throw deadline.error
+      }
+      return page
+    }
     const closePages = () => Promise.allSettled(open.map((page) => page.close()))
     type MobileShots = { shot: { buf: Buffer; width: number; height: number }; thumb: Buffer; patches: number } | null
     let mobileTask: Promise<MobileShots> | undefined
-    try {
+    const capture = async () => {
       // ---- Desktop ----
       const dPage = await newPage(desktop)
       // Files the page itself (not an embed) could not load: with a flat shot they say the page came out blank for lack of them.
@@ -1376,12 +1397,12 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       const skip = job.mode === "crawl" && url !== start ? skipReason(dPage.url(), status, root) : null
       if (skip) {
         log(`  - ${path} ${skip}, skipped`)
-        continue
+        return
       }
       const duplicate = duplicateOf(url, dPage.url(), pageMeta.canonical, pageMeta.title, root, titles)
       if (duplicate) {
         log(`  - ${path} duplicates ${duplicate}, skipped`)
-        continue
+        return
       }
       if (!meta) meta = pageMeta
       // The icon is saved beside the first page's own work, never ahead of it. Its key replaces the URL in `meta` when it
@@ -1458,6 +1479,8 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       const mobileThumb = mobileShots?.thumb ?? null
 
       network?.assertAllowed()
+      // The browser is done with the page. A page the deadline gave up on may still be running down here; this is where it stops, before it saves anything.
+      deadline.finish()
 
       // ---- Upload ----
       const animations: PageUpload["animations"] = []
@@ -1597,6 +1620,10 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       captured++
       titles.set(url, pageMeta.title)
       log(`  ✓ ${path} (${animations.length} recordings, ${upload.sections?.length ?? 0} sections, ${new Set(liveClips.filter(Boolean)).size} live clips${other ? `, ${other.scheme} scheme` : ""}${inView.patches.length ? `, ${inView.patches.length} in-view patches` : ""}${mobileShots?.patches ? `, ${mobileShots.patches} mobile in-view patches` : ""}${warnings.length ? `, ${warnings.join(" and ")}` : ""})`)
+    }
+    try {
+      // Raced, not just awaited: a call into a page whose script never lets go of the thread (page.evaluate has no timeout) never returns.
+      await Promise.race([deadline.expiry, capture()])
     } catch (e) {
       network?.assertAllowed()
       if (e instanceof JobGoneError || e instanceof PrivateAddressError) throw e
@@ -1612,9 +1639,11 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       if (captured === 0 && job.mode === "single") throw e
       if (failures > Math.max(5, job.maxPages)) throw e
     } finally {
-      await Promise.allSettled([closePages(), closeRenderer()])
+      deadline.clear()
+      // Closing a page ends every call still waiting on it, an unresponsive one included. Nothing here waits on that for long: the next page must not.
+      await within(TEARDOWN_MS, Promise.allSettled([closePages(), closeRenderer()]))
       // A desktop failure closes the mobile page above, which ends its task.
-      await mobileTask
+      await within(TEARDOWN_MS, mobileTask)
     }
   }
 

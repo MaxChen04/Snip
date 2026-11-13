@@ -2,6 +2,7 @@ import { test, mock } from "node:test"
 import assert from "node:assert/strict"
 import type { CrawlState, Job, JobComplete, PageUpload } from "../../web/shared/types"
 import { JobGoneError, SnipApi } from "../src/api"
+import { PAGE_DEADLINE_MS } from "../src/deadline"
 import { CaptureRuntime } from "../src/runtime"
 
 // Regression tests for runtime recovery bugs (hung capture, local stop, lost lease).
@@ -60,6 +61,39 @@ test("a capture that never settles is failed within 10 minutes, its heartbeat st
       await flush()
     }
     assert.equal(heartbeats.filter((id) => id === job1.id).length, before, "no heartbeats for the failed job")
+    runtime.stop()
+  } finally {
+    mock.timers.reset()
+  }
+})
+
+test("a capture the page deadline cannot reach is failed at twice the page deadline, not before, and its heartbeat stops with it", async () => {
+  mock.timers.enable({ apis: ["setTimeout", "setInterval"] })
+  try {
+    const queue: (Job | null)[] = [job1, null]
+    const heartbeats: (string | null)[] = []
+    const failed: string[] = []
+    const runtime = new CaptureRuntime({
+      api: { claim: async () => queue.shift() ?? null, heartbeat: async (id) => { heartbeats.push(id) }, fail: async (id) => { failed.push(id) } },
+      launch: async () => browser(),
+      // Hung where no page deadline reaches, such as a browser that has stopped answering altogether.
+      capture: async () => { await new Promise<void>(() => {}) },
+      status: () => {}, pollMs: 5, idleMs: 50, once: false,
+    })
+    void runtime.run()
+    await flush()
+    // The watchdog is a multiple of the page deadline, not a number of its own: a page that is merely slow is the deadline's to end.
+    mock.timers.tick(2 * PAGE_DEADLINE_MS - 1_000)
+    await flush()
+    assert.deepEqual(failed, [], "still waiting just short of twice the page deadline")
+    assert.ok(heartbeats.length > 0, "and beating while it waits")
+    mock.timers.tick(1_000)
+    await flush()
+    assert.deepEqual(failed, ["job-1"])
+    const before = heartbeats.length
+    mock.timers.tick(10 * 60_000)
+    await flush()
+    assert.equal(heartbeats.length, before, "no beats for a job that was failed")
     runtime.stop()
   } finally {
     mock.timers.reset()
