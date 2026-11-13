@@ -17,7 +17,8 @@ const env = {
           : null
       return {
         first: async () => row,
-        bind: () => ({ first: async () => row, all: async () => ({ results: [] }) }),
+        // getPresence asks for the agent's row and the last refusal's row in one query.
+        bind: () => ({ first: async () => row, all: async () => ({ results: sql.includes("FROM worker_presence") && row ? [row] : [] }) }),
         all: async () => ({ results: [] }),
       }
     },
