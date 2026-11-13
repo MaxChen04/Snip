@@ -455,7 +455,8 @@ test("the z migration keeps the order boards loaded in before it", async () => {
   const mf = new Miniflare(convertV4MiniflareOptions({ modules: true, script: 'export default {fetch(){return new Response("ok")}}', d1Databases: ["DB"] }))
   try {
     const database = (await mf.getD1Database("DB")) as unknown as D1Database
-    await applyMigrations(database, (f) => !f.startsWith("0017"))
+    // Hold back only the migration under test; style parts share its numeric prefix.
+    await applyMigrations(database, (f) => f !== "0017_board_item_z.sql")
     const run = (sql: string) => database.prepare(sql).run()
     await run(`INSERT INTO collections (id, name, created_at) VALUES ('b1', 'One', '2026-01-01'), ('b2', 'Two', '2026-01-01')`)
     const stripe = await capture(database, "https://stripe.com", [{ path: "/" }, { path: "/pricing" }])
@@ -482,7 +483,7 @@ test("the z migration keeps the order boards loaded in before it", async () => {
     await row("b1", "page", stripe.reference.id, "/pricing")
     await row("b1", "reference", linear.reference.id)
 
-    await applyMigrations(database, (f) => f.startsWith("0017"))
+    await applyMigrations(database, (f) => f === "0017_board_item_z.sql")
     const env = { DB: database, SESSION_SECRET: "test-secret", DEV_LOGIN: "max" } as unknown as Env
     const load = async (id: string) => ((await (await app.request(`http://localhost/api/boards/${id}`, {}, env)).json()) as BoardCanvas).items.map((i) => [i.kind, i.id, i.z])
     assert.deepEqual(await load("b1"), [
