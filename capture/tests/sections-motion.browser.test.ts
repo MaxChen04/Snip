@@ -101,6 +101,43 @@ test("motion logging reports transitions, CSS animations and element.animate() w
   }
 })
 
+test("motion logging preserves a long sampled spring easing as valid, replayable CSS", async () => {
+  const browser = await launch()
+  try {
+    const page = await browser.newPage()
+    const spring = `linear(${Array.from({ length: 81 }, (_, i) => {
+      const t = i / 80
+      const y = i === 80 ? 1 : 1 - Math.exp(-6 * t) * Math.cos(12 * t)
+      return `${y.toFixed(5)} ${(t * 100).toFixed(2)}%`
+    }).join(", ")})`
+    await page.setContent(`<style>
+      .spring { animation: enter 2s ${spring} both }
+      @keyframes enter { from { opacity: 0; transform: translateY(20px) } }
+    </style><div id="spring">Spring</div><div id="replay">Replay</div>`)
+    assert.ok(await page.evaluate((easing) => CSS.supports("animation-timing-function", easing), spring))
+    await page.evaluate(`(${MOTION_JS})({ "op": "install" })`)
+    await page.evaluate(() => document.querySelector("#spring")!.classList.add("spring"))
+    await page.waitForFunction(() => document.querySelector("#spring")!.getAnimations().length === 1)
+    const expected = await page.evaluate(() => document.querySelector("#spring")!.getAnimations()[0]!.effect!.getKeyframes()[0]!.easing)
+    const entries = await page.evaluate(`(${MOTION_JS})({ "op": "take" })`) as { target: string; easing: string; keyframes: { easing?: string }[] }[]
+    const captured = entries.find((entry) => entry.target === "div#spring")!
+    assert.ok(expected!.length > 200, "the browser-normalized easing exceeds the keyframe preview limit")
+    assert.equal(captured.easing, expected, "the motion profile retains the complete sampled spring")
+    assert.equal(captured.keyframes[0]!.easing?.length, 200, "keyframe previews remain bounded")
+    const replay = await page.evaluate((easing) => {
+      const valid = CSS.supports("animation-timing-function", easing)
+      const animation = document.querySelector("#replay")!.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 1000, easing })
+      const timing = animation.effect!.getTiming().easing
+      animation.cancel()
+      return { valid, timing }
+    }, captured.easing)
+    assert.equal(replay.valid, true, "the emitted easing is syntactically valid CSS")
+    assert.equal(replay.timing, captured.easing, "a downstream consumer can replay the same spring")
+  } finally {
+    await browser.close()
+  }
+})
+
 test("motion installed before load logs entrance staggers, and names the page's animation tech", async () => {
   const browser = await launch()
   try {

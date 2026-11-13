@@ -36,7 +36,8 @@
       if (!e || !e.getKeyframes) return null
       const t = e.getTiming()
       const name = a.constructor && a.constructor.name
-      const keyframes = e.getKeyframes().slice(0, 8).map((k) => {
+      const raw = e.getKeyframes()
+      const keyframes = raw.slice(0, 8).map((k) => {
         const o = {}
         for (const [p, v] of Object.entries(k)) {
           if (v == null || p === "computedOffset" || p === "composite" || (p === "easing" && v === "linear")) continue
@@ -51,8 +52,9 @@
         property: a.transitionProperty || a.animationName || [...new Set(keyframes.flatMap((k) => Object.keys(k)).filter((p) => p !== "offset" && p !== "easing"))].join(", ") || null,
         durationMs: round(typeof t.duration === "number" ? t.duration : 0),
         delayMs: round(t.delay),
-        // A CSS animation's timing function lives on its keyframes; the effect itself runs linear.
-        easing: name === "CSSAnimation" && t.easing === "linear" && keyframes[0] && keyframes[0].easing ? keyframes[0].easing : t.easing,
+        // A CSS animation's timing function lives on its keyframes; the effect itself runs linear. Keep the raw
+        // easing: sampled linear() springs can exceed the keyframe preview's string limit and must remain valid CSS.
+        easing: name === "CSSAnimation" && t.easing === "linear" && raw[0] && raw[0].easing ? raw[0].easing : t.easing,
         iterations: t.iterations === Infinity ? "infinite" : t.iterations,
         keyframes,
         // When it was started, before its delay. Transitions and element.animate() are logged as they are created; a
