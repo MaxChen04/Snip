@@ -101,6 +101,83 @@ test("motion logging reports transitions, CSS animations and element.animate() w
   }
 })
 
+test("motion installed before load logs entrance staggers, and names the page's animation tech", async () => {
+  const browser = await launch()
+  try {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 800 } })
+    await context.addInitScript(`(${MOTION_JS})({ "op": "install" })`)
+    const page = await context.newPage()
+    await page.route("http://snip.test/", (route) => route.fulfill({ contentType: "text/html", body: `<!doctype html><style>
+        :root { --ease-spring: linear(0, 0.5 20%, 1.04 45%, 0.99 70%, 1) }
+        .glyph { animation: rise 600ms cubic-bezier(0.34, 1.56, 0.64, 1) both; animation-delay: calc(var(--i) * 70ms) }
+        @keyframes rise { from { opacity: 0; transform: translateY(8px) } }
+        .same { animation: rise 300ms ease-out both }
+      </style>
+      <div>${[0, 1, 2, 3, 4].map((i) => `<span class="glyph" style="--i:${i}">g</span>`).join("")}</div>
+      <div>${[0, 1, 2].map(() => `<b class="same">x</b>`).join("")}</div>
+      <p id="pulse">p</p><p class="word">a</p><p class="word">b</p><p class="word">c</p><p class="word">d</p>
+      <i class="late">1</i><i class="late">2</i><i class="late">3</i><i class="late">4</i><u class="loose">1</u><u class="loose">2</u><u class="loose">3</u><u class="loose">4</u>
+      <canvas id="gl" width="400" height="300" style="width:400px;height:300px"></canvas><canvas id="flat" width="200" height="100" style="width:200px;height:100px"></canvas>
+      <script>
+        window.gsap = { version: "3.12.5" }
+        document.querySelector("#gl").getContext("webgl2")
+        document.querySelector("#flat").getContext("2d")
+        // Script starts each element in turn at set times after load. Spinning on the clock (rather than timers) makes the
+        // start times exact, so the inference is what is tested; "late" replays a measured case where the first timer
+        // fired late (gaps of 6, 40 and 40 ms), and "loose" has no even step at all.
+        const at = (offsets, run) => { const t0 = performance.now(); offsets.forEach((ms, i) => { while (performance.now() - t0 < ms) {} run(i) }) }
+        addEventListener("load", () => {
+          const fade = (el, duration) => el.animate([{ opacity: 0, filter: "blur(2px)" }, { opacity: 1, filter: "blur(0px)" }], { duration, easing: "cubic-bezier(.22,1,.36,1)" })
+          at([0, 100, 200], () => document.querySelector("#pulse").animate([{ scale: 1 }, { scale: 1.1 }], { duration: 90 }))
+          at([0, 40, 80, 120], (i) => fade(document.querySelectorAll(".word")[i], 403))
+          at([0, 6, 46, 86], (i) => fade(document.querySelectorAll(".late")[i], 500))
+          at([0, 40, 250, 600], (i) => fade(document.querySelectorAll(".loose")[i], 600))
+        })
+      </script>` }))
+    await page.goto("http://snip.test/")
+    await page.waitForTimeout(400)
+    const motion = (arg: object) => page.evaluate(`(${MOTION_JS})(${JSON.stringify(arg)})`) as Promise<Record<string, any>[]>
+    await motion({ op: "install" }) // the capture calls it again after load: a no-op
+    const entries = await motion({ op: "take" })
+
+    const glyphs = entries.find((e) => e.property === "rise" && e.target.includes("glyph"))!
+    assert.equal(glyphs.count, 5)
+    assert.deepEqual(glyphs.stagger, { stepMs: 70, spanMs: 280, evenGaps: 4, gaps: 4, gapRangeMs: [70, 70], from: "delays" }, "a delay-driven stagger is one entry with its step")
+    assert.equal(glyphs.delayMs, 0, "the first element's delay")
+    assert.equal(glyphs.easing, "cubic-bezier(0.34, 1.56, 0.64, 1)", "a CSS animation's easing is its animation-timing-function, not the effect's linear")
+    const words = entries.find((e) => e.target === "body > p.word" || e.target === "p.word")!
+    assert.equal(words.count, 4)
+    // Start times are logged in whole ms, so each gap can read 1 ms either way.
+    const near = (actual: number, expected: number) => assert.ok(Math.abs(actual - expected) <= 1, `${actual} is not about ${expected}`)
+    const stagger = (s: Record<string, any>, step: number, span: number, even: number, low: number) => {
+      assert.deepEqual([s.evenGaps, s.gaps, s.from], [even, 3, "start times"])
+      near(s.stepMs, step)
+      near(s.spanMs, span)
+      near(s.gapRangeMs[0], low)
+    }
+    stagger(words.stagger, 40, 120, 3, 40) // elements started in turn are a stagger too
+    assert.equal(words.durationMs, 403)
+    const pulse = entries.find((e) => e.target === "p#pulse")!
+    assert.equal(pulse.count, 3)
+    assert.equal(pulse.stagger, undefined, "one element animated again and again is not a stagger")
+    const late = entries.find((e) => e.target.endsWith("i.late"))!
+    stagger(late.stagger, 40, 86, 2, 6) // a late first timer still reads as a stagger, and says one gap didn't fit
+    assert.equal(entries.find((e) => e.target.endsWith("u.loose"))!.stagger, undefined, "starts with no even step are not a stagger")
+    const same = entries.find((e) => e.target.includes("same"))!
+    assert.equal(same.count, 3)
+    assert.equal(same.stagger, undefined, "effects that start together are not a stagger")
+
+    const tech = await page.evaluate(`(${MOTION_JS})({ "op": "tech" })`) as Record<string, any>
+    assert.ok(tech.libraries.includes("GSAP 3.12.5"))
+    assert.deepEqual(tech.canvases.map((c: { context: string; width: number }) => [c.context, c.width]), [["webgl2", 400], ["2d", 200]])
+    assert.equal(tech.scrollDriven, false, "the animation shorthand's default animation-timeline drives nothing")
+    await page.addStyleTag({ content: ".reveal { animation: rise linear both; animation-timeline: view() }" })
+    assert.equal((await page.evaluate(`(${MOTION_JS})({ "op": "tech" })`) as Record<string, any>).scrollDriven, true)
+  } finally {
+    await browser.close()
+  }
+})
+
 test("live clips are recorded only for sections that move, cropped to the section, with fixed bars put back", async () => {
   const { recordLiveSections } = await import("../src/capture")
   const { closeRenderer } = await import("../src/sheet")

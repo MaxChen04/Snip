@@ -7,6 +7,7 @@ import { PAGE_STALL_MS, pageDeadline, within } from "./deadline"
 import type { CapturedStyles } from "./style-parts"
 import { imageSize, type Frame } from "./gif"
 import { allowPrivateUrls, assertPublicUrl, createCaptureNetwork, PrivateAddressError } from "./network-guard"
+import { buildMotionProfile, mergeMotionProfiles, type MotionTech } from "./motion-profile"
 import { buildStills, closeRenderer, cropBands, sampleIndexes } from "./sheet"
 import { pageText, TEXT_LIMITS, type TextBlock } from "./text"
 import { encodeRecording, recordingWriter, type Recording } from "./video"
@@ -1308,6 +1309,7 @@ function mergeTokens(list: DesignTokens[]): DesignTokens | null {
     transitions: merge((t) => t.transitions, 24),
     keyframes: [...new Set(list.flatMap((t) => t.keyframes))],
     cssVariables: Object.assign({}, ...list.map((t) => t.cssVariables)),
+    motion: mergeMotionProfiles(list.flatMap((t) => (t.motion ? [t.motion] : []))),
   }
 }
 
@@ -1338,6 +1340,8 @@ export async function captureJob(browser: Browser, api: SnipApi, job: Job, signa
     const mobile = await browser.newContext({ ...common, viewport: MOBILE, deviceScaleFactor: MOBILE_DPR, isMobile: true, hasTouch: true, userAgent: MOBILE_UA })
     contexts.push(mobile)
     await Promise.all(contexts.flatMap((context) => [context.addInitScript(HOLD_RESIZE_JS), context.addInitScript(OBSERVED_JS)]))
+    // Motion is logged on desktop only, from before the page's scripts run, so entrance animations are seen.
+    await desktop.addInitScript(`(${MOTION_JS})({ "op": "install" })`)
     // The sitemap, icon and fonts are fetched through a proxy of their own: a private address there loses that file,
     // while one the pages themselves ask for still fails the job.
     let sidecar = desktop
@@ -1551,6 +1555,8 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       })()
 
       await run(dPage, MOTION_JS, { op: "install" }).then(() => tick(), () => {})
+      const loadMotion = await takeMotion(dPage) // what played while loading: its entrance
+      tick()
       const scroll = await recordScroll(dPage, true, recordingFormat, tick)
       const scrollMotion = await takeMotion(dPage)
       tick()
@@ -1586,6 +1592,12 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       const hovers = await recordHovers(dPage, hoverSeen, recordingFormat, tick)
       const empty = await dPage.evaluate(() => !document.body?.innerText.trim() && !document.querySelector("img, picture, video, canvas, svg, iframe, object, embed")).catch(() => false)
       tick()
+      const tech = await run<MotionTech | []>(dPage, MOTION_JS, { op: "tech" }).catch(() => null)
+      styles.tokens.motion = buildMotionProfile(styles.tokens, [
+        { phase: "load", entries: loadMotion },
+        { phase: "scroll", entries: scrollMotion },
+        ...hovers.map((h) => ({ phase: "hover" as const, entries: h.motion, label: h.label })),
+      ], tech && !Array.isArray(tech) ? tech : null)
       await dPage.close()
       tick()
       const mobileShots = await mobileTask

@@ -4,7 +4,7 @@ import { Miniflare, convertV4MiniflareOptions } from "miniflare"
 import { app } from "../worker/app"
 import * as db from "../worker/db"
 import { mcpApiHandler } from "../worker/mcp"
-import type { AnimationMeta, Job, MotionEntry } from "../shared/types"
+import type { AnimationMeta, DesignTokens, Job, MotionEntry, MotionProfile } from "../shared/types"
 import { applyMigrations } from "./helpers/d1"
 
 // Real local D1 and R2 bindings; no deployed resources are used.
@@ -29,10 +29,23 @@ test("page sections and logged motion are stored, checked and described over MCP
       keyframes: [{ offset: 0, transform: "none" }, { offset: 1, transform: "translateY(-8px)" }], startMs: 12, scrollY: 0,
     }]
     const meta: AnimationMeta = { version: 1, frameCount: 2, playbackMs: 900, timing: "measured", frames: [], sheet: null, observedStyles: null, motion }
+    const profile: MotionProfile = {
+      version: 1,
+      tech: { libraries: ["three.js r175"], canvases: [{ context: "webgl2", width: 1120, height: 520, y: 80 }], viewTransitions: false, scrollDriven: false },
+      tokens: [{ name: "--ease-fast", value: "cubic-bezier(.2,0,0,1)", kind: "easing" }],
+      easings: [{ value: "cubic-bezier(0.2, 0, 0, 1)", shape: "strong ease-out", tokenCandidate: "--ease-fast", elements: 40, ran: 2 }, { value: "ease-out", shape: "ease-out: fast start, decelerates", elements: 3, ran: 1 }],
+      durations: [{ ms: 300, elements: 40, ran: 1 }],
+      staggers: [{ phase: "load", target: "p.word", property: "opacity", count: 40, durationMs: 403, easing: "ease-out", stepMs: 20, spanMs: 780, evenGaps: 39, gaps: 39, gapRangeMs: [19, 21], from: "start times" }],
+      entrance: motion,
+      hovers: [{ label: "card", target: "div#card", property: "transform", durationMs: 300, delayMs: 50, easing: "ease-out" }],
+      pixelOnly: ["WebGL 2 1120×520 at y=80: drawn by script"],
+      totals: { hovers: 45 },
+    }
+    const pageTokens: DesignTokens = { colors: [], fonts: [], fontSizes: [], spacing: [], radii: [], shadows: [], transitions: [], keyframes: [], cssVariables: {}, motion: profile }
     const page = {
       url: "https://example.com/", path: "/", title: "Home", ord: 0,
       desktopKey: `${p}/desktop.jpg`, desktopThumbKey: `${p}/desktop-thumb.jpg`, desktopWidth: 1440, desktopHeight: 1700,
-      mobileKey: null, mobileThumbKey: null, mobileWidth: null, mobileHeight: null, snapshotKey: null, stylesKey: null, tokens: null,
+      mobileKey: null, mobileThumbKey: null, mobileWidth: null, mobileHeight: null, snapshotKey: null, stylesKey: null, tokens: pageTokens,
       sections: [
         { kind: "header", label: "Header", y: 0, height: 80, key: `${p}/section-0.jpg` },
         { kind: "hero", label: "Ship faster", y: 80, height: 1620, key: `${p}/section-1.jpg`, thumbKey: `${p}/section-1-thumb.jpg`, live: { key: `${p}/section-1-live.webm`, height: 900, durationMs: 3000 } },
@@ -103,6 +116,31 @@ test("page sections and logged motion are stored, checked and described over MCP
     assert.equal(anim.structuredContent.motion.nextOffset, null)
     assert.deepEqual((await rpc("get_animation", { animation_id: animations[0]!.id, representation: "manifest", motion_offset: 1 })).structuredContent.motion.items, [], "motion pages on with motion_offset")
     assert.match(anim.structuredContent.motion.note, /real duration/)
+
+    const overview = (await rpc("get_motion_profile", { reference_id: ref.id, page_id: pageId, limit: 1 })).structuredContent
+    assert.deepEqual([overview.pageId, overview.path], [pageId, "/"], "scoped to the page asked for")
+    assert.deepEqual(overview.tech, profile.tech)
+    assert.deepEqual(overview.groups.easings, { total: 2, items: [profile.easings[0]] })
+    assert.equal(overview.omitted.easings, 1, "what the overview left out is counted")
+    assert.deepEqual(overview.cappedAtCapture.found, { hovers: 45 }, "lists the capture capped say how much they held")
+    assert.match(overview.provenance.inferred, /tokenCandidate/)
+    assert.match(overview.provenance.observed, /Read from the browser/)
+    assert.equal(overview.recordings.total, 1)
+    assert.equal(overview.recordings.items[0].kind, "hover")
+
+    const first = (await rpc("get_motion_profile", { reference_id: ref.id, page_id: pageId, group: "easings", limit: 1 })).structuredContent
+    assert.deepEqual(first.items, [profile.easings[0]])
+    assert.match(first.provenance, /inferred/)
+    const second = (await rpc("get_motion_profile", { reference_id: ref.id, page_id: pageId, group: "easings", limit: 1, cursor: first.nextCursor })).structuredContent
+    assert.deepEqual([second.items, second.offset, second.nextCursor], [[profile.easings[1]], 1, null], "a group pages on with its cursor")
+    assert.match((await rpc("get_motion_profile", { reference_id: ref.id, group: "easings", cursor: first.nextCursor })).content[0].text, /different reference, page or group/)
+    const stag = (await rpc("get_motion_profile", { reference_id: ref.id, page_id: pageId, group: "staggers" })).structuredContent
+    assert.match(stag.provenance, /^Inferred/)
+    const recs = (await rpc("get_motion_profile", { reference_id: ref.id, page_id: pageId, group: "recordings" })).structuredContent
+    assert.deepEqual([recs.total, recs.items[0].id, recs.nextCursor], [1, animations[0]!.id, null])
+
+    assert.match((await rpc("get_motion_profile", { reference_id: ref.id })).structuredContent.unavailable, /saved when it finishes/, "the reference's merged profile comes with completion")
+    assert.match((await rpc("get_motion_profile", { reference_id: ref.id, page_id: "nope" })).content[0].text, /No page/)
   } finally {
     await Promise.allSettled(pending)
     await mf.dispose()

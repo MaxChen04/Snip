@@ -86,6 +86,14 @@ export function buildAgentPrompt({ reference: r, pages, animations, tokens, mcpU
       ...pages.map((p, i) => `   - ${p.title || p.path} (${p.path}): page_id "${p.id}", ${viewText(p, copied.pages![i]!)}`),
     )
   }
+  // Motion is scoped like the rest of the selection: the picked pages, else the pages of the picked recordings, and
+  // the whole site only when its tokens were picked on their own.
+  const motionPages = r.tokens?.motion ? [...new Set(pages.length ? pages.map((p) => p.id) : animations.flatMap((a) => (a.pageId ? [a.pageId] : [])))] : []
+  if (motionPages.length) {
+    out.push(`${step++}. To learn how ${motionPages.length > 1 ? "these pages move" : "this page moves"}, call get_motion_profile with reference_id "${r.id}" and page_id ${motionPages.map((id) => `"${id}"`).join(", ")}${motionPages.length > 1 ? " (one call each)" : ""}: motion tokens, easing curves, durations, staggers and entrance animations. Its provenance says which values were read from the browser and which are inferred.`)
+  } else if (r.tokens?.motion && tokens) {
+    out.push(`${step++}. To learn how the site moves, call get_motion_profile with reference_id "${r.id}": motion tokens, easing curves, durations, staggers and entrance animations merged across its pages. Its provenance says which values were read from the browser and which are inferred.`)
+  }
   if (animations.length) {
     out.push(
       `${step++}. For each animation, call get_animation with its animation_id. It returns a contact sheet of sampled frames plus timing and the element's observed styles. Request representation "frame" with a frame index for a closer look at one moment.`,

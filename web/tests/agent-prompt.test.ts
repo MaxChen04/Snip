@@ -54,3 +54,14 @@ test("copied prompt carries the saved note on why the reference was saved", () =
     assert.ok(!without.includes("Why I saved this reference"))
   }
 })
+
+test("copied prompt asks for motion at the scope of the selection", () => {
+  const reference = { id: "ref1", title: "Ando", domain: "ando.so", url: "https://ando.so", tokens: { motion: { version: 1 } } } as never
+  const base = { reference, pages: [], animations: [], tokens: false, mcpUrl: "https://snip.test/mcp" }
+  const onePage = buildAgentPrompt({ ...base, pages: [{ id: "p1", path: "/", title: "Home" }] as never })
+  assert.match(onePage, /get_motion_profile with reference_id "ref1" and page_id "p1":/)
+  const recording = buildAgentPrompt({ ...base, animations: [{ id: "a1", pageId: "p2", kind: "hover", label: "Nav" }] as never })
+  assert.match(recording, /page_id "p2"/, "a picked recording scopes motion to its page")
+  assert.match(buildAgentPrompt({ ...base, tokens: true }), /get_motion_profile with reference_id "ref1": .*merged across its pages/, "the whole site only for site-wide tokens")
+  assert.ok(!buildAgentPrompt({ ...base, reference: { ...(reference as object), tokens: null } as never, pages: [{ id: "p1", path: "/" }] as never }).includes("get_motion_profile"), "no profile, no call")
+})
