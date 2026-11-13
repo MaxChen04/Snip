@@ -1,11 +1,11 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type RefObject } from "react"
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement, type RefObject } from "react"
 import { useLocation, useSearch } from "wouter"
 import { AgentBanner } from "@/components/agent-banner"
 import { TopBar } from "@/components/top-bar"
 import { CaptureCard } from "@/components/canvas/capture-card"
 import { DropOverlay } from "@/components/canvas/drop-overlay"
 import { countOf, FilterDock } from "@/components/canvas/filter-dock"
-import { GAP, layoutHome, PLAZA, visibleTiles, type HomeLayout, type Placement } from "@/components/canvas/home-layout"
+import { GAP, layoutHome, PLAZA, stageTiles, visibleTiles, type HomeLayout, type Placement } from "@/components/canvas/home-layout"
 import { InfiniteCanvas, type CanvasView, type InfiniteCanvasHandle, type WorldRect } from "@/components/canvas/infinite-canvas"
 import { ItemInspector } from "@/components/canvas/item-inspector"
 import { HomeTile } from "@/components/canvas/tiles"
@@ -99,12 +99,18 @@ const at = (t: Pick<Placement, "x" | "y" | "w" | "h">) => ({ left: t.x, top: t.y
 
 /**
  * The tiles in (and near) view. Re-renders only when the visible rect or the items change, and reuses the element of
- * every tile that stays in view: a new rect then costs React the tiles that came into view, not all of them.
+ * every tile that stays in view: a new rect then costs React the tiles that came into view, not all of them. A step of
+ * a zoom that brings in hundreds mounts them over a few frames (see stageTiles).
  */
 const Field = memo(function Field({ layout, items, rect, onOpen }: { layout: HomeLayout; items: CanvasItem[]; rect: WorldRect; onOpen?: (item: CanvasItem) => void }) {
-  const cache = useMemo(() => ({ elements: new Map<string, ReactElement>() }), [layout, items, onOpen])
+  // `mounted` is the set of keys the last commit put on the canvas.
+  const cache = useMemo(() => ({ elements: new Map<string, ReactElement>(), mounted: new Set<string>() }), [layout, items, onOpen])
+  const [, nextFrame] = useState(0)
+  const wanted = visibleTiles(layout, rect)
+  // A new feed or layout mounts everything at once, as it always did: there is no view to keep smooth yet.
+  const { tiles: staged, later } = cache.mounted.size ? stageTiles(wanted, cache.mounted, rect) : { tiles: wanted, later: false }
   const kept = new Map<string, ReactElement>()
-  const tiles = visibleTiles(layout, rect).map((t) => {
+  const tiles = staged.map((t) => {
     let el = cache.elements.get(t.key)
     if (!el) {
       // Repeated copies of the block are not tabbable or announced (see HomeTile).
@@ -115,6 +121,12 @@ const Field = memo(function Field({ layout, items, rect, onOpen }: { layout: Hom
     return el
   })
   cache.elements = kept
+  useLayoutEffect(() => {
+    cache.mounted = new Set(kept.keys())
+    if (!later) return
+    const frame = requestAnimationFrame(() => nextFrame((n) => n + 1))
+    return () => cancelAnimationFrame(frame)
+  })
   return tiles
 })
 

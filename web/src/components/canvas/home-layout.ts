@@ -208,3 +208,24 @@ export function visibleTiles(layout: HomeLayout, r: Rect): Placement[] {
   }
   return out
 }
+
+/** The most tiles a render mounts that were not mounted before (see stageTiles). */
+export const MOUNT_PER_FRAME = 100
+
+/**
+ * One step of a zoom can bring hundreds of tiles into view: one notch of a mouse wheel took the real library from 135
+ * mounted tiles to 318, then 406, then 866. Mounting a tile (React's render and commit, then style, layout and paint)
+ * costs the main thread about 0.13 ms in a build and 0.23 ms in development, so the last 549 of those were one 59 ms
+ * frame in a build. So of the `wanted` tiles this returns every one that is mounted already and at most `limit` new
+ * ones, nearest the middle of the rect first, in the order of `wanted`; `later` says some were held back for the next
+ * frame. Tiles that left `wanted` are simply gone.
+ */
+export function stageTiles(wanted: Placement[], mounted: ReadonlySet<string>, r: Rect, limit = MOUNT_PER_FRAME): { tiles: Placement[]; later: boolean } {
+  const fresh = wanted.filter((t) => !mounted.has(t.key))
+  if (fresh.length <= limit) return { tiles: wanted, later: false }
+  const cx = r.x + r.w / 2
+  const cy = r.y + r.h / 2
+  const away = (t: Placement) => Math.hypot(t.x + t.w / 2 - cx, t.y + t.h / 2 - cy)
+  const admitted = new Set(fresh.sort((a, b) => away(a) - away(b)).slice(0, limit))
+  return { tiles: wanted.filter((t) => mounted.has(t.key) || admitted.has(t)), later: true }
+}

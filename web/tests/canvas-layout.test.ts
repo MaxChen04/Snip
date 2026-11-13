@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { layoutHome, PLAZA, visibleTiles, type Placement, type Rect } from "../src/components/canvas/home-layout"
+import { layoutHome, MOUNT_PER_FRAME, PLAZA, stageTiles, visibleTiles, type Placement, type Rect } from "../src/components/canvas/home-layout"
 
 const ASPECTS = [1.6, 1.6, 0.8, 1.3, 1, 2.4, 1.6, 0.6, 1.6, 1.2, 0.45, 3]
 const make = (n: number) => Array.from({ length: n }, (_, i) => ({ key: `item${i}`, aspect: ASPECTS[i % ASPECTS.length]! }))
@@ -94,4 +94,45 @@ test("culling returns exactly the tiles that intersect the rect, with unique key
         if (moved.x < rect.x + rect.w && moved.x + t.w > rect.x && moved.y < rect.y + rect.h && moved.y + t.h > rect.y) expected.add(`${t.key}@${i},${j}`)
       }
   assert.deepEqual(new Set(keys), expected)
+})
+
+test("staging holds back all but a frame's worth of new tiles, nearest the middle first, and keeps what is mounted", () => {
+  const layout = layoutHome(make(200))
+  const rect: Rect = { x: -8000, y: -5000, w: 16000, h: 10000 }
+  const wanted = visibleTiles(layout, rect)
+  assert.ok(wanted.length > 4 * MOUNT_PER_FRAME, `${wanted.length} tiles in the rect`)
+  const dist = (t: Placement) => Math.hypot(t.x + t.w / 2 - (rect.x + rect.w / 2), t.y + t.h / 2 - (rect.y + rect.h / 2))
+
+  // Some tiles are mounted already (the last view's), one more has left the view.
+  const mounted = new Set([...wanted.slice(0, 40).map((t) => t.key), "gone"])
+  const step = stageTiles(wanted, mounted, rect)
+  assert.equal(step.later, true)
+  assert.ok(wanted.slice(0, 40).every((t) => step.tiles.includes(t)), "every tile that stays in view stays mounted")
+  assert.ok(!step.tiles.some((t) => t.key === "gone"))
+  const added = step.tiles.filter((t) => !mounted.has(t.key))
+  assert.equal(added.length, MOUNT_PER_FRAME)
+  const held = wanted.filter((t) => !mounted.has(t.key) && !step.tiles.includes(t))
+  assert.ok(Math.max(...added.map(dist)) <= Math.min(...held.map(dist)), "the tiles nearest the middle come first")
+  assert.deepEqual(step.tiles, wanted.filter((t) => step.tiles.includes(t)), "the order of the tiles is kept")
+
+  // The rest follow, a frame's worth at a time, until every tile in view is mounted.
+  let now = new Set(step.tiles.map((t) => t.key))
+  let frames = 1
+  for (let next = stageTiles(wanted, now, rect); ; next = stageTiles(wanted, now, rect)) {
+    assert.ok(next.tiles.filter((t) => !now.has(t.key)).length <= MOUNT_PER_FRAME)
+    now = new Set(next.tiles.map((t) => t.key))
+    frames++
+    if (!next.later) break
+    assert.ok(frames < 100, "staging ends")
+  }
+  assert.deepEqual([...now].sort(), wanted.map((t) => t.key).sort())
+  assert.equal(frames, Math.ceil((wanted.length - 40) / MOUNT_PER_FRAME), "one frame per MOUNT_PER_FRAME new tiles")
+})
+
+test("staging mounts a step of fewer new tiles than the limit at once", () => {
+  const layout = layoutHome(make(200))
+  const rect: Rect = { x: -600, y: -400, w: 1200, h: 800 }
+  const wanted = visibleTiles(layout, rect)
+  const step = stageTiles(wanted, new Set(wanted.slice(10).map((t) => t.key)), rect)
+  assert.deepEqual(step, { tiles: wanted, later: false })
 })
