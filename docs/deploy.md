@@ -167,7 +167,7 @@ Pass `--capture-env replace` to point `capture/.env` at the cloud copy, or use t
 | `npm run setup:cloudflare -- owner link --no-handoff` | Mint a link for another browser or device and print it. Settings' **Sign in another browser** runs exactly this. |
 | `npm run setup:cloudflare -- owner rotate` | Replace the owner-link secret and mint a new link. Recovery path. |
 | `npm run setup:cloudflare -- abort` | Clean up an interrupted enable. |
-| `npm run setup:cloudflare -- migrate --json` / `deploy --json` | Apply remote migrations or deploy the current build. Used by updates. |
+| `npm run setup:cloudflare -- migrate --json` / `deploy --json` | `migrate` applies this build's pending remote migrations. `deploy` applies them, then deploys this build's Worker. Used by updates. |
 
 The three destructive commands share one interlock. `--confirm` must equal the basename of the item being deleted: the directory name for `snapshot delete` and `snapshot delete-export`, and the cloud URL's host (for example `snip.max.workers.dev`) for `delete-resources`. Leave it out and the run exits 2 with the exact command to repeat; give a different value and it exits 1. Neither path changes anything. The app asks for the same value, typed by hand.
 
@@ -306,14 +306,17 @@ The Mac app does not redeploy the Worker. A release build, including one that up
 
 The app's sign-in handoff needs the Worker to send that nonce, so a Worker older than the app cannot sign the app in. The tab that opens after the owner link then says **Your cloud library is older than this Snip. Update cloud (npm run update), then sign in again.**, and the app stays signed out until the Worker is redeployed. Nothing accepts a session without the nonce.
 
-Snip records the Worker version it deployed. If the deployed Worker no longer matches that record, Snip reports the deployment as changed outside Snip and asks you to deploy again; it does not redeploy on its own, because someone may have changed the Worker deliberately.
+After a deploy, Snip asks the new Worker for its version and records it in `.snip/cloud.json`. If that differs from what the previous deploy recorded, which is normal after an update, the log shows a warning and the deploy carries on. Nothing checks the deployed Worker between deploys, so a Worker changed in the Cloudflare dashboard is not noticed. Run `deploy` again to put this build back.
 
-To do it by hand, apply migrations before deploying:
+To do it by hand, `deploy` is enough: it applies the pending migrations and then deploys the Worker, in that order. `migrate` applies the migrations alone. Run it first if you want the database changed before the Worker is, because an older Worker keeps working on a newer schema:
 
 ```bash
+npm run build -w web   # a source checkout only; a release build is already built
 npm run setup:cloudflare -- migrate --json
 npm run setup:cloudflare -- deploy --json
 ```
+
+Both commands copy the build in this checkout into the deploy folder before they read anything from it, so they apply and deploy this build's migrations and Worker, never an earlier release's. They say what they did: `Applied 2 migrations`, or `Database is up to date` when none were pending.
 
 ## If the cloud library can't be reached
 
