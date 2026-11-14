@@ -4,7 +4,10 @@
   "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "workspaces": ["web", "capture"],
-  "devDependencies": { "miniflare": "5.20261101.0-beta" },
+  "devDependencies": {
+    "miniflare": "5.20261101.0-beta",
+    "wrangler": "4.160.0"
+  },
   "scripts": {
     "test": "npm run test:core && npm run test:app",
     "test:core": "node --import tsx --test web/tests/*.test.ts capture/tests/*.test.ts",
