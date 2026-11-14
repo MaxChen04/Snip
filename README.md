@@ -6,11 +6,9 @@ A private library of website design references. Paste a URL, choose **Landing pa
 
 ![Browsing the canvas, filtering websites and opening a saved site in Snip](docs/media/browse.gif)
 
-[Higher-quality MP4 recording](docs/media/browse.mp4)
-
 Website: [usesnip.dev](https://usesnip.dev) · [Releases and downloads](https://github.com/MaxChen04/Snip/releases) · [0.1.36 beta release notes](docs/releases/0.1.36.md) · License: [source-available](#license)
 
-**0.1.36 is the next beta target, not a published download yet.** The current published release is [v0.1.0](https://github.com/MaxChen04/Snip/releases/tag/v0.1.0), which contains source only. Build from source below, or check the releases page for published assets. Signed installation and native update acceptance remain release gates; see [desktop release guidance](desktop/RELEASING.md).
+0.1.36 is the beta target release.
 
 ## Quick start
 
@@ -127,8 +125,6 @@ Choose an **infinite canvas** or a **scrolling grid** in the account menu's **Ga
 
 ![Canvas inspector showing mobile captures, colors and type, and motion](docs/media/viewer.gif)
 
-[Higher-quality MP4 recording](docs/media/viewer.mp4)
-
 **Design tokens.** Every website gets its colors, type, spacing, radii and shadows extracted.
 
 ![Design tokens for a captured website](docs/media/tokens.png)
@@ -137,13 +133,9 @@ Choose an **infinite canvas** or a **scrolling grid** in the account menu's **Ga
 
 ![Selecting pages and tokens and copying an agent prompt](docs/media/select.gif)
 
-[Higher-quality MP4 recording](docs/media/select.mp4)
-
 **Animations.** Scroll and hover recordings from every capture, in one feed.
 
 ![Browsing captured animations and playing a recording](docs/media/animations.gif)
-
-[Higher-quality MP4 recording](docs/media/animations.mp4)
 
 ## How it works
 
