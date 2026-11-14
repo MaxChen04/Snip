@@ -8,7 +8,7 @@ A private library of website design references. Paste a URL, choose **Landing pa
 
 Website: [usesnip.dev](https://usesnip.dev) · [Releases and downloads](https://github.com/MaxChen04/Snip/releases) · [0.1.36 beta release notes](docs/releases/0.1.36.md) · License: [source-available](#license)
 
-**0.1.36 is the next beta target, not a published download yet.** The current published release is [v0.1.0](https://github.com/MaxChen04/Snip/releases/tag/v0.1.0), which contains source only. Build from source below, or check the releases page for published assets. Signed installation and native update acceptance remain release gates; see [desktop release guidance](desktop/RELEASING.md).
+0.1.36 is the beta target release.
 
 ## Quick start
 
