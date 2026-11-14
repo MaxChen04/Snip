@@ -36,6 +36,26 @@ export function useGridSize(): [GridSize, (g: GridSize) => void] {
   ]
 }
 
+export type HomeView = "canvas" | "grid"
+const VIEW_EVENT = "rs:view"
+
+/** Home as the infinite canvas or a scrolling grid; shared by every hook user, like useGridSize. */
+export function useHomeView(): [HomeView, (v: HomeView) => void] {
+  const [view, setView] = useState<HomeView>(() => readPref("rs.view", "canvas"))
+  useEffect(() => {
+    const on = () => setView(readPref("rs.view", "canvas"))
+    window.addEventListener(VIEW_EVENT, on)
+    return () => window.removeEventListener(VIEW_EVENT, on)
+  }, [])
+  return [
+    view,
+    (v) => {
+      writePref("rs.view", v)
+      window.dispatchEvent(new Event(VIEW_EVENT))
+    },
+  ]
+}
+
 export const masonryCols: Record<GridSize, string> = {
   s: "columns-2 sm:columns-3 lg:columns-5 2xl:columns-6",
   m: "columns-1 sm:columns-2 lg:columns-4 2xl:columns-5",

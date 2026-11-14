@@ -3,7 +3,8 @@ import { Link } from "wouter"
 import { motion, useReducedMotion } from "motion/react"
 import { BookmarkIcon, ChevronDownIcon, KeyRound, LogOutIcon, McpServerIcon, MonitorIcon, MoonIcon, SearchIcon, SunIcon, XIcon } from "@/components/icons"
 import { BookmarkletDialog } from "@/components/bookmarklet-dialog"
-import { api, type StorageUsage } from "@/lib/api"
+import { api, type Reference, type StorageUsage } from "@/lib/api"
+import { SiteIcon } from "@/components/site-icon"
 import { useAddFlow } from "@/components/add-flow"
 import { BoardsList } from "@/components/canvas/boards-list"
 import { isLocalOrigin } from "@/lib/mcp"
@@ -22,7 +23,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
-import { useGridSize, type GridSize } from "@/lib/prefs"
+import { useGridSize, useHomeView, type GridSize, type HomeView } from "@/lib/prefs"
 
 // Cosmos-style chrome: three floating pills (brand + board switcher, search, actions).
 
@@ -58,35 +59,7 @@ export function TopBar({
       <BoardSwitcher boardId={boardId} />
 
       {onQuery ? (
-        // Compact until it's in use: it widens while focused or holding a query, so the canvas doesn't feel crowded.
-        <label
-          className={cn(
-            pill,
-            "mx-auto w-60 min-w-0 gap-2 px-3 transition-[width] duration-200 ease-out focus-within:w-80 has-[input:not(:placeholder-shown)]:w-80 motion-reduce:transition-none has-focus-visible:outline-2 has-focus-visible:outline-offset-2",
-          )}
-        >
-          <SearchIcon className="size-3.5 shrink-0 text-ink-9" />
-          <input
-            data-search
-            value={query}
-            onChange={(e) => onQuery(e.target.value)}
-            onKeyDown={(e) => e.key === "Escape" && e.currentTarget.blur()}
-            placeholder="Search…"
-            aria-label="Search your saves"
-            aria-keyshortcuts="/"
-            className="peer h-full min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-ink-10 pointer-coarse:text-base"
-          />
-          {!query && (
-            <kbd aria-hidden className="hidden h-5 min-w-5 place-items-center rounded-sm bg-ink-3 px-1 text-2xs text-ink-10 pointer-fine:grid pointer-fine:peer-focus:hidden">
-              /
-            </kbd>
-          )}
-          {query && (
-            <button onClick={() => onQuery("")} aria-label="Clear search" className="press grid size-5 place-items-center rounded-full bg-control text-ink-10 shadow-button hover:text-foreground active:scale-[0.92]">
-              <XIcon className="size-3" />
-            </button>
-          )}
-        </label>
+        <SearchField query={query ?? ""} onQuery={onQuery} />
       ) : (
         <div className="flex-1" />
       )}
@@ -96,6 +69,74 @@ export function TopBar({
         <AccountMenu login={login} />
       </div>
     </header>
+  )
+}
+
+/**
+ * Compact until it's in use: it widens while focused or holding a query, so the canvas doesn't feel crowded. While
+ * focused and empty, a panel says what search matches and offers saved sites as one-click filters.
+ */
+function SearchField({ query, onQuery }: { query: string; onQuery: (q: string) => void }) {
+  const [sites, setSites] = useState<Reference[] | null>(null)
+  const loadSites = () => sites || api.references({ status: "ready" }, null, 8).then((p) => setSites(p.items.filter((r, i, a) => a.findIndex((x) => x.domain === r.domain) === i)), () => setSites([]))
+  return (
+    <div className="group/search relative mx-auto min-w-0">
+      <label
+        className={cn(
+          pill,
+          "w-60 min-w-0 gap-2 px-3 transition-[width] duration-200 ease-out focus-within:w-96 has-[input:not(:placeholder-shown)]:w-96 motion-reduce:transition-none has-focus-visible:outline-2 has-focus-visible:outline-offset-2 max-sm:focus-within:w-full max-sm:has-[input:not(:placeholder-shown)]:w-full",
+        )}
+      >
+        <SearchIcon className="size-3.5 shrink-0 text-ink-9" />
+        <input
+          data-search
+          value={query}
+          onFocus={() => void loadSites()}
+          onChange={(e) => onQuery(e.target.value)}
+          onKeyDown={(e) => e.key === "Escape" && e.currentTarget.blur()}
+          placeholder="Search sites, pages, sections…"
+          aria-label="Search your saves by site, page title, path or section"
+          aria-keyshortcuts="/"
+          className="peer h-full min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-ink-10 pointer-coarse:text-base"
+        />
+        {!query && (
+          <kbd aria-hidden className="hidden h-5 min-w-5 place-items-center rounded-sm bg-ink-3 px-1 text-2xs text-ink-10 pointer-fine:grid pointer-fine:peer-focus:hidden">
+            /
+          </kbd>
+        )}
+        {query && (
+          <button onClick={() => onQuery("")} aria-label="Clear search" className="press grid size-5 place-items-center rounded-full bg-control text-ink-10 shadow-button hover:text-foreground active:scale-[0.92]">
+            <XIcon className="size-3" />
+          </button>
+        )}
+      </label>
+      {/* Shown by CSS while focus is inside, so tabbing from the field to a chip keeps it open. */}
+      {!query && (
+        <div className="absolute inset-x-0 top-12 hidden flex-col gap-2.5 rounded-2xl bg-popover p-3 shadow-menu group-focus-within/search:flex">
+          <p className="text-2xs text-ink-10">Matches site names and links, page titles and paths, and section names like “pricing” or “footer”.</p>
+          {!!sites?.length && (
+            <div className="flex flex-col gap-1.5">
+              <span className="text-2xs font-medium text-ink-11">Your sites</span>
+              <div className="flex flex-wrap gap-1.5">
+                {sites.map((r) => (
+                  <button
+                    key={r.id}
+                    type="button"
+                    // Keep focus in the field so the panel stays put and the results show at once.
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => onQuery(r.domain)}
+                    className="tactile press flex h-7 items-center gap-1.5 rounded-full pr-2.5 pl-1.5 text-2xs"
+                  >
+                    <SiteIcon domain={r.domain} icon={r.favicon} />
+                    {r.domain}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -183,6 +224,7 @@ function StorageMeter({ usage }: { usage: StorageUsage | null | "error" }) {
 function AccountMenu({ login }: { login: string }) {
   const { theme, setTheme } = useTheme()
   const [grid, setGrid] = useGridSize()
+  const [view, setView] = useHomeView()
   const [usage, setUsage] = useState<StorageUsage | null | "error">(null)
   const [bookmarklet, setBookmarklet] = useState(false)
   return (
@@ -213,6 +255,17 @@ function AccountMenu({ login }: { login: string }) {
               { value: "light", label: <SunIcon className="size-3.5" />, title: "Light" },
               { value: "dark", label: <MoonIcon className="size-3.5" />, title: "Dark" },
               { value: "system", label: <MonitorIcon className="size-3.5" />, title: "System" },
+            ]}
+          />
+        </div>
+        <div className="flex items-center justify-between px-2 py-1.5 text-xs">
+          Gallery
+          <Segmented<HomeView>
+            value={view}
+            onChange={setView}
+            options={[
+              { value: "canvas", label: "Canvas", title: "Infinite canvas you can drag around" },
+              { value: "grid", label: "Grid", title: "Scrolling grid" },
             ]}
           />
         </div>

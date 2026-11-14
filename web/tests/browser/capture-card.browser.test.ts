@@ -1,4 +1,4 @@
-// The capture card at the canvas origin: its options, its status line and the pill beside the field.
+// The capture card at the canvas origin (its status line) and the dock's + popover (its options).
 import assert from "node:assert/strict"
 import { after, before, test } from "node:test"
 import { STOPPED_EMPTY, WAITING } from "../../shared/capture-errors.ts"
@@ -10,11 +10,12 @@ let app: App
 before(async () => void (app = await startApp()))
 after(async () => app?.stop())
 
-test("the card and the Add dialog offer the same crawl page caps", async () => {
+test("the + popover and the Add dialog offer the same crawl page caps", async () => {
   const t = await app.session({ state: { boards: { board1: boardOf() } } })
   const { page } = t
   await t.goto("/")
-  await page.getByRole("button", { name: "Crawl site" }).click()
+  await page.getByRole("button", { name: "Add a site or images" }).click()
+  await page.getByRole("radio", { name: /Whole site/ }).click()
   const card = await page.getByRole("group", { name: "Pages to crawl" }).getByRole("button").allInnerTexts()
 
   await t.goto("/b/board1")
@@ -37,27 +38,15 @@ const withRunning = async (r: Reference, opts: { viewport?: { width: number; hei
   await t.goto("/")
   return t
 }
-const card = (t: Awaited<ReturnType<typeof withRunning>>) => t.page.locator("form")
+const card = (t: Awaited<ReturnType<typeof withRunning>>) => t.page.locator("[data-capture-status]")
 
-test("the options stay on the card while a capture runs", async () => {
+test("the + popover offers the landing page, the whole site and image upload while a capture runs", async () => {
   const t = await withRunning(reference({ status: "capturing", progress: "Capturing 1/1: /" }))
-  await card(t).getByText("Capturing", { exact: true }).waitFor()
-  assert.equal(await t.page.getByRole("button", { name: "More options" }).isVisible(), true)
-  assert.equal(await t.page.getByRole("button", { name: "One page" }).isVisible(), true)
-  assert.equal(await t.page.getByRole("button", { name: "Crawl site" }).isVisible(), true)
+  await card(t).getByText("Capturing example.com").waitFor()
+  await t.page.getByRole("button", { name: "Add a site or images" }).click()
+  for (const name of [/Landing page/, /Whole site/]) assert.equal(await t.page.getByRole("radio", { name }).isVisible(), true)
   assert.equal(await t.page.getByRole("button", { name: "Upload images" }).isVisible(), true)
-})
-
-test("the pill names the state: Queued while waiting, Capturing once it runs", async () => {
-  const queued = await withRunning(reference({ status: "queued", progress: WAITING }))
-  await card(queued).getByText(WAITING).waitFor()
-  assert.equal(await card(queued).getByText("Queued", { exact: true }).count(), 1)
-  assert.equal(await card(queued).getByText("Capturing", { exact: true }).count(), 0)
-
-  const running = await withRunning(reference({ status: "capturing", progress: "Capturing 1/1: /" }))
-  await card(running).getByText("Capturing example.com").waitFor()
-  assert.equal(await card(running).getByText("Capturing", { exact: true }).count(), 1)
-  assert.equal(await card(running).getByText("Queued", { exact: true }).count(), 0)
+  assert.equal(await t.page.getByRole("button", { name: "More options" }).isVisible(), true)
 })
 
 test("a queued capture reads the Worker's progress text on the card and the reference page, agent online or not", async () => {
@@ -159,17 +148,14 @@ test("the card shows the capture that is capturing, not a newer one still queued
   // Of the two being captured, the one that started last.
   await card(t).getByText("Capturing bbb.example").waitFor()
   assert.equal(await card(t).getByText("+2 more").count(), 1)
-  assert.equal(await card(t).getByText("Capturing", { exact: true }).count(), 1, "the pill")
-  assert.equal(await card(t).getByText("Queued", { exact: true }).count(), 0)
 })
 
-test("with nothing capturing the card shows the newest capture", async () => {
+test("with nothing capturing the card shows a queued capture and counts the rest", async () => {
   const a = capture("aaa", { status: "queued", progress: WAITING, createdAt: at(1) })
   const b = capture("bbb", { status: "queued", progress: WAITING, createdAt: at(2) })
   const t = await withCaptures([a, b])
-  await card(t).getByText("Queued", { exact: true }).waitFor()
+  await card(t).getByText(WAITING).waitFor()
   assert.equal(await card(t).getByText("+1 more").count(), 1)
-  assert.equal(await t.page.getByPlaceholder("bbb.example").count(), 1, "the field names the newest")
 })
 
 test("a capture that finishes while another is capturing leaves the card, and the count follows", async () => {

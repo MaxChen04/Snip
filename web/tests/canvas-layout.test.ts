@@ -136,3 +136,15 @@ test("staging mounts a step of fewer new tiles than the limit at once", () => {
   const step = stageTiles(wanted, new Set(wanted.slice(10).map((t) => t.key)), rect)
   assert.deepEqual(step, { tiles: wanted, later: false })
 })
+
+test("a closed plaza leaves no hole: tiles meet at the origin, small library or repeating block", () => {
+  const middle: Rect = { x: -100, y: -60, w: 200, h: 120 }
+  for (const n of [10, 80]) {
+    const layout = layoutHome(make(n), { w: 0, h: 0 })
+    assert.equal(layout.fill.length, 0)
+    const all = visibleTiles(layout, { x: -3000, y: -3000, w: 6000, h: 6000 })
+    assertNoOverlaps(all)
+    const covered = visibleTiles(layout, middle).reduce((s, t) => s + overlap(t, middle), 0)
+    assert.ok(covered > 0.7 * middle.w * middle.h, `${n} items: the middle is only ${Math.round((covered / (middle.w * middle.h)) * 100)}% covered`)
+  }
+})
