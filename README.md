@@ -4,7 +4,9 @@
 
 A private library of website design references. Paste a URL, choose **Landing page** or **Whole site**, and a capture agent on your machine records the selected page or crawls its links up to your page limit. Your agent reads them back over MCP.
 
-![Browsing a collection, opening a captured site and a page in Snip](docs/media/browse.gif)
+![Browsing the canvas, filtering websites and opening a saved site in Snip](docs/media/browse.gif)
+
+[Higher-quality MP4 recording](docs/media/browse.mp4)
 
 Website: [usesnip.dev](https://usesnip.dev) · [Releases and downloads](https://github.com/MaxChen04/Snip/releases) · [0.1.36 beta release notes](docs/releases/0.1.36.md) · License: [source-available](#license)
 
@@ -121,9 +123,11 @@ Choose an **infinite canvas** or a **scrolling grid** in the account menu's **Ga
 - **Connect MCP** in the top bar shows setup for Claude, Codex, OpenCode, Cursor and other clients.
 - Press <kbd>/</kbd> to search. A banner explains when captures are waiting for the capture agent. The account menu shows library storage use.
 
-**Reference page viewer.** The detailed reference view retains the resizable Tokens, HTML and CSS sidebar and desktop/mobile captures. The canvas inspector instead groups its information into Sections, Colors & type and Motion tabs. The images below show the reference view.
+**Canvas inspector.** Open a saved page, switch between desktop and mobile, inspect Colors & type, and explore Motion. The detailed reference view also retains the resizable Tokens, HTML and CSS sidebar.
 
-![Page viewer with resizable Tokens, HTML and CSS sidebar](docs/media/viewer.gif)
+![Canvas inspector showing mobile captures, colors and type, and motion](docs/media/viewer.gif)
+
+[Higher-quality MP4 recording](docs/media/viewer.mp4)
 
 **Design tokens.** Every website gets its colors, type, spacing, radii and shadows extracted.
 
@@ -131,11 +135,15 @@ Choose an **infinite canvas** or a **scrolling grid** in the account menu's **Ga
 
 **Select and Copy prompt.** Pick pages, animations and tokens, then copy a prompt that points your agent at exactly those references over MCP. In the page viewer, **Add to prompt** keeps the viewport and theme you're looking at, and the checks in the Sections sidebar narrow it to those sections. The prompt names the capture run its ids came from; if you recapture the site later, the agent calls `resolve_selection` to find the same items again.
 
-![Selecting pages and copying an agent prompt](docs/media/select.gif)
+![Selecting pages and tokens and copying an agent prompt](docs/media/select.gif)
+
+[Higher-quality MP4 recording](docs/media/select.mp4)
 
 **Animations.** Scroll and hover recordings from every capture, in one feed.
 
-![Animations gallery](docs/media/animations.gif)
+![Browsing captured animations and playing a recording](docs/media/animations.gif)
+
+[Higher-quality MP4 recording](docs/media/animations.mp4)
 
 ## How it works
 
