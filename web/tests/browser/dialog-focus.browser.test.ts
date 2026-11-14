@@ -21,6 +21,9 @@ const focused = (page: Page) =>
  * time. The dialog's own focus guards (hidden spans) are not counted.
  */
 const tabStaysIn = async (page: Page, dialog: Locator, key: "Tab" | "Shift+Tab", n = 30) => {
+  // Base UI transfers initial focus on the next animation frame, not on DOM mount.
+  // Observe that handoff without moving focus ourselves; then record every Tab leak.
+  await dialog.page().waitForFunction((d) => d?.contains(document.activeElement), await dialog.elementHandle(), { timeout: 1000 })
   await dialog.evaluate((d) => {
     const w = window as unknown as { leaks: string[] }
     w.leaks = []
@@ -114,6 +117,7 @@ test("the Add dialog opens with its URL field focused, every time it opens", asy
     const dialog = page.getByRole("dialog", { name: "New reference" })
     await dialog.waitFor()
     await page.getByRole("textbox", { name: "Website URL" }).waitFor()
+    await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "Website URL", undefined, { timeout: 1000 })
     assert.equal(await focused(page), "INPUT:Website URL")
     await page.keyboard.press("Escape")
     await dialog.waitFor({ state: "detached" })

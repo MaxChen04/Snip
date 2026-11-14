@@ -47,6 +47,7 @@ const open = async (t: Awaited<ReturnType<typeof website>>) => {
   const viewer = page.getByRole("dialog")
   await viewer.waitFor()
   await viewer.getByRole("button", { name: "Close" }).waitFor()
+  await page.waitForFunction(() => document.querySelector('[role="dialog"]')?.contains(document.activeElement), undefined, { timeout: 1000 })
   return { viewer, opener: before }
 }
 
@@ -105,6 +106,8 @@ test("the website's page behind the viewer is hidden from screen readers and doe
   const { page } = t
   const { viewer, opener } = await open(t)
   const scrollLock = () => page.evaluate(() => getComputedStyle(document.body).overflow)
+  // Scroll locking is scheduled asynchronously, independently of initial focus.
+  await page.waitForFunction(() => getComputedStyle(document.body).overflow === "hidden", undefined, { timeout: 1000 })
   assert.equal(await scrollLock(), "hidden")
   // Assistive technology sees the viewer and nothing of the website behind it.
   assert.equal(await page.getByRole("button", { name: "Select", exact: true }).count(), 0, "the page behind is still in the accessibility tree")
@@ -122,6 +125,8 @@ test("the website's page behind the viewer is hidden from screen readers and doe
   await viewer.getByRole("button", { name: "Close" }).click()
   await viewer.waitFor({ state: "detached" })
   await page.getByRole("button", { name: "Select", exact: true }).waitFor()
+  // Base UI releases its shared scroll lock on the next task after unmount.
+  await page.waitForFunction(() => getComputedStyle(document.body).overflow !== "hidden", undefined, { timeout: 1000 })
   assert.notEqual(await scrollLock(), "hidden")
   assert.equal(await focused(page), opener)
 })
