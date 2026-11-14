@@ -8,7 +8,7 @@ import {
   type RegistrationResponseJSON,
   type WebAuthnCredential,
 } from "@simplewebauthn/server"
-import { type AppEnv, crossSiteWrite, currentEpoch, getSession, setSessionCookie } from "./auth"
+import { type AppEnv, crossSiteWrite, currentEpoch, getSession, setSessionCookie, signOutAll } from "./auth"
 import * as db from "./db"
 
 // Passkeys are an owner-only convenience: the owner registers one from the owner link so every
@@ -134,7 +134,7 @@ export async function loginVerify(c: Context<AppEnv>) {
   if (!body?.response?.id) return c.json(badRequest("Expected an authentication response"), 400)
 
   const context = await db.getPasskeyLogin(c.env.DB, body.response.id)
-  if (!context) return c.json(badRequest("This passkey is not registered on this Snip library."), 400)
+  if (!context) return c.json(badRequest("This passkey is no longer registered for this Snip library. Use the owner link or GitHub to sign in."), 400)
   const { passkey, owner, epoch } = context
 
   const { rpID, origin } = relyingParty(c.env)
@@ -177,6 +177,10 @@ export async function listDevices(c: Context<AppEnv>) {
 }
 
 export async function removeDevice(c: Context<AppEnv>) {
-  const removed = await db.deletePasskey(c.env.DB, c.get("session").ownerId, c.req.param("id")!)
-  return removed ? c.json({ ok: true }) : c.json(badRequest("No such passkey"), 404)
+  const session = c.get("session")
+  if (!(await db.deletePasskey(c.env.DB, session.ownerId, c.req.param("id")!))) return c.json(badRequest("No such passkey"), 404)
+  // A session does not record which passkey signed it in, so a removed device is signed out by ending them all,
+  // connected agents included. This one is renewed.
+  await setSessionCookie(c, { ...session, epoch: await signOutAll(c.env, session) })
+  return c.json({ ok: true })
 }

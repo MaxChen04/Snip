@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react"
+import { useEffect, useRef, useState, type ReactNode } from "react"
 import { cn } from "cn"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -164,17 +164,17 @@ export function SignOutDialog({ open, onOpenChange, onConfirm }: { open: boolean
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[440px]">
         <DialogHeader>
-          <DialogTitle>Sign out all devices?</DialogTitle>
+          <DialogTitle>Sign out everywhere, including connected agents?</DialogTitle>
           <DialogDescription>
-            Signs out browsers and this app. You'll sign in again with your passkey. Agents that already have access keep it until their token expires, up to 7
-            days.
+            Browsers, this app and connected agents all stop working immediately. Browsers and the app have to sign in again, and agents have to reconnect.
+            This Mac's owner link is the way back in.
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={onConfirm}>Sign out all devices</Button>
+          <Button onClick={onConfirm}>Sign out everywhere</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -193,13 +193,15 @@ export function DeleteResourcesDialog({
   onConfirm: () => void
 }) {
   const [value, setValue] = useState("")
+  const field = useRef<HTMLInputElement>(null)
   useEffect(() => {
     if (open) setValue("")
   }, [open])
-  const matches = value.trim().toLowerCase() === host.toLowerCase()
+  // With no cloud library on record there is nothing to name, so nothing to confirm.
+  const matches = host !== "" && value.trim().toLowerCase() === host.toLowerCase()
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[460px]">
+      <DialogContent initialFocus={field} className="sm:max-w-[460px]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <TriangleAlertIcon className="size-4 text-(--red-11)" />
@@ -214,7 +216,7 @@ export function DeleteResourcesDialog({
           <span className="text-xs font-medium text-muted-foreground">
             Type <span className="font-mono text-foreground">{host}</span> to confirm
           </span>
-          <Input autoFocus value={value} onChange={event => setValue(event.target.value)} spellCheck={false} autoComplete="off" aria-label="Cloud library address" />
+          <Input ref={field} value={value} onChange={event => setValue(event.target.value)} spellCheck={false} autoComplete="off" aria-label="Cloud library address" />
         </label>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>

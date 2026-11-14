@@ -165,18 +165,31 @@ export function layoutHome(items: { key: string; aspect: number }[], plaza: Plaz
 
 const intersects = (a: Rect, x: number, y: number, w: number, h: number) => x < a.x + a.w && x + w > a.x && y < a.y + a.h && y + h > a.y
 
+type Bounds = { minX: number; minY: number; maxX: number; maxY: number }
+// A layout never changes once made, and visibleTiles runs on every visible-rect change (every frame of a zoom).
+const boundsOf = new WeakMap<HomeLayout, Bounds>()
+function bounds(layout: HomeLayout): Bounds {
+  let b = boundsOf.get(layout)
+  if (!b) {
+    b = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity }
+    for (const list of [layout.tiles, layout.fill])
+      for (const t of list) {
+        b.minX = Math.min(b.minX, t.x)
+        b.minY = Math.min(b.minY, t.y)
+        b.maxX = Math.max(b.maxX, t.x + t.w)
+        b.maxY = Math.max(b.maxY, t.y + t.h)
+      }
+    boundsOf.set(layout, b)
+  }
+  return b
+}
+
 /** Tiles (with copies of a repeating block) that intersect a world rect, origin copy first, newest first within a copy. */
 export function visibleTiles(layout: HomeLayout, r: Rect): Placement[] {
   const { tiles, fill, period } = layout
   if (!period) return tiles.filter((t) => intersects(r, t.x, t.y, t.w, t.h))
 
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
-  for (const t of [...tiles, ...fill]) {
-    minX = Math.min(minX, t.x)
-    minY = Math.min(minY, t.y)
-    maxX = Math.max(maxX, t.x + t.w)
-    maxY = Math.max(maxY, t.y + t.h)
-  }
+  const { minX, minY, maxX, maxY } = bounds(layout)
   const copies: [number, number][] = []
   for (let i = Math.floor((r.x - maxX) / period.w); i <= Math.ceil((r.x + r.w - minX) / period.w); i++)
     for (let j = Math.floor((r.y - maxY) / period.h); j <= Math.ceil((r.y + r.h - minY) / period.h); j++) copies.push([i, j])
@@ -186,9 +199,33 @@ export function visibleTiles(layout: HomeLayout, r: Rect): Placement[] {
   for (const [i, j] of copies) {
     const dx = i * period.w
     const dy = j * period.h
-    for (const t of i === 0 && j === 0 ? tiles : [...tiles, ...fill]) {
-      if (intersects(r, t.x + dx, t.y + dy, t.w, t.h)) out.push({ ...t, key: `${t.key}@${i},${j}`, x: t.x + dx, y: t.y + dy })
+    // The origin copy keeps the plaza clear; the others fill it.
+    for (const list of i === 0 && j === 0 ? [tiles] : [tiles, fill]) {
+      for (const t of list) {
+        if (intersects(r, t.x + dx, t.y + dy, t.w, t.h)) out.push({ ...t, key: `${t.key}@${i},${j}`, x: t.x + dx, y: t.y + dy })
+      }
     }
   }
   return out
+}
+
+/** The most tiles a render mounts that were not mounted before (see stageTiles). */
+export const MOUNT_PER_FRAME = 100
+
+/**
+ * One step of a zoom can bring hundreds of tiles into view: one notch of a mouse wheel took the real library from 135
+ * mounted tiles to 318, then 406, then 866. Mounting a tile (React's render and commit, then style, layout and paint)
+ * costs the main thread about 0.13 ms in a build and 0.23 ms in development, so the last 549 of those were one 59 ms
+ * frame in a build. So of the `wanted` tiles this returns every one that is mounted already and at most `limit` new
+ * ones, nearest the middle of the rect first, in the order of `wanted`; `later` says some were held back for the next
+ * frame. Tiles that left `wanted` are simply gone.
+ */
+export function stageTiles(wanted: Placement[], mounted: ReadonlySet<string>, r: Rect, limit = MOUNT_PER_FRAME): { tiles: Placement[]; later: boolean } {
+  const fresh = wanted.filter((t) => !mounted.has(t.key))
+  if (fresh.length <= limit) return { tiles: wanted, later: false }
+  const cx = r.x + r.w / 2
+  const cy = r.y + r.h / 2
+  const away = (t: Placement) => Math.hypot(t.x + t.w / 2 - cx, t.y + t.h / 2 - cy)
+  const admitted = new Set(fresh.sort((a, b) => away(a) - away(b)).slice(0, limit))
+  return { tiles: wanted.filter((t) => mounted.has(t.key) || admitted.has(t)), later: true }
 }

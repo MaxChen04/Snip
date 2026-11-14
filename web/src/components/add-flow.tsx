@@ -1,14 +1,16 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react"
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react"
 import { useLocation } from "wouter"
 import { XIcon } from "@/components/icons"
 import { toast } from "sonner"
-import { AddReferenceDialog, extractUrls } from "@/components/add-reference-dialog"
+import { AddReferenceDialog } from "@/components/add-reference-dialog"
 import { trackCapture } from "@/components/canvas/capture-card"
 import { ConnectMcpDialog } from "@/components/connect-mcp-dialog"
 import { notify } from "@/components/notify"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
 import { api } from "@/lib/api"
 import { useCollections } from "@/lib/collections"
+import { extractUrls } from "@/lib/site-url"
+import { MAX_NAME } from "../../shared/types"
 
 // One place that owns the "Create" dialogs so the top bar, board views and empty
 // states on any page open the same flow.
@@ -49,9 +51,10 @@ export function AddFlowProvider({ children }: { children: ReactNode }) {
       // The canvas capture card takes its own pastes (data-capture-input).
       if (typing(e.target) || (e.target as Element | null)?.closest?.("[data-capture-input]") || dialogOpen()) return
       const text = e.clipboardData?.getData("text") ?? ""
-      if (!extractUrls(text).length) return
+      const found = extractUrls(text)
+      if (!found.length) return
       e.preventDefault()
-      open(currentBoard(), text)
+      open(currentBoard(), found.map((u) => u.href).join(" "))
     }
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey || typing(e.target) || dialogOpen()) return
@@ -86,10 +89,6 @@ export function AddFlowProvider({ children }: { children: ReactNode }) {
         onOpenChange={(o) => !o && setAdding(null)}
         // Captures started here show on the canvas capture card too.
         onCreated={(r) => trackCapture(r.id)}
-        onAdded={() => {
-          setAdding(null)
-          window.dispatchEvent(new Event("rs:reload"))
-        }}
       />
       <NewCollectionDialog open={naming} onOpenChange={setNaming} />
       <ConnectMcpDialog open={connecting} onOpenChange={setConnecting} />
@@ -102,6 +101,7 @@ function NewCollectionDialog({ open, onOpenChange }: { open: boolean; onOpenChan
   const [, navigate] = useLocation()
   const [name, setName] = useState("")
   const [busy, setBusy] = useState(false)
+  const field = useRef<HTMLInputElement>(null)
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -109,7 +109,8 @@ function NewCollectionDialog({ open, onOpenChange }: { open: boolean; onOpenChan
     setBusy(true)
     try {
       const { id } = await api.createCollection(name.trim())
-      await refresh()
+      // The board exists now; a list that fails to reload is not a failed create.
+      await refresh().catch(() => {})
       onOpenChange(false)
       notify(`Created board “${name.trim()}”`)
       setName("")
@@ -123,7 +124,7 @@ function NewCollectionDialog({ open, onOpenChange }: { open: boolean; onOpenChan
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent showCloseButton={false} className="gap-0 p-0 sm:max-w-[400px]">
+      <DialogContent initialFocus={field} showCloseButton={false} className="gap-0 p-0 sm:max-w-[400px]">
         <form onSubmit={submit}>
           <div className="flex items-center justify-between px-5 pt-5 pb-4">
             <DialogTitle className="text-base font-medium">New board</DialogTitle>
@@ -134,11 +135,12 @@ function NewCollectionDialog({ open, onOpenChange }: { open: boolean; onOpenChan
           </div>
           <div className="px-5 pb-5">
             <input
-              autoFocus
+              ref={field}
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. Pricing pages"
               aria-label="Board name"
+              maxLength={MAX_NAME}
               className="well h-10 w-full rounded-lg px-3 text-sm outline-none placeholder:text-ink-10 focus:bg-ink-4 pointer-coarse:text-base"
             />
           </div>

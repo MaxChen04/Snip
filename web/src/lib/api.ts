@@ -43,6 +43,13 @@ export type PageWithRef = Page & { reference: RefSummary }
 export type AnimationWithRef = Animation & { reference: RefSummary }
 
 export class UnauthorizedError extends Error {}
+/** Fired on window when any request is answered 401: the session is over. App reacts to it. */
+export const SIGNED_OUT = "snip:signed-out"
+function signedOut() {
+  window.dispatchEvent(new Event(SIGNED_OUT))
+  return new UnauthorizedError("Not signed in")
+}
+export class NotFoundError extends Error {}
 
 /** The URL is already in the library. */
 export class DuplicateError extends Error {
@@ -56,11 +63,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
   })
-  if (res.status === 401) throw new UnauthorizedError("Not signed in")
+  if (res.status === 401) throw signedOut()
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as { error?: string; existing?: Reference }
     if (res.status === 409 && body.existing) throw new DuplicateError(body.existing)
-    throw new Error(body.error ?? `Request failed (${res.status})`)
+    const message = body.error ?? `Request failed (${res.status})`
+    throw res.status === 404 ? new NotFoundError(message) : new Error(message)
   }
   return res.json() as Promise<T>
 }
@@ -116,7 +124,7 @@ export const api = {
     if (body.collectionId) form.set("collectionId", body.collectionId)
     // No content-type header: the browser sets the multipart boundary.
     const res = await fetch("/api/images", { method: "POST", body: form })
-    if (res.status === 401) throw new UnauthorizedError("Not signed in")
+    if (res.status === 401) throw signedOut()
     if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error ?? `Upload failed (${res.status})`)
     return (await res.json()) as SavedImage
   },
@@ -129,7 +137,8 @@ export const api = {
   /** Save positions (and optionally width and group) for up to 200 items at once. */
   placeBoardItems: (id: string, items: BoardItemPlacement[]) =>
     request<{ ok: true }>(`/api/boards/${id}/items`, { method: "PUT", body: JSON.stringify({ items }) }),
-  addBoardNote: (id: string, note: { text: string; x: number; y: number; w?: number | null; groupId?: string | null }) =>
+  /** `z` is the stacking order (a whole number); omitted, the note goes on top. */
+  addBoardNote: (id: string, note: { text: string; x: number; y: number; z?: number; w?: number | null; groupId?: string | null }) =>
     request<BoardItem>(`/api/boards/${id}/notes`, { method: "POST", body: JSON.stringify(note) }),
   updateBoardNote: (id: string, noteId: string, text: string) =>
     request<{ ok: true }>(`/api/boards/${id}/notes/${noteId}`, { method: "PATCH", body: JSON.stringify({ text }) }),

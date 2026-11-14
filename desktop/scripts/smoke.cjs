@@ -41,6 +41,13 @@ async function main() {
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), "snip-desktop-smoke-"))
   const root = path.join(temp, "repo"), appDir = path.join(root, "desktop")
   let application, fixture
+  const slowResponses = new Set()
+  let releaseSlow = false
+  const releaseSlowPage = () => {
+    releaseSlow = true
+    for (const send of slowResponses) send()
+    slowResponses.clear()
+  }
   const evidence = { checks: [], platform: `${os.release()}/${process.arch}`, node: process.version }
   const check = name => { evidence.checks.push(name); console.log("PASS", name) }
   try {
@@ -68,8 +75,11 @@ async function main() {
     for (const key of ["ELECTRON_RUN_AS_NODE", "SNIP_URL", "CAPTURE_TOKEN", "DEV_LOGIN"]) delete env[key]
     await run(process.execPath, [path.join(ROOT, "node_modules/wrangler/bin/wrangler.js"), "d1", "migrations", "apply", "snip", "--local", "--config", path.join(root, "web/wrangler.jsonc"), "--persist-to", path.join(root, "web/.wrangler/state")], { cwd: root, env })
     fixture = http.createServer((req, res) => {
-      const send = () => { res.setHeader("content-type", "text/html"); res.end('<!doctype html><html><head><title>Snip owned fixture</title><style>body{margin:0;font-family:Arial}h1{padding:40px}section{height:1600px;background:linear-gradient(#eee,#aac)}button{margin:20px;padding:15px;transition:transform .2s}button:hover{transform:scale(1.1)}</style></head><body><h1>Owned capture fixture</h1><button>Example</button><section>Scroll content</section></body></html>') }
-      if (req.url === "/slow") setTimeout(send, 6500); else send()
+      const send = () => { if (res.destroyed || res.writableEnded) return; res.setHeader("content-type", "text/html"); res.end('<!doctype html><html><head><title>Snip owned fixture</title><style>body{margin:0;font-family:Arial}h1{padding:40px}section{height:1600px;background:linear-gradient(#eee,#aac)}button{margin:20px;padding:15px;transition:transform .2s}button:hover{transform:scale(1.1)}</style></head><body><h1>Owned capture fixture</h1><button>Example</button><section>Scroll content</section></body></html>') }
+      if (req.method === "GET" && req.url === "/slow" && !releaseSlow) {
+        slowResponses.add(send)
+        res.once("close", () => slowResponses.delete(send))
+      } else send()
     })
     const fixturePort = await listen(fixture)
     // Exercise the actual packager/signing path. An unpackaged launch can hide
@@ -79,6 +89,8 @@ async function main() {
     const bundle = path.join(packaged, "Snip-darwin-arm64/Snip.app")
     await run("codesign", ["--verify", "--deep", "--strict", bundle])
     application = await _electron.launch({ executablePath: path.join(bundle, "Contents/MacOS/Snip"), args: [], env, timeout: 30000 })
+    // Retain the native child before close disposes Playwright's application handle.
+    const appProcess = application.process()
     // Native macOS runners may leave a launched app behind another window.
     // Exercise visible controls in the foreground without disabling the real
     // background throttling that the idle checks below are meant to verify.
@@ -116,7 +128,7 @@ async function main() {
     evidence.visible = await processTree(application.process().pid)
     await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close())
     await until(async () => await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length) === 0, "hidden renderer was retained")
-    // Reach the 30-second steady-state queue interval and let Chromium exit.
+    // Reach the steady-state queue interval (10 seconds) and let Chromium exit.
     await sleep(35000)
     evidence.hidden = await processTree(application.process().pid)
     await sleep(30000)
@@ -153,14 +165,19 @@ async function main() {
       window.snipDesktop.checkQueue(); return ref
     }, `http://127.0.0.1:${fixturePort}/slow`)
     await until(async () => (await page.evaluate(id => fetch(`/api/references/${id}`).then(r => r.json()), slow.id)).reference.status === "capturing", "slow capture not claimed")
-    const tracked = await processTree(application.process().pid)
+    // "capturing" begins at claim time. Quitting before navigation correctly hands
+    // that claim back. Wait for an actual in-flight page, then hold its response.
+    await until(() => slowResponses.size > 0, "slow capture never requested its page")
+    const tracked = await processTree(appProcess.pid)
     const quitStart = Date.now()
     const closing = application.close()
     await sleep(5500)
-    assert.equal(application.process().exitCode, null, "quit killed a capture after five seconds")
+    assert.equal(appProcess.exitCode, null, "quit exited during an in-flight capture")
+    assert.equal(appProcess.signalCode, null, "quit killed an in-flight capture with a signal")
+    releaseSlowPage()
     await closing
     application = null
-    assert.ok(Date.now() - quitStart > 5500)
+    assert.ok(Date.now() - quitStart >= 5500)
     await until(() => tracked.every(({ pid }) => { try { process.kill(pid, 0); return false } catch { return true } }), "child processes survived quit", 10000)
     // Read the persisted DB through the same no-watch server after app exit.
     const { fork } = require("node:child_process")
@@ -177,7 +194,7 @@ async function main() {
       backend.send({ type: "snip:stop" })
       await new Promise(resolve => backend.once("exit", resolve))
     } finally { if (backend.exitCode === null) backend.kill("SIGKILL") }
-    check("quit drains a capture longer than five seconds before stopping its API; no children survive")
+    check("quit drains a capture longer than five seconds before stopping its API; no tracked children survive")
     await fs.writeFile(path.join(temp, "evidence.json"), JSON.stringify(evidence, null, 2))
     console.log(`Evidence: ${temp}/evidence.json`)
   } catch (error) {
@@ -192,6 +209,7 @@ async function main() {
     for (const name of ["web", "capture"]) console.error(await fs.readFile(path.join(temp, "logs", `${name}.log`), "utf8").catch(() => ""))
     throw error
   } finally {
+    releaseSlowPage()
     if (application) await application.close().catch(() => {})
     if (fixture) await new Promise(resolve => fixture.close(resolve))
   }

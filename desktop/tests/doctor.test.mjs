@@ -245,6 +245,19 @@ test("no doctor fix still sends users to the retired deploy config", async (t) =
   assert.match(edits.fix, /git checkout web\/wrangler\.jsonc/)
 })
 
+test("the doctor checks the capture env file the app would load for the mode", async (t) => {
+  // After a detach the engine has left capture/.env pointing at the cloud; the agent loads .env.local.
+  const root = repoFixture(t, { cloud: { mode: "local", cloud: { url: CLOUD, detachedAt: new Date().toISOString() } } })
+  const local = fs.readFileSync(path.join(root, "capture/.env"), "utf8")
+  fs.writeFileSync(path.join(root, "capture/.env.local"), local)
+  fs.writeFileSync(path.join(root, "capture/.env.cloud"), `SNIP_URL=${CLOUD}\nCAPTURE_TOKEN=cloud-token\n`)
+  fs.writeFileSync(path.join(root, "capture/.env"), `SNIP_URL=${CLOUD}\nCAPTURE_TOKEN=cloud-token\n`)
+  assert.ok(labels(await runChecks(root)).includes("capture/.env.local points at http://localhost:5173"))
+
+  fs.writeFileSync(path.join(root, ".snip/cloud.json"), JSON.stringify({ version: 1, mode: "cloud", cloud: { url: CLOUD } }))
+  assert.ok(labels(await runChecks(root)).includes(`capture/.env.cloud points at ${CLOUD}`))
+})
+
 test("parseFlags reads --check and --data-root", () => {
   assert.deepEqual(parseFlags([]), { check: false, dataRoot: null, help: false })
   assert.equal(parseFlags(["--check"]).check, true)

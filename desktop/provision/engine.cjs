@@ -109,6 +109,8 @@ async function runSteps(steps, ctx, { journal = true } = {}) {
       data = (await step.run(ctx)) || {};
     } catch (error) {
       if (error instanceof NeedsInputError || error instanceof CancelledError || error instanceof ChoiceRequired || error instanceof ConfirmRequired) throw error;
+      // A step that breaks because it was cancelled is a cancel, not a failure to journal.
+      if (ctx.cancelled) throw new CancelledError();
       const failure = error instanceof StepError
         ? error
         : new StepError('STEP_FAILED', error && error.message ? error.message : `${title} failed.`, { hint: error && error.hint });
@@ -122,6 +124,7 @@ async function runSteps(steps, ctx, { journal = true } = {}) {
       let verified = true;
       try { verified = await step.verify(ctx); } catch { verified = false; }
       if (!verified) {
+        if (ctx.cancelled) throw new CancelledError();
         const failure = new StepError('VERIFY_FAILED', `${title} did not take effect.`, {
           hint: 'Fix the cause and run the same command again; completed steps are skipped.',
           step: step.id,

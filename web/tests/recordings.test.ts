@@ -29,7 +29,7 @@ test("WebM recordings are served in byte ranges and described over MCP, next to 
     const ctx = { waitUntil(p: Promise<unknown>) { pending.push(p) }, passThroughOnException() {}, props: { ownerId: "max" } } as unknown as ExecutionContext
     const env = { DB: database, FILES: files, SESSION_SECRET: "test-secret", DEV_LOGIN: "max", CAPTURE_TOKEN: "test-token" } as unknown as Env
     const claim = () => app.request("http://localhost/agent/jobs/claim", {
-      method: "POST", headers: { authorization: "Bearer test-token", "x-snip-capture-protocol": "3" },
+      method: "POST", headers: { authorization: "Bearer test-token", "x-snip-capture-protocol": "4" },
     }, env, ctx)
     assert.equal((await claim()).status, 204, "an empty queue still returns no job")
     const ref = await db.createReference(database, { url: "https://example.com", mode: "single" })
@@ -39,13 +39,13 @@ test("WebM recordings are served in byte ranges and described over MCP, next to 
     assert.deepEqual(job.recordingFormats, ["gif", "webm"], "the serving Worker advertises formats it can display")
     const p = `refs/${ref.id}/${job.attempt}/p0`
     const anim = (kind: "scroll" | "hover", gifKey: string) => ({ kind, label: kind, selector: null, viewport: "desktop" as const, gifKey, width: 720, height: 450, sheetKey: null, meta: null })
-    await db.addPage(database, ref.id, job.attempt, {
+    await db.addPage(database, ref.id, job.lease, {
       url: "https://example.com/", path: "/", title: "Home", ord: 0,
       desktopKey: `${p}/desktop.jpg`, desktopThumbKey: `${p}/desktop-thumb.jpg`, desktopWidth: 1440, desktopHeight: 900,
       mobileKey: null, mobileThumbKey: null, mobileWidth: null, mobileHeight: null, snapshotKey: null, stylesKey: null, tokens: null,
       animations: [anim("scroll", `${p}/scroll.webm`), anim("hover", `${p}/hover-0.gif`)],
     })
-    await db.completeJob(database, ref.id, job.attempt, { title: null, description: null, favicon: null, coverKey: null, tokens: null })
+    await db.completeJob(database, ref.id, job.lease, { title: null, description: null, favicon: null, coverKey: null, tokens: null })
     const video = new Uint8Array(1000).map((_, i) => i % 256)
     await files.put(`${p}/scroll.webm`, video, { httpMetadata: { contentType: "video/webm" } })
     await files.put(`${p}/hover-0.gif`, new TextEncoder().encode("GIF89a"), { httpMetadata: { contentType: "image/gif" } })

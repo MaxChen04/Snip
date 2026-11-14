@@ -6,6 +6,7 @@ import { collectionCountLabel } from "@/components/collection-picker"
 import { api, fileUrl } from "@/lib/api"
 import { useCollections } from "@/lib/collections"
 import { cn } from "@/lib/utils"
+import { MAX_NAME } from "../../../shared/types"
 
 const row =
   "flex h-14 w-full shrink-0 items-center gap-3 rounded-md px-2 text-left transition-colors duration-150 ease-out hover:bg-ink-3 focus-visible:-outline-offset-2"
@@ -172,6 +173,7 @@ export function BoardsList({
             }}
             placeholder="e.g. Pricing pages"
             aria-label="Board name"
+            maxLength={MAX_NAME}
             className="well h-8 min-w-0 flex-1 rounded-md px-2.5 text-xs outline-none placeholder:text-ink-10 pointer-coarse:h-10 pointer-coarse:text-base"
           />
           <button

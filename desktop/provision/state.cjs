@@ -9,7 +9,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 
 const LOCK_STALE_MS = 15 * 60 * 1000;
-const MODES = new Set(['local', 'enabling', 'cloud', 'disabling']);
+const MODES = new Set(['local', 'enabling', 'cloud']);
 const STEP_STATUSES = new Set(['done', 'skipped', 'failed', 'waiting']);
 
 class StateError extends Error {
@@ -126,16 +126,18 @@ function setMode(dataRoot, mode) {
 function beginEnabling(dataRoot) {
   return updateState(dataRoot, (state) => {
     if (state.mode === 'cloud') throw new StateError('ALREADY_CLOUD', 'This library is already using the cloud.', 'Run `status` to see it, or `pull` to copy it back.');
-    if (state.mode === 'disabling') throw new StateError('BUSY_MODE', 'A copy-back is in progress.', 'Let it finish or run `abort` first.');
     if (!state.library.id) state.library.id = randomId();
     if (state.mode !== 'enabling') {
       state.steps = [];
-      state.pausedForMove = [];
       state.transfer = null;
+      // A pull that died mid-swap is not being resumed any more, so its backup
+      // note must not make a later pull treat the live library as its own download.
+      delete state.pullBackup;
       if (state.cloud) {
         // Keep what the account already holds (ids, url, detachedAt) so guard
-        // can recognise this Mac's own install, but drop the last run's outcome.
-        const { outcome, move, ...kept } = state.cloud;
+        // can recognise this Mac's own install, but drop the last run's outcome
+        // and its abort scope: what an earlier run created is not this run's to delete.
+        const { outcome, move, created, ...kept } = state.cloud;
         state.cloud = kept;
       }
     }

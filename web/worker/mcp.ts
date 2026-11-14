@@ -2,13 +2,15 @@ import { createMcpHandler } from "agents/mcp/server"
 import { McpServer, ProtocolError, ProtocolErrorCode, type CallToolResult } from "@modelcontextprotocol/server"
 import { z } from "zod"
 import { isVideoKey, type Animation, type DesignTokens, type Page, type Reference } from "../shared/types"
-import { isLocalOrigin, signFileUrl } from "./auth"
+import { pageSummary } from "../shared/page-summary"
+import { agentAdvice, agentState } from "../shared/agent-state"
+import { currentEpoch, isLocalOrigin, signFileUrl } from "./auth"
 import * as db from "./db"
 import { readText } from "./files"
 import { bounded, decodeCursor, encodeCursor } from "./mcp-bounds"
 import {
   TASKS_EXTENSION, WAIT_DEFAULT_SECONDS, WAIT_MAX_SECONDS, WAIT_STEP_MS,
-  clientDeclaresTasks, isFinished, needsUser, parseTaskId, supersededTaskFields, taskFields,
+  clientDeclaresTasks, isOver, parseTaskId, supersededTaskFields, taskFields, taskStatus,
 } from "./mcp-tasks"
 import { WORKER_VERSION } from "./version"
 
@@ -126,11 +128,8 @@ function buildServer(env: Env, origin: string) {
   const coverage = (h: number | null) => (h == null ? "not_captured" : h >= PAGE_CLIP_PX ? "clipped_at_height_limit" : "full_document_at_capture")
 
   const describePage = async (p: Page, withUrls = false) => ({
-    id: p.id,
+    ...pageSummary(p),
     referenceId: p.referenceId,
-    url: p.url,
-    path: p.path,
-    title: p.title,
     desktop: {
       fullPageUrl: await url(p.desktopKey),
       thumbUrl: await url(p.desktopThumbKey),
@@ -221,7 +220,7 @@ function buildServer(env: Env, origin: string) {
       bytes += size
       images.push(got.image)
     }
-    const listed = bounded(pages.map((p) => ({ id: p.id, path: p.path, title: p.title })), 0, 10)
+    const listed = bounded(pages.map(pageSummary), 0, 10)
     const tokens = tokenSummary(full.tokens, 4)
     return ok(
       {
@@ -276,8 +275,10 @@ function buildServer(env: Env, origin: string) {
     requireTasks(ctx)
     const { ref, current } = await findTask(taskId)
     // Cooperative, like the app's Stop: a running crawl ends after its current page and keeps what it captured.
-    // A superseded task is already over; cancelling it must not stop the user's recapture.
-    if (current) await db.requestStop(env.DB, ref.id)
+    // A finished or superseded task is already over; cancelling it must not stop the user's recapture.
+    if (!current || isOver(taskStatus(ref, await db.getCaptureStatus(env.DB, ref))))
+      throw new ProtocolError(ProtocolErrorCode.InvalidParams, "Failed to cancel task: Task has already ended")
+    await db.requestStop(env.DB, ref.id)
     return {}
   })
   server.server.setRequestHandler("tasks/update", { params: z.looseObject({ taskId: z.string() }) }, async ({ taskId }, ctx) => {
@@ -366,7 +367,7 @@ Signed file URLs expire after 24 hours.`,
       }
 
       if (part === "overview") {
-        const pages = bounded(r.pages.map((p) => ({ id: p.id, path: p.path, title: p.title })), 0, Math.min(limit, 20))
+        const pages = bounded(r.pages.map(pageSummary), 0, Math.min(limit, 20))
         const anims = bounded(r.animations.map(listedAnimation), 0, Math.min(limit, 20))
         const status = ref.status === "ready" ? null : await db.getCaptureStatus(env.DB, ref)
         return ok({
@@ -394,10 +395,7 @@ Signed file URLs expire after 24 hours.`,
       if (part === "pages") {
         const res = bounded(
           r.pages.map((p) => ({
-            id: p.id,
-            path: p.path,
-            title: p.title,
-            url: p.url,
+            ...pageSummary(p),
             desktop: p.desktopKey ? { width: p.desktopWidth, height: p.desktopHeight, coverage: coverage(p.desktopHeight) } : null,
             mobile: p.mobileKey ? { width: p.mobileWidth, height: p.mobileHeight, coverage: coverage(p.mobileHeight) } : null,
           })),
@@ -691,11 +689,8 @@ Scroll timing is synthetic playback; hover offsets are measured. Treat easing an
       return ok({
         items: await Promise.all(
           res.items.map(async (p) => ({
-            id: p.id,
+            ...pageSummary(p),
             referenceId: p.referenceId,
-            url: p.url,
-            path: p.path,
-            title: p.title,
             thumbUrl: await url(p.desktopThumbKey ?? p.mobileThumbKey),
             reference: p.reference,
             collectionIds: p.collectionIds,
@@ -764,16 +759,17 @@ Scroll timing is synthetic playback; hover offsets are measured. Treat easing an
       for (;;) {
         const ref = await db.getReferenceRecord(env.DB, reference_id)
         if (!ref) return fail(`No reference with id "${reference_id}". It may have been deleted. Call search_references to find ids.`)
-        if (isFinished(ref)) {
+        const status = await db.getCaptureStatus(env.DB, ref)
+        const state = taskStatus(ref, status)
+        if (isOver(state)) {
           // done goes into the payload before it is serialized, so text-only clients see it too.
           return captureResult(ref, max_images, { done: true })
         }
-        const status = await db.getCaptureStatus(env.DB, ref)
         const left = deadline - Date.now()
-        if (needsUser(ref, status) || left <= 0)
+        if (state === "input_required" || left <= 0)
           return ok({
             done: false,
-            waitAgain: !needsUser(ref, status),
+            waitAgain: state === "working",
             referenceId: ref.id,
             state: ref.status,
             progress: ref.progress,
@@ -843,7 +839,7 @@ Scroll timing is synthetic playback; hover offsets are measured. Treat easing an
         return ok({ ...(await summarizeRef(ref)), capture, next: `wait_for_capture(reference_id "${ref.id}")` })
       } catch (e) {
         if (e instanceof ProtocolError) throw e
-        return fail(`${(e as Error).message}. Pass a full http(s) URL, e.g. https://linear.app.`)
+        return fail(`${(e as Error).message.replace(/\.$/, "")}. Pass a full http(s) URL, e.g. https://linear.app.`)
       }
     },
   )
@@ -864,10 +860,13 @@ Scroll timing is synthetic playback; hover offsets are measured. Treat easing an
     {
       title: "Create a collection",
       description: "Create a new collection to organize references. Returns its id for set_collection_membership or set_page_collection_membership.",
-      inputSchema: z.object({ name: z.string().min(1), description: z.string().optional() }),
+      inputSchema: z.object({ name: z.string(), description: z.string().optional() }),
       annotations: { destructiveHint: false },
     },
-    async ({ name, description }) => ok({ id: await db.createCollection(env.DB, name, description) }),
+    async ({ name, description }) => {
+      const invalid = db.nameError(name)
+      return invalid ? fail(invalid) : ok({ id: await db.createCollection(env.DB, name, description) })
+    },
   )
 
   server.registerTool(
@@ -930,7 +929,7 @@ Scroll timing is synthetic playback; hover offsets are measured. Treat easing an
       {
         title: "Get cloud setup status",
         description:
-          "Report what this Snip Worker can see about cloud setup: whether the request arrived on a local origin, whether an owner is configured, and whether a capture agent has been seen. This tool runs inside the Worker and cannot inspect the user's Mac, so it also returns the command to run for full status.",
+          "Report what this Snip Worker can see about cloud setup: whether the request arrived on a local origin, whether an owner is configured, and whether a capture agent is online. This tool runs inside the Worker and cannot inspect the user's Mac, so it also returns the command to run for full status.",
         inputSchema: z.object({
           command: z.enum(["setup", "pull"]).optional().describe("Which runbook to prepare. Default setup"),
         }),
@@ -939,7 +938,7 @@ Scroll timing is synthetic playback; hover offsets are measured. Treat easing an
       async ({ command }) => {
         const local = isLocalOrigin(origin)
         const [owner, presence] = await Promise.all([db.firstOwner(env.DB), db.getPresence(env.DB)])
-        const seconds = presence.lastSeenAt ? Math.max(0, Math.round((Date.now() - Date.parse(presence.lastSeenAt)) / 1000)) : null
+        const agent = agentState(presence)
         return ok({
           mode: local ? "local" : "cloud",
           origin,
@@ -947,7 +946,7 @@ Scroll timing is synthetic playback; hover offsets are measured. Treat easing an
           checks: [
             { id: "origin-local", ok: local },
             { id: "owner-configured", ok: !!owner },
-            { id: "capture-agent", ok: presence.freshness === "recent", detail: seconds == null ? "never seen" : `seen ${seconds}s ago` },
+            { id: "capture-agent", ok: agent.kind === "online", detail: agentAdvice(agent, "assistant").headline },
           ],
           next: {
             run: command === "pull" ? "npm run setup:cloudflare -- pull --json" : "npm run setup:cloudflare -- setup --check --json",
@@ -965,14 +964,18 @@ Scroll timing is synthetic playback; hover offsets are measured. Treat easing an
   return server
 }
 
-type McpProps = { ownerId?: unknown }
+type McpProps = { ownerId?: unknown; epoch?: unknown }
 
 export const mcpApiHandler = {
-  fetch(request: Request, env: Env, ctx: ExecutionContext) {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     // The OAuth provider only reaches this handler after validating a token; the grant must name
     // an owner, or a token minted before ownership existed would read the library as anyone.
-    const ownerId = (ctx as ExecutionContext & { props?: McpProps }).props?.ownerId
-    if (typeof ownerId !== "string" || !ownerId) return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: { "content-type": "application/json" } })
+    const props = (ctx as ExecutionContext & { props?: McpProps }).props
+    const unauthorized = () => new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: { "content-type": "application/json" } })
+    if (typeof props?.ownerId !== "string" || !props.ownerId) return unauthorized()
+    // "Sign out everywhere" moves the same counter browser sessions are checked against. A grant
+    // minted before grants carried an epoch counts as epoch 0: it works until the first sign-out.
+    if ((props.epoch ?? 0) !== (await currentEpoch(env.DB))) return unauthorized()
     const origin = new URL(request.url).origin
     const handler = createMcpHandler(() => buildServer(env, origin), { route: "/mcp" })
     return handler(request, env, ctx)

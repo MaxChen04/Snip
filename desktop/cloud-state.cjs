@@ -3,7 +3,7 @@
 const fs = require("node:fs")
 const path = require("node:path")
 
-const MODES = new Set(["local", "enabling", "cloud", "disabling"])
+const MODES = new Set(["local", "enabling", "cloud"])
 const STEP_STATES = new Set(["done", "failed", "skipped", "running", "waiting", "pending"])
 const MAX_BYTES = 512 * 1024
 
@@ -48,7 +48,6 @@ function normalizeCloud(raw) {
     lastDeployedAt: text(raw.lastDeployedAt, 40),
     lastVerifiedAt: text(raw.lastVerifiedAt, 40),
     workerVersion: text(raw.workerVersion, 40),
-    expectedWorkerVersion: text(raw.expectedWorkerVersion, 40),
   }
 }
 
@@ -153,6 +152,24 @@ function readCloudState(dataRoot) {
   }
 }
 
+/**
+ * The record and the mode it puts this library in. "local" means there is no
+ * cloud.json; a file that is damaged, or written as a version the engine refuses
+ * (provision/state.cjs), is "unreadable" and never silently a local library.
+ */
+function readCloud(dataRoot) {
+  const state = readCloudState(dataRoot)
+  if (state?.version === 1) return { mode: state.mode, state }
+  return { mode: state || fs.existsSync(cloudPaths(dataRoot).state) ? "unreadable" : "local", state: null }
+}
+
+const cloudModeFor = dataRoot => readCloud(dataRoot).mode
+
+/** The services a mode runs: the local Worker serves only a library that is on this Mac. */
+function modeServices(mode) {
+  return mode === "unreadable" ? [] : mode === "cloud" ? ["capture"] : ["web", "capture"]
+}
+
 /** "local" for a fresh library. A stale lock never changes mode. */
 function cloudMode(state) {
   return state && MODES.has(state.mode) ? state.mode : "local"
@@ -161,6 +178,23 @@ function cloudMode(state) {
 /** True when the app should open the cloud URL instead of the local Worker. */
 function usesCloud(state) {
   return cloudMode(state) === "cloud" && typeof state?.cloud?.url === "string"
+}
+
+/**
+ * What it takes to make the services and the window match `mode`. `applied` is the
+ * kind of library they were last set up for. A running capture agent keeps the
+ * destination it started with, and the local Worker has no place beside a cloud library.
+ */
+function modePlan({ mode, applied, webRunning }) {
+  const kind = mode === "cloud" || mode === "unreadable" ? mode : "local"
+  const moved = kind !== applied
+  return {
+    kind,
+    stopCapture: moved,
+    stopWeb: kind !== "local" && webRunning,
+    recreateWindow: moved,
+    start: modeServices(mode),
+  }
 }
 
 // The capture agent keeps one file per destination. Snip rewrites neither mid-capture:
@@ -223,8 +257,12 @@ module.exports = {
   cloudPaths,
   normalizeCloudState,
   readCloudState,
+  readCloud,
+  cloudModeFor,
+  modeServices,
   cloudMode,
   usesCloud,
+  modePlan,
   captureEnvFiles,
   selectCaptureEnvFile,
   keepLocalCaptureEnv,

@@ -12,8 +12,8 @@ const { channelConfig } = require("./channels.cjs")
 const { SourceUpdates } = require("./source-updates.cjs")
 const { prepareRuntimeLayout, selectExistingLibrary } = require("./runtime-layout.cjs")
 const windowOrigin = require("./window-origin.cjs")
-const { readCloudState, cloudMode, selectCaptureEnvFile, keepLocalCaptureEnv } = require("./cloud-state.cjs")
-const { engineAvailable, runEngine } = require("./cloud-engine.cjs")
+const { cloudPaths, readCloud, modeServices, modePlan, selectCaptureEnvFile, keepLocalCaptureEnv } = require("./cloud-state.cjs")
+const { engineAvailable, runEngine, setupFlags, retryArgs } = require("./cloud-engine.cjs")
 const { sessionCookie, externalUrl } = require("./cloud-session.cjs")
 const { snapshotFlags } = require("./cloud-confirm.cjs")
 const { ownerLinkFrom, LINK_NOTE, LINK_TTL_MS } = require("./cloud-link.cjs")
@@ -60,13 +60,18 @@ let tray, win, node, idleTimer, readyTimer, layout, updates, sourceUpdates
 let quitting = false, finishedQuit = false, shutdown = null, autoCapture = true
 let startupError = "", lastUrl = null, position = null
 let resolvingNode = false
-let settingsWin = null, cloudState = null
+let settingsWin = null, cloudState = null, cloudMode = "local"
 let cloudRun = null, cloudResult = null
+let cloudUpdatePending = false
+// The last library run that did not succeed: what Retry runs again.
+let failedRun = null
 // The owner link is minted for a person to open in another browser, so it is the one
 // URL that belongs in the renderer. It lives in memory only, and never in a log.
 let ownerLink = null
 const pins = new WeakMap()
 const cloudInput = new Map()
+// The kind of library the services and the window were last set up for; the launch window is local.
+let applied = "local"
 let localLibrary = { at: 0, value: null }
 const uiState = Object.create(null)
 const logs = new Set()
@@ -82,7 +87,10 @@ try {
   }
 } catch {} // A corrupt view-state cache must not prevent opening the library.
 
-const mode = () => cloudMode(cloudState)
+const mode = () => cloudMode
+function loadCloud() {
+  ({ mode: cloudMode, state: cloudState } = layout ? readCloud(layout.dataRoot) : { mode: "local", state: null })
+}
 function cloudOrigin() {
   try { return cloudState?.cloud?.url ? new URL(cloudState.cloud.url).origin : null } catch { return null }
 }
@@ -140,7 +148,8 @@ function captureEnvFile() {
 }
 function start(key) {
   if (!node || quitting || shutdown || services[key].proc) return
-  if (key === "web" && mode() === "cloud") return
+  if (!modeServices(mode()).includes(key)) return
+  if (key === "capture" && mode() === "cloud" && cloudUpdatePending) return
   if (key === "capture" && mode() !== "cloud" && services.web.status !== "running") return
   try {
     let args, cwd
@@ -207,7 +216,8 @@ for (const [key, service] of Object.entries(services)) {
 function showLoading() {
   if (!win || win.isDestroyed() || quitting || mode() === "cloud") return
   const s = services.web
-  const msg = startupError || (s.status === "crashed" ? s.detail || "The web app stopped. Check its log and retry from the menu bar." : s.status === "stopped" && node ? "The web app is stopped. Start it from the menu bar." : "Starting Snip…")
+  // Nothing is started on a record Snip cannot read: the local library may be stale.
+  const msg = mode() === "unreadable" ? `Snip can’t read this library’s cloud record, so it hasn’t opened or captured anything. Repair or remove ${cloudPaths(layout.dataRoot).state}, or update Snip, then reopen it.` : startupError || (s.status === "crashed" ? s.detail || "The web app stopped. Check its log and retry from the menu bar." : s.status === "stopped" && node ? "The web app is stopped. Start it from the menu bar." : "Starting Snip…")
   const logo = require("node:url").pathToFileURL(path.join(ROOT, "web/public/logo.png")).href
   void win.loadFile(path.join(__dirname, "loading.html"), { query: { msg, logo } }).catch(() => {})
 }
@@ -221,14 +231,17 @@ function openExternal(url) {
   const safe = externalUrl(url)
   if (safe) void shell.openExternal(safe)
 }
-function configureLinks(window, pin) {
+// The pin is read from the map on every event: the first window's origin is adopted after it is created.
+function configureLinks(window) {
   window.webContents.setWindowOpenHandler(({ url }) => {
     try {
+      const pin = pins.get(window)
       if (windowOrigin.isSettingsUrl(url)) { openSettings(); return { action: "deny" } }
-      if (pin.origin && windowOrigin.originOf(url) === pin.origin) {
+      if (windowOrigin.allowsNavigation(pin, url)) {
         if (pin.role === "local" && isGallery(url)) { showApp(); void win.loadURL(url).catch(() => {}); return { action: "deny" } }
         const child = new BrowserWindow({ width: 1280, height: 860, autoHideMenuBar: true, webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false } })
-        configureLinks(child, pin)
+        pinWindow(child, pin)
+        configureLinks(child)
         // Snapshot windows close normally. Minimized viewers release their
         // document after the same idle grace period and reload on restoration.
         let timer, suspendedUrl
@@ -252,7 +265,7 @@ function configureLinks(window, pin) {
   })
   window.webContents.on("will-navigate", (event, url) => {
     if (windowOrigin.isSettingsUrl(url)) { event.preventDefault(); openSettings(); return }
-    if (!windowOrigin.allowsNavigation(pin, url)) { event.preventDefault(); openExternal(url) }
+    if (!windowOrigin.allowsNavigation(pins.get(window), url)) { event.preventDefault(); openExternal(url) }
   })
 }
 function createWindow() {
@@ -266,7 +279,7 @@ function createWindow() {
   win = new BrowserWindow({ width: 1280, height: 860, minWidth: 720, minHeight: 480, title: identity.name, backgroundColor: "#f6f5f2", webPreferences })
   if (nightly) win.on("page-title-updated", event => { event.preventDefault(); win.setTitle("Snip Dev — Test library") })
   pinWindow(win, pin)
-  configureLinks(win, pin)
+  configureLinks(win)
   const current = win
   const isBackground = () => !current.isVisible() || current.isMinimized() || app.isHidden()
   const releaseWhenIdle = () => {
@@ -424,10 +437,13 @@ async function cloudSignInMethods() {
     return null
   }
 }
+// What Retry would run, or null when there is nothing to repeat (an error recorded
+// before a restart has no failed command left in memory).
+const retryRun = () => retryArgs({ mode: mode(), failed: failedRun, answers: Object.fromEntries(cloudInput) })
 async function cloudSnapshotState() {
   // While the engine is writing, its own events are the freshest source; between runs
   // re-read so a change made by the CLI shows the next time Settings opens.
-  if (!cloudRun && layout) cloudState = readCloudState(layout.dataRoot)
+  if (!cloudRun) loadCloud()
   // An expired link is dead: drop it rather than offer a button that cannot work.
   if (ownerLink && Date.now() - ownerLink.at >= LINK_TTL_MS) ownerLink = null
   return {
@@ -439,6 +455,8 @@ async function cloudSnapshotState() {
     // Minting a link is not a library operation, so it never drives that view.
     busy: !!cloudRun && !cloudRun.resultSeen && cloudRun.purpose !== "owner-link",
     running: cloudRun ? { command: cloudRun.command, step: cloudRun.step } : null,
+    // Settings offers Retry only when this is true: the error text can outlive the command.
+    canRetry: retryRun() !== null,
     // The owner link is for the person at the keyboard; it is never written to disk.
     link: ownerLink ? { url: ownerLink.url, note: LINK_NOTE, expiresAt: new Date(ownerLink.at + LINK_TTL_MS).toISOString() } : null,
     engine: { available: engineAvailable(__dirname) },
@@ -447,19 +465,6 @@ async function cloudSnapshotState() {
     ready: !!node && !!layout,
     local: await localLibraryStatus(),
     app: { version: app.getVersion(), dataRoot: layout?.dataRoot ?? null, captureEnv: captureEnvFile()?.name ?? null },
-  }
-}
-function cloudFlags(options = {}) {
-  const text = (value, limit) => (typeof value === "string" && value.trim() ? value.trim().slice(0, limit) : undefined)
-  return {
-    account: text(options.accountId, 64),
-    domain: text(options.domain, 253),
-    login: text(options.login, 64),
-    // Set only when the person picked "Use that library" in the choice screen.
-    "adopt-existing": options.adoptExisting === true ? true : undefined,
-    // The app always keeps the local capture settings as .env.local and points the
-    // agent at the cloud queue; that is the "replace" behaviour from the contracts.
-    "capture-env": "replace",
   }
 }
 /** `event: "session"` is consumed here: the token goes to the cookie jar, never the renderer. */
@@ -501,90 +506,98 @@ function onCloudEvent(run, event) {
     return
   }
   if (event.event === "session") { void acceptCloudSession(event); return }
-  if (event.event === "needs_input") {
-    for (const key of Array.isArray(event.keys) ? event.keys : []) {
-      if (key && typeof key.key === "string") cloudInput.set(key.key.slice(0, 64), "")
-    }
-  }
   if (event.event === "step") applyCloudStep(event)
   if (event.event === "log") sendToSettings("snip:cloud-log", { level: ["info", "warn", "error"].includes(event.level) ? event.level : "info", message: String(event.message ?? "").slice(0, 2000) })
   sendToSettings("snip:cloud-progress", event)
 }
-// A running capture agent keeps the destination it started with, and start() is a
-// no-op while it runs, so switching libraries has to stop it first. stop() lets an
-// in-flight capture finish.
-async function restartCaptureForMode() {
-  if (services.capture.proc) await services.capture.stop().catch(() => {})
-}
-async function enterCloudMode() {
-  if (!layout) return
-  try { keepLocalCaptureEnv({ dataRoot: layout.dataRoot }) } catch {}
-  await restartCaptureForMode()
-  autoCapture = true
-  recreateWindow()
-  start("capture")
-}
-async function enterLocalMode() {
-  await restartCaptureForMode()
-  autoCapture = true
-  localLibrary = { at: 0, value: null }
-  // `pull` stopped the local Worker at pull-swap; wait for that to finish, or start()
-  // would return early on the shutdown guard.
+/**
+ * Put the services and the window in the state mode() calls for. Every finished run
+ * ends here, whatever its result: a failed one has still stopped things.
+ */
+async function applyMode({ resumeCapture = true } = {}) {
+  if (!layout || quitting) return
+  resumeCapture = resumeCapture && !(mode() === "cloud" && cloudUpdatePending)
+  // A run's last step may still be stopping the local Worker; start() would return early.
   if (shutdown) await shutdown.catch(() => {})
-  start("web")
-  recreateWindow()
+  const plan = modePlan({ mode: mode(), applied, webRunning: !!services.web.proc })
+  applied = plan.kind
+  // stop() lets an in-flight capture finish.
+  if (plan.stopCapture) await services.capture.stop()
+  if (plan.stopWeb) await stopWeb()
+  if (quitting) return
+  autoCapture = resumeCapture
+  localLibrary = { at: 0, value: null }
+  if (plan.recreateWindow) recreateWindow()
+  for (const key of plan.start) if (key !== "capture" || resumeCapture) start(key)
 }
-async function finishCloudRun(run, { cancelled, code }) {
+// runEngine always delivers a result before the exit, so `result` is the whole verdict.
+async function finishCloudRun(run, { code }) {
   const result = cloudResult
   cloudResult = null
   if (cloudRun === run) cloudRun = null
-  cloudState = layout ? readCloudState(layout.dataRoot) : null
+  loadCloud()
+  if (quitting) return
   if (run.purpose === "owner-link") {
     // Nothing about the library changed, so there is no mode to enter and no log line
     // to add: a link that was minted is already in Settings, and one that was not has
     // a sentence of its own.
     if (!run.link) {
-      const message = result?.code === "SECRET_MISSING"
+      const message = result.code === "SECRET_MISSING"
         ? "This Mac holds no owner secret for its cloud library. Turn cloud off and on again to replace it."
-        : cancelled
+        : result.code === "CANCELLED"
           ? "The sign-in link wasn’t created."
           : "Snip couldn’t create a sign-in link. Try again."
       // The codes are the only thing worth recording: the URL itself is never logged.
-      const detail = typeof result?.data?.code === "string" ? ` (${result.data.code})` : ""
-      makeLog("cloud").end(`${new Date().toISOString()} owner link exited ${code ?? "?"} ${result?.code ?? "no result"}${detail}\n`)
+      const detail = typeof result.data?.code === "string" ? ` (${result.data.code})` : ""
+      makeLog("cloud").end(`${new Date().toISOString()} owner link exited ${code ?? "?"} ${result.code}${detail}\n`)
       sendToSettings("snip:cloud-log", { level: "error", message })
     }
     refresh()
     return
   }
-  if (result?.ok) {
-    if (result.mode === "cloud") await enterCloudMode()
-    else if (result.mode === "local") await enterLocalMode()
-    sendToSettings("snip:cloud-log", { level: "info", message: result.mode === "cloud" ? "Snip is now using your cloud library." : "Snip is back on this Mac." })
-  } else if (cancelled || result?.code === "CANCELLED") {
-    sendToSettings("snip:cloud-log", { level: "info", message: "Stopped. Nothing on Cloudflare was changed." })
+  // Answers belong to the run they were given for; this is the one place they are dropped.
+  cloudInput.clear()
+  failedRun = result.ok ? null : run.args
+  if (result.ok) {
+    if (run.command === "deploy" || mode() === "local") cloudUpdatePending = false
+    await applyMode()
+    if (run.command === "deploy" && mode() === "cloud" && win && !win.isDestroyed()) {
+      void win.loadURL(isCloudRoute(lastUrl) ? lastUrl : cloudOrigin()).catch(() => {})
+    }
+    sendToSettings("snip:cloud-log", { level: "info", message: run.command === "deploy" ? "Your cloud library is updated. Captures can run again." : mode() === "cloud" ? "Snip is now using your cloud library." : "Snip is back on this Mac." })
+  } else if (result.code === "CANCELLED") {
+    sendToSettings("snip:cloud-log", { level: "info", message: "Stopped." })
   } else {
-    // A run that dies without a `result` still needs a sentence a person can act on.
+    // A run that died without its own result still needs a sentence a person can act on.
     const fallback = code === 2 ? "Snip needs one more choice before it can continue." : code === 3 ? "Another Snip setup is already running." : code === 4 ? "This build can’t run that part of cloud Snip." : "Setup stopped before it finished. Retry the step that failed."
     const byCode = { NEEDS_INPUT: fallback, UNSUPPORTED: "This build can’t run that part of cloud Snip.", LOCKED: "Another Snip setup is already running." }
-    const message = cloudState?.error?.message ?? byCode[result?.code] ?? fallback
+    const message = cloudState?.error?.message ?? byCode[result.code] ?? fallback
     sendToSettings("snip:cloud-log", { level: "error", message })
     // Main's log is the one place a failed run is recorded; the renderer only shows copy.
-    makeLog("cloud").end(`${new Date().toISOString()} ${run.command} exited ${code ?? "?"} ${result?.code ?? "no result"}\n`)
+    makeLog("cloud").end(`${new Date().toISOString()} ${run.command} exited ${code ?? "?"} ${result.code}\n`)
+  }
+  // A run that stopped short has still stopped captures or the local Worker.
+  if (!result.ok) {
+    // A partial deployment may not match this app. Keep capture paused until an update succeeds.
+    await applyMode({ resumeCapture: run.command !== "deploy" })
+    if (run.command === "deploy") sendToSettings("snip:cloud-log", { level: "warn", message: "Captures remain paused. Retry Update cloud library before starting them again." })
   }
   refresh()
 }
-function startCloudRun(command, flags = {}, subcommand, purpose) {
+async function startCloudRun(command, flags = {}, subcommand, purpose) {
   if (cloudRun) return { error: "busy" }
   if (!layout || !node) return { error: "Snip is still starting." }
   if (!engineAvailable(__dirname)) return { error: "Cloud setup isn’t included in this build.", code: "UNSUPPORTED" }
   if (command === "setup") {
     try { keepLocalCaptureEnv({ dataRoot: layout.dataRoot }) } catch {}
   }
-  const run = { command: subcommand ? `${command} ${subcommand}` : command, step: null, cancel: null, resultSeen: false, purpose, link: null }
+  const run = { command: subcommand ? `${command} ${subcommand}` : command, args: [command, flags, subcommand], step: null, cancel: null, resultSeen: false, purpose, link: null }
   cloudRun = run
   cloudResult = null
+  // "Create a new link" must never hand back the one it replaces.
+  if (purpose === "owner-link") ownerLink = null
   const opening = {
+    deploy: "Finishing the current capture before updating your cloud library.",
     pull: "Reading your cloud library.",
     detach: "Turning off cloud on this Mac.",
     "delete-resources": "Deleting the cloud copy.",
@@ -594,17 +607,49 @@ function startCloudRun(command, flags = {}, subcommand, purpose) {
   }[run.command] ?? "Setting up your cloud library."
   // The owner-link run reports through its own channel, so it does not touch the log.
   if (purpose !== "owner-link") sendToSettings("snip:cloud-log", { level: "info", message: opening })
+  let prepared
   try {
+    if (command === "deploy") {
+      // Reserve the run before waiting, so another action cannot race the deployment.
+      // Cancellation while draining is honoured before any cloud changes are made.
+      cloudUpdatePending = true
+      autoCapture = false
+      run.exited = new Promise(resolve => { prepared = resolve })
+      run.cancel = () => { run.cancelPending = true; return true }
+      onCloudEvent(run, { v: 1, event: "step", step: "deploy-quiesce", status: "started", message: "Finish the current capture" })
+      refresh()
+      await services.capture.stop()
+      if (run.cancelPending || quitting) {
+        onCloudEvent(run, { v: 1, event: "result", ok: false, code: "CANCELLED", mode: mode() })
+        await finishCloudRun(run, { code: 1 })
+        prepared()
+        return { started: true }
+      }
+      onCloudEvent(run, { v: 1, event: "step", step: "deploy-quiesce", status: "ok" })
+    }
     const handle = runEngine({
       executable: node.executable, appDir: __dirname, root: ROOT, dataRoot: layout.dataRoot, command, subcommand, flags, baseEnv: node.env,
       onEvent: event => { if (cloudRun === run) onCloudEvent(run, event) },
       onExit: info => { if (cloudRun === run) void finishCloudRun(run, info) },
     })
     run.cancel = () => handle.cancel()
+    run.child = handle.child
+    run.exited = handle.exited
+    prepared?.()
     // An event can land before the handle exists; honour a cancel that came first.
     if (run.cancelPending) run.cancel()
   } catch (error) {
-    cloudRun = null
+    try {
+      if (command === "deploy") {
+        // A failure before the child starts still needs a visible Retry in Settings.
+        onCloudEvent(run, { v: 1, event: "result", ok: false, code: "FAILED", mode: mode(), message: error.message, retryable: true })
+        await finishCloudRun(run, { code: 1 })
+      } else {
+        cloudRun = null
+      }
+    } finally {
+      prepared?.()
+    }
     return { error: error.message }
   }
   refresh()
@@ -622,20 +667,21 @@ function registerCloudIpc() {
   ipcMain.handle("snip:cloud-state", guard(() => cloudSnapshotState()))
   ipcMain.handle("snip:cloud-enable", guard(payload => {
     if (mode() === "cloud") return { error: "This Mac is already using a cloud library." }
-    const merged = { ...Object.fromEntries(cloudInput), ...payload }
-    cloudInput.clear()
-    return startCloudRun("setup", cloudFlags(merged))
+    return startCloudRun("setup", setupFlags({ ...Object.fromEntries(cloudInput), ...payload }))
+  }))
+  ipcMain.handle("snip:cloud-update", guard(() => {
+    if (mode() !== "cloud") return { error: "No cloud library is connected." }
+    return startCloudRun("deploy")
   }))
   ipcMain.handle("snip:cloud-disable", guard(payload => {
     if (payload.action === "pull") return startCloudRun("pull")
     if (payload.action === "detach") return startCloudRun("detach")
     return { error: "Unknown action." }
   }))
-  ipcMain.handle("snip:cloud-retry-step", guard(payload => {
-    if (mode() === "enabling") return startCloudRun("setup", cloudFlags(Object.fromEntries(cloudInput)))
-    if (mode() === "disabling") return startCloudRun("pull")
-    if (mode() === "cloud" && typeof payload.step === "string") return startCloudRun("setup", cloudFlags({}))
-    return { error: "Nothing to retry." }
+  ipcMain.handle("snip:cloud-retry-step", guard(() => {
+    // Settings only offers Retry when canRetry is true; this refusal is the backstop.
+    const args = retryRun()
+    return args ? startCloudRun(...args) : { error: "Nothing to retry." }
   }))
   ipcMain.handle("snip:cloud-cancel", guard(() => ({ cancelled: !!cloudRun?.cancel?.() })))
   // Undo is not Cancel: it abandons an interrupted `enabling` and is only offered there.
@@ -674,6 +720,8 @@ function registerCloudIpc() {
     }
   }))
   ipcMain.handle("snip:cloud-delete-resources", guard(payload => {
+    // The engine refuses this too; saying so here keeps a refusal out of the library's record.
+    if (mode() === "cloud") return { error: "This Mac is using its cloud library. Turn off cloud first, then delete the cloud copy." }
     const confirm = typeof payload.confirm === "string" ? payload.confirm.trim().toLowerCase().slice(0, 253) : ""
     let host = null
     try { host = new URL(cloudState?.cloud?.url).host.toLowerCase() } catch {}
@@ -711,6 +759,7 @@ async function forceQuit() {
   const { response } = await dialog.showMessageBox({ type: "warning", buttons: ["Keep finishing", "Force quit"], defaultId: 0, cancelId: 0, message: "Interrupt the current capture?", detail: "An unfinished capture may need to be retried when Snip starts again." })
   if (response !== 1) return
   quitting = true
+  try { cloudRun?.child?.kill("SIGKILL") } catch {}
   services.capture.forceStop()
   services.web.forceStop()
   finishedQuit = true
@@ -777,6 +826,8 @@ async function drainForQuit() {
   clearTimeout(idleTimer)
   clearTimeout(readyTimer)
   refresh()
+  // The engine is this app's child too: cancel it, and wait out its bounded kill.
+  if (cloudRun?.cancel?.()) await cloudRun.exited
   await (shutdown || stopServices(services.capture, services.web))
   await Promise.all([...logs].map(log => log.end()))
   try {
@@ -812,7 +863,7 @@ function configureUpdates() {
     enabled: nightly || (releaseBuild && config?.repository === "MaxChen04/Snip" && config?.updatesEnabled === true),
     nativeEnabled: releaseBuild && config?.repository === "MaxChen04/Snip" && config?.updatesEnabled === true,
     drain: drainForQuit,
-    installFailed: () => { quitting = false; finishedQuit = false; autoCapture = true; start("web"); showApp() },
+    installFailed: () => { quitting = false; finishedQuit = false; void applyMode(); showApp() },
   })
   let previous = updates.phase, notifiedVersion
   updates.on("change", () => {
@@ -839,8 +890,10 @@ function serviceItems(key) {
   const s = services[key]
   const items = [{ label: `${labels[key]}: ${STATUS[s.status]}`, enabled: false }]
   if (s.detail && s.status === "disconnected") items.push({ label: s.detail.slice(0, 100), enabled: false })
-  if (s.proc && !s.stopping) items.push({ label: `Stop ${labels[key].toLowerCase()}`, enabled: !shutdown && !quitting, click: () => key === "web" ? void stopWeb() : (autoCapture = false, void s.stop()) })
-  else if (!s.proc) items.push({ label: `Start ${labels[key].toLowerCase()}`, enabled: !!node && !shutdown && !quitting && (key === "web" || services.web.status === "running" || mode() === "cloud"), click: () => { autoCapture = true; start(key) } })
+  // A cloud run stops the local Worker and the capture agent itself and counts on them staying stopped.
+  const free = !shutdown && !quitting && !cloudRun && !(key === "capture" && mode() === "cloud" && cloudUpdatePending)
+  if (s.proc && !s.stopping) items.push({ label: `Stop ${labels[key].toLowerCase()}`, enabled: free, click: () => key === "web" ? void stopWeb() : (autoCapture = false, void s.stop()) })
+  else if (!s.proc) items.push({ label: `Start ${labels[key].toLowerCase()}`, enabled: !!node && free && (key === "web" || services.web.status === "running" || mode() === "cloud"), click: () => { autoCapture = true; start(key) } })
   if (key === "capture" && s.proc && !s.stopping) items.push({ label: "Check queue now", enabled: !quitting, click: () => s.send({ type: "snip:retry" }) })
   return items
 }
@@ -856,7 +909,7 @@ function refresh() {
     ...(mode() === "cloud" && cloudOrigin() ? [{ label: windowOrigin.parse(cloudState.cloud.url)?.host ?? "Cloud library", enabled: false }] : []),
     { id: "snip-settings-tray", label: "Settings…", enabled: !quitting, click: openSettings }, { type: "separator" },
     ...(!node ? [{ label: resolvingNode ? "Finding Node.js…" : "Retry setup", enabled: !resolvingNode && !quitting, click: () => void setup() }] : []),
-    ...(mode() === "cloud" ? [] : serviceItems("web")), ...(mode() === "cloud" ? [] : [{ type: "separator" }]), ...serviceItems("capture"), { type: "separator" },
+    ...modeServices(mode()).flatMap(key => [...serviceItems(key), { type: "separator" }]),
     ...updateItems(), { type: "separator" },
     { label: "Show logs", click: () => shell.openPath(app.getPath("logs")) },
     ...(quitting || shutdown || services.capture.stopping ? [{ label: "Force quit Snip…", click: () => void forceQuit() }] : []),
@@ -932,12 +985,8 @@ async function setup() {
     if (releaseBuild) Object.assign(node.env, { PLAYWRIGHT_BROWSERS_PATH: layout.browsersPath, SNIP_BROWSER_AUTO_INSTALL: "0" })
     // The mode is read before anything loads a URL: a restart in cloud mode must not
     // open the local library, and a restart in local mode must not wait on cloud.
-    cloudState = readCloudState(layout.dataRoot)
-    if (mode() === "cloud") {
-      // The window created at launch still shows the startup page with the local pin.
-      recreateWindow()
-      if (!quitting) start("capture")
-    } else if (!quitting) start("web")
+    loadCloud()
+    await applyMode()
   } catch (error) { startupError = error.message; showLoading() }
   finally { resolvingNode = false; refresh() }
 }

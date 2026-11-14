@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useLocation } from "wouter"
 import { ChevronRightIcon, ClipboardIcon, CornerDownLeftIcon, FileIcon, GlobeIcon, NetworkIcon, XIcon } from "@/components/icons"
 import { toast } from "sonner"
@@ -8,39 +8,47 @@ import { Dialog, DialogContent, DialogTitle, DialogClose, DialogDescription } fr
 import { Spinner } from "@/components/ui/spinner"
 import { api, DuplicateError, type CaptureMode, type CaptureOptions, type Reference } from "@/lib/api"
 import { DESKTOP_WIDTHS } from "../../shared/types"
-import { extractUrls, parseSiteUrl } from "@/lib/site-url"
-
-export { extractUrls, parseSiteUrl }
+import { CRAWL_LIMITS, extractUrls, typedUrls } from "@/lib/site-url"
 import { cn } from "@/lib/utils"
 
 const MODES: { value: CaptureMode; title: string; description: string; icon: typeof FileIcon }[] = [
   { value: "single", title: "Single page", description: "Just this URL", icon: FileIcon },
   { value: "crawl", title: "Crawl site", description: "Follow same-domain links", icon: NetworkIcon },
 ]
-const LIMITS = [10, 25, 50, 100]
+
+/**
+ * What pasted text puts in the dialog: one link fills the field (the rest of a sentence is dropped), several are added
+ * together, and text with no link stays as it was so it can be corrected.
+ */
+const readLinks = (text: string) => {
+  const found = extractUrls(text)
+  return found.length > 1 ? { url: "", bulk: found } : { url: found[0]?.href ?? text.trim(), bulk: [] }
+}
 
 export function AddReferenceDialog({
   open,
   onOpenChange,
-  onAdded,
   onCreated,
   defaultCollection,
   defaultUrl,
 }: {
   open: boolean
   onOpenChange: (o: boolean) => void
-  /** null after adding several websites at once. */
-  onAdded: (r: Reference | null) => void
   /** Each reference as it is created, including the ones saved before a bulk add fails part way. */
   onCreated?: (r: Reference) => void
   defaultCollection?: string
   defaultUrl?: string
 }) {
   const [, navigate] = useLocation()
-  const initial = useMemo(() => extractUrls(defaultUrl ?? ""), [defaultUrl])
-  const [url, setUrl] = useState(initial.length > 1 ? "" : (defaultUrl ?? ""))
+  // Handed over as it is, because what was typed in the capture card is not a sentence to pick links out of; several
+  // valid addresses are added together, as if pasted.
+  const initial = useMemo(() => {
+    const { urls } = typedUrls(defaultUrl ?? "")
+    return urls.length > 1 ? { url: "", bulk: urls } : { url: (defaultUrl ?? "").trim(), bulk: [] }
+  }, [defaultUrl])
+  const [url, setUrl] = useState(initial.url)
   // Several pasted websites are added together, each as its own reference.
-  const [bulk, setBulk] = useState<URL[]>(initial.length > 1 ? initial : [])
+  const [bulk, setBulk] = useState<URL[]>(initial.bulk)
   const [mode, setMode] = useState<CaptureMode>("single")
   const [maxPages, setMaxPages] = useState(25)
   const [selected, setSelected] = useState<string[]>(defaultCollection ? [defaultCollection] : [])
@@ -50,9 +58,24 @@ export function AddReferenceDialog({
   const [desktopWidth, setDesktopWidth] = useState<number>(1440)
   const [signedIn, setSignedIn] = useState(false)
   const [duplicate, setDuplicate] = useState<Reference | null>(null)
+  // What the Worker said when it refused the address that was sent.
+  const [refused, setRefused] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
-  const parsed = useMemo(() => parseSiteUrl(url), [url])
-  useEffect(() => setDuplicate(null), [url])
+  const field = useRef<HTMLInputElement>(null)
+  // Typed addresses are all added, or none: one that is not an address is said so.
+  const typed = useMemo(() => typedUrls(url), [url])
+  const links = bulk.length ? bulk : typed.urls
+  const error = typed.error ?? refused
+  useEffect(() => {
+    setDuplicate(null)
+    setRefused(null)
+  }, [url])
+  // Closing unmounts the dialog. A submit still running then finishes sending, but closes nothing: that would close a newer dialog.
+  const gone = useRef(false)
+  useEffect(() => {
+    gone.current = false
+    return () => void (gone.current = true)
+  }, [])
 
   const options: CaptureOptions = { colorScheme, desktopWidth, signedIn }
   const body = (u: URL, allowDuplicate = false) => ({
@@ -70,7 +93,7 @@ export function AddReferenceDialog({
     let saved = 0
     const failed: URL[] = []
     let lastError = ""
-    for (const u of bulk) {
+    for (const u of links) {
       try {
         onCreated?.(await api.addReference(body(u)))
         added++
@@ -83,49 +106,44 @@ export function AddReferenceDialog({
       }
     }
     const summary = [added && `Added ${added} ${added === 1 ? "website" : "websites"}`, saved && `${saved} already saved`].filter(Boolean).join(", ")
+    if (added) window.dispatchEvent(new Event("rs:reload"))
     if (failed.length) {
       // Keep the ones that failed in the dialog so they can be retried as they were.
+      setUrl("")
       setBulk(failed)
-      if (added) window.dispatchEvent(new Event("rs:reload"))
       toast.error(`${summary ? `${summary}. ` : ""}${failed.length} couldn't be added: ${lastError}`)
       return
     }
-    setBulk([])
-    onAdded(null)
+    if (!gone.current) onOpenChange(false)
     notify(summary)
   }
 
   const submit = async (e?: React.FormEvent, allowDuplicate = false) => {
     e?.preventDefault()
-    if (submitting || (!parsed && !bulk.length)) return
+    if (submitting || !links.length) return
     setSubmitting(true)
+    setRefused(null)
     try {
-      if (bulk.length) return await submitBulk()
-      const ref = await api.addReference(body(parsed!, allowDuplicate))
+      if (bulk.length || links.length > 1) return await submitBulk()
+      const ref = await api.addReference(body(links[0], allowDuplicate))
       onCreated?.(ref)
-      setUrl("")
-      onAdded(ref)
-      notify(mode === "crawl" ? `Crawling ${parsed!.hostname}` : "Added 1 reference", {
+      window.dispatchEvent(new Event("rs:reload"))
+      if (!gone.current) onOpenChange(false)
+      notify(mode === "crawl" ? `Crawling ${links[0].hostname}` : "Added 1 reference", {
         action: { label: "View", onClick: () => navigate(`/r/${ref.id}`) },
       })
     } catch (err) {
       if (err instanceof DuplicateError) setDuplicate(err.existing)
-      else toast.error((err as Error).message)
+      else setRefused((err as Error).message)
     } finally {
       setSubmitting(false)
     }
   }
 
-  /** One URL fills the field; several switch to adding them all at once. */
   const take = (text: string) => {
-    const found = extractUrls(text)
-    if (found.length > 1) {
-      setBulk(found)
-      setUrl("")
-      return true
-    }
-    setUrl(text.trim())
-    return false
+    const next = readLinks(text)
+    setUrl(next.url)
+    setBulk(next.bulk)
   }
 
   const paste = async () => {
@@ -138,7 +156,7 @@ export function AddReferenceDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent showCloseButton={false} className="flex max-h-[calc(100svh-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[460px]">
+      <DialogContent initialFocus={field} showCloseButton={false} className="flex max-h-[calc(100svh-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[460px]">
         <form onSubmit={submit} className="flex min-h-0 flex-col">
           <div className="flex items-center justify-between px-5 pt-5 pb-4">
             <DialogTitle className="text-base font-medium">New reference</DialogTitle>
@@ -176,7 +194,7 @@ export function AddReferenceDialog({
               <label className="well flex h-12 items-center gap-3 rounded-lg px-3.5">
                 <GlobeIcon className="size-5 shrink-0 text-muted-foreground" />
                 <input
-                  autoFocus
+                  ref={field}
                   inputMode="url"
                   autoComplete="off"
                   spellCheck={false}
@@ -185,12 +203,10 @@ export function AddReferenceDialog({
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
                   onPaste={(e) => {
-                    const found = extractUrls(e.clipboardData.getData("text"))
-                    if (found.length > 1) {
-                      e.preventDefault()
-                      setBulk(found)
-                      setUrl("")
-                    }
+                    const text = e.clipboardData.getData("text")
+                    if (!extractUrls(text).length) return
+                    e.preventDefault()
+                    take(text)
                   }}
                   className="h-full min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-ink-10"
                 />
@@ -217,12 +233,11 @@ export function AddReferenceDialog({
                   </button>
                 </div>
               ) : (
-              <p className={cn("mt-1.5 h-4 px-1 text-2xs text-ink-10", url && !parsed && "text-(--red-11)")}>
-                {url && !parsed
-                  ? "Enter a full domain like linear.app"
-                  : mode === "crawl"
-                    ? `Follows links on ${parsed?.hostname ?? "the same domain"}, desktop and mobile`
-                    : "Desktop and mobile screenshots, styles and motion"}
+              <p className={cn("mt-1.5 min-h-4 px-1 text-2xs text-ink-10", error && "text-(--red-11)")}>
+                {error ??
+                  (mode === "crawl"
+                    ? `Follows links on ${links.length === 1 ? links[0].hostname : "the same domain"}, desktop and mobile`
+                    : "Desktop and mobile screenshots, styles and motion")}
               </p>
               )}
             </div>
@@ -263,7 +278,7 @@ export function AddReferenceDialog({
               <div className="flex items-center gap-2.5 px-1">
                 <span className="text-xs text-ink-11">Up to</span>
                 <div className="tactile-track flex">
-                  {LIMITS.map((n) => (
+                  {CRAWL_LIMITS.map((n) => (
                     <button
                       key={n}
                       type="button"
@@ -355,11 +370,11 @@ export function AddReferenceDialog({
           <div className="border-t-[0.5px] border-border p-3">
             <button
               type="submit"
-              disabled={(!parsed && !bulk.length) || submitting}
+              disabled={!links.length || submitting}
               className="press flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-primary px-3.5 text-sm font-medium tracking-[-0.01em] text-primary-foreground shadow-primary hover:bg-(--primary-hover) disabled:opacity-60 disabled:active:scale-100 dark:disabled:bg-ink-4 dark:disabled:text-ink-8 dark:disabled:opacity-100 dark:disabled:shadow-none"
             >
               {submitting ? <Spinner className="size-3.5" /> : null}
-              {submitting ? "Saving…" : bulk.length ? `Save ${bulk.length} websites` : mode === "crawl" ? "Crawl and save" : "Save reference"}
+              {submitting ? "Saving…" : links.length > 1 ? `Save ${links.length} websites` : mode === "crawl" ? "Crawl and save" : "Save reference"}
               {!submitting && (
                 <kbd className="grid size-[18px] place-items-center rounded-xs bg-primary-foreground/15">
                   <CornerDownLeftIcon className="size-3" />

@@ -165,7 +165,8 @@
             if (p.startsWith("border") && parseFloat(cs.getPropertyValue(p.replace("color", "width"))) === 0) continue
             if (p === "outline-color" && cs.outlineStyle === "none") continue
             if ((p === "fill" || p === "stroke") && tag !== "svg" && tag !== "path") continue
-            if (v && v !== "none") bump("colors", toHex(v))
+            // Fill and stroke can be a paint server (url(#gradient)), none or context-fill: not colors, so not swatches.
+            if (CSS.supports("color", v) && v.toLowerCase() !== "currentcolor") bump("colors", toHex(v))
           }
           if (ownText(el)) {
             bump("fonts", cs.fontFamily)

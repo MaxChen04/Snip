@@ -1,7 +1,7 @@
 // Shapes shared with desktop/main.cjs and proposals/cloud-contracts.md. The renderer
 // never reads cloud.json itself: every value here arrives over the preload bridge.
 
-export type CloudMode = "local" | "enabling" | "cloud" | "disabling"
+export type CloudMode = "local" | "enabling" | "cloud"
 
 export interface CloudRecord {
   url: string
@@ -17,7 +17,6 @@ export interface CloudRecord {
   lastVerifiedAt: string | null
   /** Deployed Worker version, when the engine recorded it. */
   workerVersion?: string | null
-  expectedWorkerVersion?: string | null
 }
 
 export interface SnapshotRecord {
@@ -97,10 +96,13 @@ export interface OwnerLink {
 }
 
 export interface CloudSnapshotState {
-  mode: CloudMode
+  /** "unreadable": cloud.json exists but cannot be read, so nothing may be started. */
+  mode: CloudMode | "unreadable"
   state: CloudFile | null
   busy: boolean
   running: { command: string; step: string | null } | null
+  /** Whether main still holds a command Retry can run; the recorded error alone is not enough. Absent means no. */
+  canRetry?: boolean
   /** The last link minted on this Mac, while it is still worth anything. */
   link?: OwnerLink | null
   engine?: { available: boolean }
@@ -136,16 +138,6 @@ export interface EngineHumanEvent {
   message?: string
 }
 
-export interface EngineProgressEvent {
-  v: 1
-  event: "progress"
-  step: string
-  message?: string
-  current?: number
-  total?: number
-  unit?: string
-}
-
 export interface EngineResultEvent {
   v: 1
   event: "result"
@@ -154,6 +146,8 @@ export interface EngineResultEvent {
   mode: CloudMode
   /** Only preflight refusals set this; absent means a retry is worth offering. */
   retryable?: boolean
+  /** The engine's own sentence for a failure (cli.cjs passes it beside `data`). */
+  message?: string
   data?: Record<string, unknown>
 }
 
@@ -177,13 +171,13 @@ export interface EngineLogEvent {
 export interface EngineInputEvent {
   v: 1
   event: "needs_input"
-  keys: { key: string; label?: string; secret?: boolean }[]
+  /** `options` are the only valid answers; the answer is an option's `value`. */
+  keys: { key: string; label?: string; secret?: boolean; options?: { value: string; label: string }[] }[]
 }
 
 export type EngineEvent =
   | EngineStepEvent
   | EngineHumanEvent
-  | EngineProgressEvent
   | EngineChoiceEvent
   | EngineResultEvent
   | EngineLogEvent
@@ -191,7 +185,9 @@ export type EngineEvent =
 
 export interface CloudBridge {
   state(): Promise<CloudSnapshotState>
-  enable(options?: { accountId?: string; domain?: string; login?: string; captureEnv?: string; adoptExisting?: boolean }): Promise<CloudReply>
+  enable(options?: { account?: string; domain?: string; login?: string; captureEnv?: string; adoptExisting?: boolean }): Promise<CloudReply>
+  /** Deploy the cloud version bundled with this app, after captures drain. */
+  update(): Promise<CloudReply>
   disable(action: "detach" | "pull"): Promise<CloudReply>
   retryStep(step: string): Promise<CloudReply>
   cancel(): Promise<{ cancelled: boolean }>
@@ -214,7 +210,6 @@ export interface CloudReply {
   started?: true
   cancelled?: boolean
   error?: string
-  code?: string
 }
 
 declare global {

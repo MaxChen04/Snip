@@ -34,8 +34,8 @@ test("pages can be saved to many collections without copying files, and survive 
     const capture = async (url: string, paths: string[]) => {
       const ref = await db.createReference(database, { url, mode: "crawl" })
       const job = (await db.claimJob(database))!
-      for (const [i, path] of paths.entries()) await db.addPage(database, ref.id, job.attempt, page(ref.id, job.attempt, path, i))
-      await db.completeJob(database, ref.id, job.attempt, { title: null, description: null, favicon: null, coverKey: null, tokens: null })
+      for (const [i, path] of paths.entries()) await db.addPage(database, ref.id, job.lease, page(ref.id, job.attempt, path, i))
+      await db.completeJob(database, ref.id, job.lease, { title: null, description: null, favicon: null, coverKey: null, tokens: null })
       return (await db.getReference(database, ref.id))!
     }
     const mistral = await capture("https://mistral.ai", ["/", "/pricing"])
@@ -78,7 +78,7 @@ test("pages can be saved to many collections without copying files, and survive 
     // A recapture replaces page rows; membership follows the page path.
     await db.requeueReference(database, stripe.reference.id)
     const again = (await db.claimJob(database))!
-    await db.addPage(database, stripe.reference.id, again.attempt, page(stripe.reference.id, again.attempt, "/pricing", 0))
+    await db.addPage(database, stripe.reference.id, again.lease, page(stripe.reference.id, again.attempt, "/pricing", 0))
     const recaptured = await db.listPages(database, { collectionId: pricing })
     assert.equal(recaptured.items.length, 2)
     assert.ok(recaptured.items.some((p) => p.desktopKey?.includes(again.attempt)))

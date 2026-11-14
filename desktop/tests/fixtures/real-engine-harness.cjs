@@ -377,15 +377,16 @@ function buildContext() {
 /** The browser half of the owner-link handoff: payload|ownerId|exp|nonce|port. */
 function completeOwnerLink(link) {
   let port = 0;
+  let nonce = '';
   try {
-    const token = new URL(link).searchParams.get('t') ?? '';
-    const portField = token.split('.')[0].split('|')[4];
-    port = Number(portField);
+    const fields = (new URL(link).searchParams.get('t') ?? '').split('.')[0].split('|');
+    port = Number(fields[4]);
+    nonce = fields[3];
   } catch {}
   if (!Number.isInteger(port) || port <= 0) return;
   // The page reads location.hash and POSTs it; give the listener a moment to bind.
   setTimeout(() => {
-    const body = JSON.stringify({ token: 'harness-session-token' });
+    const body = JSON.stringify({ token: 'harness-session-token', nonce });
     const request = http.request(
       { host: '127.0.0.1', port, path: '/store', method: 'POST', headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) } },
       (response) => response.resume(),

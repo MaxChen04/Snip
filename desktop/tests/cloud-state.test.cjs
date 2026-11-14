@@ -1,6 +1,6 @@
 // The mode lives in cloud.json, which the engine writes. These tests pin the readings
-// the app depends on: a missing or broken file means local, never a crash, and the
-// capture env choice follows the mode.
+// the app depends on: a missing file means local, a broken one is unreadable and never
+// a crash, and the capture env choice follows the mode.
 const { test } = require("node:test")
 const assert = require("node:assert/strict")
 const fs = require("node:fs")
@@ -12,6 +12,9 @@ const {
   readCloudState,
   cloudMode,
   usesCloud,
+  modePlan,
+  modeServices,
+  cloudModeFor,
   captureEnvFiles,
   selectCaptureEnvFile,
   keepLocalCaptureEnv,
@@ -164,4 +167,35 @@ test("cloud paths stay inside .snip", t => {
   const paths = cloudPaths(root)
   assert.equal(paths.state, path.join(root, ".snip", "cloud.json"))
   assert.equal(paths.lock, path.join(root, ".snip", "cloud.lock"))
+})
+
+test("a finished run is followed by whatever the recorded mode needs, whatever the result", () => {
+  // A failed or cancelled local run: the engine stopped captures or the Worker, and both come back.
+  assert.deepEqual(modePlan({ mode: "local", applied: "local", webRunning: false }), { kind: "local", stopCapture: false, stopWeb: false, recreateWindow: false, start: ["web", "capture"] })
+  assert.deepEqual(modePlan({ mode: "enabling", applied: "local", webRunning: true }), { kind: "local", stopCapture: false, stopWeb: false, recreateWindow: false, start: ["web", "capture"] })
+  // The mode moved, even under a failed result: capture changes destination and the window its origin.
+  assert.deepEqual(modePlan({ mode: "cloud", applied: "local", webRunning: true }), { kind: "cloud", stopCapture: true, stopWeb: true, recreateWindow: true, start: ["capture"] })
+  assert.deepEqual(modePlan({ mode: "local", applied: "cloud", webRunning: false }), { kind: "local", stopCapture: true, stopWeb: false, recreateWindow: true, start: ["web", "capture"] })
+  // The local Worker never runs beside a cloud library.
+  assert.deepEqual(modePlan({ mode: "cloud", applied: "cloud", webRunning: true }), { kind: "cloud", stopCapture: false, stopWeb: true, recreateWindow: false, start: ["capture"] })
+})
+
+test("an unreadable or unsupported record starts nothing and is never a local library", t => {
+  assert.deepEqual(modeServices("unreadable"), [])
+  assert.deepEqual(modeServices("cloud"), ["capture"])
+  assert.deepEqual(modeServices("enabling"), ["web", "capture"])
+  assert.deepEqual(modePlan({ mode: "unreadable", applied: "local", webRunning: true }), { kind: "unreadable", stopCapture: true, stopWeb: true, recreateWindow: true, start: [] })
+  // The engine refuses any record version but 1 (provision/state.cjs); so does the app.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "snip-cloud-version-"))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  fs.mkdirSync(path.join(root, ".snip"))
+  fs.writeFileSync(path.join(root, ".snip", "cloud.json"), JSON.stringify({ version: 2, mode: "local" }))
+  assert.equal(cloudModeFor(root), "unreadable")
+  fs.writeFileSync(path.join(root, ".snip", "cloud.json"), JSON.stringify({ version: 1, mode: "enabling" }))
+  assert.equal(cloudModeFor(root), "enabling")
+})
+
+test("only the modes the engine writes are modes", () => {
+  // Nothing ever wrote "disabling"; a record that claims it is read like any unknown mode.
+  assert.equal(normalizeCloudState({ mode: "disabling" }).mode, "local")
 })

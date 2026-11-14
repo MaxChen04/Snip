@@ -5,7 +5,7 @@ import { safeNext } from "../shared/safe-next"
 
 // Web sessions, stored as an HMAC-signed cookie.
 //
-// A session names the owner identity, how it signed in, and the "sign out all devices" epoch it
+// A session names the owner identity, how it signed in, and the "sign out everywhere" epoch it
 // was minted at. The owner link and passkeys are the owner's own path in; GitHub remains the path
 // for a second person, keeping its multi-login allowlist.
 //
@@ -110,7 +110,7 @@ function parseSessionPayload(payload: string): ParsedSession | null {
     return { session: { ownerId, label: ownerId, method, epoch }, exp }
   }
   // Legacy payload: "<login>|<exp>". Never invalidated by a deploy; epoch 0 is what a fresh
-  // owners row holds until "sign out all devices" bumps it.
+  // owners row holds until "sign out everywhere" bumps it.
   if (rest.length) return null
   return { session: { ownerId: head, label: head, method: "github", epoch: 0 }, exp }
 }
@@ -169,9 +169,11 @@ export async function getSession(c: Context<AppEnv>): Promise<Session | null> {
   if (!payload) return null
   const parsed = parseSessionPayload(payload)
   if (!parsed || parsed.exp < Date.now()) return null
+  // The allowlist that let a GitHub login in also decides whether its session still stands.
+  if (parsed.session.method === "github" && !allowedLogins(c.env).includes(parsed.session.ownerId.toLowerCase())) return null
   if (parsed.session.epoch === -1) return parsed.session
   const state = await ownerState(c.env.DB, parsed.session.ownerId)
-  // A session minted before "sign out all devices" carries an older epoch and stops here.
+  // A session minted before "sign out everywhere" carries an older epoch and stops here.
   if (parsed.session.epoch !== state.epoch) return null
   return state.label ? { ...parsed.session, label: state.label } : parsed.session
 }
@@ -380,7 +382,7 @@ export async function finishLogin(c: Context<AppEnv>) {
   }
 
   // A second person keeps their own identity but shares the install's revocation counter, so
-  // "sign out all devices" signs them out too.
+  // "sign out everywhere" signs them out too.
   await setSessionCookie(c, { ownerId: user.login, label: user.login, method: "github", epoch: await currentEpoch(c.env.DB) })
   return c.redirect(safeNext(next))
 }

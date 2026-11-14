@@ -84,6 +84,8 @@ function createEmitter({ json = false, stdout = process.stdout, stderr = process
     if (json) {
       const event = { event: 'result', ok, code, mode: mode || null, data };
       if (!ok && retryable !== undefined) event.retryable = retryable;
+      // The sentence for a failure that has no failed step to carry it (a refusal, a lock).
+      if (!ok && message) event.message = message;
       send(event);
       return;
     }

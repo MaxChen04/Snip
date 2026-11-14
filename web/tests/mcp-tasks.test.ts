@@ -56,8 +56,8 @@ async function setup() {
       mobileKey: null, mobileThumbKey: null, mobileWidth: null, mobileHeight: null,
       snapshotKey: null, stylesKey: null, tokens: null, animations: [],
     }
-    assert.ok(await db.addPage(DB, id, job.attempt, page))
-    assert.ok(await db.completeJob(DB, id, job.attempt, { title: "Example", description: null, favicon: null, coverKey: key, tokens: null }))
+    assert.ok(await db.addPage(DB, id, job.lease, page))
+    assert.ok(await db.completeJob(DB, id, job.lease, { title: "Example", description: null, favicon: null, coverKey: key, tokens: null }))
   }
   return { mf, DB, call, task, rpc, finish }
 }
@@ -81,7 +81,7 @@ test("add_reference becomes a task that completes with thumbnails and a gallery 
     assert.equal(created.status, "working")
     assert.equal(created.ttlMs, null)
     assert.ok(created.pollIntervalMs > 0)
-    assert.equal(created.statusMessage.match(/Waiting for your Mac/g)?.length, 1)
+    assert.equal(created.statusMessage.match(/Waiting for the capture agent/g)?.length, 1)
     const id = refOf(created.taskId)
     assert.equal(created.taskId, `${id}.1`)
 
@@ -147,7 +147,7 @@ test("a failed capture completes its task with a tool error, not a failed task",
     await db.touchPresence(DB, "idle", null)
     const created = (await call("add_reference", { url: "https://example.com" })).result!
     const job = (await db.claimJob(DB))!
-    await db.failJob(DB, refOf(created.taskId), job.attempt, "Navigation timeout")
+    await db.failJob(DB, refOf(created.taskId), job.lease, "Navigation timeout")
     const done = (await task("tasks/get", created.taskId)).result!
     assert.equal(done.status, "completed")
     assert.equal(done.result.isError, true)
@@ -201,7 +201,7 @@ test("a Recapture ends the old run's task as cancelled, and cancelling it leaves
     assert.match(old.statusMessage, /recaptured/)
     assert.equal(old.result, undefined)
 
-    await task("tasks/cancel", created.taskId)
+    assert.equal((await task("tasks/cancel", created.taskId)).error?.code, -32602, "a task that has ended cannot be cancelled")
     const ref = (await db.getReferenceRecord(DB, id))!
     assert.equal(ref.status, "queued")
     assert.equal(ref.captureRun, 2)
@@ -210,6 +210,106 @@ test("a Recapture ends the old run's task as cancelled, and cancelling it leaves
     // The new run is reachable as its own task id, and a run that was never issued is not.
     assert.equal((await task("tasks/get", `${id}.2`)).result!.status, "working")
     assert.equal((await task("tasks/get", `${id}.3`)).error?.code, -32602)
+  } finally {
+    await mf.dispose()
+  }
+})
+
+test("a capture only the user can move is input_required for tasks/get exactly when wait_for_capture says not to wait", async () => {
+  const { mf, DB, call, task, finish } = await setup()
+  try {
+    await db.touchPresence(DB, "idle", null)
+    const created = (await call("add_reference", { url: "https://example.com" })).result!
+    const id = refOf(created.taskId)
+    const both = async () => ({
+      task: (await task("tasks/get", created.taskId)).result!,
+      wait: (await call("wait_for_capture", { reference_id: id, timeout_seconds: 1 })).result!.structuredContent,
+    })
+
+    // The user pauses it from the app.
+    assert.equal(await db.requestPause(DB, id), true)
+    const paused = await both()
+    assert.equal(paused.task.status, "input_required")
+    assert.match(paused.task.statusMessage, /paused/)
+    assert.ok(paused.task.pollIntervalMs > 0)
+    assert.equal(paused.wait.waitAgain, false)
+
+    assert.equal(await db.resumeReference(DB, id), true)
+    const resumed = await both()
+    assert.equal(resumed.task.status, "working")
+    assert.equal(resumed.wait.waitAgain, true)
+
+    // The capture agent goes away.
+    await DB.prepare("UPDATE worker_presence SET last_seen_at = ?").bind(new Date(Date.now() - 10 * 60_000).toISOString()).run()
+    const offline = await both()
+    assert.equal(offline.task.status, "input_required")
+    assert.match(offline.task.statusMessage, /npm run capture/)
+    assert.equal(offline.wait.waitAgain, false)
+
+    // It comes back and finishes: the same task completes, and can no longer be cancelled.
+    await db.touchPresence(DB, "idle", null)
+    await finish(id)
+    const done = await both()
+    assert.equal(done.task.status, "completed")
+    assert.equal(done.wait.done, true)
+    const cancel = await task("tasks/cancel", created.taskId)
+    assert.equal(cancel.error?.code, -32602)
+    assert.equal((await db.getReferenceRecord(DB, id))!.status, "ready")
+  } finally {
+    await mf.dispose()
+  }
+})
+
+test("add_reference and create_collection refuse what the API refuses, with the same sentences", async () => {
+  const { mf, DB, call } = await setup()
+  try {
+    const refused = (await call("add_reference", { url: "https://user:pw@example.com" })).result!
+    assert.equal(refused.isError, true)
+    assert.match(refused.content[0].text, /^A web address cannot contain a username or password\. Pass a full http\(s\) URL/)
+    assert.equal((await call("add_reference", { url: "file:///etc/passwd" })).result!.isError, true)
+    const tooLong = (await call("add_reference", { url: `https://example.com/${"a".repeat(2030)}` })).result!
+    assert.equal(tooLong.isError, true)
+    assert.match(tooLong.content[0].text, /^That web address is too long\. Pass a full http\(s\) URL/, "one full stop, not two")
+
+    // The same site URL written another way is the saved one, not a new capture.
+    const first = (await call("add_reference", { url: "ando.so" }, { tasks: false })).result!
+    const again = (await call("add_reference", { url: "https://www.ando.so/?utm_source=x" }, { tasks: false })).result!
+    assert.equal(JSON.parse(again.content[0].text).alreadySaved, true)
+    assert.equal(JSON.parse(again.content[0].text).id, JSON.parse(first.content[0].text).id)
+
+    const long = (await call("create_collection", { name: "x".repeat(121) })).result!
+    assert.deepEqual([long.isError, long.content[0].text], [true, "name must be at most 120 characters"])
+    assert.equal((await call("create_collection", { name: "   " })).result!.isError, true)
+    assert.ok(JSON.parse((await call("create_collection", { name: "x".repeat(120) })).result!.content[0].text).id)
+    assert.equal((await DB.prepare("SELECT count(*) AS n FROM collections").first<{ n: number }>())!.n, 1)
+  } finally {
+    await mf.dispose()
+  }
+})
+
+test("every MCP view of a page carries what the capture agent noticed about it", async () => {
+  const { mf, DB, call } = await setup()
+  try {
+    const ref = await db.createReference(DB, { url: "https://example.com", mode: "crawl", maxPages: 5 })
+    const job = (await db.claimJob(DB))!
+    const expected: Record<string, string[]> = { "/0": [], "/1": ["blank"], "/2": ["truncated", "blank"] }
+    for (const [ord, warnings] of Object.values(expected).map((w, i) => [i, w] as const))
+      assert.ok(await db.addPage(DB, ref.id, job.lease, {
+        url: `https://example.com/${ord}`, path: `/${ord}`, title: `Page ${ord}`, ord, desktopKey: null, desktopThumbKey: null, desktopWidth: null, desktopHeight: null,
+        mobileKey: null, mobileThumbKey: null, mobileWidth: null, mobileHeight: null, snapshotKey: null, stylesKey: null, tokens: null, animations: [], warnings: warnings as never,
+      } satisfies PageUpload))
+    assert.ok(await db.completeJob(DB, ref.id, job.lease, { title: "Example", description: null, favicon: null, coverKey: null, tokens: null }))
+
+    type Listed = { id: string; path: string; warnings?: string[] }
+    const seen = (pages: Listed[]) => Object.fromEntries(pages.map((p) => [p.path, p.warnings]))
+    const sc = async (name: string, args: Record<string, unknown>) => (await call(name, args)).result!.structuredContent
+    assert.deepEqual(seen((await sc("get_reference", { id: ref.id, part: "overview" })).pages), expected, "overview")
+    assert.deepEqual(seen((await sc("get_reference", { id: ref.id, part: "pages" })).items), expected, "pages")
+    assert.deepEqual(seen((await sc("get_reference", { id: ref.id, part: "full" })).pages), expected, "full")
+    assert.deepEqual(seen((await sc("search_pages", {})).items), expected, "search_pages")
+    assert.deepEqual(seen((await sc("wait_for_capture", { reference_id: ref.id })).pages), expected, "the finished capture's summary")
+    for (const p of (await sc("get_reference", { id: ref.id, part: "pages" })).items as Listed[])
+      assert.deepEqual((await sc("get_page", { page_id: p.id, image: "none" })).warnings, expected[p.path], `get_page ${p.path}`)
   } finally {
     await mf.dispose()
   }

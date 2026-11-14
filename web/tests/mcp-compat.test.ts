@@ -16,6 +16,8 @@ const env = {
   DB: {
     prepare(sql: string) {
       return {
+        // The unbound read is the sign-out epoch check; no owners row means epoch 0.
+        async first() { return null },
         bind(...args: string[]) {
           return {
             async first() {

@@ -1,5 +1,7 @@
 import { chromium } from "playwright"
 import { mkdirSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { sign } from "../../worker/auth.ts"
 
 // Screenshots of every browser page this branch adds, in light and dark.
@@ -7,10 +9,11 @@ import { sign } from "../../worker/auth.ts"
 //   node --import tsx web/tests/screenshots/passkeys.mjs
 
 const BASE = process.env.BASE ?? "http://localhost:5199"
-const OUT = process.env.OUT ?? "/Users/Maxsc/.factory/worktrees/98cfc78f/screenshots/worker"
+const OUT = process.env.OUT ?? join(tmpdir(), "snip-screenshots/worker")
 const OWNER_LINK_SECRET = process.env.OWNER_LINK_SECRET ?? "dev-owner-link-secret"
 
 mkdirSync(OUT, { recursive: true })
+console.log(`Screenshots: ${OUT}`)
 
 /** The engine mints this in Node; the page needs the same signed payload the Worker verifies. */
 async function ownerLink({ port = 43111, ownerId = "max" } = {}) {
@@ -79,8 +82,8 @@ async function main() {
     await page.keyboard.press("Escape")
     await page.waitForTimeout(200)
 
-    await page.getByRole("button", { name: "Sign out all devices" }).click()
-    await page.waitForSelector("text=Sign out all devices?")
+    await page.getByRole("button", { name: "Sign out everywhere, including connected agents" }).click()
+    await page.waitForSelector("text=Sign out everywhere, including connected agents?")
     await shoot(page, `passkeys-sign-out-all-${scheme}`, { wait: 250 })
     await page.keyboard.press("Escape")
 

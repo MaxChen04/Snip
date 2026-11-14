@@ -329,6 +329,93 @@ test("only bars pinned to the viewport edges are hidden: fixed backgrounds and p
   }
 })
 
+test("a fixed header and a stuck sticky sub-nav do not repeat in the stitched shot, a floating widget shows once in the first viewport, and a sticky one in its place stays", async () => {
+  const { recordLiveSections, patchInView, fullPageShotAtForTest, OBSERVED_FOR_TEST, HOLD_RESIZE_FOR_TEST } = await import("../src/capture")
+  const { closeRenderer } = await import("../src/sheet")
+  const sharp = (await import("sharp")).default
+  const browser = await launch()
+  try {
+    const context = await browser.newContext({ viewport: { width: 800, height: 600 } })
+    await context.addInitScript(HOLD_RESIZE_FOR_TEST)
+    await context.addInitScript(OBSERVED_FOR_TEST)
+    // The header is a fixed wrapper with no height; the bar overflows it, and its child sets visibility again (sites do both). Every
+    // section reveals a box on scroll, so each gets an in-view frame. The sub-nav sticks to the top of the tall middle section, and it
+    // transitions, as bars do. It starts the section, so it also sits at the top of the viewport when that section is shown first.
+    await context.route("http://snip.test/", (route) => route.fulfill({ contentType: "text/html", body: `<!doctype html><title>Bars</title><style>
+      body { margin: 0 } section { height: 600px; position: relative }
+      #top { position: fixed; top: 0; left: 0; right: 0; height: 0 }
+      #top nav { position: absolute; top: 0; left: 0; right: 0; height: 40px; transition: all 0.5s } #top b { display: block; height: 40px; background: rgb(255, 0, 0); visibility: visible }
+      #sub { position: sticky; top: 0; height: 40px; background: rgb(0, 0, 255); transition: all 0.5s }
+      #hud { position: fixed; right: 20px; bottom: 20px; width: 60px; height: 30px; background: rgb(255, 165, 0) }
+      .box { position: absolute; left: 0; width: 100%; height: 100px; background: rgb(0, 128, 128); opacity: 0 } .box.in { opacity: 1 }
+    </style><div id="top"><nav><b></b></nav></div><div id="hud"></div>
+      <section><div class="box" style="top: 300px"></div></section>
+      <section style="height: 1200px"><div id="sub"></div><div class="box" style="top: 300px"></div><div class="box" style="top: 900px"></div></section>
+      <section><div class="box" style="top: 300px"></div></section>
+      <script>const io = new IntersectionObserver((es) => es.forEach((e) => e.target.classList.toggle("in", e.isIntersecting))); document.querySelectorAll(".box").forEach((b) => io.observe(b))</script>` }))
+    const page = await context.newPage()
+    await page.goto("http://snip.test/")
+    const shot = await fullPageShotAtForTest(page, 1)
+    const cuts = [{ y: 0, height: 600 }, { y: 600, height: 1200 }, { y: 1800, height: 600 }].map((c, i) => ({ kind: "section" as const, label: `Part ${i}`, ...c }))
+    const inView = { shot: shot.buf, patches: [] as { y: number; height: number; jpeg: Buffer }[] }
+    await recordLiveSections(page, cuts, "gif", new Map(), inView)
+    assert.ok(inView.patches.some((p) => p.y >= 1200), `the tall middle section is patched below its first screen, got ${inView.patches.map((p) => p.y)}`)
+    const stitched = await patchInView(shot.buf, inView.patches)
+    const column = async (left: number) => {
+      const { data, info } = await sharp(stitched).extract({ left, top: 0, width: 1, height: shot.height }).raw().toBuffer({ resolveWithObject: true })
+      return (match: (r: number, g: number, b: number) => boolean) => Array.from({ length: info.height }, (_, y) => y).filter((y) => match(data[y * info.channels]!, data[y * info.channels + 1]!, data[y * info.channels + 2]!))
+    }
+    const rows = await column(400)
+    const red = rows((r, g, b) => r > 200 && g < 60 && b < 60)
+    const blue = rows((r, g, b) => b > 200 && r < 60 && g < 60)
+    // The widget is in the first viewport (rows 550-580) once: the section frame at the top shows it, the ones further down do not.
+    const orange = (await column(750))((r, g, b) => r > 200 && g > 120 && g < 200 && b < 60)
+    assert.ok(orange.length >= 25 && orange.every((y) => y >= 540 && y < 590), `the widget shows once, in the first viewport, got ${orange.length} rows at ${orange.at(0)}-${orange.at(-1)}`)
+    assert.ok(red.length > 0 && red.every((y) => y < 40), `the header shows once, at the top, got rows ${red.at(0)}-${red.at(-1)} (${red.length} px)`)
+    assert.ok(blue.length > 0 && blue.every((y) => y >= 600 && y < 640), `the sub-nav shows once, at the top of its section, got rows ${blue.at(0)}-${blue.at(-1)} (${blue.length} px)`)
+    assert.equal(await page.evaluate(() => document.querySelectorAll("[data-snip-live-hidden]").length), 0, "everything is restored afterwards")
+    assert.equal(await page.evaluate(() => (document.querySelector("#top nav") as HTMLElement).style.cssText + (document.querySelector("#sub") as HTMLElement).style.cssText), "", "no style is left behind")
+  } finally {
+    await closeRenderer()
+    await browser.close()
+  }
+})
+
+test("a floating widget stays in the first viewport when a header section is followed by a hero that starts below it", async () => {
+  const { recordLiveSections, patchInView, fullPageShotAtForTest, OBSERVED_FOR_TEST, HOLD_RESIZE_FOR_TEST } = await import("../src/capture")
+  const { closeRenderer } = await import("../src/sheet")
+  const sharp = (await import("sharp")).default
+  const browser = await launch()
+  try {
+    const context = await browser.newContext({ viewport: { width: 800, height: 600 } })
+    await context.addInitScript(HOLD_RESIZE_FOR_TEST)
+    await context.addInitScript(OBSERVED_FOR_TEST)
+    // The hero starts at y 60 and reveals a box below the first viewport, so its frame is scrolled to 60 with the bars hidden and
+    // pasted over rows 60-660, which hold the widget (rows 550-580). The widget is put back from the shot, where it is.
+    await context.route("http://snip.test/", (route) => route.fulfill({ contentType: "text/html", body: `<!doctype html><title>Widget</title><style>
+      body { margin: 0 } section { height: 600px; position: relative } header { height: 60px; background: rgb(240, 240, 240) }
+      #hud { position: fixed; right: 20px; bottom: 20px; width: 60px; height: 30px; background: rgb(255, 165, 0) }
+      .box { position: absolute; left: 0; width: 100%; height: 100px; background: rgb(0, 128, 128); opacity: 0 } .box.in { opacity: 1 }
+    </style><div id="hud"></div><header>Logo</header>
+      <section><div class="box" style="top: 550px"></div></section>
+      <section><div class="box" style="top: 300px"></div></section>
+      <script>const io = new IntersectionObserver((es) => es.forEach((e) => e.target.classList.toggle("in", e.isIntersecting))); document.querySelectorAll(".box").forEach((b) => io.observe(b))</script>` }))
+    const page = await context.newPage()
+    await page.goto("http://snip.test/")
+    const shot = await fullPageShotAtForTest(page, 1)
+    const cuts = [{ y: 0, height: 60 }, { y: 60, height: 600 }, { y: 660, height: 600 }].map((c, i) => ({ kind: "section" as const, label: `Part ${i}`, ...c }))
+    const inView = { shot: shot.buf, patches: [] as { y: number; height: number; jpeg: Buffer; x?: number; width?: number }[] }
+    await recordLiveSections(page, cuts, "gif", new Map(), inView)
+    assert.ok(inView.patches.some((p) => p.y === 60), `the hero is patched, got ${inView.patches.map((p) => p.y)}`)
+    const { data, info } = await sharp(await patchInView(shot.buf, inView.patches)).extract({ left: 750, top: 0, width: 1, height: shot.height }).raw().toBuffer({ resolveWithObject: true })
+    const orange = Array.from({ length: info.height }, (_, y) => y).filter((y) => data[y * info.channels]! > 200 && data[y * info.channels + 1]! > 120 && data[y * info.channels + 1]! < 200 && data[y * info.channels + 2]! < 60)
+    assert.ok(orange.length >= 25 && orange.every((y) => y >= 540 && y < 590), `the widget shows once, where the shot has it, got ${orange.length} rows at ${orange.at(0)}-${orange.at(-1)}`)
+  } finally {
+    await closeRenderer()
+    await browser.close()
+  }
+})
+
 // A page whose reveals undo themselves out of view, so a full-page shot taken from the top shows them hidden.
 // The teal box sits at document y 1000-1300, below the first viewport on desktop and mobile alike.
 const REVEAL_PAGE = (title: string, link = "") => `<!doctype html><title>${title}</title><meta name="viewport" content="width=device-width">
@@ -405,6 +492,33 @@ test("a section that ends at the bottom of a fractional-DPR viewport is patched,
     const [r, g, b] = [...(await sharp(patched).extract({ left: 100, top: Math.round(870 * 1.5), width: 1, height: 1 }).raw().toBuffer())]
     assert.ok(r! < 60 && g! > 90 && b! > 90, `the reveal is in the shot, got ${[r, g, b]}`)
     await context.close()
+  } finally {
+    await browser.close()
+  }
+})
+
+test("likelyInView reads the page under tsx instead of falling back to every section", async () => {
+  // tsx wraps a named function in a __name() call that does not exist in the page. A helper declared inside the evaluated
+  // callback then throws, the catch marks every section as likely, and the patch-only pass visits them all.
+  const { likelyInViewForTest, OBSERVED_FOR_TEST } = await import("../src/capture")
+  const browser = await launch()
+  try {
+    const context = await browser.newContext({ viewport: { width: 800, height: 600 } })
+    await context.addInitScript(OBSERVED_FOR_TEST)
+    await context.route("http://snip.test/", (route) => route.fulfill({ contentType: "text/html", body: `<!doctype html><title>Likely</title><style>
+      body { margin: 0 } section { display: block; position: relative; height: 600px } .box { position: absolute; top: 200px; width: 100%; height: 100px; background: teal }
+      @keyframes grow { to { transform: scaleX(2) } } .scrolled { animation: grow 1s linear both; animation-timeline: scroll() }
+    </style>
+      <section>nothing moves</section>
+      <section><div class="box" id="watched"></div></section>
+      <section><div class="box scrolled"></div></section>
+      <section><div class="box" style="opacity: 0.05"></div></section>
+      <section>still end</section>
+      <script>new IntersectionObserver(() => {}).observe(document.getElementById("watched"))</script>` }))
+    const page = await context.newPage()
+    await page.goto("http://snip.test/")
+    const cuts = [0, 600, 1200, 1800, 2400].map((y, i) => ({ kind: "section" as const, label: `Part ${i}`, y, height: 600 }))
+    assert.deepEqual(await likelyInViewForTest(page, cuts), [false, true, true, true, false], "observed, scroll-driven and faded sections only")
   } finally {
     await browser.close()
   }

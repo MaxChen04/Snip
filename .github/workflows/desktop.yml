@@ -41,8 +41,8 @@ jobs:
       - run: npm ci
       - run: npm ci --prefix desktop
       - run: npm run build -w web
-      - run: npm run test:app
       - run: npx --no-install playwright install chromium
+      - run: npm run test:app
       - run: node --import tsx --test capture/tests/network.browser.test.ts
       - run: npm run test:desktop
       - run: npm run build --prefix desktop -- --no-install

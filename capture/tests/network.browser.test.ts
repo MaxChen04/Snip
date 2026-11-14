@@ -48,6 +48,7 @@ test("capture rejects a private stylesheet instead of publishing its response", 
   let uploads = 0
   try {
     const routedBrowser = {
+      isConnected: () => browser.isConnected(),
       async newContext(options:any) {
         const context = await browser.newContext(options)
         await context.route("http://8.8.8.8/**", route => route.fulfill({contentType:"text/html",
@@ -133,4 +134,27 @@ test('WebSocket upgrades retain public connectivity and refuse private targets',
     for (const socket of sockets) socket.destroy()
     await new Promise<void>(resolve=>server.close(()=>resolve()))
   }
+})
+
+test("a private icon or unused font loses that file, not the capture", {timeout:90000}, async () => {
+  const target = await fixture()
+  const browser = await chromium.launch({headless:true})
+  let completed: {favicon:string|null}|null = null
+  let pages = 0
+  try {
+    const routedBrowser = {
+      isConnected: () => browser.isConnected(),
+      async newContext(options:any) {
+        const context = await browser.newContext(options)
+        await context.route("http://8.8.8.8/", route => route.fulfill({contentType:"text/html",
+          body:`<html><head><title>Public fixture</title><link rel="icon" href="${target.url}"><style>@font-face{font-family:Unused;src:url("${target.url}")}</style></head><body>Public fixture</body></html>`}))
+        return context
+      }
+    }
+    const api = {async control(){return null},async progress(){},async upload(key:string){return key},async addPage(){pages++},async complete(_id:string,c:{favicon:string|null}){completed=c}}
+    await captureJob(routedBrowser as any,api as any,{id:"r",url:"http://8.8.8.8/",attempt:"a".repeat(32),mode:"crawl",maxPages:1,resume:null,options:null,features:["icon"]})
+    assert.equal(target.hits(),0)
+    assert.equal(pages,1)
+    assert.equal(completed!.favicon,target.url,"the icon was not saved, so its URL is kept")
+  } finally { await browser.close(); await target.close() }
 })

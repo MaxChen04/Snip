@@ -11,7 +11,7 @@ test("capture leases fence stale workers and isolate cleanup", async () => {
   try {
     const database = await mf.getD1Database("DB") as unknown as D1Database
     const files = await mf.getR2Bucket("FILES") as unknown as R2Bucket
-    for (const migration of ["0001_init.sql", "0002_mcp_media_status.sql", "0003_capture_attempts.sql", "0004_page_collections.sql", "0005_capture_control.sql", "0006_notes_and_options.sql", "0011_capture_runs.sql", "0012_page_sections.sql", "0013_alt_scheme.sql", "0014_canvas.sql", "0015_board_item_style.sql"]) {
+    for (const migration of ["0001_init.sql", "0002_mcp_media_status.sql", "0003_capture_attempts.sql", "0004_page_collections.sql", "0005_capture_control.sql", "0006_notes_and_options.sql", "0011_capture_runs.sql", "0012_page_sections.sql", "0013_alt_scheme.sql", "0014_canvas.sql", "0015_board_item_style.sql", "0016_stale_reclaims.sql", "0018_capture_lease.sql", "0019_page_warnings.sql", "0020_agent_refused.sql"]) {
       const sql = await readFile(new URL(`../migrations/${migration}`, import.meta.url), "utf8")
       // D1 exec accepts one statement per line; migration comments and multiline SQL need prepare/batch.
       const statements = sql.replace(/^--.*$/gm, "").split(";").map((s) => s.trim()).filter(Boolean)
@@ -23,22 +23,24 @@ test("capture leases fence stale workers and isolate cleanup", async () => {
     const old = (await db.claimJob(database))!
     const oldKey = `refs/${ref.id}/${old.attempt}/p0/desktop.jpg`
     await files.put(oldKey, "old")
-    await db.requeueReference(database, ref.id)
+    // Only a finished capture can be recaptured.
+    assert.equal(await db.failJob(database, ref.id, old.lease, "failed"), true)
+    assert.equal(await db.requeueReference(database, ref.id), true)
     const current = (await db.claimJob(database))!
     assert.notEqual(current.attempt, old.attempt)
     const currentKey = `refs/${ref.id}/${current.attempt}/p0/desktop.jpg`
     await files.put(currentKey, "current")
-    assert.equal(await db.setProgress(database, ref.id, old.attempt, "old"), false)
+    assert.equal(await db.setProgress(database, ref.id, old.lease, "old"), false)
     const page = { url: "https://example.com", path: "/", title: "Page", ord: 0,
       desktopKey: currentKey, desktopThumbKey: currentKey, desktopWidth: 100, desktopHeight: 100,
       mobileKey: null, mobileThumbKey: null, mobileWidth: null, mobileHeight: null,
       snapshotKey: null, stylesKey: null, tokens: null,
       animations: [{ kind: "scroll" as const, label: "Scroll", selector: null, viewport: "desktop" as const, gifKey: currentKey, width: 100, height: 100, sheetKey: null, meta: null }] }
-    assert.equal(await db.addPage(database, ref.id, old.attempt, page), null)
-    assert.ok(await db.addPage(database, ref.id, current.attempt, page))
+    assert.equal(await db.addPage(database, ref.id, old.lease, page), null)
+    assert.ok(await db.addPage(database, ref.id, current.lease, page))
     assert.equal((await db.getReference(database, ref.id))?.pages.length, 1)
-    assert.equal(await db.failJob(database, ref.id, old.attempt, "old"), false)
-    assert.equal(await db.completeJob(database, ref.id, old.attempt, { title: null, description: null, favicon: null, coverKey: null, tokens: null }), false)
+    assert.equal(await db.failJob(database, ref.id, old.lease, "old"), false)
+    assert.equal(await db.completeJob(database, ref.id, old.lease, { title: null, description: null, favicon: null, coverKey: null, tokens: null }), false)
     const failingFiles = new Proxy(files, { get(target, name) {
       if (name === "list") return async () => { throw new Error("temporary storage failure") }
       const value = Reflect.get(target, name, target)
@@ -52,8 +54,8 @@ test("capture leases fence stale workers and isolate cleanup", async () => {
     assert.equal(await files.get(oldKey), null)
     assert.ok(await files.get(currentKey))
     await database.prepare("UPDATE refs SET claimed_at = '2000-01-01T00:00:00.000Z' WHERE id = ?").bind(ref.id).run()
-    assert.equal(await db.renewLease(database, ref.id, old.attempt), false)
-    assert.equal(await db.renewLease(database, ref.id, current.attempt), true)
+    assert.equal(await db.renewLease(database, ref.id, old.lease), false)
+    assert.equal(await db.renewLease(database, ref.id, current.lease), true)
     assert.equal(await db.claimJob(database), null)
 
     const pending: Promise<unknown>[] = []
@@ -63,9 +65,9 @@ test("capture leases fence stale workers and isolate cleanup", async () => {
     const auth = { authorization: "Bearer test-token" }
     const rejected = await req("/agent/jobs/claim", { method: "POST", headers: auth })
     assert.equal(rejected.status, 426)
-    const beat = (attempt: string) => req("/agent/heartbeat", { method: "POST", headers: { ...auth, "content-type": "application/json", "x-snip-capture-protocol": "3", "x-snip-capture-attempt": attempt }, body: JSON.stringify({ jobId: ref.id }) })
-    assert.equal((await beat(old.attempt)).status, 410)
-    assert.equal((await beat(current.attempt)).status, 200)
+    const beat = (lease: string) => req("/agent/heartbeat", { method: "POST", headers: { ...auth, "content-type": "application/json", "x-snip-capture-protocol": "4", "x-snip-capture-lease": lease }, body: JSON.stringify({ jobId: ref.id }) })
+    assert.equal((await beat(old.lease)).status, 410)
+    assert.equal((await beat(current.lease)).status, 200)
 
     let release!: () => void
     let started!: () => void
@@ -77,7 +79,7 @@ test("capture leases fence stale workers and isolate cleanup", async () => {
       return typeof value === "function" ? value.bind(target) : value
     } })
     const uploadKey = `refs/${ref.id}/${current.attempt}/p0/late.jpg`
-    const upload = app.request(`https://snip.test/agent/files/${uploadKey}`, { method: "PUT", body: "late", headers: { ...auth, "x-snip-capture-protocol": "3", "x-snip-capture-attempt": current.attempt } }, { ...env, FILES: delayedFiles }, ctx)
+    const upload = app.request(`https://snip.test/agent/files/${uploadKey}`, { method: "PUT", body: "late", headers: { ...auth, "x-snip-capture-protocol": "4", "x-snip-capture-lease": current.lease } }, { ...env, FILES: delayedFiles }, ctx)
     await entered
     await db.deleteReference(database, ref.id)
     await db.cleanupRetiredFiles(database, files)
@@ -111,7 +113,7 @@ test("capture leases fence stale workers and isolate cleanup", async () => {
       return typeof value === "function" ? value.bind(target) : value
     } })
     const lateKey = `refs/${uncertainRef.id}/${uncertainJob.attempt}/p0/late.jpg`
-    const lateUpload = app.request(`https://snip.test/agent/files/${lateKey}`, { method: "PUT", body: "late", headers: { ...auth, "x-snip-capture-protocol": "3", "x-snip-capture-attempt": uncertainJob.attempt } }, { ...env, DB: failingDb, FILES: slowFiles }, ctx)
+    const lateUpload = app.request(`https://snip.test/agent/files/${lateKey}`, { method: "PUT", body: "late", headers: { ...auth, "x-snip-capture-protocol": "4", "x-snip-capture-lease": uncertainJob.lease } }, { ...env, DB: failingDb, FILES: slowFiles }, ctx)
     await enteredUncertain
     await db.deleteReference(database, uncertainRef.id)
     await db.cleanupRetiredFiles(database, files)
@@ -131,8 +133,8 @@ test("capture leases fence stale workers and isolate cleanup", async () => {
     const reclaimed = (await db.claimJob(database))!
     assert.equal(reclaimed.id, staleRef.id)
     assert.notEqual(reclaimed.attempt, expired.attempt)
-    assert.equal(await db.addPage(database, staleRef.id, expired.attempt, page), null)
-    assert.equal(await db.failJob(database, staleRef.id, expired.attempt, "expired"), false)
+    assert.equal(await db.addPage(database, staleRef.id, expired.lease, page), null)
+    assert.equal(await db.failJob(database, staleRef.id, expired.lease, "expired"), false)
   } finally {
     await mf.dispose()
   }

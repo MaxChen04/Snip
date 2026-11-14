@@ -15,25 +15,17 @@ export interface HumanAction {
   url?: string
   message?: string
 }
-export interface Progress {
-  step: string
-  message?: string
-  current?: number
-  total?: number
-  unit?: string
-}
 export interface NeededInput {
   key: string
   label: string
   secret: boolean
+  options?: { value: string; label: string }[]
 }
 
 const EMPTY: CloudSnapshotState = { mode: "local", state: null, busy: false, running: null }
 
 function resultMessage(code: string): string {
   switch (code) {
-    case "NEEDS_INPUT":
-      return "Snip needs one more choice before it can continue."
     case "LOCKED":
       return "Another Snip setup is already running."
     case "UNSUPPORTED":
@@ -52,31 +44,30 @@ function resultMessage(code: string): string {
 const CONFIRM_CODES = new Set(["CONFIRM_MISSING", "CONFIRM_MISMATCH"])
 
 /**
- * One source of truth for Settings: a disk snapshot plus the live engine events.
- * The renderer never inspects the engine's files; everything arrives over the bridge.
+ * One source of truth for Settings: main's `state()` snapshot plus the live engine events
+ * of the run in flight. Main never pushes state, so this re-reads it whenever main says
+ * something happened. The renderer never inspects the engine's files.
  */
 export function useCloud(bridge = window.snipCloud) {
   const [snapshot, setSnapshot] = useState<CloudSnapshotState>(EMPTY)
   const [loaded, setLoaded] = useState(false)
   const [steps, setSteps] = useState<Record<string, LiveStep>>({})
   const [action, setAction] = useState<HumanAction | null>(null)
-  const [progress, setProgress] = useState<Progress | null>(null)
   const [error, setError] = useState<CloudError | null>(null)
   const [choice, setChoice] = useState<EngineChoiceEvent | null>(null)
   const [needed, setNeeded] = useState<NeededInput[] | null>(null)
-  const [busy, setBusy] = useState(false)
   const [link, setLink] = useState<OwnerLink | null>(null)
   const [linkPending, setLinkPending] = useState(false)
   const [linkError, setLinkError] = useState<string | null>(null)
-  // The log callback is installed once; this ref says whether a mint is waiting, so a
-  // failure can be shown in the sheet that asked for it instead of as a loose toast.
-  const minting = useRef(false)
-  // The link arrives on its own channel. These let the wait end the moment it does,
-  // rather than after the next `state()` round trip.
-  const linkSettled = useRef(false)
-  const linkLatest = useRef<OwnerLink | null>(null)
   const [note, setNote] = useState<{ level: "info" | "warn" | "error"; message: string; id: number } | null>(null)
-  const runId = useRef(0)
+  // The bridge callbacks are installed once; these let them read what is on screen.
+  const minting = useRef(false)
+  minting.current = linkPending
+  const asking = useRef(false)
+  asking.current = choice !== null || needed !== null
+  // `state()` replies can land out of order: one issued before the last applied is dropped.
+  const reads = useRef({ issued: 0, applied: 0 })
+  const starting = useRef(false)
 
   // A snapshot read can be older than the link event; keep a link that is still valid
   // rather than blanking it, and drop one that has run out.
@@ -84,24 +75,21 @@ export function useCloud(bridge = window.snipCloud) {
     next ?? (current && Date.parse(current.expiresAt) > Date.now() ? current : null), [])
 
   const refresh = useCallback(async () => {
-    if (!bridge) return
+    const ticket = ++reads.current.issued
     try {
-      const next = await bridge.state()
-      if (next) {
-        setSnapshot(next)
-        setBusy(next.busy)
-        setLink(current => keepLink(current, next.link))
-        setError(next.state?.error ?? null)
-        if (!next.busy) {
-          setSteps(previous => {
-            // A cold read wins only when no engine is running; live events are fresher otherwise.
-            const seeded: Record<string, LiveStep> = {}
-            for (const step of next.state?.steps ?? []) {
-              seeded[step.id] = { id: step.id, status: step.status === "running" ? "running" : step.status, detail: step.detail ?? undefined }
-            }
-            return Object.keys(previous).length && next.busy ? previous : seeded
-          })
+      const next = await bridge?.state()
+      if (!next || ticket < reads.current.applied) return
+      reads.current.applied = ticket
+      setSnapshot(next)
+      setLink(current => keepLink(current, next.link))
+      if (!next.busy) {
+        // A cold read wins only when no engine is running; live events are fresher otherwise.
+        const seeded: Record<string, LiveStep> = {}
+        for (const step of next.state?.steps ?? []) {
+          seeded[step.id] = { id: step.id, status: step.status, detail: step.detail ?? undefined }
         }
+        setSteps(seeded)
+        setAction(null)
       }
     } finally {
       setLoaded(true)
@@ -124,7 +112,6 @@ export function useCloud(bridge = window.snipCloud) {
     if (!bridge) return
     const offProgress = bridge.onProgress((event: EngineEvent) => {
       if (event.event === "step") {
-        setBusy(true)
         setSteps(previous => ({
           ...previous,
           [event.step]: {
@@ -155,18 +142,13 @@ export function useCloud(bridge = window.snipCloud) {
         // Terminal: the engine stopped so a consequence is never inferred from a default.
         setChoice(event)
         setAction(null)
-        setBusy(false)
-        return
-      }
-      if (event.event === "progress") {
-        setProgress({ step: event.step, message: event.message, current: event.current, total: event.total, unit: event.unit })
         return
       }
       if (event.event === "needs_input") {
         // Terminal: the engine never reads stdin. Collect the value here and re-invoke.
         const keys = (event.keys ?? [])
           .filter(entry => entry && typeof entry.key === "string")
-          .map(entry => ({ key: entry.key, label: entry.label ?? entry.key, secret: entry.secret === true }))
+          .map(entry => ({ key: entry.key, label: entry.label ?? entry.key, secret: entry.secret === true, options: entry.options }))
           .slice(0, 4)
         if (keys.some(entry => entry.key === "confirm")) {
           // `confirm` is never typed by a person: the record the shell rendered is stale.
@@ -175,14 +157,13 @@ export function useCloud(bridge = window.snipCloud) {
         } else {
           setNeeded(keys.length ? keys : null)
         }
-        setBusy(false)
         return
       }
       if (event.event === "result") {
-        setBusy(false)
+        setSnapshot(current => ({ ...current, busy: false }))
         setAction(null)
-        setProgress(null)
-        if (!event.ok && event.code !== "CANCELLED") {
+        // NEEDS_INPUT is a question, already on screen as a choice or an input card.
+        if (!event.ok && event.code !== "CANCELLED" && event.code !== "NEEDS_INPUT") {
           const retryable = event.retryable !== false
           const code = typeof event.data?.code === "string" ? event.data.code : event.code
           if (CONFIRM_CODES.has(code)) {
@@ -193,7 +174,7 @@ export function useCloud(bridge = window.snipCloud) {
               : {
                   step: typeof event.data?.step === "string" ? event.data.step : null,
                   code,
-                  message: typeof event.data?.message === "string" ? event.data.message : resultMessage(code),
+                  message: [event.message, event.data?.message].find((value): value is string => typeof value === "string" && value !== "") ?? resultMessage(code),
                   hint: typeof event.data?.hint === "string" ? event.data.hint : null,
                   at: null,
                   retryable,
@@ -201,26 +182,24 @@ export function useCloud(bridge = window.snipCloud) {
           }
         }
         void refresh()
-        // The child may still be exiting when the result lands; read the final mode once more.
-        window.setTimeout(() => void refresh(), 400)
       }
     })
     const offLog = bridge.onLog(entry => {
       if (entry.level === "error" && minting.current) {
         // One reason, in the sheet that asked for it, next to its own Try again.
-        linkSettled.current = true
         setLinkError(entry.message)
         setLinkPending(false)
         return
       }
       setNote({ level: entry.level, message: entry.message, id: Date.now() })
-      if (entry.level === "error") toast.error(entry.message)
+      // Main's closing line for a run that stopped to ask is not a failure.
+      if (entry.level === "error" && !asking.current) toast.error(entry.message)
+      // Main logs when a run starts and when its child has exited, with or without a result.
+      void refresh()
     })
     // The link is not a "step" event: it arrives on its own channel so the window never
     // flips into the progress view for it.
     const offLink = bridge.onLink(next => {
-      linkLatest.current = next
-      linkSettled.current = true
       setLink(next)
       setLinkPending(false)
     })
@@ -231,63 +210,47 @@ export function useCloud(bridge = window.snipCloud) {
     }
   }, [bridge, refresh])
 
+  // Every mint ends on a channel main pushes: the link, or an error line in the log.
   const requestLink = useCallback(async () => {
-    if (!bridge) return null
+    // A mint already in flight is the one to wait for.
+    if (!bridge || minting.current) return
     minting.current = true
-    linkSettled.current = false
-    linkLatest.current = null
     setLinkPending(true)
     setLinkError(null)
-    try {
-      const reply = await bridge.ownerLink()
-      if (reply?.error) {
-        setLinkError(reply.error)
-        return null
-      }
-      // The mint lands on its own channel. This loop is the fallback for a link that
-      // arrived before anyone was listening, and the way to notice a run that ended
-      // without one. `settled` keeps it from waiting on a slow read it doesn't need.
-      for (let attempt = 0; attempt < 60; attempt++) {
-        if (linkSettled.current) return linkLatest.current
-        await new Promise(resolve => window.setTimeout(resolve, 250))
-        if (linkSettled.current) return linkLatest.current
-        const next = await bridge.state()
-        if (next?.link) {
-          linkLatest.current = next.link
-          setLink(next.link)
-          return next.link
-        }
-        if (!next?.running) {
-          // Main logs the reason; without one, say the plain thing.
-          setLinkError(current => current ?? "Snip couldn’t create a sign-in link. Try again.")
-          return null
-        }
-      }
-      return null
-    } finally {
-      minting.current = false
+    const reply = await bridge.ownerLink()
+    if (reply?.error) {
+      // "busy" is main's word for a run still in flight, often the last mint winding down.
+      setLinkError(reply.error === "busy" ? "Snip is still finishing something else. Try again in a moment." : reply.error)
       setLinkPending(false)
     }
   }, [bridge])
 
-  const begin = useCallback(async (call: () => Promise<{ started?: true; error?: string }>) => {
-    const ticket = ++runId.current
+  /** Starts a run. `command` is what the window asked for; main's snapshot then confirms it. */
+  const begin = useCallback(async (command: string | null, call: () => Promise<{ started?: true; error?: string }>) => {
+    if (starting.current) return
+    starting.current = true
+    // A read from before this run must not land on top of it.
+    reads.current.applied = ++reads.current.issued
     setSteps({})
     setAction(null)
-    setProgress(null)
     setError(null)
     setChoice(null)
     setNeeded(null)
-    setBusy(true)
-    const reply = await call()
-    if (reply?.error) {
-      if (ticket === runId.current) setBusy(false)
-      toast.error(reply.error)
-      return false
+    setSnapshot(current => ({ ...current, busy: true, running: command ? { command, step: null } : null }))
+    try {
+      const reply = await call()
+      // "busy" is main saying a run already exists; the read below shows which.
+      if (reply?.error && reply.error !== "busy") {
+        setSnapshot(current => ({ ...current, busy: false }))
+        toast.error(reply.error)
+      }
+    } finally {
+      starting.current = false
+      void refresh()
     }
-    return true
-  }, [])
+  }, [refresh])
 
+  const busy = snapshot.busy
   return {
     bridge,
     snapshot,
@@ -298,16 +261,17 @@ export function useCloud(bridge = window.snipCloud) {
     snapshotRecord: snapshot.state?.snapshot ?? null,
     local: snapshot.local ?? null,
     engineAvailable: snapshot.engine?.available !== false,
-    busy: busy || snapshot.busy,
+    busy,
     running: snapshot.running,
     steps,
     action,
     choice,
     needed,
-    progress,
-    error,
+    // The file's error is from before the run in flight; a live one is newer than the file.
+    error: busy ? null : error ?? snapshot.state?.error ?? null,
     note,
-    link,
+    // A link being replaced, or one whose replacement failed, is not offered again.
+    link: linkPending || linkError ? null : link,
     linkPending,
     linkError,
     requestLink,
@@ -315,6 +279,7 @@ export function useCloud(bridge = window.snipCloud) {
     begin,
     clearChoice: () => setChoice(null),
     clearNeeded: () => setNeeded(null),
+    clearError: () => setError(null),
     clearNote: () => setNote(null),
   }
 }

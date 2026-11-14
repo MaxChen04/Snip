@@ -37,7 +37,7 @@ test("the HTML snapshot and styles file are gzipped only for a Worker that says 
           addPage: async (_id: string, page: PageUpload) => { pages.push(page) },
           complete: async () => {},
         } as unknown as SnipApi
-        const job: Job = { id: "gz", url, mode: "single", maxPages: 1, attempt: "a".repeat(32), resume: null, options: null, ...(features ? { features } : {}) }
+        const job: Job = { id: "gz", url, mode: "single", maxPages: 1, attempt: "a".repeat(32), lease: "b".repeat(32), resume: null, options: null, ...(features ? { features } : {}) }
         await captureJob(browser, api, job)
         assert.equal(pages.length, 1)
         const { snapshotKey, stylesKey } = pages[0]!
