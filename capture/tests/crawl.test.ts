@@ -1,6 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { duplicateOf, leftSite, promoteLinks, rankLinks, skipReason } from "../src/capture"
+import sharp from "sharp"
+import { duplicateOf, isFlat, leftSite, promoteLinks, rankLinks, skipReason } from "../src/capture"
 
 const root = new URL("https://vercel.com")
 
@@ -98,4 +99,12 @@ test("the first page's links go ahead of a sitemap queue and low-value pages sta
   const merged = promoteLinks(queue, links, [at("/")])
   // Queued links move up, visited "/" is not re-added, /login stays behind the other queued pages, unqueued /signup goes last.
   assert.deepEqual(paths(merged), ["/pricing", "/enterprise", "/features", "/homepage", "/about", "/agents", "/ai", "/changelog", "/careers", "/login", "/signup"])
+})
+
+test("a shot of one color, grain included, is flat; a line of text or a picture on it is not", async () => {
+  const raw = (width: number, height: number, level: (i: number) => number) => sharp(Buffer.from(Array.from({ length: width * height * 3 }, (_, i) => level(i))), { raw: { width, height, channels: 3 } }).jpeg({ quality: 80 }).toBuffer()
+  const grain = await raw(300, 200, (i) => 244 + ((i * 7) % 13) - 6) // as on heronaiapp.com: off-white with noise
+  assert.equal(await isFlat(grain), true)
+  assert.equal(await isFlat(await sharp(grain).composite([{ input: Buffer.from(`<svg width="300" height="200"><rect x="20" y="90" width="60" height="10" fill="#222"/></svg>`) }]).jpeg().toBuffer()), false, "a line of text")
+  assert.equal(await isFlat(await raw(300, 200, (i) => (i % 900 < 450 ? 20 : 240))), false, "a picture")
 })

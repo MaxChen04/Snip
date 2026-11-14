@@ -82,7 +82,7 @@ test("agent presence and storage usage for the gallery", async () => {
   }
 })
 
-test("protocol 2 agents cannot claim optioned jobs or mutate capture state", async () => {
+test("agents on an older protocol cannot claim optioned jobs or mutate capture state", async () => {
   const {mf,database,files,call} = await setup()
   try {
     const ref = await (await call('/api/references','POST',{url:'https://example.com',mode:'single',options:{colorScheme:'dark',desktopWidth:1920,signedIn:true}})).json() as {id:string}
@@ -90,14 +90,14 @@ test("protocol 2 agents cannot claim optioned jobs or mutate capture state", asy
     const pending:Promise<unknown>[]=[]
     const ctx = {waitUntil(p:Promise<unknown>){pending.push(p)},passThroughOnException(){}} as unknown as ExecutionContext
     const agent = (protocol:string,path:string,method='POST') => app.request(`http://localhost/agent${path}`,{method,headers:{authorization:'Bearer test-token','x-snip-capture-protocol':protocol}},env,ctx)
-    for(const [path,method] of [['/jobs/claim','POST'],['/heartbeat','POST'],['/files/no-write','PUT'],['/ping','GET']]) {
-      const response=await agent('2',path!,method!)
+    for(const protocol of ['2','3']) for(const [path,method] of [['/jobs/claim','POST'],['/heartbeat','POST'],['/files/no-write','PUT'],['/ping','GET']]) {
+      const response=await agent(protocol,path!,method!)
       assert.equal(response.status,426)
-      assert.match(await response.text(),/upgrade required/i)
+      assert.match(await response.text(),/older than your cloud library.*Update the Snip app/)
     }
     assert.equal((await db.getReferenceRecord(database,ref.id))!.status,'queued')
     assert.equal((await db.getPresence(database)).freshness,'never')
-    const claimed=await agent('3','/jobs/claim')
+    const claimed=await agent('4','/jobs/claim')
     assert.equal(claimed.status,200)
     assert.deepEqual((await claimed.json() as {options:unknown}).options,{colorScheme:'dark',desktopWidth:1920,signedIn:true})
     await Promise.all(pending)

@@ -9,15 +9,17 @@ const copy = (v: string) => {
 
 export function TokensPanel({ tokens, compact }: { tokens: DesignTokens; compact?: boolean }) {
   const n = compact ? 12 : 32
+  // A value the browser can't read as a colour (a gradient reference such as url(#paint0)) has nothing to show.
+  const colors = tokens.colors.filter((c) => CSS.supports("color", c.value))
   const vars = Object.entries(tokens.cssVariables ?? {})
   return (
     <div className={cn("grid gap-8", !compact && "lg:grid-cols-2")}>
       <Section title="Colors">
         <div className={cn("grid gap-2", compact ? "grid-cols-[repeat(auto-fill,minmax(3.5rem,1fr))]" : "grid-cols-4 sm:grid-cols-6 lg:grid-cols-8")}>
-          {tokens.colors.slice(0, n * 2).map((c) => (
-            <button key={c.value} onClick={() => copy(c.value)} className="group min-w-0 text-left" title={`${c.value} (${c.count})`}>
+          {colors.slice(0, n * 2).map((c) => (
+            <button key={c.value} onClick={() => copy(c.value)} className="group min-w-0 self-start text-left" title={`${c.value} (${c.count})`}>
               <div className="aspect-square rounded-lg shadow-button transition-[scale] duration-150 ease-out group-active:scale-[0.97]" style={{ background: c.value }} />
-              <div className="mt-1 truncate font-mono text-[10px] text-ink-10 group-hover:text-foreground">{c.value}</div>
+              <div className="mt-1 font-mono text-[10px] leading-3 break-words text-ink-10 group-hover:text-foreground">{c.value}</div>
             </button>
           ))}
         </div>

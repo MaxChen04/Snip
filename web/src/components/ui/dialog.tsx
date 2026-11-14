@@ -35,6 +35,20 @@ function DialogOverlay({
   )
 }
 
+/**
+ * Tab wraps at the ends at once. The popup's focus guards hand focus back a frame late, and a Tab pressed in that
+ * frame (key repeat on a busy page) would land on the page behind the dialog.
+ */
+function wrapTab(e: React.KeyboardEvent<HTMLElement>) {
+  if (e.key !== "Tab" || e.defaultPrevented) return
+  const items = [...e.currentTarget.querySelectorAll<HTMLElement>("a[href], button, input, select, textarea, [tabindex]")].filter(
+    (el) => el.tabIndex >= 0 && !el.matches(":disabled") && el.checkVisibility({ visibilityProperty: true }),
+  )
+  if (document.activeElement !== (e.shiftKey ? items[0] : items.at(-1))) return
+  e.preventDefault()
+  items[e.shiftKey ? items.length - 1 : 0].focus()
+}
+
 function DialogContent({
   className,
   children,
@@ -48,6 +62,7 @@ function DialogContent({
       <DialogOverlay />
       <DialogPrimitive.Popup
         data-slot="dialog-content"
+        onKeyDown={wrapTab}
         className={cn(
           "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-6 rounded-xl bg-popover p-6 text-sm text-popover-foreground shadow-modal outline-none sm:max-w-md",
           className
@@ -151,4 +166,5 @@ export {
   DialogOverlay,
   DialogPortal,
   DialogTitle,
+  wrapTab,
 }

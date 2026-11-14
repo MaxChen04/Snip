@@ -199,8 +199,6 @@ async function setup() {
 
 async function pull() {
   const state = readState()
-  state.mode = "disabling"
-  writeState(state)
   for (const [id, title] of PULL_STEPS) {
     if (cancelled) break
     if (id === "pull-files") {
@@ -215,7 +213,7 @@ async function pull() {
     if (!(await step(id, title))) break
   }
   if (cancelled) {
-    emit({ event: "result", ok: false, code: "CANCELLED", mode: "disabling" })
+    emit({ event: "result", ok: false, code: "CANCELLED", mode: "cloud" })
     process.exitCode = 1
     return
   }

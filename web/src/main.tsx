@@ -11,7 +11,7 @@ createRoot(document.getElementById("root")!).render(
     <ThemeProvider>
       <TooltipProvider>
         <App />
-        <Toaster position="bottom-center" />
+        <Toaster position="bottom-center" offset={{ bottom: "var(--toast-bottom, 24px)" }} mobileOffset={{ bottom: "var(--toast-bottom, 16px)" }} />
       </TooltipProvider>
     </ThemeProvider>
   </StrictMode>,

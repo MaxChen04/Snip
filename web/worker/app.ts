@@ -1,5 +1,5 @@
 import { Hono, type Context } from "hono"
-import { isGzipKey, ungzipKey, type CaptureMode, type CrawlState, type JobComplete, type PageUpload } from "../shared/types"
+import { PAGE_WARNINGS, isGzipKey, ungzipKey, type CaptureMode, type CrawlState, type JobComplete, type PageUpload, type PageWarning } from "../shared/types"
 import { acceptsGzip, getFile } from "./files"
 import {
   type AppEnv,
@@ -9,6 +9,7 @@ import {
   logout,
   requireCaptureToken,
   crossSiteWrite,
+  currentEpoch,
   requireSession,
   signOutAll,
   startLogin,
@@ -17,6 +18,7 @@ import {
 import * as db from "./db"
 import { canvas } from "./canvas"
 import { signInPath } from "../shared/safe-next"
+import { CAPTURE_PROTOCOL, CAPTURE_PROTOCOL_HEADER, parseProtocol, refusalMessage } from "../shared/capture-protocol"
 import { loginOptions, loginVerify, registerOptions, registerVerify, listDevices, removeDevice } from "./passkeys"
 import { escapeHtml, ownerLinkPage, ownerLinkSubmit } from "./owner"
 import { transfer, validKey } from "./transfer"
@@ -124,7 +126,9 @@ app.post("/authorize", async (c) => {
     userId: session.ownerId,
     metadata: { label: session.label },
     scope: approved.request.scope,
-    props: { ownerId: session.ownerId },
+    // The epoch is read from the database, not the session: a dev session reports -1 ("never
+    // checked"), and a grant must still stop working at the next sign-out everywhere.
+    props: { ownerId: session.ownerId, epoch: await currentEpoch(c.env.DB) },
   })
   const headers = new Headers(approved.headers)
   headers.set("location", redirectTo)
@@ -205,8 +209,8 @@ api.get("/me", (c) => {
   return c.json({ login: session.ownerId, ownerId: session.ownerId, method: session.method })
 })
 
-// Signs every device out: the counter in the owners row moves and every cookie minted before it
-// stops verifying. MCP tokens live in OAUTH_KV and are deliberately not affected.
+// Signs everything out: the counter in the owners row moves, and every cookie and every MCP
+// grant minted before it stops being accepted. Agents have to connect again.
 api.post("/sign-out-all", async (c) => c.json({ ok: true, epoch: await signOutAll(c.env, c.get("session")) }))
 
 // The owner's signed-in devices (passkeys only; GitHub sign-ins leave no device row).
@@ -214,12 +218,7 @@ api.get("/passkeys", (c) => listDevices(c))
 api.delete("/passkeys/:id", (c) => removeDevice(c))
 
 api.get("/cloud-status", async (c) => {
-  const [owner, passkeys, presence, counts] = await Promise.all([
-    db.firstOwner(c.env.DB),
-    db.hasPasskeys(c.env.DB),
-    db.getPresence(c.env.DB),
-    db.libraryCounts(c.env.DB),
-  ])
+  const [owner, passkeys, counts] = await Promise.all([db.firstOwner(c.env.DB), db.hasPasskeys(c.env.DB), db.libraryCounts(c.env.DB)])
   const methods: ("passkey" | "github")[] = []
   if (passkeys) methods.push("passkey")
   if (githubEnabled(c.env)) methods.push("github")
@@ -229,7 +228,6 @@ api.get("/cloud-status", async (c) => {
     ownerId: owner?.id ?? null,
     methods,
     counts,
-    lastCapture: { at: presence.lastSeenAt, activity: presence.activity, stale: presence.freshness !== "recent" },
   })
 })
 
@@ -249,7 +247,7 @@ api.get("/animations", async (c) => c.json(await db.listAnimations(c.env.DB, lis
 
 api.post("/references", async (c) => {
   const body = await c.req.json<{ url: string; mode: CaptureMode; maxPages?: number; collectionIds?: string[]; notes?: string; options?: unknown; allowDuplicate?: boolean }>()
-  if (!body.url) return c.json({ error: "url is required" }, 400)
+  if (typeof body.url !== "string") return c.json({ error: "url is required" }, 400)
   try {
     if (!body.allowDuplicate) {
       const existing = await db.findReferenceByUrl(c.env.DB, body.url)
@@ -290,7 +288,9 @@ api.get("/references/:id", async (c) => {
 api.post("/references/:id/recapture", async (c) => {
   const id = c.req.param("id")
   // Retire the current file namespace and schedule its cleanup.
-  await db.requeueReference(c.env.DB, id)
+  if (!(await db.requeueReference(c.env.DB, id))) {
+    return (await db.getReferenceRecord(c.env.DB, id)) ? c.json({ error: "This capture is still in progress. Stop it or wait for it to finish, then recapture." }, 409) : c.json({ error: "not found" }, 404)
+  }
   c.executionCtx.waitUntil(db.cleanupRetiredFiles(c.env.DB, c.env.FILES))
   return c.json({ ok: true })
 })
@@ -340,11 +340,14 @@ api.post("/collections/:cid/pages", async (c) => {
 api.get("/collections", async (c) => c.json(await db.listCollections(c.env.DB)))
 api.post("/collections", async (c) => {
   const { name, description } = await c.req.json<{ name: string; description?: string }>()
-  if (!name?.trim()) return c.json({ error: "name is required" }, 400)
+  const invalid = db.nameError(name)
+  if (invalid) return c.json({ error: invalid }, 400)
   return c.json({ id: await db.createCollection(c.env.DB, name, description) }, 201)
 })
 api.patch("/collections/:id", async (c) => {
-  const { name, description } = await c.req.json<{ name: string; description?: string }>()
+  const { name, description } = await c.req.json<{ name: string; description?: string | null }>()
+  const invalid = db.nameError(name)
+  if (invalid) return c.json({ error: invalid }, 400)
   await db.updateCollection(c.env.DB, c.req.param("id"), name, description)
   return c.json({ ok: true })
 })
@@ -363,12 +366,18 @@ app.route("/api", api)
 const agent = new Hono<AppEnv>()
 agent.use("*", requireCaptureToken)
 agent.use("*", async (c, next) => {
-  if (c.req.header("x-snip-capture-protocol") !== "3") return c.json({ error: "Capture agent upgrade required. Install the latest Snip capture agent." }, 426)
+  const sent = c.req.header(CAPTURE_PROTOCOL_HEADER)
+  // `expectedProtocol` lets an agent tell which side is out of date from the numbers, which a Worker before 1.5.0 never said.
+  if (sent !== String(CAPTURE_PROTOCOL)) {
+    // Remembered for the browser's banner, which would call this agent offline. The agent hears why whether or not the note is kept.
+    c.executionCtx.waitUntil(db.noteRefusedAgent(c.env.DB, parseProtocol(sent)).catch((error) => console.error("refused agent not recorded", error)))
+    return c.json({ error: refusalMessage(sent), expectedProtocol: CAPTURE_PROTOCOL }, 426)
+  }
   await next()
 })
 
-const attemptFrom = (c: { req: { header(name: string): string | undefined } }) => c.req.header("x-snip-capture-attempt") ?? ""
-const validAttempt = (attempt: string) => /^[a-f0-9]{32}$/.test(attempt)
+// The lease a claim issued. One agent holds a job at a time; a missing or replaced lease matches no job, so the call is answered "job is gone".
+const leaseFrom = (c: { req: { header(name: string): string | undefined } }) => c.req.header("x-snip-capture-lease") ?? ""
 
 // Lets `npm run doctor` check the URL and token without claiming a job or touching presence.
 agent.get("/ping", (c) => c.json({ ok: true }))
@@ -378,36 +387,32 @@ agent.post("/jobs/claim", async (c) => {
   c.executionCtx.waitUntil(db.cleanupRetiredFiles(c.env.DB, c.env.FILES))
   await db.touchPresence(c.env.DB, job ? "busy" : "idle", job?.id ?? null)
   // Advertise on every claim, including resumed jobs: the destination may have been upgraded since the last one.
-  return job ? c.json({ ...job, recordingFormats: ["gif", "webm"], features: ["sections", "live", "schemes", "icon", "gzip"] }) : c.body(null, 204)
+  return job ? c.json({ ...job, recordingFormats: ["gif", "webm"], features: ["sections", "live", "schemes", "icon", "gzip", "sectionThumbs"] }) : c.body(null, 204)
 })
 
 agent.post("/heartbeat", async (c) => {
   const { jobId } = await c.req.json<{ jobId?: string | null }>().catch(() => ({ jobId: null }))
-  const attempt = attemptFrom(c)
-  if (jobId && (!validAttempt(attempt) || !(await db.renewLease(c.env.DB, jobId, attempt)))) return c.json({ error: "job is gone" }, 410)
+  if (jobId && !(await db.renewLease(c.env.DB, jobId, leaseFrom(c)))) return c.json({ error: "job is gone" }, 410)
   await db.touchPresence(c.env.DB, jobId ? "busy" : "idle", jobId ?? null)
   return c.json({ ok: true })
 })
 
 agent.post("/jobs/:id/progress", async (c) => {
-  const attempt = attemptFrom(c)
   const { message } = await c.req.json<{ message: string }>()
-  if (!validAttempt(attempt) || !(await db.setProgress(c.env.DB, c.req.param("id"), attempt, message))) return c.json({ error: "job is gone" }, 410)
+  if (!(await db.setProgress(c.env.DB, c.req.param("id"), leaseFrom(c), message))) return c.json({ error: "job is gone" }, 410)
   await db.touchPresence(c.env.DB, "busy", c.req.param("id"))
   return c.json({ ok: true })
 })
 
 agent.get("/jobs/:id/control", async (c) => {
-  const attempt = attemptFrom(c)
-  const result = validAttempt(attempt) ? await db.getControl(c.env.DB, c.req.param("id"), attempt) : null
+  const result = await db.getControl(c.env.DB, c.req.param("id"), leaseFrom(c))
   return result ? c.json(result) : c.json({ error: "job is gone" }, 410)
 })
 
 agent.post("/jobs/:id/pause", async (c) => {
-  const attempt = attemptFrom(c)
-  if (!validAttempt(attempt)) return c.json({ error: "job is gone" }, 410)
   const state = await c.req.json<CrawlState>()
-  const result = await db.pauseJob(c.env.DB, c.req.param("id"), attempt, state)
+  // ?release: the agent is stopping and hands the crawl back whether or not a pause was asked for.
+  const result = await db.pauseJob(c.env.DB, c.req.param("id"), leaseFrom(c), state, c.req.query("release") !== undefined)
   if (result === "gone") return c.json({ error: "job is gone" }, 410)
   if (result === "changed") return c.json({ error: "pause no longer requested" }, 409)
   await db.touchPresence(c.env.DB, "idle", null)
@@ -416,16 +421,23 @@ agent.post("/jobs/:id/pause", async (c) => {
 
 agent.put("/files/*", async (c) => {
   const key = c.req.path.slice("/agent/files/".length)
-  const attempt = attemptFrom(c)
+  const lease = leaseFrom(c)
   if (!KEY_RE.test(key) || key.includes("..")) return c.json({ error: "bad key" }, 400)
   const parts = key.split("/")
-  if (!validAttempt(attempt) || parts[2] !== attempt) return c.json({ error: "job is gone" }, 410)
-  const upload = await db.beginUpload(c.env.DB, parts[1]!, attempt, key)
+  // The file goes in the namespace of the capture this lease holds.
+  const attempt = await db.leasedAttempt(c.env.DB, parts[1]!, lease)
+  if (!attempt || parts[2] !== attempt) return c.json({ error: "job is gone" }, 410)
+  const upload = await db.beginUpload(c.env.DB, parts[1]!, lease, key)
   if (!upload) return c.json({ error: "job is gone" }, 410)
   const contentType = c.req.header("content-type") ?? "application/octet-stream"
-  // Keep the durable intent if the write, postcheck or stale-key deletion fails.
-  await c.env.FILES.put(key, c.req.raw.body, { httpMetadata: { contentType } })
-  if (!(await db.isCapturing(c.env.DB, parts[1]!, attempt))) {
+  // The pin outlives a failed postcheck or stale-key deletion, where the object may exist. A failed write stored nothing, so its pin goes.
+  try {
+    await c.env.FILES.put(key, c.req.raw.body, { httpMetadata: { contentType } })
+  } catch (error) {
+    await db.finishUpload(c.env.DB, upload)
+    throw error
+  }
+  if (!(await db.isCapturing(c.env.DB, parts[1]!, lease))) {
     await c.env.FILES.delete(key)
     await db.finishUpload(c.env.DB, upload)
     return c.json({ error: "job is gone" }, 410)
@@ -438,15 +450,20 @@ const num = (n: unknown) => typeof n === "number" && Number.isFinite(n) && n >= 
 /** Sections as the agent sends them: the viewer and MCP position clips and crops from these numbers. */
 function validSections(sections: unknown): sections is NonNullable<PageUpload["sections"]> {
   return Array.isArray(sections) && sections.length <= 64 && sections.every((s) =>
-    s && typeof s === "object" && typeof s.key === "string" && typeof s.label === "string" && s.label.length <= 200 &&
+    s && typeof s === "object" && typeof s.key === "string" && (s.thumbKey === undefined || typeof s.thumbKey === "string") && typeof s.label === "string" && s.label.length <= 200 &&
     ["header", "hero", "section", "footer"].includes(s.kind) && num(s.y) && num(s.height) &&
     (s.live === undefined || (s.live && typeof s.live.key === "string" && num(s.live.height) && num(s.live.durationMs) && (s.live.y === undefined || num(s.live.y)))))
 }
 
+/** Warnings as the agent sends them: the known codes, each at most once. */
+const validWarnings = (warnings: unknown): warnings is PageWarning[] =>
+  Array.isArray(warnings) && new Set(warnings).size === warnings.length && warnings.every((code) => (PAGE_WARNINGS as readonly unknown[]).includes(code))
+
 agent.post("/jobs/:id/pages", async (c) => {
   const id = c.req.param("id")
-  const attempt = attemptFrom(c)
-  if (!validAttempt(attempt)) return c.json({ error: "job is gone" }, 410)
+  const lease = leaseFrom(c)
+  const attempt = await db.leasedAttempt(c.env.DB, id, lease)
+  if (!attempt) return c.json({ error: "job is gone" }, 410)
   const page = await c.req.json<PageUpload>()
   const prefix = `refs/${id}/${attempt}/`
   if (page.sections !== undefined && !validSections(page.sections)) return c.json({ error: "bad sections" }, 400)
@@ -454,29 +471,31 @@ agent.post("/jobs/:id/pages", async (c) => {
   if (alt !== undefined && !(alt && (alt.scheme === "light" || alt.scheme === "dark") && typeof alt.desktopKey === "string" && typeof alt.desktopThumbKey === "string" &&
     num(alt.desktopWidth) && num(alt.desktopHeight) && Array.isArray(alt.sectionKeys) && alt.sectionKeys.length <= 64 && alt.sectionKeys.every((k) => k === null || typeof k === "string")))
     return c.json({ error: "bad altScheme" }, 400)
-  const keys = [page.desktopKey, page.desktopThumbKey, page.mobileKey, page.mobileThumbKey, page.snapshotKey, page.stylesKey, ...(page.sections ?? []).flatMap((s) => [s.key, s.live?.key]), alt?.desktopKey, alt?.desktopThumbKey, ...(alt?.sectionKeys ?? []), ...page.animations.flatMap((a) => [a.gifKey, a.sheetKey])]
+  if (page.warnings !== undefined && !validWarnings(page.warnings)) return c.json({ error: "bad warnings" }, 400)
+  const keys = [page.desktopKey, page.desktopThumbKey, page.mobileKey, page.mobileThumbKey, page.snapshotKey, page.stylesKey, ...(page.sections ?? []).flatMap((s) => [s.key, s.thumbKey, s.live?.key]), alt?.desktopKey, alt?.desktopThumbKey, ...(alt?.sectionKeys ?? []), ...page.animations.flatMap((a) => [a.gifKey, a.sheetKey])]
   if (keys.some((key) => key && !key.startsWith(prefix))) return c.json({ error: "bad file key" }, 400)
-  const pageId = await db.addPage(c.env.DB, id, attempt, page)
+  const pageId = await db.addPage(c.env.DB, id, lease, page)
   return pageId ? c.json({ id: pageId }) : c.json({ error: "job is gone" }, 410)
 })
 
 agent.post("/jobs/:id/complete", async (c) => {
   const id = c.req.param("id")
-  const attempt = attemptFrom(c)
+  const lease = leaseFrom(c)
+  const attempt = await db.leasedAttempt(c.env.DB, id, lease)
+  if (!attempt) return c.json({ error: "job is gone" }, 410)
   const body = await c.req.json<JobComplete>()
   const prefix = `refs/${id}/${attempt}/`
   if (body.coverKey && !body.coverKey.startsWith(prefix)) return c.json({ error: "bad file key" }, 400)
   // Only an icon saved with this capture is kept. An older agent sends the site's icon URL instead, which Snip never loads.
   if (!body.favicon?.startsWith(prefix)) body.favicon = null
-  if (!validAttempt(attempt) || !(await db.completeJob(c.env.DB, id, attempt, body))) return c.json({ error: "job is gone" }, 410)
+  if (!(await db.completeJob(c.env.DB, id, lease, body))) return c.json({ error: "job is gone" }, 410)
   await db.touchPresence(c.env.DB, "idle", null)
   return c.json({ ok: true })
 })
 
 agent.post("/jobs/:id/fail", async (c) => {
-  const attempt = attemptFrom(c)
   const { error } = await c.req.json<{ error: string }>()
-  if (!validAttempt(attempt) || !(await db.failJob(c.env.DB, c.req.param("id"), attempt, error))) return c.json({ error: "job is gone" }, 410)
+  if (!(await db.failJob(c.env.DB, c.req.param("id"), leaseFrom(c), error))) return c.json({ error: "job is gone" }, 410)
   await db.touchPresence(c.env.DB, "idle", null)
   return c.json({ ok: true })
 })

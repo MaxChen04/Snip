@@ -1,7 +1,9 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from "react"
 import { Redirect, Route, Switch, useSearch } from "wouter"
+import { navigate } from "wouter/use-browser-location"
 import { Spinner } from "@/components/ui/spinner"
-import { api, UnauthorizedError, type Me } from "@/lib/api"
+import { api, SIGNED_OUT, UnauthorizedError, type Me } from "@/lib/api"
+import { signInHref } from "@/lib/site"
 import { CollectionsProvider } from "@/lib/collections"
 import { CanvasHome } from "@/components/canvas/canvas-home"
 import { BoardCanvas } from "@/components/canvas/board-canvas"
@@ -33,13 +35,24 @@ function Home({ login }: { login: string }) {
 export function App() {
   const [state, setState] = useState<"loading" | "anon" | "offline" | Me>("loading")
 
+  // Any 401 means signed out, at boot or later (signed out on another device).
+  useEffect(() => {
+    const onSignedOut = () => {
+      // Signed out mid-use: sign-in brings them back to where they were.
+      if (typeof state === "object" && location.pathname !== "/sign-in") navigate(signInHref(), { replace: true })
+      setState("anon")
+    }
+    window.addEventListener(SIGNED_OUT, onSignedOut)
+    return () => window.removeEventListener(SIGNED_OUT, onSignedOut)
+  }, [state])
+
   const check = useCallback(() => {
     setState("loading")
     api
       .me()
       .then((me) => setState(me))
-      // Only a 401 means signed out; anything else is a connection problem worth retrying.
-      .catch((e) => setState(e instanceof UnauthorizedError ? "anon" : "offline"))
+      // Anything but a 401 is a connection problem worth retrying.
+      .catch((e) => e instanceof UnauthorizedError || setState("offline"))
   }, [])
 
   useEffect(check, [check])
@@ -63,7 +76,7 @@ export function App() {
     return (
       <Suspense fallback={<Loading />}>
       <Switch>
-        {/* Reachable signed out: the passkey form decides for itself whether a session exists. */}
+        {/* Reachable signed out: /sign-in decides for itself whether a session exists, /passkeys asks to sign in. */}
         <Route path="/sign-in">
           <Suspense fallback={<Loading />}>
             <SignInPage />
@@ -71,11 +84,15 @@ export function App() {
         </Route>
         <Route path="/passkeys">
           <Suspense fallback={<Loading />}>
-            <PasskeysPage />
+            <PasskeysPage me={null} />
           </Suspense>
         </Route>
         <Route path="/guide">
           <GuidePage signedIn={false} />
+        </Route>
+        {/* The bookmarklet's tab is kept through sign-in. */}
+        <Route path="/add">
+          <Redirect to={signInHref()} replace />
         </Route>
         <Route>
           <LandingPage />
@@ -101,7 +118,7 @@ export function App() {
         </Route>
         <Route path="/passkeys">
           <Suspense fallback={<Loading />}>
-            <PasskeysPage />
+            <PasskeysPage me={state} />
           </Suspense>
         </Route>
         <Route path="/r/:id">{(p) => <ReferencePage key={p.id} id={p.id} login={state.login} />}</Route>

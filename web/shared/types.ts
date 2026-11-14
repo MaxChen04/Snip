@@ -17,6 +17,9 @@ export interface CaptureOptions {
 
 export const DESKTOP_WIDTHS = [1280, 1440, 1920] as const
 
+/** The longest name a board, or a frame on a board, may have. */
+export const MAX_NAME = 120
+
 export interface DesignTokens {
   colors: { value: string; count: number }[]
   fonts: { family: string; count: number }[]
@@ -56,8 +59,15 @@ export interface Reference {
   options: CaptureOptions | null
   createdAt: string
   updatedAt: string
-  /** Last claim or progress time while capturing. */
+  /** Last claim, heartbeat or progress time while capturing. */
   claimedAt: string | null
+  /**
+   * Set while capturing when the agent's last heartbeat (that time) is older than 90 seconds, the same threshold at which
+   * `AgentPresence.freshness` turns stale: the agent has gone quiet, and the next agent that asks for work is given this capture.
+   * Null while it keeps beating and when not capturing.
+   * Worked out when the reference is read, so a page that wants it to appear on time has to read again.
+   */
+  quietSince: string | null
   /** Starts at 1; each Recapture adds one. An MCP task belongs to one run. */
   captureRun: number
 }
@@ -87,10 +97,16 @@ export interface Page {
   altScheme: AltScheme | null
   /** Whether sections were looked for at capture. False for older captures; true with no sections for a page that doesn't break into any. */
   sectionsCaptured: boolean
+  /** What the capture agent noticed about this page: it came out blank, or was cut short. Empty when nothing, and for older captures. */
+  warnings: PageWarning[]
   /** Collections this page was saved to on its own (not through its website). */
   collectionIds: string[]
   createdAt: string
 }
+
+/** The two things the capture agent flags on a page it saved: "blank" (nothing visible) and "truncated" (cut off before the end). */
+export const PAGE_WARNINGS = ["blank", "truncated"] as const
+export type PageWarning = (typeof PAGE_WARNINGS)[number]
 
 /**
  * The desktop page in the color scheme it was not captured in (dark for a light capture), when flipping
@@ -116,6 +132,12 @@ export interface PageSection {
   height: number
   /** JPEG of just this section, at desktop width. */
   key: string
+  /**
+   * The same crop at 640 px wide (or 160 px tall, for a strip), which the home gallery draws instead: it zooms hundreds of
+   * sections, and decoding full crops at each zoom was its slowest frame. Absent for captures from before it, and for a crop
+   * too small to shrink; then `key` is what shows. Only the home tile uses it.
+   */
+  thumbKey?: string
   /**
    * A short looping WebM of the section playing in real time (canvas and WebGL backgrounds, marquees, carousels),
    * recorded only when something in it moved. It covers `height` CSS px from its own `y` (at most one viewport),
@@ -284,27 +306,30 @@ export interface Job {
   url: string
   mode: CaptureMode
   maxPages: number
-  /** Server-issued capture lease and file namespace. */
+  /** The file namespace and page numbering of this capture. A stalled capture that is claimed again keeps it. */
   attempt: string
+  /** Who holds this job: issued on every claim and sent with every call for it. Once another claim replaces it, the old holder's calls are refused. */
+  lease: string
   /** Where a paused crawl left off. Pages already captured are kept; continue from here. */
   resume: CrawlState | null
   options: CaptureOptions | null
   /** Formats the serving Worker can display. Older Workers omit this and require GIF. Not persisted. */
   recordingFormats?: ("gif" | "webm")[]
   /**
-   * What the serving Worker stores beyond the basics: page sections, live clips of them, "icon" (it keeps a site icon saved with the capture), and "gzip" (it reads text files
-   * uploaded under a gzipKey). Older Workers omit this. Not persisted.
+   * What the serving Worker stores beyond the basics: page sections, live clips of them, "icon" (it keeps a site icon saved with the capture), "gzip" (it reads text files
+   * uploaded under a gzipKey), and "sectionThumbs" (it keeps a section's thumbKey). Older Workers omit this. Not persisted.
    */
-  features?: ("sections" | "live" | "schemes" | "icon" | "gzip")[]
+  features?: ("sections" | "live" | "schemes" | "icon" | "gzip" | "sectionThumbs")[]
 }
 
-/** Crawl position saved when a capture pauses. */
+/** Crawl position, saved with each page and when a capture pauses. */
 export interface CrawlState {
   version: 1
   /** URLs still to visit, in order. */
   queue: string[]
-  /** URLs already visited (captured or failed), so they are not queued again. */
+  /** URLs already visited (captured, skipped or failed), so they are not queued again. A page's ord and file prefix are its place here. */
   visited: string[]
+  /** Pages saved so far. */
   captured: number
   failures: number
   navLinksQueued: boolean
@@ -332,9 +357,13 @@ export interface PageUpload {
   snapshotKey: string | null
   stylesKey: string | null
   tokens: DesignTokens | null
+  /** Where the crawl stands once this page is saved, so a capture whose agent dies carries on from here. Older agents send none. */
+  state?: CrawlState
   /** Older agents send none. */
   sections?: PageSection[]
   altScheme?: AltScheme
+  /** Each code at most once. Older agents send none. */
+  warnings?: PageWarning[]
   animations: {
     kind: AnimationKind
     label: string | null
@@ -362,7 +391,7 @@ export interface CaptureStatus {
   state: RefStatus
   progress: string | null
   error: string | null
-  /** Last time this capture reported progress (or was claimed). Null unless capturing. */
+  /** Last heartbeat or progress report (or the claim). Null unless capturing. */
   lastProgressAt: string | null
   worker: {
     lastSeenAt: string | null
@@ -371,6 +400,8 @@ export interface CaptureStatus {
     freshness: "recent" | "stale" | "never"
     activity: "idle" | "busy" | null
     currentJobId: string | null
+    /** The last agent the Worker turned away for its capture protocol while it would still count as alive (see AgentPresence), or null. */
+    refused: AgentPresence["refused"]
   }
   pollAfterSeconds: number | null
   advice: string
@@ -381,6 +412,12 @@ export interface AgentPresence {
   lastSeenAt: string | null
   freshness: "recent" | "stale" | "never"
   activity: "idle" | "busy" | null
+  /**
+   * The last agent the Worker turned away for its capture protocol (426), while it would still count as alive: it is not offline, it is the wrong version.
+   * `outdated` is the half to update: "app" when the agent is behind the Worker, "cloud" when it is ahead. `protocol` is null for an agent too old to send one.
+   * Null when there is none, and absent from a Worker before 1.5.0.
+   */
+  refused: { at: string; protocol: number | null; outdated: "app" | "cloud" } | null
 }
 
 export interface StorageUsage {
@@ -438,6 +475,8 @@ export interface SectionItem {
   label: string
   /** JPEG of just this section (PageSection.key). */
   key: string
+  /** Its smaller copy for the home gallery (PageSection.thumbKey); null where the capture stored none. */
+  thumbKey: string | null
   /** Size in desktop CSS px: the page's desktop width by the section's height. */
   width: number
   height: number
@@ -469,6 +508,8 @@ export interface BoardItem {
   /** Top-left corner in canvas px. */
   x: number | null
   y: number | null
+  /** Stacking order on the board: higher is on top, and items arrive bottom to top. null until the item is placed (those arrive last). */
+  z: number | null
   /** Display width in canvas px; null means the kind's default. Height follows the item's aspect ratio. */
   w: number | null
   groupId: string | null
@@ -520,6 +561,8 @@ export interface BoardItemPlacement {
   id: string
   x: number
   y: number
+  /** Stacking order, a whole number; higher is on top. Omitted: keep the stored one (on top for a first placement). */
+  z?: number
   /** Omitted: keep the stored width. null: back to the default. */
   w?: number | null
   /** Omitted: keep the stored group. null: out of any group. */

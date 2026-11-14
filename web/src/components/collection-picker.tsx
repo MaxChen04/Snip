@@ -1,9 +1,11 @@
 import { useState } from "react"
 import { CheckIcon, PlusIcon, SearchIcon } from "@/components/icons"
 import { toast } from "sonner"
+import { notify } from "@/components/notify"
 import { api, fileUrl, type Collection } from "@/lib/api"
 import { useCollections } from "@/lib/collections"
 import { cn } from "@/lib/utils"
+import { MAX_NAME } from "../../shared/types"
 
 /** Square cover for a board: newest cover, or a soft 2x2 placeholder. */
 export function CollectionThumb({ c, className }: { c?: Collection; className?: string }) {
@@ -62,20 +64,27 @@ export function CollectionPicker({
   const [q, setQ] = useState("")
   const [creating, setCreating] = useState(false)
   const [name, setName] = useState("")
+  const [busy, setBusy] = useState(false)
   const shown = collections.filter((c) => c.name.toLowerCase().includes(q.trim().toLowerCase()))
 
   const create = async () => {
     const n = (name || q).trim()
+    if (busy) return
     if (!n) return setCreating(false)
+    setBusy(true)
     try {
       const { id } = await api.createCollection(n)
-      await refresh()
+      // The board exists now; a list that fails to reload is not a failed create.
+      await refresh().catch(() => {})
       onToggle(id, true)
+      notify(`Created board “${n}”`)
       setName("")
       setQ("")
       setCreating(false)
     } catch (err) {
       toast.error((err as Error).message)
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -96,19 +105,18 @@ export function CollectionPicker({
       )}
       <div className="-mx-2 min-h-0 overflow-y-auto px-2">
         {creating ? (
-          <form
-            onSubmit={(e) => {
-              e.preventDefault()
-              void create()
-            }}
-            className={cn(row, "hover:bg-transparent")}
-          >
+          // Not a form: the picker also sits inside the Add dialog's form.
+          <div className={cn(row, "hover:bg-transparent")}>
             <CollectionThumb />
             <input
               autoFocus
               value={name}
               onChange={(e) => setName(e.target.value)}
               onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault()
+                  void create()
+                }
                 if (e.key === "Escape") {
                   e.stopPropagation()
                   setCreating(false)
@@ -116,12 +124,13 @@ export function CollectionPicker({
               }}
               placeholder="Board name"
               aria-label="Board name"
+              maxLength={MAX_NAME}
               className="well h-8 min-w-0 flex-1 rounded-lg px-2.5 text-xs outline-none focus:bg-ink-4"
             />
-            <button type="submit" className="press h-8 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground shadow-primary hover:bg-(--primary-hover)">
+            <button type="button" disabled={busy} onClick={() => void create()} className="press h-8 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground shadow-primary hover:bg-(--primary-hover) disabled:opacity-60">
               Create
             </button>
-          </form>
+          </div>
         ) : (
           <button type="button" onClick={() => (q.trim() ? void create() : setCreating(true))} className={row}>
             <span className="tactile grid size-9 shrink-0 place-items-center rounded-md">

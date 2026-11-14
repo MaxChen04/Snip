@@ -2,10 +2,11 @@
 // Dev tool only: it talks to `npm run dev:settings`, never to Electron or Cloudflare.
 // Usage: node desktop/scripts/settings-shots.mjs [outDir]
 import fs from "node:fs"
+import os from "node:os"
 import path from "node:path"
 import { chromium } from "playwright"
 
-const out = path.resolve(process.argv[2] ?? "/Users/Maxsc/.factory/worktrees/98cfc78f/screenshots/desktop")
+const out = path.resolve(process.argv[2] ?? path.join(os.tmpdir(), "snip-screenshots/desktop"))
 const origin = process.env.SNIP_SETTINGS_ORIGIN ?? "http://127.0.0.1:5174"
 const url = query => `${origin}/settings.html?${query}`
 

@@ -19,7 +19,9 @@ import { isAdjust, LAYER_ADJ, layerLabel, LayerFrame, LayerLock, LayerMenu, laye
 import { SelectionToolbar } from "@/components/canvas/selection-toolbar"
 import { StickyNote } from "@/components/canvas/sticky-note"
 import { CanvasTile, tileLabel } from "@/components/canvas/tiles"
-import { filterOf, itemAspect, RELOAD_EVENT, type CanvasItem } from "@/components/canvas/types"
+import { filterOf, itemAspect, RELOAD_EVENT, type CanvasFilter, type CanvasItem } from "@/components/canvas/types"
+import { Button } from "@/components/ui/button"
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Spinner } from "@/components/ui/spinner"
 import { useDesktopState } from "@/hooks/use-desktop-state"
@@ -27,13 +29,14 @@ import { LIVE_POLL, usePoll } from "@/hooks/use-poll"
 import { api, type BoardGroup, type BoardItem, type BoardItemKind, type BoardItemPlacement, type Collection, type LibraryTypeCounts, type SavedImage } from "@/lib/api"
 import { useCollections } from "@/lib/collections"
 import { cn } from "@/lib/utils"
-import type { BoardItemStyle } from "../../../shared/types"
+import { MAX_NAME, type BoardItemStyle } from "../../../shared/types"
 
 // ponytail: only the layer menu and the canvas handles are undoable (a 50-step history behind the toast's Undo).
 // Everything else saves straight away; removing an item only takes it off the board.
 
 /** A member (website, page, image) or note, where it sits and how it looks. `key` is `${kind}:${id}`. */
-type Node = Placed & { kind: BoardItemKind; id: string; item?: CanvasItem; text?: string; style: BoardItemStyle }
+/** `z` is the stored stacking order; a board's nodes are kept sorted by it, bottom to top. */
+type Node = Placed & { kind: BoardItemKind; id: string; z: number; item?: CanvasItem; text?: string; style: BoardItemStyle }
 type Board = { collection: Collection; nodes: Node[]; groups: BoardGroup[] }
 
 const DEFAULT_W: Record<BoardItemKind, number> = { reference: 232, page: 232, image: 232, note: 200 }
@@ -44,6 +47,8 @@ const BATCH = 200
 const chunks = <T,>(xs: T[]) => Array.from({ length: Math.ceil(xs.length / BATCH) }, (_, i) => xs.slice(i * BATCH, (i + 1) * BATCH))
 const typing = (t: EventTarget | null) => t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))
 const dialogOpen = () => !!document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"]')
+/** The z above every one of these. */
+const above = (nodes: Node[]) => nodes.reduce((top, n) => Math.max(top, n.z), -1) + 1
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
 function toItem(b: BoardItem): CanvasItem | undefined {
@@ -56,7 +61,7 @@ function toNode(b: BoardItem, x: number, y: number): Node | undefined {
   const item = toItem(b)
   if (!item && b.kind !== "note") return
   const w = b.w ?? DEFAULT_W[b.kind]
-  return { key: `${b.kind}:${b.id}`, kind: b.kind, id: b.id, item, text: b.text, x, y, w, h: item ? w / itemAspect(item) : w * NOTE_H, groupId: b.groupId, style: b.style ?? {} }
+  return { key: `${b.kind}:${b.id}`, kind: b.kind, id: b.id, item, text: b.text, x, y, z: b.z ?? 0, w, h: item ? w / itemAspect(item) : w * NOTE_H, groupId: b.groupId, style: b.style ?? {} }
 }
 
 const placement = (n: Node): BoardItemPlacement => ({
@@ -64,6 +69,7 @@ const placement = (n: Node): BoardItemPlacement => ({
   id: n.id,
   x: Math.round(n.x),
   y: Math.round(n.y),
+  z: n.z,
   w: n.w,
   groupId: n.groupId,
   style: Object.keys(n.style).length ? n.style : null,
@@ -204,6 +210,7 @@ const iconButton = "press grid size-8 place-items-center rounded-full text-ink-1
 /** Floating pill under the top bar: the board's name (click to rename), counts, Add note, Add website, more. */
 function BoardHeader({ board, onRename, onAddNote, onAddWebsite, onDelete }: { board: Collection; onRename: (name: string) => void; onAddNote: () => void; onAddWebsite: () => void; onDelete: () => void }) {
   const [editing, setEditing] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   return (
     <div className={cn(pill, "absolute top-16 left-4 z-50 max-w-[calc(100%-2rem)] gap-2 py-1 pr-1 pl-1.5 sm:left-6")}>
       {editing ? (
@@ -211,7 +218,7 @@ function BoardHeader({ board, onRename, onAddNote, onAddWebsite, onDelete }: { b
           autoFocus
           defaultValue={board.name}
           aria-label="Board name"
-          maxLength={120}
+          maxLength={MAX_NAME}
           onFocus={(e) => e.currentTarget.select()}
           onBlur={(e) => {
             setEditing(false)
@@ -245,11 +252,31 @@ function BoardHeader({ board, onRename, onAddNote, onAddWebsite, onDelete }: { b
           <MoreHorizontalIcon />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="w-44">
-          <DropdownMenuItem variant="destructive" onClick={onDelete}>
+          <DropdownMenuItem variant="destructive" onClick={() => setDeleting(true)}>
             <Trash2Icon /> Delete board
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+      <Dialog open={deleting} onOpenChange={setDeleting}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Delete “{board.name}”?</DialogTitle>
+            <DialogDescription>Its saves stay in All saves. Its notes and groups are deleted for good. This can't be undone.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
+            <Button
+              variant="destructive-confirm"
+              onClick={() => {
+                setDeleting(false)
+                onDelete()
+              }}
+            >
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
@@ -306,27 +333,44 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
     setTimeout(() => (swallow.current = false))
   }
 
-  // ---- Saving: positions and frames queue up and go out together ~400 ms after the last change ----
-  const pending = useRef({ items: new Map<string, BoardItemPlacement>(), groups: new Map<string, Partial<BoardGroup>>(), timer: 0 })
-  const flush = useCallback(async () => {
-    const p = pending.current
-    clearTimeout(p.timer)
-    const items = [...p.items.values()]
-    const groups = [...p.groups]
-    p.items.clear()
-    p.groups.clear()
-    if (!items.length && !groups.length) return
-    try {
-      await Promise.all([...chunks(items).map((c) => api.placeBoardItems(id, c)), ...groups.map(([g, patch]) => api.updateBoardGroup(id, g, patch))])
-    } catch (e) {
-      toast.error(`Couldn't save the layout. ${message(e)}`)
-      window.dispatchEvent(new Event(RELOAD_EVENT)) // back to what's stored
-    }
+  // ---- Saving: changed items and frames queue up and go out together ~400 ms after the last change ----
+  // The queue only names what changed; what is saved is the board as it is when the save goes out.
+  const pending = useRef({ items: new Set<string>(), groups: new Set<string>(), timer: 0 })
+  // Settles when everything sent so far has been answered: a save waits for it, so changes reach the server in order,
+  // and a load starts over when it changed meanwhile. Every request that changes the board goes through sent().
+  const saving = useRef<Promise<unknown>>(Promise.resolve())
+  const sent = <T,>(request: Promise<T>) => {
+    saving.current = Promise.allSettled([saving.current, request])
+    return request
+  }
+  const flush = useCallback(() => {
+    clearTimeout(pending.current.timer)
+    const before = saving.current
+    return sent(
+      (async () => {
+        await before
+        const p = pending.current
+        const items = live.current?.nodes.filter((n) => p.items.has(n.key)).map(placement) ?? []
+        const groups = live.current?.groups.filter((g) => p.groups.has(g.id)) ?? []
+        p.items.clear()
+        p.groups.clear()
+        if (!items.length && !groups.length) return
+        try {
+          await Promise.all([
+            ...chunks(items).map((c) => api.placeBoardItems(id, c)),
+            ...groups.map((g) => api.updateBoardGroup(id, g.id, { x: Math.round(g.x), y: Math.round(g.y), w: Math.round(g.w), h: Math.round(g.h) })),
+          ])
+        } catch (e) {
+          toast.error(`Couldn't save the layout. ${message(e)}`)
+          window.dispatchEvent(new Event(RELOAD_EVENT)) // back to what's stored
+        }
+      })(),
+    )
   }, [id])
   const queue = (nodes: Node[], frames: BoardGroup[] = []) => {
     const p = pending.current
-    for (const n of nodes) p.items.set(n.key, placement(n))
-    for (const f of frames) p.groups.set(f.id, { x: Math.round(f.x), y: Math.round(f.y), w: Math.round(f.w), h: Math.round(f.h) })
+    for (const n of nodes) p.items.add(n.key)
+    for (const f of frames) p.groups.add(f.id)
     clearTimeout(p.timer)
     p.timer = window.setTimeout(() => void flush(), 400)
   }
@@ -335,23 +379,32 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
   const latest = useRef(0)
   const load = useCallback(async () => {
     const n = ++latest.current
-    await flush()
     let data
-    try {
-      data = await api.board(id)
-    } catch (e) {
+    let asked
+    // A change sent after the board was asked for may be missing from the reply: ask again once it has been answered.
+    do {
+      asked = saving.current
+      await asked
+      try {
+        data = await api.board(id)
+      } catch (e) {
+        if (n !== latest.current) return
+        if (/not found/i.test(message(e))) setStatus("missing")
+        else if (!live.current) setStatus("error")
+        return
+      }
       if (n !== latest.current) return
-      if (/not found/i.test(message(e))) setStatus("missing")
-      else if (!live.current) setStatus("error")
-      return
-    }
-    if (n !== latest.current) return
-    const order = new Map(live.current?.nodes.map((x, i) => [x.key, i]))
+    } while (asked !== saving.current)
+    // What is queued to save has not reached the server yet: there the board's own placement stands.
+    const unsaved = new Map(live.current?.nodes.filter((x) => pending.current.items.has(x.key)).map((x) => [x.key, x]))
+    const unsavedFrames = new Map(live.current?.groups.filter((g) => pending.current.groups.has(g.id)).map((g) => [g.id, g]))
     const placed: Node[] = []
     const fresh: Node[] = []
     for (const it of data.items) {
       const node = toNode(it, it.x ?? 0, it.y ?? 0)
-      if (node) (it.x === null || it.y === null ? fresh : placed).push(node)
+      const own = node && unsaved.get(node.key)
+      if (own) placed.push({ ...node, x: own.x, y: own.y, z: own.z, w: own.w, h: own.h, groupId: own.groupId, style: own.style })
+      else if (node) (it.x === null || it.y === null ? fresh : placed).push(node)
     }
     const auto = fresh.filter((x) => !drops.current.has(x.key))
     autoPlace(placed, auto).forEach((p, i) => Object.assign(auto[i]!, p))
@@ -360,15 +413,16 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
       if (at) Object.assign(x, at)
       drops.current.delete(x.key)
     }
-    // Keep the stacking order the user made; newcomers go on top.
-    const rank = (x: Node, i: number) => order.get(x.key) ?? order.size + i
-    const nodes = [...placed, ...fresh].map((x, i) => [x, rank(x, i)] as const).sort((a, b) => a[1] - b[1]).map(([x]) => x)
-    apply({ collection: data.collection, nodes, groups: data.groups })
+    // The server sends items bottom to top; newcomers go on top. Sorting only moves what is queued to save.
+    const top = above(placed)
+    fresh.forEach((x, i) => (x.z = top + i))
+    const nodes = [...placed, ...fresh].sort((a, b) => a.z - b.z)
+    apply({ collection: data.collection, nodes, groups: data.groups.map((g) => unsavedFrames.get(g.id) ?? g) })
     const keys = new Set(nodes.map((x) => x.key))
     if ([...sel.current].some((k) => !keys.has(k))) setSelected(new Set([...sel.current].filter((k) => keys.has(k))))
     setStatus("ready")
     if (fresh.length) queue(fresh)
-  }, [id, flush])
+  }, [id])
 
   useEffect(() => {
     void load()
@@ -399,12 +453,16 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
     if (!b) return
     const r = moveOnBoard(b.nodes, b.groups, new Set(keys), new Set(frameIds), dx, dy)
     const moved = new Set(r.movedItems.map((x) => x.key))
-    apply({ ...b, nodes: front ? [...r.items.filter((x) => !moved.has(x.key)), ...r.items.filter((x) => moved.has(x.key))] : r.items, groups: r.frames })
-    queue(r.movedItems, r.movedFrames)
+    const rest = r.items.filter((x) => !moved.has(x.key))
+    // On top means a z above everything else; it is saved with the move.
+    const raised = front ? r.movedItems.map((x, i) => ({ ...x, z: above(rest) + i })) : r.movedItems
+    apply({ ...b, nodes: front ? [...rest, ...raised] : r.items, groups: r.frames })
+    queue([...raised, ...r.leftBehind], r.movedFrames)
   }
 
   /** Follow a pointer that went down on items or a frame title; past a small threshold it drags them (or, with nothing it may move, calls `blocked`). */
-  const beginDrag = (e: React.PointerEvent, keys: string[], frameIds: string[], blocked?: () => void) => {
+  const beginDrag = (e: React.PointerEvent, all: string[], frameIds: string[], blocked?: () => void) => {
+    const keys = unlocked(all) // locked items stay put
     const start = { x: e.clientX, y: e.clientY }
     const pointer = e.pointerId
     const zoom = canvas.current?.getView().zoom ?? 1
@@ -459,8 +517,7 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
     const modified = e.shiftKey || e.metaKey || e.ctrlKey
     // Pressing an unselected item selects it alone (modified clicks toggle on click instead).
     if (!sel.current.has(key) && !modified) setSelected(new Set([key]))
-    // Locked items stay put.
-    beginDrag(e, unlocked(sel.current.has(key) ? [...sel.current] : [key]), [], () => say(LOCKED, false))
+    beginDrag(e, sel.current.has(key) ? [...sel.current] : [key], [], () => say(LOCKED, false))
   }
   const unlocked = (keys: string[]) => {
     const locked = new Set(live.current?.nodes.filter((n) => n.style.locked).map((n) => n.key))
@@ -511,20 +568,22 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
   const selectedNodes = nodes.filter((n) => selected.has(n.key))
   const members = selectedNodes.filter((n) => n.item)
 
-  const removeNodes = async (keys: Set<string>) => {
+  // Several items at once ask first; `open` closes it while the rest stays, so the text does not blank during the exit.
+  const [removing, setRemoving] = useState({ open: false, keys: new Set<string>(), count: 0, notes: 0 })
+  const removeNodes = async (keys: Set<string>, confirmed = false) => {
     const b = live.current
     const gone = b?.nodes.filter((n) => keys.has(n.key) && !n.style.locked) ?? []
     if (b && !gone.length && b.nodes.some((n) => keys.has(n.key))) return say(LOCKED, false)
     if (!b || !gone.length) return
     const notes = gone.filter((n) => n.kind === "note")
-    if (gone.length > 1 && !confirm(`Remove ${gone.length} items from this board?${notes.length ? " Notes are deleted." : ""} Everything else stays in All saves.`)) return
+    if (gone.length > 1 && !confirmed) return setRemoving({ open: true, keys, count: gone.length, notes: notes.length })
     const goneKeys = new Set(gone.map((n) => n.key))
-    for (const n of gone) pending.current.items.delete(n.key)
     apply({ ...b, nodes: b.nodes.filter((n) => !goneKeys.has(n.key)) })
     setSelected(new Set([...sel.current].filter((k) => !goneKeys.has(k))))
     try {
-      await Promise.all([setMembers(id, gone, false), ...notes.map((n) => api.deleteBoardNote(id, n.id))])
+      await sent(Promise.all([setMembers(id, gone, false), ...notes.map((n) => api.deleteBoardNote(id, n.id))]))
       void refresh().catch(() => {})
+      if (gone.length > 1) notify(`Removed ${gone.length} items`)
     } catch (e) {
       toast.error(message(e))
       void load()
@@ -535,28 +594,35 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
   const makeGroup = async (items: Node[], name: string, box: Box) => {
     const grouped = new Set(items.map((n) => n.key))
     await flush() // the server keeps stored positions; queued ones must land first
-    const g = await api.createBoardGroup(id, {
-      name,
-      x: Math.round(box.x),
-      y: Math.round(box.y),
-      w: Math.round(box.w),
-      h: Math.round(box.h),
-      items: items.map((n) => ({ kind: n.kind, id: n.id })),
-    })
+    const g = await sent(
+      api.createBoardGroup(id, {
+        name,
+        x: Math.round(box.x),
+        y: Math.round(box.y),
+        w: Math.round(box.w),
+        h: Math.round(box.h),
+        items: items.map((n) => ({ kind: n.kind, id: n.id })),
+      }),
+    )
     const now = live.current!
     apply({ ...now, groups: [...now.groups, g], nodes: now.nodes.map((n) => (grouped.has(n.key) ? { ...n, groupId: g.id } : n)) })
     return g
   }
+  const grouping = useRef(false) // one frame per press, however often G is hit while it is made
   const group = async () => {
     const b = live.current
     const items = b?.nodes.filter((n) => sel.current.has(n.key)) ?? []
-    if (!b || !items.length) return
+    if (!b || !items.length || grouping.current) return
+    if (items.some((n) => n.style.locked)) return say(LOCKED, false)
+    grouping.current = true
     try {
       const g = await makeGroup(items, `Group ${b.groups.length + 1}`, fitFrame(items))
       setRenaming(g.id)
       return g
     } catch (e) {
       toast.error(message(e))
+    } finally {
+      grouping.current = false
     }
   }
 
@@ -597,6 +663,7 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
     if (!b) return
     const ks = new Set(keys)
     apply({ ...b, nodes: b.nodes.map((n) => (ks.has(n.key) ? { ...n, ...patch(n) } : n)) })
+    queue(nodesOf(keys)) // commit leaves out an item that was just locked
     commit(keys, [], 0, 0, false)
   }
   const setAmount = (keys: string[], aid: AdjustId, v: number) =>
@@ -680,7 +747,8 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
       try {
         const made = await Promise.all(
           notes.map(async (n) => {
-            const c = await api.addBoardNote(id, { text: n.text ?? "", x: Math.round(n.x + 24), y: Math.round(n.y + 24), w: n.w, groupId: n.groupId })
+            await flush() // the server puts a note above what it has stored; a queued order must land first
+            const c = await sent(api.addBoardNote(id, { text: n.text ?? "", x: Math.round(n.x + 24), y: Math.round(n.y + 24), w: n.w, groupId: n.groupId }))
             return { ...toNode(c, c.x!, c.y!)!, style: n.style, h: n.h }
           }),
         )
@@ -690,11 +758,10 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
         setSelected(new Set(made.map((n) => n.key)))
         remember(async () => {
           const gone = new Set(made.map((n) => n.key))
-          for (const k of gone) pending.current.items.delete(k)
           const b2 = live.current!
           apply({ ...b2, nodes: b2.nodes.filter((n) => !gone.has(n.key)) })
           setSelected(new Set([...sel.current].filter((k) => !gone.has(k))))
-          await Promise.all(made.map((n) => api.deleteBoardNote(id, n.id)))
+          await sent(Promise.all(made.map((n) => api.deleteBoardNote(id, n.id))))
         })
         return say(notes.length < targets.length ? "Duplicated the notes; saves appear once per board" : `${label} applied`)
       } catch (e) {
@@ -820,7 +887,7 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
       await setMembers(cid, shared, true)
       await Promise.all([
         ...chunks(items.flatMap((n, i) => (n.item ? [{ ...placement(n), ...at[i]!, groupId: null }] : []))).map((c) => api.placeBoardItems(cid, c)),
-        ...items.flatMap((n, i) => (n.kind === "note" ? [api.addBoardNote(cid, { text: n.text ?? "", ...at[i]!, w: n.w })] : [])),
+        ...items.flatMap((n, i) => (n.kind === "note" ? [api.addBoardNote(cid, { text: n.text ?? "", ...at[i]!, z: n.z, w: n.w })] : [])),
       ])
       void refresh().catch(() => {})
       toast.dismiss(busy)
@@ -844,7 +911,8 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
     const y = Math.round(p.y - (w * NOTE_H) / 2)
     const frame = frameAt(live.current?.groups ?? [], p.x, p.y)
     try {
-      const it = await api.addBoardNote(id, { text: "", x, y, groupId: frame?.id ?? null })
+      await flush() // the server puts the note above what it has stored; a queued order must land first
+      const it = await sent(api.addBoardNote(id, { text: "", x, y, groupId: frame?.id ?? null }))
       const node = toNode(it, x, y)!
       const b = live.current!
       apply({ ...b, nodes: [...b.nodes, node] })
@@ -858,7 +926,7 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
 
   const renameBoard = async (name: string) => {
     try {
-      await api.renameCollection(id, name)
+      await sent(api.renameCollection(id, name))
       if (live.current) apply({ ...live.current, collection: { ...live.current.collection, name } })
       await refresh()
     } catch (e) {
@@ -867,7 +935,6 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
   }
 
   const deleteBoard = async () => {
-    if (!confirm(`Delete “${title}”? Its saves stay in All saves; its notes and groups are deleted.`)) return
     try {
       const p = pending.current
       clearTimeout(p.timer)
@@ -875,6 +942,7 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
       p.groups.clear()
       await api.deleteCollection(id)
       await refresh().catch(() => {})
+      notify(`Deleted board “${title}”`)
       navigate("/")
     } catch (e) {
       toast.error(message(e))
@@ -897,7 +965,7 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
     noteSave: (noteId, text) => {
       const b = live.current
       if (b) apply({ ...b, nodes: b.nodes.map((n) => (n.kind === "note" && n.id === noteId ? { ...n, text } : n)) })
-      api.updateBoardNote(id, noteId, text).catch((e: unknown) => toast.error(`Couldn't save the note. ${message(e)}`))
+      sent(api.updateBoardNote(id, noteId, text)).catch((e: unknown) => toast.error(`Couldn't save the note. ${message(e)}`))
     },
     noteDelete: (noteId) => void removeNodes(new Set([`note:${noteId}`])),
     titleDown: (e, gid) => {
@@ -909,7 +977,7 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
       const b = live.current
       if (!name || !b) return
       apply({ ...b, groups: b.groups.map((g) => (g.id === gid ? { ...g, name } : g)) })
-      api.updateBoardGroup(id, gid, { name }).catch((e: unknown) => {
+      sent(api.updateBoardGroup(id, gid, { name })).catch((e: unknown) => {
         toast.error(message(e))
         void load()
       })
@@ -918,9 +986,7 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
       const b = live.current
       if (!b) return
       apply({ ...b, groups: b.groups.filter((g) => g.id !== gid), nodes: b.nodes.map((n) => (n.groupId === gid ? { ...n, groupId: null } : n)) })
-      for (const p of pending.current.items.values()) if (p.groupId === gid) p.groupId = null
-      pending.current.groups.delete(gid)
-      api.deleteBoardGroup(id, gid).catch((e: unknown) => {
+      sent(api.deleteBoardGroup(id, gid)).catch((e: unknown) => {
         toast.error(message(e))
         void load()
       })
@@ -956,7 +1022,7 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
       const moving = sel.current.has(node.key) ? [...sel.current] : [node.key]
       if (!sel.current.has(node.key)) setSelected(new Set(moving))
       // Stacking stays put: re-ordering would move the focused node and lose focus. Locked items stay put.
-      if (unlocked(moving).length) commit(unlocked(moving), [], ...arrows[e.key]!, false)
+      if (unlocked(moving).length) commit(moving, [], ...arrows[e.key]!, false)
       else say(LOCKED, false)
     } else if (e.key === "Enter" || e.key === " ") {
       if (node.item) handlers.open(node.item)
@@ -1234,6 +1300,28 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
           onClose={closeMenu}
         />
       )}
+      <Dialog open={removing.open} onOpenChange={(open) => setRemoving((r) => ({ ...r, open }))}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Remove {removing.count} items from this board?</DialogTitle>
+            <DialogDescription>
+              {removing.notes ? "Notes are deleted for good. This can't be undone. Everything else stays in All saves." : "They stay in All saves."}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
+            <Button
+              variant="destructive-confirm"
+              onClick={() => {
+                setRemoving((r) => ({ ...r, open: false }))
+                void removeNodes(removing.keys, true)
+              }}
+            >
+              Remove
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       {openItem && (
         <ItemInspector
           item={openItem}

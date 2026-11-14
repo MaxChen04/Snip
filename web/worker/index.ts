@@ -1,5 +1,6 @@
 import OAuthProvider from "@cloudflare/workers-oauth-provider"
 import { app } from "./app"
+import { cleanupRetiredFiles, sweepAbandoned } from "./db"
 import { mcpApiHandler } from "./mcp"
 import { guardOAuthRequest, type OAuthCostGuardBindings } from "./oauth-cost-guards"
 
@@ -31,5 +32,10 @@ export default {
     const blocked = await guardOAuthRequest(request, env)
     if (blocked) return blocked
     return getProvider(env).fetch(request, env, ctx)
+  },
+  // Otherwise a stop or pause left on an agent that went quiet waits for the next claim, and retired capture files for a claim, recapture or delete.
+  async scheduled(_controller, env) {
+    await sweepAbandoned(env.DB)
+    await cleanupRetiredFiles(env.DB, env.FILES)
   },
 } satisfies ExportedHandler<Env & OAuthCostGuardBindings>

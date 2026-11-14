@@ -40,7 +40,6 @@ async function commandSetup(ctx, { steps = setupSteps.setupSteps() } = {}) {
       const data = (await preflight.run(ctx)) || {};
       ctx.emit.step(preflight.id, 'ok', data.message || 'Ready', { progress: { done: 1, total: steps.length }, data });
     } catch (error) {
-      // --check is read-only: report the failure, never journal it.
       ctx.emit.step(preflight.id, 'failed', error.message, { data: error.data || {} });
       throw error;
     }
@@ -312,19 +311,15 @@ function pullVerifyStep({ stagedState, manifest }) {
       if (Number(reported.refs || 0) > 0 && keys.length === 0) {
         throw new StepError('EXPORT_EMPTY', 'The cloud library reports references but no files.', { hint: 'Check the cloud library in a browser, then run `pull` again.' });
       }
-      // One worker for the whole check: starting one per key would take minutes.
-      const present = await ctx.deps.library.withLocalWorker({ root: ctx.root, dataRoot: ctx.dataRoot, token: randomSecret(), persist: stagedState, log: () => {} }, async (handle) => {
-        let seen = 0;
-        for (const entry of keys) {
-          ctx.checkCancel();
-          const response = await handle.transfer.head(entry.key);
-          if (response === null) {
-            throw new StepError('VERIFY_FILES_MISSING', 'A file did not arrive in the downloaded copy.', { data: { key: entry.key } });
-          }
-          seen++;
-        }
-        return seen;
-      });
+      // Sizes come from one listing of the staged bucket, the same check setup makes of the cloud copy.
+      const staged = await ctx.deps.library.withLocalWorker({ root: ctx.root, dataRoot: ctx.dataRoot, token: randomSecret(), persist: stagedState, log: () => {} }, (handle) => handle.transfer.manifest());
+      const { missing, mismatch, present } = require('./lib.cjs').compareFiles(keys, staged.keys);
+      if (missing.length) {
+        throw new StepError('VERIFY_FILES_MISSING', 'A file did not arrive in the downloaded copy.', { hint: 'Run `pull` again.', data: { key: missing[0] } });
+      }
+      if (mismatch) {
+        throw new StepError('VERIFY_SIZE_MISMATCH', 'A file in the downloaded copy has a different size.', { hint: 'Run `pull` again.', data: { key: mismatch.key, cloud: mismatch.expected, local: mismatch.actual } });
+      }
       ctx.setWork({ pullVerified: { digest: remoteDigest, keys: present, tables: reported } });
       return { message: `${present} file${present === 1 ? '' : 's'}, all verified`, detail: remoteDigest };
     },
@@ -338,10 +333,17 @@ function pullSwapStep({ stagedRoot, stagedState }) {
     title: 'Switching to the downloaded library',
     async run(ctx) {
       const live = local.localStatePath(ctx.dataRoot);
-      const previous = path.join(ctx.dataRoot, 'backups', `cloud-pull-${NOW().replace(/[:.]/g, '-')}`);
-      const hadLocal = fs.existsSync(live);
-      if (hadLocal) {
+      // `pullBackup` is written before the library is moved aside and cleared when the
+      // swap is recorded, so a pull that died in between still knows where it put it.
+      const recorded = ctx.state().pullBackup;
+      const resumed = Boolean(recorded) && fs.existsSync(path.join(ctx.dataRoot, recorded));
+      const previous = resumed ? path.join(ctx.dataRoot, recorded) : path.join(ctx.dataRoot, 'backups', `cloud-pull-${NOW().replace(/[:.]/g, '-')}`);
+      const hadLocal = resumed || fs.existsSync(live);
+      // Anything live next to that backup is the interrupted pull's own download.
+      if (resumed) fs.rmSync(live, { recursive: true, force: true });
+      else if (hadLocal) {
         fs.mkdirSync(path.dirname(previous), { recursive: true, mode: 0o700 });
+        ctx.save((next) => { next.pullBackup = path.relative(ctx.dataRoot, previous); return next; });
         try {
           fs.renameSync(live, previous);
         } catch (error) {
@@ -393,6 +395,7 @@ function pullSwapStep({ stagedRoot, stagedState }) {
           : null;
         next.cloud = { ...(next.cloud || {}), detachedAt: NOW(), lastVerifiedAt: NOW() };
         next.mode = 'local';
+        delete next.pullBackup;
         return next;
       });
       return { message: hadLocal ? `Previous library kept at ${path.relative(ctx.dataRoot, previous)}` : 'Library switched' };
@@ -441,45 +444,75 @@ function pullFinishStep() {
 
 // ---------- deploy / migrate ----------
 
+// `deploy` and `migrate` are built from the same three steps. <dataRoot>/cloud is
+// a copy of this build that wrangler reads: the schema step reads its migrations
+// and the Worker step uploads its bundle. The layout step is the only thing that
+// refreshes that copy, and it runs before either of them, so neither can act on
+// the previous release's files.
+
+function cloudPreflightStep(id) {
+  return {
+    id,
+    title: 'Checking this Mac',
+    async run(ctx) {
+      if (!ctx.deps.deploy.configExists(ctx.dataRoot)) {
+        throw new StepError('NOT_PROVISIONED', 'This Mac has no cloud deploy configuration yet.', { hint: 'Run `setup` first.' });
+      }
+      const problem = ctx.deps.deploy.runtimeProblem(ctx.root);
+      if (problem) throw new StepError('NO_BUILD', problem.message, { hint: problem.hint });
+      return { message: 'Ready' };
+    },
+    async verify() { return true; },
+  };
+}
+
+function cloudLayoutStep(id, record) {
+  return {
+    id,
+    title: 'Preparing the deploy',
+    async run(ctx) {
+      ctx.deps.deploy.prepareDeployLayout({
+        root: ctx.root,
+        dataRoot: ctx.dataRoot,
+        d1Id: record.d1 && record.d1.id,
+        kvId: record.kv && record.kv.id,
+        login: record.login || undefined,
+        url: record.url,
+      });
+      return { message: 'This build is ready to deploy' };
+    },
+    async verify() { return true; },
+  };
+}
+
+/** `outcome.applied` names the migrations this run applied, for the result. */
+function cloudSchemaStep(id, record, outcome) {
+  return {
+    id,
+    title: 'Applying database migrations',
+    async run(ctx) {
+      const result = await ctx.deps.deploy.applyMigrations(ctx.wrangler, { dataRoot: ctx.dataRoot, accountId: record.accountId, remote: true, retry: retryOf(ctx) });
+      outcome.applied = deploy.appliedMigrations(result);
+      return { message: deploy.migrationSummary(outcome.applied), detail: outcome.applied.join(', ') };
+    },
+    async verify() { return true; },
+  };
+}
+
 async function commandDeploy(ctx) {
   ctx.reload();
   const record = requireCloud(ctx);
+  const outcome = { applied: [] };
   const steps = [
-    {
-      id: 'deploy-preflight',
-      title: 'Checking this Mac',
-      async run(ctx2) {
-        if (!ctx2.deps.deploy.configExists(ctx2.dataRoot)) {
-          throw new StepError('NOT_PROVISIONED', 'This Mac has no cloud deploy configuration yet.', { hint: 'Run `setup` first.' });
-        }
-        if (ctx2.deps.deploy.runtimeProblem(ctx2.root)) {
-          const problem = ctx2.deps.deploy.runtimeProblem(ctx2.root);
-          throw new StepError('NO_BUILD', problem.message, { hint: problem.hint });
-        }
-        return { message: 'Ready' };
-      },
-    },
-    {
-      id: 'deploy-schema',
-      title: 'Applying database migrations',
-      async run(ctx2) {
-        await ctx2.deps.deploy.applyMigrations(ctx2.wrangler, { dataRoot: ctx2.dataRoot, accountId: record.accountId, remote: true, retry: retryOf(ctx2) });
-        return { message: 'Database is up to date' };
-      },
-    },
+    cloudPreflightStep('deploy-preflight'),
+    cloudLayoutStep('deploy-layout', record),
+    // Migrations before the Worker: an old Worker on the new schema is safe, a new
+    // Worker on the old schema is not.
+    cloudSchemaStep('deploy-schema', record, outcome),
     {
       id: 'deploy-worker',
       title: 'Deploying the Worker',
       async run(ctx2) {
-        // Refresh the copy first, so a new bundle is never shadowed by a stale one.
-        ctx2.deps.deploy.prepareDeployLayout({
-          root: ctx2.root,
-          dataRoot: ctx2.dataRoot,
-          d1Id: record.d1 && record.d1.id,
-          kvId: record.kv && record.kv.id,
-          login: record.login || undefined,
-          url: record.url,
-        });
         await ctx2.deps.deploy.deployWorker(ctx2.wrangler, { dataRoot: ctx2.dataRoot, accountId: record.accountId, retry: retryOf(ctx2) });
         ctx2.setCloud({ lastDeployedAt: NOW(), bundleHash: setupSteps.bundleHash(ctx2.dataRoot) });
         return { message: `Live at ${record.url}` };
@@ -521,33 +554,21 @@ async function commandDeploy(ctx) {
   // calls this after every build.
   const result = await require('./engine.cjs').runSteps(steps, ctx, { journal: false });
   ctx.reload();
-  return { ok: true, code: 'OK', mode: ctx.state().mode, data: { url: record.url, steps: result.completed }, message: `Deployed ${record.url}` };
+  return { ok: true, code: 'OK', mode: ctx.state().mode, data: { url: record.url, steps: result.completed, migrations: outcome.applied }, message: `Deployed ${record.url}` };
 }
 
 async function commandMigrate(ctx) {
   ctx.reload();
   const record = requireCloud(ctx);
+  const outcome = { applied: [] };
   const steps = [
-    {
-      id: 'migrate-preflight',
-      title: 'Checking this Mac',
-      async run(ctx2) {
-        if (!ctx2.deps.deploy.configExists(ctx2.dataRoot)) throw new StepError('NOT_PROVISIONED', 'This Mac has no cloud deploy configuration yet.', { hint: 'Run `setup` first.' });
-        return { message: 'Ready' };
-      },
-    },
-    {
-      id: 'migrate-apply',
-      title: 'Applying database migrations',
-      async run(ctx2) {
-        await ctx2.deps.deploy.applyMigrations(ctx2.wrangler, { dataRoot: ctx2.dataRoot, accountId: record.accountId, remote: true, retry: retryOf(ctx2) });
-        return { message: 'Database is up to date' };
-      },
-    },
+    cloudPreflightStep('migrate-preflight'),
+    cloudLayoutStep('migrate-layout', record),
+    cloudSchemaStep('migrate-apply', record, outcome),
   ];
   // Same reason as deploy: migrating is the action, so it always runs.
   await require('./engine.cjs').runSteps(steps, ctx, { journal: false });
-  return { ok: true, code: 'OK', mode: ctx.state().mode, data: {}, message: 'Migrations applied' };
+  return { ok: true, code: 'OK', mode: ctx.state().mode, data: { migrations: outcome.applied }, message: deploy.migrationSummary(outcome.applied) };
 }
 
 // ---------- detach / delete / snapshot ----------
@@ -599,6 +620,13 @@ async function commandDeleteResources(ctx) {
       id: 'delete-preflight',
       title: 'Checking the confirmation',
       async run(ctx2) {
+        // The cloud library is the only current copy while this Mac is using it.
+        if (ctx2.state().mode === 'cloud') {
+          throw new StepError('CLOUD_IN_USE', 'This Mac is using its cloud library, so deleting it would delete the only current copy.', {
+            hint: 'Copy it back first with `pull`, or run `detach` to return to this Mac’s own library as it is, then run `delete-resources` again. Nothing was changed.',
+            retryable: false,
+          });
+        }
         // Same interlock as the snapshot commands, keyed on the host the row
         // shows. Missing → exit 2; different → exit 1; nothing deleted either way.
         snapshotModule.requireConfirm(ctx2, { recordPath: record.url, command: 'delete-resources' });
@@ -624,7 +652,7 @@ async function commandDeleteResources(ctx) {
           }
         }
         // The bucket is emptied first by the Worker's own lifecycle; delete it last.
-        const bucket = await ctx2.wrangler.run(['r2', 'bucket', 'delete', record.bucket || 'snip-files', '--force'], { env: { CLOUDFLARE_ACCOUNT_ID: accountId } });
+        const bucket = await ctx2.wrangler.run(['r2', 'bucket', 'delete', record.bucket || 'snip-files'], { env: { CLOUDFLARE_ACCOUNT_ID: accountId } });
         if (!bucket.ok && !/not found|does not exist/i.test(`${bucket.stdout}${bucket.stderr}`)) {
           ctx2.emit.log('warn', 'The storage bucket could not be deleted; remove it in the Cloudflare dashboard.');
         }
@@ -904,7 +932,7 @@ async function commandAbort(ctx) {
       title: 'Checking this Mac',
       async run(ctx2) {
         const mode = ctx2.state().mode;
-        if (mode === 'cloud') throw new StepError('HEALTHY_CLOUD', 'This Mac is using its cloud library, so there is nothing to abort.', { hint: 'Use `detach` to go back to local, or `delete-resources` to remove it.' });
+        if (mode === 'cloud') throw new StepError('HEALTHY_CLOUD', 'This Mac is using its cloud library, so there is nothing to abort.', { hint: 'Use `detach` to go back to local, or `pull` to copy it back.' });
         if (mode !== 'enabling') throw new StepError('NOTHING_TO_ABORT', 'No setup is in progress.', { hint: 'Nothing was changed.' });
         return { message: 'Cleaning up an interrupted setup' };
       },
@@ -919,31 +947,37 @@ async function commandAbort(ctx) {
         // Only what this run recorded as created. A pre-existing or adopted D1,
         // KV or bucket is never deleted by abort.
         const record = ctx2.state().cloud || {};
-        const created = record.created || {};
+        const created = { ...(record.created || {}) };
+        const env = { CLOUDFLARE_ACCOUNT_ID: record.accountId };
         const removed = [];
-        if (created.bucket) {
-          const result = await ctx2.wrangler.run(['r2', 'bucket', 'delete', created.bucket], { env: { CLOUDFLARE_ACCOUNT_ID: record.accountId } });
-          if (result.ok) removed.push(`bucket ${created.bucket}`);
-          else ctx2.emit.log('warn', `Could not remove the bucket ${created.bucket}; remove it in the Cloudflare dashboard.`);
+        const remove = async (key, label, args) => {
+          const result = await ctx2.wrangler.run(args, { env });
+          if (result.ok) { removed.push(label); delete created[key]; }
+          else ctx2.emit.log('warn', `Could not remove the ${label}; remove it in the Cloudflare dashboard.`);
+        };
+        if (created.bucket) await remove('bucket', `bucket ${created.bucket}`, ['r2', 'bucket', 'delete', created.bucket]);
+        if (created.kv && created.kv.id) await remove('kv', `KV namespace ${created.kv.name}`, ['kv', 'namespace', 'delete', '--namespace-id', created.kv.id, '--skip-confirmation']);
+        if (created.d1 && created.d1.name) await remove('d1', `database ${created.d1.name}`, ['d1', 'delete', created.d1.name, '--skip-confirmation']);
+        // Setup paused these in this Mac's library, which is the one in use again.
+        let paused = ctx2.state().pausedForMove || [];
+        const origin = ctx2.deps.local.localOrigin(ctx2.dataRoot);
+        if (paused.length && await ctx2.deps.local.reachable(origin)) {
+          const api = ctx2.deps.local.createLocalApi(origin, { fetchImpl: ctx2.deps.fetch });
+          const results = await Promise.all(paused.map((id) => api.resumeReference(id).catch(() => null)));
+          // 409 means it is no longer paused and 404 that it was deleted: nothing left to resume.
+          paused = paused.filter((_id, index) => !results[index] || !(results[index].ok || [404, 409].includes(results[index].status)));
         }
-        if (created.kv && created.kv.id) {
-          const result = await ctx2.wrangler.run(['kv', 'namespace', 'delete', '--binding', 'OAUTH_KV'], { env: { CLOUDFLARE_ACCOUNT_ID: record.accountId } });
-          if (result.ok) removed.push(`KV ${created.kv.name}`);
-          else ctx2.emit.log('warn', `Could not remove the KV namespace ${created.kv.name}; remove it in the Cloudflare dashboard.`);
-        }
-        if (created.d1 && created.d1.name) {
-          const result = await ctx2.wrangler.run(['d1', 'delete', created.d1.name, '--skip-confirmation'], { env: { CLOUDFLARE_ACCOUNT_ID: record.accountId } });
-          if (result.ok) removed.push(`database ${created.d1.name}`);
-          else ctx2.emit.log('warn', `Could not remove the database ${created.d1.name}; remove it in the Cloudflare dashboard.`);
-        }
+        if (paused.length) ctx2.emit.log('warn', `${paused.length} paused capture${paused.length === 1 ? '' : 's'} could not be resumed because Snip is not running; resume ${paused.length === 1 ? 'it' : 'them'} from the library.`);
         ctx2.save((next) => {
           next.mode = 'local';
-          next.pausedForMove = [];
+          next.pausedForMove = paused;
           next.error = null;
-          if (next.cloud) next.cloud = { ...next.cloud, created: {} };
+          // What could not be removed stays recorded, so the record never claims a cleanup that did not happen.
+          if (next.cloud) next.cloud = { ...next.cloud, created };
           return next;
         });
-        return { message: removed.length ? `Removed ${removed.join(', ')}` : 'This Mac is local again. Nothing this run created was left behind.' };
+        const left = Object.keys(created).length;
+        return { message: removed.length ? `Removed ${removed.join(', ')}` : left ? 'This Mac is local again. Some of what this run created is still in the Cloudflare account.' : 'This Mac is local again. Nothing this run created was left behind.' };
       },
       async verify(ctx2) { return ctx2.state().mode === 'local'; },
     },
@@ -1014,7 +1048,7 @@ async function commandOwner(ctx) {
         }
       }
       const stored = ctx2.secrets();
-      const minted = mintOwnerLink({ secret: stored.ownerLinkSecret, url: record.url, ownerId: record.ownerId || 'owner', port });
+      const minted = mintOwnerLink({ secret: stored.ownerLinkSecret, url: record.url, ownerId: record.ownerId || 'owner', port, nonce: loopback?.nonce });
       ctx2.setWork({ ownerLink: minted.link, ownerLoopback: loopback });
       // `url` is also on the step result's top level because the step event
       // carries that object as its `data` (§1.4.1): a client that reads steps

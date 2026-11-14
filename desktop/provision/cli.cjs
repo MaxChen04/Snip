@@ -300,8 +300,8 @@ async function main(argv, io = {}) {
     const code = exitCodeFor(error);
     if (code !== 2) {
       try {
-        // setup --check is read-only, so its failure is reported but not recorded.
-        if (ctx && !(command === 'setup' && flags.check)) {
+        // Only a run that holds the lock writes cloud.json; --check and status change nothing.
+        if (ctx && lock) {
           ctx.recordError({
             step: error.step || null,
             code: error.code || 'FAILED',

@@ -3,7 +3,7 @@
 
 export type Box = { x: number; y: number; w: number; h: number }
 /** Something on the board: `key` is unique, `groupId` the frame it belongs to. */
-export type Placed = Box & { key: string; groupId: string | null }
+export type Placed = Box & { key: string; groupId: string | null; style?: { locked?: boolean } }
 export type Frame = Box & { id: string }
 
 export const GAP = 24
@@ -79,12 +79,20 @@ export function centred(boxes: Box[]): { x: number; y: number }[] {
 /**
  * Move items (`keys`) and frames (`frameIds`, with every item in them) by dx, dy. A moved item that isn't riding
  * along with its frame joins the frame under its centre, or leaves its frame for open canvas. Frames that end up
- * with a moved item grow to fit all their items. Returns everything, plus which items and frames changed.
+ * with a moved item grow to fit all their items. Locked items stay where they are, whoever asks; one whose frame
+ * moves away is no longer in it, and does not rejoin by itself.
+ * Returns everything, plus which items and frames changed, and which locked items their frame left behind.
  */
 export function moveOnBoard<T extends Placed, F extends Frame>(items: T[], frames: F[], keys: Set<string>, frameIds: Set<string>, dx: number, dy: number) {
   const changed = new Set<string>()
+  const left = new Set<string>()
   const nextItems = items.map((it) => {
     const riding = it.groupId !== null && frameIds.has(it.groupId)
+    if (it.style?.locked) {
+      if (!riding) return it
+      left.add(it.key)
+      return { ...it, groupId: null }
+    }
     if (!riding && !keys.has(it.key)) return it
     changed.add(it.key)
     const moved = { ...it, x: it.x + dx, y: it.y + dy }
@@ -109,6 +117,7 @@ export function moveOnBoard<T extends Placed, F extends Frame>(items: T[], frame
     items: nextItems,
     frames: nextFrames,
     movedItems: nextItems.filter((it) => changed.has(it.key)),
+    leftBehind: nextItems.filter((it) => left.has(it.key)),
     movedFrames: nextFrames.filter((f) => changedFrames.has(f.id)),
   }
 }

@@ -450,6 +450,30 @@ test('a build without rate-limit bindings takes them from the tracked template',
   assert.equal(lib.readRatelimits('{ "name": "snip" }'), null);
 });
 
+test('a failed result carries its sentence in the JSON stream, a successful one does not', () => {
+  const events = [];
+  const emit = createEmitter({ json: true, stdout: { write: (line) => { events.push(JSON.parse(line)); return true; } }, stderr: { write: () => true } });
+  emit.result({ ok: false, code: 'LOCKED', data: {}, message: 'Another Snip setup is running.', retryable: true });
+  emit.result({ ok: true, code: 'OK', mode: 'cloud', message: 'Done.' });
+  assert.equal(events[0].message, 'Another Snip setup is running.');
+  assert.equal('message' in events[1], false);
+});
+
+test('a build without the cleanup cron takes it from the tracked template', () => {
+  const template = fs.readFileSync(path.join(__dirname, '../../web/wrangler.jsonc'), 'utf8');
+  const triggers = lib.readTriggers(template);
+  assert.ok(triggers && triggers.crons.length, 'the tracked template declares a cron');
+  const base = { d1_databases: [{ binding: 'DB' }], kv_namespaces: [{ binding: 'OAUTH_KV' }] };
+  const options = { d1Id: 'd1-id', kvId: 'kv-id', login: 'tester', url: PROVIDED, triggers };
+  assert.deepEqual(lib.patchDeployConfig(base, options).triggers, triggers);
+  assert.deepEqual(lib.patchDeployConfig({ ...base, triggers: { crons: [] } }, options).triggers, triggers);
+  // A build that already has one keeps its own.
+  const own = { crons: ['*/30 * * * *'] };
+  assert.deepEqual(lib.patchDeployConfig({ ...base, triggers: own }, options).triggers, own);
+  assert.equal(lib.readTriggers('{ "name": "snip" }'), null);
+  assert.equal(lib.readTriggers('  // "triggers": { "crons": ["0 * * * *"] },'), null);
+});
+
 test('prepareDeployLayout copies snip, client and migrations and never touches the runtime', () => {
   const library = fakeLibrary();
   const result = deploy.prepareDeployLayout({ root: library.root, dataRoot: library.root, d1Id: 'd1-id', kvId: 'kv-id', login: 'tester', url: PROVIDED });
@@ -618,6 +642,9 @@ test('owner links are signed, scoped and single-shaped', () => {
   assert.equal(transfer.ownerSecretHash(secret), crypto.createHash('sha256').update(`snip-owner-hash-v1|${secret}`).digest('base64url').slice(0, 16));
 });
 
+/** POST /store the way the loopback's own page does. */
+const storeToken = (port, body) => fetch(`http://127.0.0.1:${port}/store`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+
 test('the loopback accepts exactly one token and drops the fragment', async () => {
   const loopback = transfer.startLoopback({ timeoutMs: 5000 });
   const port = await loopback.listening;
@@ -626,11 +653,64 @@ test('the loopback accepts exactly one token and drops the fragment', async () =
   const html = await page.text();
   assert.match(html, /location\.hash/);
   assert.match(html, /history\.replaceState/);
-  const stored = await fetch(`http://127.0.0.1:${port}/store`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: 'session-value' }) });
+  const stored = await storeToken(port, { token: 'session-value', nonce: loopback.nonce });
   assert.equal(stored.status, 200);
   assert.equal(await tokenPromise, 'session-value');
-  const second = await fetch(`http://127.0.0.1:${port}/store`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: 'other' }) }).catch(() => null);
+  const second = await storeToken(port, { token: 'other', nonce: loopback.nonce }).catch(() => null);
   assert.ok(!second || second.status !== 200);
+  loopback.close();
+});
+
+test('the loopback refuses a token posted without its nonce, or with another, and keeps waiting for the real one', async () => {
+  const loopback = transfer.startLoopback({ timeoutMs: 5000 });
+  const port = await loopback.listening;
+  assert.match(loopback.nonce, /^[0-9a-f]{32}$/);
+  const other = transfer.startLoopback({ timeoutMs: 5000 });
+  assert.notEqual(other.nonce, loopback.nonce, 'every loopback has its own nonce');
+  other.close();
+  let received = null;
+  loopback.token.then((value) => { received = value; }, () => {});
+
+  const refused = [
+    { token: 'forged' },
+    { token: 'forged', nonce: '' },
+    { token: 'forged', nonce: null },
+    { token: 'forged', nonce: 42 },
+    { token: 'forged', nonce: 'a'.repeat(32) },
+    { token: 'forged', nonce: loopback.nonce.slice(0, -1) },
+    { token: 'forged', nonce: `${loopback.nonce}0` },
+    { token: 'forged', nonce: loopback.nonce.toUpperCase() },
+    { nonce: loopback.nonce },
+  ];
+  for (const body of refused) {
+    const response = await storeToken(port, body);
+    assert.equal(response.status, body.token ? 403 : 400, `${JSON.stringify(body)} is refused`);
+  }
+  assert.equal((await fetch(`http://127.0.0.1:${port}/store`, { method: 'POST', body: 'not json' })).status, 403);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(received, null, 'nothing a wrong nonce posted was taken');
+  assert.equal(loopback.closed, false, 'the loopback is still waiting for the real page');
+
+  assert.equal((await storeToken(port, { token: 'real', nonce: loopback.nonce })).status, 200);
+  assert.equal(await loopback.token, 'real');
+  assert.equal((await storeToken(port, { token: 'again', nonce: loopback.nonce }).catch(() => ({ status: 0 }))).status === 200, false, 'the right nonce works once');
+  loopback.close();
+});
+
+test('the loopback refuses a token posted by another web page', async () => {
+  const loopback = transfer.startLoopback({ timeoutMs: 5000 });
+  const port = await loopback.listening;
+  let received = null;
+  loopback.token.then((value) => { received = value; }, () => {});
+  const post = (origin) => fetch(`http://127.0.0.1:${port}/store`, { method: 'POST', headers: { 'content-type': 'text/plain', origin }, body: JSON.stringify({ token: `from ${origin}`, nonce: loopback.nonce }) });
+  for (const origin of ['https://evil.example', `http://localhost:${port}`, `http://127.0.0.1:${port + 1}`, 'null']) {
+    assert.equal((await post(origin)).status, 403, `${origin} is refused`);
+  }
+  assert.equal(received, null, 'no token was accepted');
+  // Its own /done page is the one sender a browser will name with this origin.
+  const own = `http://127.0.0.1:${port}`;
+  assert.equal((await post(own)).status, 200);
+  assert.equal(await loopback.token, `from ${own}`);
   loopback.close();
 });
 
@@ -1056,7 +1136,10 @@ test('detach is offline, keeps the cloud record and refuses during enabling', as
 
 test('delete-resources refuses without an exact host confirmation', async () => {
   const library = fakeLibrary();
-  enterCloud(library.root, { workerName: 'snip', d1: { name: 'snip', id: 'd1' }, kv: { name: 'OAUTH_KV', id: 'kv' }, bucket: 'snip-files' });
+  stateModule.updateState(library.root, (next) => {
+    next.cloud = { url: PROVIDED, accountId: 'acct', workerName: 'snip', d1: { name: 'snip', id: 'd1' }, kv: { name: 'OAUTH_KV', id: 'kv' }, bucket: 'snip-files' };
+    return next;
+  });
   const emitter = collectedEmitter();
   const ctx = createContext({
     root: library.root,
@@ -1903,6 +1986,11 @@ function ownerLinkPort(link) {
   return Number(payload.split('|').pop());
 }
 
+/** The nonce an owner link carries, read back out of the signed payload (payload|ownerId|exp|nonce|port). */
+function ownerLinkNonce(link) {
+  return new URL(link).searchParams.get('t').split('.')[0].split('|')[3];
+}
+
 function ownerLibrary({ ownerId = 'tester' } = {}) {
   const library = fakeLibrary();
   stateModule.writeSecrets(library.root, { version: 1, ownerLinkSecret: crypto.randomBytes(32).toString('hex'), captureToken: 'c' });
@@ -1951,7 +2039,10 @@ test('owner link --managed still hands off when --no-handoff is absent', async (
   assert.ok(link, 'the link is emitted before the run waits on the token');
   const port = ownerLinkPort(link);
   assert.ok(port > 0, 'the app\'s own link still carries a live loopback port');
-  const stored = await fetch(`http://127.0.0.1:${port}/store`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: 'session-value' }) });
+  // The loopback only takes the nonce of the link it minted: a process that has the port but not the link is refused.
+  assert.equal((await storeToken(port, { token: 'forged' })).status, 403);
+  assert.equal((await storeToken(port, { token: 'forged', nonce: 'f'.repeat(32) })).status, 403);
+  const stored = await storeToken(port, { token: 'session-value', nonce: ownerLinkNonce(link) });
   assert.equal(stored.status, 200);
 
   const settled = await Promise.race([pending, new Promise((resolve) => setTimeout(() => resolve('timeout'), 5000))]);
@@ -1972,9 +2063,7 @@ test('setup ignores --no-handoff: its owner step is how this Mac signs itself in
       if (step !== 'owner') return;
       const port = ownerLinkPort(url);
       ports.push(port);
-      if (port > 0) {
-        fetch(`http://127.0.0.1:${port}/store`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: 'app-session' }) }).catch(() => {});
-      }
+      if (port > 0) storeToken(port, { token: 'app-session', nonce: ownerLinkNonce(url) }).catch(() => {});
     },
   });
   assert.deepEqual(ports.length, 1);
@@ -2195,7 +2284,10 @@ test('the snapshot command runs the contract step ids, in order', async () => {
 
 test('delete-resources verifies every artifact and clears the install record', async () => {
   const library = fakeLibrary();
-  enterCloud(library.root, { workerName: 'snip', d1: { name: 'snip', id: 'd1' }, kv: { name: 'OAUTH_KV', id: 'kv' }, bucket: 'snip-files' });
+  stateModule.updateState(library.root, (next) => {
+    next.cloud = { url: PROVIDED, accountId: 'acct', workerName: 'snip', d1: { name: 'snip', id: 'd1' }, kv: { name: 'OAUTH_KV', id: 'kv' }, bucket: 'snip-files' };
+    return next;
+  });
   const emitter = collectedEmitter();
   const fakeCloudModule = {
     listD1: async () => [],
@@ -2219,7 +2311,10 @@ test('delete-resources verifies every artifact and clears the install record', a
 
   // A surviving database is a failed delete, not a success.
   const library2 = fakeLibrary();
-  enterCloud(library2.root, { workerName: 'snip', d1: { name: 'snip', id: 'd1' }, bucket: 'snip-files' });
+  stateModule.updateState(library2.root, (next) => {
+    next.cloud = { url: PROVIDED, accountId: 'acct', workerName: 'snip', d1: { name: 'snip', id: 'd1' }, bucket: 'snip-files' };
+    return next;
+  });
   const survivor = createContext({
     root: library2.root, dataRoot: library2.root, flags: { confirm: 'snip.tester.workers.dev' }, emit: emitter.emit,
     api: { workerExists: async () => false },
@@ -2230,8 +2325,29 @@ test('delete-resources verifies every artifact and clears the install record', a
   assert.equal(stateModule.readState(library2.root).cloud.url, PROVIDED, 'the record stays until everything is gone');
 });
 
+test('delete-resources refuses while this Mac is using the cloud library', async () => {
+  const library = fakeLibrary();
+  stateModule.updateState(library.root, (next) => {
+    next.mode = 'cloud';
+    next.cloud = { url: PROVIDED, accountId: 'acct', workerName: 'snip', d1: { name: 'snip', id: 'd1' }, kv: { name: 'OAUTH_KV', id: 'kv' }, bucket: 'snip-files' };
+    return next;
+  });
+  const calls = [];
+  const ctx = createContext({
+    root: library.root, dataRoot: library.root, flags: { confirm: 'snip.tester.workers.dev' }, emit: collectedEmitter().emit,
+    api: { workerExists: async () => false },
+    wrangler: { bin: '/x', run: async (args) => { calls.push(args); return { ok: true, stdout: '', stderr: '' }; } },
+    deps: { fetch: async () => { throw new Error('no network'); } },
+  });
+  await assert.rejects(() => commands.commandDeleteResources(ctx), (error) => error.code === 'CLOUD_IN_USE' && /pull/.test(error.hint) && /detach/.test(error.hint));
+  assert.deepEqual(calls, [], 'nothing was deleted');
+  const record = stateModule.readState(library.root);
+  assert.equal(record.mode, 'cloud');
+  assert.equal(record.cloud.url, PROVIDED);
+});
+
 /** A pull-verify context that records which tables verify actually compares. */
-function pullVerifyContext({ library, stagedState, manifestValue, dump, counts, localCounts = counts }) {
+function pullVerifyContext({ library, stagedState, manifestValue, dump, counts, localCounts = counts, stagedKeys = manifestValue.keys }) {
   const queried = [];
   const tableOf = (sql) => (sql.match(/FROM "([A-Za-z0-9_]+)"/) || [])[1];
   const emitter = collectedEmitter();
@@ -2255,7 +2371,7 @@ function pullVerifyContext({ library, stagedState, manifestValue, dump, counts, 
     library: {
       async withLocalWorker(_options, fn) {
         return fn({
-          transfer: { async head() { return 10; } },
+          transfer: { async manifest() { return { keys: stagedKeys }; } },
           async dispose() {},
         });
       },
@@ -2337,6 +2453,15 @@ test('a newer Worker that excludes a table the engine has never heard of still v
   });
   await verify.run(ctx);
   assert.deepEqual(queried, ['remote:refs', 'local:refs']);
+});
+
+test('pull-verify fails a downloaded file that is missing or the wrong size', async () => {
+  const key = SYNTHETIC.fileKey(5, 'shot.png');
+  const base = { manifestValue: { tables: { refs: 1 }, keys: [{ key, size: 10 }] }, dump: DUMP_WITH_LEDGER, counts: { refs: 1 } };
+  const truncated = pullVerifyContext({ ...base, library: fakeLibrary(), stagedState: path.join(tempDir(), 'pull/state'), stagedKeys: [{ key, size: 4 }] });
+  await assert.rejects(() => truncated.verify.run(truncated.ctx), (error) => error.code === 'VERIFY_SIZE_MISMATCH' && error.data.cloud === 10 && error.data.local === 4);
+  const absent = pullVerifyContext({ ...base, library: fakeLibrary(), stagedState: path.join(tempDir(), 'pull/state'), stagedKeys: [] });
+  await assert.rejects(() => absent.verify.run(absent.ctx), (error) => error.code === 'VERIFY_FILES_MISSING' && error.data.key === key);
 });
 
 test('pull-verify fails when two zeros would otherwise pass for a copy', async () => {
@@ -2454,6 +2579,7 @@ test('every deploy uploads the bundle again instead of replaying a journaled run
     // A finished earlier deploy in the journal.
     next.steps = [
       { id: 'deploy-preflight', status: 'done', at: new Date().toISOString(), detail: '' },
+      { id: 'deploy-layout', status: 'done', at: new Date().toISOString(), detail: '' },
       { id: 'deploy-schema', status: 'done', at: new Date().toISOString(), detail: '' },
       { id: 'deploy-worker', status: 'done', at: new Date().toISOString(), detail: '' },
       { id: 'deploy-verify', status: 'done', at: new Date().toISOString(), detail: '' },
@@ -2488,8 +2614,210 @@ test('every deploy uploads the bundle again instead of replaying a journaled run
   assert.equal(uploads, 1, 'the bundle is uploaded even though the journal says it was done');
   assert.equal(migrations, 1, 'migrations are re-applied too');
   const started = emitter.events.filter((event) => event.event === 'step' && event.status === 'started').map((event) => event.step);
-  assert.deepEqual(started, ['deploy-preflight', 'deploy-schema', 'deploy-worker', 'deploy-verify']);
+  assert.deepEqual(started, ['deploy-preflight', 'deploy-layout', 'deploy-schema', 'deploy-worker', 'deploy-verify']);
   assert.equal(stateModule.readState(library.root).cloud.workerVersion, '1.1.3');
+});
+
+// ---------- deploy and migrate apply THIS build's migrations ----------
+//
+// `<dataRoot>/cloud` is a copy of the build, refreshed by the deploy layout. The
+// database step reads the migrations from that copy, so the copy has to be
+// refreshed before the step runs, or the first update after a release applies the
+// previous release's migrations and the new Worker goes live on the old schema.
+
+const OLD_MIGRATIONS = ['0001_init.sql', '0002_boards.sql'];
+const NEW_MIGRATIONS = [...OLD_MIGRATIONS, '0003_board_item_z.sql', '0004_capture_lease.sql'];
+const NEWLY_ADDED = ['0003_board_item_z.sql', '0004_capture_lease.sql'];
+
+function writeBuild(root, { migrations, bundle }) {
+  const dir = path.join(root, 'web/migrations');
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  for (const name of migrations) fs.writeFileSync(path.join(dir, name), `-- ${name}\n`);
+  fs.writeFileSync(path.join(root, 'web/dist/snip/index.js'), `export default { bundle: "${bundle}" }\n`);
+}
+
+/**
+ * The state `npm run update` finds: the previous deploy laid out cloud/ from the
+ * OLD build, and the checkout now holds the NEW build.
+ */
+function cloudInstallAfterUpdate() {
+  const library = fakeLibrary();
+  writeBuild(library.root, { migrations: OLD_MIGRATIONS, bundle: 'old-bundle' });
+  deploy.prepareDeployLayout({ root: library.root, dataRoot: library.root, d1Id: 'd1', kvId: 'kv', login: 'tester', url: PROVIDED });
+  writeBuild(library.root, { migrations: NEW_MIGRATIONS, bundle: 'new-bundle' });
+  stateModule.setMode(library.root, 'cloud');
+  stateModule.updateState(library.root, (next) => {
+    next.cloud = { url: PROVIDED, accountId: 'acct', d1: { name: 'snip', id: 'd1' }, kv: { name: 'OAUTH_KV', id: 'kv' }, bucket: 'snip-files', workerVersion: '1.4.0' };
+    return next;
+  });
+  return library;
+}
+
+/**
+ * wrangler's own listing, in the shape the real one prints (boxed tables with a rule
+ * between rows): the pending names, then the same names again with a status.
+ */
+function appliedListing(names) {
+  const pending = ['┌────────────────────────┐', '│ name                   │', '├────────────────────────┤', names.map((name) => `│ ${name.padEnd(22)} │`).join('\n├────────────────────────┤\n'), '└────────────────────────┘'];
+  const done = ['┌────────────────────────┬────────┐', '│ name                   │ status │', '├────────────────────────┼────────┤', names.map((name) => `│ ${name.padEnd(22)} │ ✅     │`).join('\n├────────────────────────┼────────┤\n'), '└────────────────────────┴────────┘'];
+  return `Migrations to be applied:\n${pending.join('\n')}\n? About to apply ${names.length} migration(s)\n🤖 Using fallback value in non-interactive context: yes\n${done.join('\n')}`;
+}
+
+/**
+ * A wrangler double that reads what the real one reads: the migrations folder the
+ * deploy config points at, and the bundle in cloud/snip at the moment of `deploy`.
+ */
+function orderWrangler(dataRoot, applied) {
+  const ledger = new Set(applied);
+  const calls = [];
+  const reply = (stdout) => ({ ok: true, code: 0, stdout, stderr: '', output: stdout });
+  return {
+    bin: '/fake/wrangler.js',
+    calls,
+    ledger,
+    async run(args) {
+      if (args[0] === 'd1' && args[1] === 'migrations' && args[2] === 'apply') {
+        const config = args[args.indexOf('--config') + 1];
+        const folder = path.resolve(path.dirname(config), JSON.parse(fs.readFileSync(config, 'utf8')).d1_databases[0].migrations_dir);
+        const pending = fs.readdirSync(folder).filter((name) => name.endsWith('.sql')).sort().filter((name) => !ledger.has(name));
+        calls.push({ kind: 'migrate', pending });
+        for (const name of pending) ledger.add(name);
+        return reply(pending.length ? appliedListing(pending) : '✅ No migrations to apply!');
+      }
+      if (args[0] === 'deploy') {
+        calls.push({ kind: 'deploy', bundle: fs.readFileSync(path.join(dataRoot, 'cloud/snip/index.js'), 'utf8'), schema: [...ledger].sort() });
+        return reply('Uploaded snip');
+      }
+      calls.push({ kind: args.join(' ') });
+      return reply('');
+    },
+  };
+}
+
+function updateContext(library, wrangler) {
+  const emitter = collectedEmitter();
+  const layouts = [];
+  const ctx = createContext({
+    root: library.root, dataRoot: library.root, flags: {}, emit: emitter.emit, api: {}, wrangler,
+    deps: {
+      fetch: async () => { throw new Error('no network'); },
+      sleep: async () => {},
+      cloud: { ...cloudModule, putSecrets: async () => {}, deleteSecret: async () => {} },
+      // The real layout, counted: one refresh per command is the contract.
+      deploy: { ...deploy, prepareDeployLayout: (options) => { layouts.push(options); return deploy.prepareDeployLayout(options); } },
+      transferOf: () => ({ status: async () => ({ version: '1.5.0' }) }),
+    },
+  });
+  ctx.reload();
+  return { ctx, events: emitter.events, layouts };
+}
+
+const startedSteps = (events) => events.filter((event) => event.event === 'step' && event.status === 'started').map((event) => event.step);
+const stepMessage = (events, step) => events.find((event) => event.event === 'step' && event.step === step && event.status === 'ok').message;
+const kinds = (wrangler) => wrangler.calls.map((call) => call.kind).filter((kind) => kind === 'migrate' || kind === 'deploy');
+
+test('deploy applies the new build\'s migrations, and only then deploys the Worker', async () => {
+  const library = cloudInstallAfterUpdate();
+  const wrangler = orderWrangler(library.root, OLD_MIGRATIONS);
+  const { ctx, events, layouts } = updateContext(library, wrangler);
+
+  const result = await commands.commandDeploy(ctx);
+
+  assert.equal(result.ok, true);
+  const migrate = wrangler.calls.find((call) => call.kind === 'migrate');
+  assert.deepEqual(migrate.pending, NEWLY_ADDED, 'the migrations applied are the new release\'s, not the previous one\'s');
+  assert.deepEqual(kinds(wrangler), ['migrate', 'deploy'], 'the schema is migrated before the Worker goes live');
+  const worker = wrangler.calls.find((call) => call.kind === 'deploy');
+  assert.deepEqual(worker.schema, NEW_MIGRATIONS, 'the new Worker only ever goes live on the new schema');
+  assert.match(worker.bundle, /new-bundle/, 'and the Worker uploaded is the new build');
+  assert.equal(layouts.length, 1, 'the deploy layout is refreshed in exactly one place');
+  const order = startedSteps(events);
+  assert.ok(order.indexOf('deploy-layout') !== -1 && order.indexOf('deploy-layout') < order.indexOf('deploy-schema'), 'the layout is refreshed before anything reads it');
+  assert.ok(order.indexOf('deploy-schema') < order.indexOf('deploy-worker'));
+  assert.equal(stepMessage(events, 'deploy-schema'), 'Applied 2 migrations');
+  assert.deepEqual(result.data.migrations, NEWLY_ADDED);
+});
+
+test('deploy says so when no migration is pending', async () => {
+  const library = cloudInstallAfterUpdate();
+  const wrangler = orderWrangler(library.root, NEW_MIGRATIONS);
+  const { ctx, events, layouts } = updateContext(library, wrangler);
+
+  const result = await commands.commandDeploy(ctx);
+
+  assert.equal(result.ok, true);
+  assert.equal(stepMessage(events, 'deploy-schema'), 'Database is up to date');
+  assert.deepEqual(result.data.migrations, []);
+  assert.deepEqual(kinds(wrangler), ['migrate', 'deploy']);
+  assert.equal(layouts.length, 1);
+});
+
+test('migrate applies the new build\'s migrations from a copy it refreshed itself', async () => {
+  const library = cloudInstallAfterUpdate();
+  const wrangler = orderWrangler(library.root, OLD_MIGRATIONS);
+  const { ctx, events, layouts } = updateContext(library, wrangler);
+
+  const result = await commands.commandMigrate(ctx);
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(wrangler.calls.find((call) => call.kind === 'migrate').pending, NEWLY_ADDED);
+  assert.deepEqual(kinds(wrangler), ['migrate'], 'migrate never deploys the Worker');
+  assert.equal(layouts.length, 1, 'the same single layout step as deploy');
+  const order = startedSteps(events);
+  assert.ok(order.indexOf('migrate-layout') !== -1 && order.indexOf('migrate-layout') < order.indexOf('migrate-apply'));
+  assert.equal(stepMessage(events, 'migrate-apply'), 'Applied 2 migrations');
+  assert.equal(result.message, 'Applied 2 migrations');
+  assert.deepEqual(result.data.migrations, NEWLY_ADDED);
+});
+
+test('migrate says so when no migration is pending', async () => {
+  const library = cloudInstallAfterUpdate();
+  const wrangler = orderWrangler(library.root, NEW_MIGRATIONS);
+  const { ctx } = updateContext(library, wrangler);
+
+  const result = await commands.commandMigrate(ctx);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.message, 'Database is up to date');
+  assert.deepEqual(result.data.migrations, []);
+});
+
+test('migrate, then deploy by hand, leaves the new schema under the new Worker', async () => {
+  const library = cloudInstallAfterUpdate();
+  const wrangler = orderWrangler(library.root, OLD_MIGRATIONS);
+
+  await commands.commandMigrate(updateContext(library, wrangler).ctx);
+  const deployed = updateContext(library, wrangler);
+  const result = await commands.commandDeploy(deployed.ctx);
+
+  assert.equal(result.ok, true);
+  const migrations = wrangler.calls.filter((call) => call.kind === 'migrate');
+  assert.deepEqual(migrations.map((call) => call.pending), [NEWLY_ADDED, []], 'the deploy has nothing left to apply');
+  const worker = wrangler.calls.find((call) => call.kind === 'deploy');
+  assert.deepEqual(worker.schema, NEW_MIGRATIONS);
+  assert.match(worker.bundle, /new-bundle/);
+});
+
+test('deploy and migrate stop before touching Cloudflare when the build is gone, instead of using the old copy', async () => {
+  for (const [command, run] of [['deploy', commands.commandDeploy], ['migrate', commands.commandMigrate]]) {
+    const library = cloudInstallAfterUpdate();
+    fs.rmSync(path.join(library.root, 'web/migrations'), { recursive: true, force: true });
+    const wrangler = orderWrangler(library.root, OLD_MIGRATIONS);
+    const { ctx, layouts } = updateContext(library, wrangler);
+    await assert.rejects(() => run(ctx), (error) => error.code === 'NO_BUILD', `${command} reports the missing build`);
+    assert.deepEqual(wrangler.calls, [], `${command} did not apply the previous release's migrations`);
+    assert.equal(layouts.length, 0, `${command} did not half-refresh the copy`);
+  }
+});
+
+test('the applied migrations are read from wrangler\'s listing, whatever form it prints them in', () => {
+  const at = (stdout, stderr = '') => deploy.appliedMigrations({ stdout, stderr });
+  assert.deepEqual(at(appliedListing(NEWLY_ADDED)), NEWLY_ADDED, 'a boxed table, listed again with a status, counts each once');
+  assert.deepEqual(at('✅ No migrations to apply!'), []);
+  assert.deepEqual(at('', appliedListing(['0001_init.sql'])), ['0001_init.sql'], 'stderr is read too');
+  assert.deepEqual(at('Migrations to be applied:\n0001_init.sql\n\n✅ Applied 1 migration'), ['0001_init.sql'], 'a plain list works');
+  assert.deepEqual(at(''), []);
 });
 
 // ---------- transient Cloudflare failures ----------
@@ -2704,6 +3032,27 @@ test('a deploy that stays broken reports retryable in the CLI result', async () 
   assert.equal(last.ok, false);
   assert.equal(last.data.code, 'LOCAL_UNREACHABLE');
   assert.equal(last.retryable, true, 'a step failure that names itself retryable now says so');
+});
+
+test('a failed setup --check and a failed status --check write nothing', async () => {
+  const io = { stdout: { write: () => true }, stderr: { write: () => true } };
+  const empty = tempDir();
+  const check = await cli.main(['setup', '--check', '--root', empty, '--data-root', empty, '--json'], io);
+  assert.equal(check.code, 4, 'harness check: the preflight failed');
+  assert.deepEqual(fs.readdirSync(empty), [], 'no journal, no lock, nothing');
+
+  const library = fakeLibrary();
+  fs.writeFileSync(path.join(library.root, 'web/.dev.vars'), 'PUBLIC_URL=http://127.0.0.1:1\n');
+  const status = await cli.main(['status', '--check', '--root', library.root, '--data-root', library.root, '--json'], io);
+  assert.equal(status.code, 1, 'harness check: the status check failed');
+  assert.equal(fs.existsSync(path.join(library.root, '.snip')), false);
+});
+
+test('a mode this engine never writes reads as local', () => {
+  const library = fakeLibrary();
+  stateModule.writeState(library.root, { ...stateModule.emptyState(), mode: 'disabling' });
+  assert.equal(stateModule.readState(library.root).mode, 'local');
+  assert.throws(() => stateModule.setMode(library.root, 'disabling'), (error) => error.code === 'STATE_INVALID');
 });
 
 test('setup --resume behaves exactly like setup', async () => {

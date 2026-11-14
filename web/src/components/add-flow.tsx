@@ -1,8 +1,9 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react"
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react"
 import { useLocation } from "wouter"
-import { AddReferenceDialog, extractUrls } from "@/components/add-reference-dialog"
+import { AddReferenceDialog } from "@/components/add-reference-dialog"
 import { trackCapture } from "@/components/canvas/capture-card"
 import { ConnectMcpDialog } from "@/components/connect-mcp-dialog"
+import { extractUrls } from "@/lib/site-url"
 
 // One place that owns the "Create" dialogs so the top bar, board views and empty
 // states on any page open the same flow.
@@ -42,9 +43,10 @@ export function AddFlowProvider({ children }: { children: ReactNode }) {
       // The canvas capture card takes its own pastes (data-capture-input).
       if (typing(e.target) || (e.target as Element | null)?.closest?.("[data-capture-input]") || dialogOpen()) return
       const text = e.clipboardData?.getData("text") ?? ""
-      if (!extractUrls(text).length) return
+      const found = extractUrls(text)
+      if (!found.length) return
       e.preventDefault()
-      open(currentBoard(), text)
+      open(currentBoard(), found.map((u) => u.href).join(" "))
     }
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey || typing(e.target) || dialogOpen()) return
@@ -78,10 +80,6 @@ export function AddFlowProvider({ children }: { children: ReactNode }) {
         onOpenChange={(o) => !o && setAdding(null)}
         // Captures started here show on the canvas capture card too.
         onCreated={(r) => trackCapture(r.id)}
-        onAdded={() => {
-          setAdding(null)
-          window.dispatchEvent(new Event("rs:reload"))
-        }}
       />
       <ConnectMcpDialog open={connecting} onOpenChange={setConnecting} />
     </AddFlowCtx.Provider>

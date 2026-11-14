@@ -26,6 +26,7 @@ export function notify(
         ) : null}
       </div>
     ),
-    { duration: 4000, unstyled: true, position: opts.position, className: "flex! justify-center! w-full!" },
+    // The text is the id, so the same news twice (a second copy, the same site added again) replaces the toast instead of stacking.
+    { id: text, duration: 4000, unstyled: true, position: opts.position, className: "flex! justify-center! w-full!" },
   )
 }

@@ -1,4 +1,5 @@
 import { useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type ReactNode, type Ref } from "react"
+import { cullRect, FAR_ZOOM } from "@/components/canvas/cull"
 import { cn } from "@/lib/utils"
 
 /** A rectangle in world px. */
@@ -34,16 +35,17 @@ const within = (target: EventTarget | null, selector: string) => target instance
 /**
  * A pan and zoom viewport. Children render in world space; the world layer moves with a CSS transform written
  * straight to the DOM, so panning never re-renders. `children` receives the visible world rect (with a margin,
- * snapped to a grid) and re-renders only when that rect changes, which is when to cull.
+ * snapped to a grid; see cullRect) and re-renders only when that rect changes, which is when to cull.
  *
  * Drag anywhere to pan (mouse, touch, pen; a 3–6 px threshold keeps clicks working and the click ending a pan is
  * swallowed). Wheel pans, ctrl/⌘+wheel and pinch zoom around the pointer. With focus: arrows pan, +/- zoom,
- * 0 recenters. Keyboard focus moving to an off-screen child pans to it.
+ * 0 recenters. Keyboard focus moving to a child that is out of view pans to it.
  */
 export function InfiniteCanvas({
   children,
   home = { x: 0, y: 0, zoom: 1 },
   onViewChange,
+  tiled = false,
   className,
   "aria-label": label,
   ref,
@@ -53,6 +55,21 @@ export function InfiniteCanvas({
   home?: { x: number; y: number; zoom?: number }
   /** Called once per frame while the view changes. */
   onViewChange?: (view: CanvasView) => void
+  /**
+   * The children are many light tiles that mount and unmount as the view moves (the home gallery), not a few hundred
+   * heavy items that stay mounted (a board). The canvas then differs in three ways, all measured with 200 to 1,000
+   * tiles:
+   * - The world is not pinned to a compositor layer with will-change: transform and re-rasterized after each zoom.
+   *   Pinned, the layer keeps the raster scale it had before the zoom, so tiles that mount while panning at 25% are
+   *   rasterized for 100% (4.5 s of raster time for drags that take 0.56 s without), and the first step of a zoom-in
+   *   stalls for 0.8 s instead of 0.2. For a board the pin is what keeps zooming in smooth (no frame over 17 ms, against
+   *   330 ms without).
+   * - Below FAR_ZOOM the margin and the grid of the mounted rect are about half as wide (see cullRect). A board would
+   *   only mount its items again sooner, which costs more than it saves.
+   * - Below FAR_ZOOM the world carries a `data-far` attribute, so tiles can drop detail with CSS (`in-data-far:`)
+   *   without re-rendering.
+   */
+  tiled?: boolean
   className?: string
   "aria-label"?: string
   ref?: Ref<InfiniteCanvasHandle>
@@ -64,6 +81,8 @@ export function InfiniteCanvas({
   const [visible, setVisible] = useState<WorldRect>(() => ({ x: home.x - 1200, y: home.y - 800, w: 2400, h: 1600 }))
   const homeRef = useRef(home)
   homeRef.current = home
+  const tiledRef = useRef(tiled)
+  tiledRef.current = tiled
   const onViewRef = useRef(onViewChange)
   onViewRef.current = onViewChange
 
@@ -85,15 +104,10 @@ export function InfiniteCanvas({
     const flush = () => {
       cancelAnimationFrame(frame)
       frame = 0
-      const { tx, ty, k, w, h } = view.current
+      const { tx, ty, k } = view.current
       if (world.current) world.current.style.transform = `translate3d(${tx}px, ${ty}px, 0) scale(${k})`
-      // Visible rect plus a quarter-screen margin, snapped outward to a grid about 256 screen px wide, so children
-      // re-render only when it crosses a grid line.
-      const step = 256 * 2 ** Math.max(0, Math.round(Math.log2(1 / k)))
-      const m = (Math.max(w, h) * 0.25) / k
-      const x = Math.floor((-tx / k - m) / step) * step
-      const y = Math.floor((-ty / k - m) / step) * step
-      const next = { x, y, w: Math.ceil(((w - tx) / k + m) / step) * step - x, h: Math.ceil(((h - ty) / k + m) / step) * step - y }
+      if (tiledRef.current) world.current?.toggleAttribute("data-far", k < FAR_ZOOM)
+      const next = cullRect(view.current, tiledRef.current)
       setVisible((r) => (r.x === next.x && r.y === next.y && r.w === next.w && r.h === next.h ? r : next))
       onViewRef.current?.(getView())
     }
@@ -104,6 +118,7 @@ export function InfiniteCanvas({
     // will-change keeps the world on one GPU layer but rasterizes it at the zoom it started with. Dropping and
     // restoring it after zooming settles re-rasterizes, so text and images stay sharp.
     const sharpen = () => {
+      if (tiledRef.current) return
       clearTimeout(raster)
       raster = window.setTimeout(() => {
         const el = world.current
@@ -387,16 +402,21 @@ export function InfiniteCanvas({
     e.preventDefault()
   }
 
-  // Tabbing to a child outside the viewport (or under the floating chrome) brings it to the centre.
+  // Tabbing to a child that is out of view, or under the floating chrome at the top and bottom, brings it to the centre.
+  // Only along the axis on which it is out, and never for a child that is in view: the capture card is nearly as wide as
+  // a phone, so centring its field (or a button beside it) used to shift the whole card off the screen.
   const onFocus = (e: React.FocusEvent) => {
     const el = e.target as HTMLElement
     if (el === viewport.current || !inside(e) || !el.matches(":focus-visible")) return
     const r = el.getBoundingClientRect()
     const box = viewport.current!.getBoundingClientRect()
     const pad = 80
-    if (r.left >= box.left + pad && r.right <= box.right - pad && r.top >= box.top + pad && r.bottom <= box.bottom - pad) return
+    const outX = r.left < box.left || r.right > box.right
+    const outY = r.top < box.top + pad || r.bottom > box.bottom - pad
+    if (!outX && !outY) return
     const p = a.handle.screenToWorld(r.left + r.width / 2, r.top + r.height / 2)
-    a.handle.panTo(p.x, p.y)
+    const now = a.handle.getView()
+    a.handle.panTo(outX ? p.x : now.x, outY ? p.y : now.y)
   }
 
   return (
@@ -426,7 +446,7 @@ export function InfiniteCanvas({
       onKeyDown={onKeyDown}
       onFocus={onFocus}
     >
-      <div ref={world} className="absolute top-0 left-0 origin-top-left will-change-transform">
+      <div ref={world} className={cn("absolute top-0 left-0 origin-top-left", !tiled && "will-change-transform")}>
         {children(visible)}
       </div>
     </div>

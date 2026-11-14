@@ -7,7 +7,7 @@ const { EventEmitter } = require("node:events")
 const fs = require("node:fs")
 const os = require("node:os")
 const path = require("node:path")
-const { cloudFlags, enginePath, engineAvailable, engineArgs, engineEnv, runEngine, safeEvent } = require("../cloud-engine.cjs")
+const { enginePath, engineAvailable, engineArgs, setupFlags, retryArgs, engineEnv, runEngine, safeEvent } = require("../cloud-engine.cjs")
 
 const APP = "/Applications/Snip.app/Contents/Resources/app"
 const FIXTURE = path.join(__dirname, "fixtures", "fake-cloud-cli.cjs")
@@ -30,6 +30,30 @@ test("engine arguments carry the contract's flags", () => {
   const args = engineArgs({ appDir: APP, root: "/repo", dataRoot: "/library", command: "setup", flags: { account: "abc", domain: "", login: undefined }, env: {} })
   assert.deepEqual(args.slice(1), ["setup", "--json", "--root", "/repo", "--data-root", "/library", "--yes", "--no-open", "--managed", "--account", "abc"])
   assert.equal(args[0], path.join(APP, "provision", "cli.cjs"))
+})
+
+test("an answer stored under the engine's key becomes that flag", () => {
+  // `needs_input` asks for "account"; the answer is kept under that name and sent back as --account.
+  const flags = setupFlags({ account: " acct-2 ", domain: "snip.example.com", adoptExisting: true })
+  assert.deepEqual(flags, { account: "acct-2", domain: "snip.example.com", login: undefined, "adopt-existing": true, "capture-env": "replace" })
+  const args = engineArgs({ appDir: APP, root: "/repo", dataRoot: "/library", command: "setup", flags, env: {} })
+  assert.equal(args[args.indexOf("--account") + 1], "acct-2")
+  assert.equal(setupFlags({ accountId: "acct-2" }).account, undefined, "there is one name for the account, the engine's")
+})
+
+test("Retry resumes an unfinished setup, re-runs what failed, and never sets up a healthy library", () => {
+  assert.equal(retryArgs({ mode: "cloud", failed: undefined, answers: {} }), null)
+  assert.equal(retryArgs({ mode: "local", failed: undefined, answers: {} }), null)
+  const pull = ["pull", {}, undefined]
+  assert.equal(retryArgs({ mode: "cloud", failed: pull, answers: {} }), pull)
+  const restore = ["snapshot", { confirm: "replaced-2026" }, "restore"]
+  assert.equal(retryArgs({ mode: "local", failed: restore, answers: {} }), restore)
+  // Setup resumes from its journal with the answers given since, in whatever mode it stopped.
+  assert.deepEqual(retryArgs({ mode: "enabling", failed: undefined, answers: { account: "acct-2" } }), ["setup", setupFlags({ account: "acct-2" })])
+  assert.equal(retryArgs({ mode: "cloud", failed: ["setup", { account: "old" }, undefined], answers: { account: "acct-2" } })[1].account, "acct-2")
+  // An Undo that failed is retried as an Undo: Retry must not resume the setup it was undoing.
+  const abort = ["abort", {}, undefined]
+  assert.equal(retryArgs({ mode: "enabling", failed: abort, answers: {} }), abort)
 })
 
 test("snapshot actions are positional subcommands", () => {
@@ -93,12 +117,41 @@ test("stdout is parsed per line, across chunks, and garbage is never echoed", as
   assert.equal(run.cancelled, false)
 })
 
+test("a child that ends without a result yields one FAILED result before onExit", () => {
+  const child = fakeChild()
+  const seen = []
+  runEngine({
+    appDir: APP, root: "/repo", dataRoot: "/library", command: "setup", baseEnv: {}, env: {},
+    spawnProcess: () => child,
+    onEvent: event => seen.push(event.event === "result" ? `result:${event.ok}:${event.code}` : event.event),
+    onExit: info => seen.push(`exit:${info.code}`),
+  })
+  child.stdout.emit("data", '{"v":1,"event":"step","step":"preflight","status":"started"}\n')
+  child.emit("close", 1, null)
+  child.emit("close", 1, null)
+  assert.deepEqual(seen, ["step", "result:false:FAILED", "exit:1"])
+})
+
 test("cancel sends SIGINT exactly once the child is alive", () => {
   const child = fakeChild()
   const run = runEngine({ appDir: APP, root: "/repo", dataRoot: "/library", command: "setup", baseEnv: {}, env: {}, spawnProcess: () => child, onEvent: () => {} })
   assert.equal(run.cancel(), true)
   assert.deepEqual(child.killedWith, ["SIGINT"])
   assert.equal(run.cancelled, true)
+})
+
+test("a cancelled run can be awaited until the child is gone", async () => {
+  const child = fakeChild()
+  const seen = []
+  const run = runEngine({ appDir: APP, root: "/repo", dataRoot: "/library", command: "setup", baseEnv: {}, env: {}, spawnProcess: () => child, onExit: info => seen.push(info.cancelled) })
+  let settled = false
+  void run.exited.then(() => (settled = true))
+  assert.equal(run.cancel(), true)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(settled, false, "cancel alone does not end the run")
+  child.emit("close", null, "SIGINT")
+  await run.exited
+  assert.deepEqual(seen, [true])
 })
 
 test("a snapshot delete without the rendered basename stops before deleting", async t => {
@@ -167,12 +220,4 @@ test("a real setup run speaks the contract and writes a usable cloud.json", asyn
   assert.equal(file.cloud.url, "https://snip.max.workers.dev")
   assert.ok(file.snapshot?.bytes > 0)
   assert.equal(fs.statSync(path.join(dataRoot, ".snip", "cloud.json")).mode & 0o777, 0o600)
-})
-
-test("an answered account becomes the --account flag", () => {
-  // main stores needs_input answers under the engine's own key (`account`) and passes
-  // them straight to cloudFlags, so the flag must read that key.
-  const flags = cloudFlags(Object.fromEntries(new Map([["account", " 0123456789abcdef "]])))
-  assert.equal(flags.account, "0123456789abcdef")
-  assert.ok(engineArgs({ appDir: APP, root: "/r", dataRoot: "/d", command: "setup", flags }).includes("0123456789abcdef"))
 })

@@ -338,6 +338,17 @@
   .press:active { scale: 1 !important; }
 }
 
+/* The filter dock sits at the bottom centre (24px up, 52px tall): toasts land above it, wherever the dock is on the page. */
+body:has([role="toolbar"][aria-label="Filter saves"]) {
+  --toast-bottom: 88px;
+}
+
+/* A bar with no fraction to show: a segment sweeping along its track (40% of the track wide, so 250% of its own width carries it across). */
+@keyframes indeterminate {
+  from { translate: -100% 0; }
+  to { translate: 250% 0; }
+}
+
 /* Landing page motion. Everything here is off for visitors who prefer reduced motion. */
 @property --peel {
   syntax: "<length>";

@@ -81,11 +81,22 @@ async function cookie(env: Env, session: { ownerId: string; method?: string; epo
 test("a legacy login cookie still signs in and reports itself as GitHub", () =>
   withWorker(async ({ database, env, call }) => {
     const legacy = `${SESSION_COOKIE}=${await sign(env.SESSION_SECRET, `fixture-login|${Date.now() + 86_400_000}`)}`
-    const me = await call("/api/me", { headers: { cookie: legacy } })
+    const me = await call("/api/me", { headers: { cookie: legacy } }, { ALLOWED_GITHUB_LOGINS: "Fixture-Login" })
     assert.equal(me.status, 200, "a deploy must not sign existing sessions out")
     assert.deepEqual(await me.json(), { login: "fixture-login", ownerId: "fixture-login", method: "github" })
     // No owners row yet: epoch 0 is the implicit value, so the legacy cookie is valid.
     assert.equal((await database.prepare("SELECT count(*) AS n FROM owners").first<{ n: number }>())!.n, 0)
+  }))
+
+test("a GitHub session ends when its login leaves ALLOWED_GITHUB_LOGINS", () =>
+  withWorker(async ({ env, call }) => {
+    const github = await cookie(env, { ownerId: "second-person", method: "github" })
+    assert.equal((await call("/api/me", { headers: { cookie: github } }, { ALLOWED_GITHUB_LOGINS: "max, second-person" })).status, 200)
+    assert.equal((await call("/api/me", { headers: { cookie: github } }, { ALLOWED_GITHUB_LOGINS: "max" })).status, 401)
+    assert.equal((await call("/api/me", { headers: { cookie: github } })).status, 401)
+    // Other sign-in methods never consult the list.
+    const passkey = await cookie(env, { ownerId: "second-person", method: "passkey" })
+    assert.equal((await call("/api/me", { headers: { cookie: passkey } }, { ALLOWED_GITHUB_LOGINS: "max" })).status, 200)
   }))
 
 test("the new cookie carries owner and method, and tampering or expiry is refused", () =>
@@ -180,15 +191,18 @@ test("the owner link POST burns the nonce, creates the owner and hands the sessi
     const res = await call("/auth/owner", { method: "POST", body: new URLSearchParams({ t: token }), headers: { "content-type": "application/x-www-form-urlencoded" } })
     assert.equal(res.status, 302)
     const location = res.headers.get("location")!
-    assert.match(location, /^http:\/\/127\.0\.0\.1:43111\/done#token=/)
+    assert.match(location, /^http:\/\/127\.0\.0\.1:43111\/done#token=[^&]+&nonce=[0-9a-f]{32}$/)
     const cookie = cookieFrom(res)
     assert.ok(cookie, "POST sets the session")
     assert.match(res.headers.getSetCookie().join("\n"), /HttpOnly/i)
     assert.match(res.headers.getSetCookie().join("\n"), /SameSite=Lax/i)
     assert.equal(res.headers.get("referrer-policy"), "no-referrer")
 
+    // The fragment carries the link's own nonce, so the loopback can tell its page from another process.
+    const params = new URLSearchParams(new URL(location).hash.slice(1))
+    assert.equal(params.get("nonce"), nonce)
     // The fragment token is the same signed session the cookie holds.
-    const fragment = decodeURIComponent(location.split("#token=")[1]!)
+    const fragment = params.get("token")!
     assert.equal(decodeURIComponent(cookie!.split("=").slice(1).join("=")), fragment)
     // Electron injects the same value raw, without Hono's cookie serialiser.
     assert.equal((await call("/api/me", { headers: { cookie: `${SESSION_COOKIE}=${fragment}` } })).status, 200)
@@ -248,12 +262,13 @@ test("the owner link POST accepts the null origin Chromium sends with no-referre
     assert.equal(crossSite.status, 403, "a cross-site fetch is refused even without an origin")
   }))
 
-test("an owner link without a port redirects home instead of to a listener", () =>
+test("an owner link without a port signs a browser in and sends it to the passkey offer, not to a listener", () =>
   withWorker(async ({ env, call }) => {
     const { token } = await mintOwnerLink(env, { ownerId: "max", port: 0 })
     const res = await call("/auth/owner", { method: "POST", body: new URLSearchParams({ t: token }), headers: { "content-type": "application/x-www-form-urlencoded" } })
     assert.equal(res.status, 302)
-    assert.equal(res.headers.get("location"), "/")
+    assert.equal(res.headers.get("location"), "/passkeys?new=1")
+    assert.ok(cookieFrom(res), "the browser is signed in before it is offered a passkey")
   }))
 
 // ---------- Transfer ----------
@@ -529,7 +544,7 @@ test("transfer resume un-pauses through db.resumeReference and is idempotent", (
     assert.deepEqual(await first.json(), { resumed: 2, skipped: ["ffffffffffffffff"] })
 
     const row = await database.prepare(`SELECT status, capture_control, progress FROM refs WHERE id = ?`).bind(paused.id).first<{ status: string; capture_control: string | null; progress: string }>()
-    assert.deepEqual(row, { status: "queued", capture_control: null, progress: "Waiting for your Mac" })
+    assert.deepEqual(row, { status: "queued", capture_control: null, progress: "Waiting for the capture agent" })
 
     const second = await json("/transfer/resume", { ids: [paused.id, running.id, "ffffffffffffffff"] }, { headers: bearer, overrides: transfer })
     assert.deepEqual(await second.json(), { resumed: 0, skipped: [paused.id, running.id, "ffffffffffffffff"] }, "a second call changes nothing")
@@ -602,14 +617,13 @@ test("an adopted library's owner is the id the engine must mint links for", () =
     assert.deepEqual(await status(), { hasOwner: true, ownerId: "max" }, "§4.2.1: the exact ownerId, never a default")
   }))
 
-test("cloud status reports the owner, methods, counts and the capture agent", () =>
+test("cloud status reports the owner, methods and counts; the capture agent is read from /api/agent", () =>
   withWorker(async ({ database, local }) => {
     const initial = (await (await local("/api/cloud-status", {}, { DEV_LOGIN: "max" })).json()) as Record<string, unknown>
-    assert.deepEqual(Object.keys(initial).sort(), ["counts", "hasOwner", "lastCapture", "methods", "ownerId", "version"])
+    assert.deepEqual(Object.keys(initial).sort(), ["counts", "hasOwner", "methods", "ownerId", "version"])
     assert.equal(initial.hasOwner, false)
     assert.deepEqual(initial.methods, [], "no GitHub credentials and no passkeys")
     assert.deepEqual(initial.counts, { refs: 0, pages: 0, animations: 0, collections: 0, images: 0 })
-    assert.deepEqual(initial.lastCapture, { at: null, activity: null, stale: true })
 
     await database.prepare(`INSERT INTO owners (id, label, created_at) VALUES ('max', 'Max', '2026-01-01T00:00:00Z')`).run()
     await database.prepare(`INSERT INTO passkeys (id, owner_id, public_key, counter, created_at) VALUES ('k1', 'max', ?2, 0, '2026-01-01T00:00:00Z')`).bind("k1", new Uint8Array([1, 2, 3])).run()

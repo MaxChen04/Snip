@@ -18,10 +18,11 @@ test("page sections and logged motion are stored, checked and described over MCP
     const ctx = { waitUntil(p: Promise<unknown>) { pending.push(p) }, passThroughOnException() {}, props: { ownerId: "max" } } as unknown as ExecutionContext
     const env = { DB: database, FILES: files, SESSION_SECRET: "test-secret", DEV_LOGIN: "max", CAPTURE_TOKEN: "test-token" } as unknown as Env
     const agent = (path: string, init: RequestInit = {}) =>
-      app.request(`http://localhost/agent${path}`, { ...init, headers: { authorization: "Bearer test-token", "x-snip-capture-protocol": "3", "content-type": "application/json", ...init.headers } }, env, ctx)
+      app.request(`http://localhost/agent${path}`, { ...init, headers: { authorization: "Bearer test-token", "x-snip-capture-protocol": "4", "content-type": "application/json", ...init.headers } }, env, ctx)
 
     const ref = await db.createReference(database, { url: "https://example.com", mode: "single" })
     const job = await (await agent("/jobs/claim", { method: "POST" })).json() as Job
+    assert.ok(job.features?.includes("sectionThumbs"), "the claim says the Worker keeps section thumbnails, so an agent sends them only to a Worker that does")
     const p = `refs/${ref.id}/${job.attempt}/p0`
     const motion: MotionEntry[] = [{
       type: "transition", target: "div#card", property: "transform", durationMs: 300, delayMs: 50, easing: "ease-out", iterations: 1,
@@ -34,14 +35,16 @@ test("page sections and logged motion are stored, checked and described over MCP
       mobileKey: null, mobileThumbKey: null, mobileWidth: null, mobileHeight: null, snapshotKey: null, stylesKey: null, tokens: null,
       sections: [
         { kind: "header", label: "Header", y: 0, height: 80, key: `${p}/section-0.jpg` },
-        { kind: "hero", label: "Ship faster", y: 80, height: 1620, key: `${p}/section-1.jpg`, live: { key: `${p}/section-1-live.webm`, height: 900, durationMs: 3000 } },
+        { kind: "hero", label: "Ship faster", y: 80, height: 1620, key: `${p}/section-1.jpg`, thumbKey: `${p}/section-1-thumb.jpg`, live: { key: `${p}/section-1-live.webm`, height: 900, durationMs: 3000 } },
       ],
       altScheme: { scheme: "dark", desktopKey: `${p}/desktop-dark.jpg`, desktopThumbKey: `${p}/desktop-dark-thumb.jpg`, desktopWidth: 1440, desktopHeight: 1700, sectionKeys: [`${p}/section-0-dark.jpg`, null] },
       animations: [{ kind: "hover", label: "card", selector: "#card", viewport: "desktop", gifKey: `${p}/hover-0.webm`, width: 300, height: 200, sheetKey: null, meta }],
     }
-    const addPage = (body: unknown) => agent(`/jobs/${ref.id}/pages`, { method: "POST", headers: { "x-snip-capture-attempt": job.attempt }, body: JSON.stringify(body) })
+    const addPage = (body: unknown) => agent(`/jobs/${ref.id}/pages`, { method: "POST", headers: { "x-snip-capture-lease": job.lease }, body: JSON.stringify(body) })
     const outside = (await addPage({ ...page, sections: [{ ...page.sections[0], key: "refs/other/a/p0/x.jpg" }] }))
     assert.equal(outside.status, 400, "a section file outside this job's folder is refused")
+    assert.equal((await addPage({ ...page, sections: [{ ...page.sections[1], thumbKey: "refs/other/a/p0/section-1-thumb.jpg" }] })).status, 400, "a thumbnail outside this job's folder is refused")
+    for (const thumbKey of [5, null, ["x"]]) assert.equal((await addPage({ ...page, sections: [{ ...page.sections[1], thumbKey }] })).status, 400, `a thumbKey of ${JSON.stringify(thumbKey)} is not a file key`)
     assert.equal((await addPage({ ...page, sections: "nope" })).status, 400)
     assert.equal((await addPage({ ...page, sections: [{ ...page.sections[1], live: { key: "refs/other/a/p0/live.webm", height: 900, durationMs: 3000 } }] })).status, 400, "a live clip outside this job's folder is refused")
     assert.equal((await addPage({ ...page, sections: [{ ...page.sections[1], live: { height: 900 } }] })).status, 400)
@@ -64,6 +67,7 @@ test("page sections and logged motion are stored, checked and described over MCP
     }
     const { pages, animations } = (await db.getReference(database, ref.id))!
     const pageId = pages[0]!.id
+    assert.deepEqual(pages[0]!.sections.map((s) => s.thumbKey), [undefined, `${p}/section-1-thumb.jpg`], "a section keeps the thumbnail it was sent with, and one without has none")
 
     const listed = await rpc("get_page", { page_id: pageId, image: "none" })
     assert.deepEqual(listed.structuredContent.sections.map((s: { index: number; kind: string; label: string; y: number }) => [s.index, s.kind, s.label, s.y]), [[0, "header", "Header", 0], [1, "hero", "Ship faster", 80]])
@@ -86,7 +90,8 @@ test("page sections and logged motion are stored, checked and described over MCP
     assert.ok(darkSection.url.includes("section-0-dark.jpg"), "a section asked for in dark links to the dark image")
     const one = await rpc("get_page", { page_id: pageId, section: 1 })
     assert.deepEqual({ ...one.structuredContent.section, url: "" }, { index: 1, label: "Ship faster", included: true, url: "" })
-    assert.ok(one.structuredContent.section.url.includes("section-1.jpg"), "the inlined section carries its own URL")
+    assert.ok(one.structuredContent.section.url.includes("section-1.jpg"), "the inlined section carries its own URL, the full crop and not the gallery's thumbnail")
+    assert.equal((await rpc("get_page", { page_id: pageId, image: "none", include_section_urls: true })).structuredContent.sections.some((s: object) => JSON.stringify(s).includes("thumb")), false, "MCP never offers the thumbnail")
     assert.equal(one.content.length, 2, "only the section is inlined, not the viewport too")
     assert.equal(one.content[1].mimeType, "image/jpeg")
     const missing = await rpc("get_page", { page_id: pageId, section: 0 })
@@ -111,7 +116,7 @@ test("pages captured before sections and motion existed say so", async () => {
     await applyMigrations(database)
     const ref = await db.createReference(database, { url: "https://example.com", mode: "single" })
     const job = (await db.claimJob(database))!
-    await db.addPage(database, ref.id, job.attempt, {
+    await db.addPage(database, ref.id, job.lease, {
       url: "https://example.com/", path: "/", title: null, ord: 0, desktopKey: null, desktopThumbKey: null, desktopWidth: null, desktopHeight: null,
       mobileKey: null, mobileThumbKey: null, mobileWidth: null, mobileHeight: null, snapshotKey: null, stylesKey: null, tokens: null, animations: [],
     })
@@ -121,7 +126,7 @@ test("pages captured before sections and motion existed say so", async () => {
     const job2 = (await db.claimJob(database))
     const ref2 = await db.createReference(database, { url: "https://example.org", mode: "single" })
     const claimed = job2 ?? (await db.claimJob(database))!
-    await db.addPage(database, ref2.id, claimed.attempt, {
+    await db.addPage(database, ref2.id, claimed.lease, {
       url: "https://example.org/", path: "/", title: null, ord: 0, desktopKey: null, desktopThumbKey: null, desktopWidth: null, desktopHeight: null,
       mobileKey: null, mobileThumbKey: null, mobileWidth: null, mobileHeight: null, snapshotKey: null, stylesKey: null, tokens: null, sections: [], animations: [],
     })

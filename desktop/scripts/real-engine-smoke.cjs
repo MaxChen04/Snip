@@ -21,7 +21,7 @@ const { _electron } = require('playwright');
 
 const ROOT = path.resolve(__dirname, '../..');
 const desktop = path.join(ROOT, 'desktop');
-const out = path.resolve(process.argv[2] ?? '/Users/Maxsc/.factory/worktrees/98cfc78f/screenshots/desktop');
+const out = path.resolve(process.argv[2] ?? path.join(os.tmpdir(), 'snip-screenshots/desktop'));
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check, message, timeout = 60000) {
   const start = Date.now();

@@ -7,6 +7,7 @@ const ORDER: Record<string, string[]> = {
     // on the quiescent persist dir (contracts §1.8).
     "schema", "deploy", "secrets", "quiesce", "release", "export", "import", "verify", "owner", "finish",
   ],
+  deploy: ["deploy-quiesce", "deploy-preflight", "deploy-layout", "deploy-schema", "deploy-worker", "deploy-verify"],
   pull: [
     "pull-preflight", "pull-manifest", "pull-d1", "pull-stage", "pull-files",
     "pull-verify", "pull-swap", "pull-finish",
@@ -15,6 +16,8 @@ const ORDER: Record<string, string[]> = {
   "delete-resources": ["delete-preflight", "delete-execute", "delete-verify"],
   "snapshot restore": ["snapshot-preflight", "snapshot-restore", "snapshot-finish"],
   "snapshot delete": ["snapshot-preflight", "snapshot-delete", "snapshot-finish"],
+  "snapshot delete-export": ["snapshot-preflight", "snapshot-delete-export", "snapshot-finish"],
+  abort: ["abort-preflight", "abort-cleanup"],
 }
 
 const TITLES: Record<string, string> = {
@@ -36,6 +39,12 @@ const TITLES: Record<string, string> = {
   verify: "Check every reference arrived",
   owner: "Sign this Mac in",
   finish: "Switch to your cloud library",
+  "deploy-quiesce": "Finish the current capture",
+  "deploy-preflight": "Check this Mac",
+  "deploy-layout": "Prepare this app’s cloud update",
+  "deploy-schema": "Update the database",
+  "deploy-worker": "Update the cloud library",
+  "deploy-verify": "Verify the cloud update",
   "pull-preflight": "Check this Mac",
   "pull-manifest": "Read the cloud library",
   "pull-d1": "Download the database",
@@ -52,13 +61,15 @@ const TITLES: Record<string, string> = {
   "snapshot-preflight": "Check the snapshot",
   "snapshot-restore": "Restore the snapshot",
   "snapshot-delete": "Delete the snapshot",
+  "snapshot-delete-export": "Delete the export",
   "snapshot-finish": "Finish",
+  "abort-preflight": "Check this Mac",
+  "abort-cleanup": "Remove what setup created",
 }
 
-export function commandFor(running: string | null, mode: string | null): string {
-  if (running && ORDER[running]) return running
-  if (mode === "disabling") return "pull"
-  return "setup"
+// With no run to name, the view is up for an unfinished setup or one of its questions.
+export function commandFor(running: string | null): string {
+  return running && ORDER[running] ? running : "setup"
 }
 
 export function stepsFor(command: string): string[] {
