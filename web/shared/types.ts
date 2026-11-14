@@ -1,3 +1,4 @@
+import type { StylesSummary } from "./style-parts"
 // Types shared by the Worker, the web app and the capture agent.
 
 export type CaptureMode = "single" | "crawl"
@@ -30,6 +31,63 @@ export interface DesignTokens {
   transitions: { value: string; count: number }[]
   keyframes: string[]
   cssVariables: Record<string, string>
+  /** How the page moves, summarised for an agent. Absent for captures made before motion profiles existed. */
+  motion?: MotionProfile
+}
+
+/**
+ * How a stagger was inferred. stepMs is the median gap between the elements' start times (start + delay); evenGaps of
+ * gaps fall within max(4 ms, 25%) of it. from "delays": the elements' own delays set the step, read exactly; "start
+ * times": script started them in turn, and timers can fire late. Older captures have only stepMs and spanMs.
+ */
+export interface MotionStagger {
+  stepMs: number
+  spanMs: number
+  evenGaps?: number
+  gaps?: number
+  gapRangeMs?: [number, number]
+  from?: "delays" | "start times"
+}
+
+/** Where an animation was logged: while the page loaded (entrances), while it was scrolled, or on hover. */
+export type MotionPhase = "load" | "scroll" | "hover"
+
+/**
+ * A page's motion in one place, built by the capture from the motion log, the page's CSS and what draws it. For a
+ * reference it is merged across pages. Observed (read from the browser): tech, tokens, easing and duration values and
+ * counts, entrance and hover entries. Inferred: each easing's `shape`, `tokenCandidate` (a custom property with the
+ * same value, which the site may not have used there) and `staggers`. `pixelOnly` names motion Snip only has as video.
+ */
+export interface MotionProfile {
+  version: 1
+  /** Animation libraries and page features found (e.g. "three.js r175", "Lottie", "Astro view transitions"). */
+  tech: {
+    libraries: string[]
+    /** Canvases on the page, with the context their script asked for (null when it was never seen). */
+    canvases: { context: string | null; width: number; height: number; y: number }[]
+    viewTransitions: boolean
+    /** CSS scroll-driven animations (animation-timeline, view-timeline). */
+    scrollDriven: boolean
+  }
+  /** :root custom properties that name motion (durations, easings, springs, staggers), as the author named them. */
+  tokens: { name: string; value: string; kind: "duration" | "easing" | "other" }[]
+  /**
+   * Easing curves by use. `elements` counts elements whose CSS transitions use the curve; `ran` counts animations the
+   * browser ran with it. `shape` classifies the curve; `tokenCandidate` is a custom property with the same value.
+   */
+  easings: { value: string; shape: string; tokenCandidate?: string; elements: number; ran: number }[]
+  /** Durations by use, counted the same way. */
+  durations: { ms: number; tokenCandidate?: string; elements: number; ran: number }[]
+  /** Effects that seem to play on a run of elements one after another at an even step. */
+  staggers: ({ phase: MotionPhase; target: string; property: string | null; count: number; durationMs: number; easing: string } & MotionStagger)[]
+  /** Animations that ran while the page loaded: the entrance choreography. */
+  entrance: MotionEntry[]
+  /** What each recorded hover ran. */
+  hovers: { label: string; target: string; property: string | null; durationMs: number; delayMs: number; easing: string }[]
+  /** Motion that is only pixels to Snip (canvas, WebGL, script-written styles), so its timing is not in this profile. */
+  pixelOnly: string[]
+  /** How many items each list had before the capture capped it, where that is more than it kept. */
+  totals?: Partial<Record<"tokens" | "easings" | "durations" | "staggers" | "entrance" | "hovers" | "canvases" | "pixelOnly", number>>
 }
 
 export interface Reference {
@@ -170,6 +228,11 @@ export interface MotionEntry {
   scrollY: number
   /** How many elements ran this same effect (e.g. each letter of a heading); startMs and scrollY are the first one's. */
   count?: number
+  /**
+   * Set when those elements seem to start one after another at an even step (an inference; see MotionStagger).
+   * delayMs is the first one's.
+   */
+  stagger?: MotionStagger
 }
 
 export type AnimationKind = "scroll" | "hover"
@@ -272,9 +335,9 @@ export interface Job {
   recordingFormats?: ("gif" | "webm")[]
   /**
    * What the serving Worker stores beyond the basics: page sections, live clips of them, "icon" (it keeps a site icon saved with the capture), "gzip" (it reads text files
-   * uploaded under a gzipKey), and "sectionThumbs" (it keeps a section's thumbKey). Older Workers omit this. Not persisted.
+   * uploaded under a gzipKey), "sectionThumbs" (it keeps a section's thumbKey), "text" (page text for search), and "style-parts" (split styles files and summaries). Older Workers omit this. Not persisted.
    */
-  features?: ("sections" | "live" | "schemes" | "icon" | "gzip" | "sectionThumbs")[]
+  features?: ("sections" | "live" | "schemes" | "icon" | "gzip" | "sectionThumbs" | "text" | "style-parts")[]
 }
 
 /** Crawl position, saved with each page and when a capture pauses. */
@@ -311,6 +374,8 @@ export interface PageUpload {
   mobileHeight: number | null
   snapshotKey: string | null
   stylesKey: string | null
+  /** Where the split styles file (styles-parts.gzm) keeps each part. Sent only to a Worker with "style-parts"; older agents send none. */
+  stylesSummary?: StylesSummary | null
   tokens: DesignTokens | null
   /** Where the crawl stands once this page is saved, so a capture whose agent dies carries on from here. Older agents send none. */
   state?: CrawlState
@@ -319,6 +384,11 @@ export interface PageUpload {
   altScheme?: AltScheme
   /** Each code at most once. Older agents send none. */
   warnings?: PageWarning[]
+  /**
+   * The page's visible text, for search: the whole page, and each section's share of it (same order as sections).
+   * Sent when the Worker advertises "text"; older agents send none.
+   */
+  text?: { body: string; sections?: string[] }
   animations: {
     kind: AnimationKind
     label: string | null
