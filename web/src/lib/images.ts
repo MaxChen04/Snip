@@ -5,7 +5,6 @@ export const IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"
 export const MAX_IMAGE_BYTES = 20 * 1024 * 1024
 
 const isImageType = (type: string) => (IMAGE_TYPES as readonly string[]).includes(type)
-export const isImageFile = (f: File) => isImageType(f.type) && f.size <= MAX_IMAGE_BYTES
 
 const THUMB_WIDTH = 800
 const THUMB_MAX_HEIGHT = 2000

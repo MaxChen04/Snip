@@ -3,7 +3,7 @@ import { notify } from "@/components/notify"
 import { buildAgentPrompt } from "@/lib/agent-prompt"
 import { mcpUrl } from "@/lib/mcp"
 import type { Animation, Page, Reference } from "@/lib/api"
-import { cn } from "@/lib/utils"
+import { cn, copyToClipboard } from "@/lib/utils"
 
 export { EMPTY_SELECTION, pruneSelection, selectionSize, toggleIn, togglePage, withPageView, type Selection } from "@/lib/selection-state"
 import { selectionSize, type Selection } from "@/lib/selection-state"
@@ -65,13 +65,9 @@ export function SelectionBar({
       },
       pages,
     )
-    try {
-      await navigator.clipboard.writeText(prompt)
-      notify("Prompt copied. Paste it into your agent chat")
-    } catch {
-      // Clipboard blocked (e.g. insecure origin): fall back to a prompt dialog the user can copy from.
-      window.prompt("Copy this prompt", prompt)
-    }
+    if (await copyToClipboard(prompt)) notify("Prompt copied. Paste it into your agent chat")
+    // Clipboard blocked (e.g. insecure origin): fall back to a prompt dialog the user can copy from.
+    else window.prompt("Copy this prompt", prompt)
   }
 
   return (

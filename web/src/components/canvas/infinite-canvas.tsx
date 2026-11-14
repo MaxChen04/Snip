@@ -45,7 +45,6 @@ export function InfiniteCanvas({
   children,
   home = { x: 0, y: 0, zoom: 1 },
   onViewChange,
-  inertia = true,
   tiled = false,
   className,
   "aria-label": label,
@@ -56,8 +55,6 @@ export function InfiniteCanvas({
   home?: { x: number; y: number; zoom?: number }
   /** Called once per frame while the view changes. */
   onViewChange?: (view: CanvasView) => void
-  /** Glide a little after a fling. Always off under prefers-reduced-motion. */
-  inertia?: boolean
   /**
    * The children are many light tiles that mount and unmount as the view moves (the home gallery), not a few hundred
    * heavy items that stay mounted (a board). The canvas then differs in three ways, all measured with 200 to 1,000
@@ -380,7 +377,7 @@ export function InfiniteCanvas({
     swallowClick.current = true
     setTimeout(() => (swallowClick.current = false))
     const [first, last] = [g.samples[0], g.samples.at(-1)]
-    if (inertia && e.type === "pointerup" && first && last && last.t > first.t && performance.now() - last.t < 60 && !reducedMotion()) {
+    if (e.type === "pointerup" && first && last && last.t > first.t && performance.now() - last.t < 60 && !reducedMotion()) {
       // At least a frame's worth of time, and at most 2 px/ms (a ~640-px glide): a burst of moves in a few ms
       // otherwise reads as a huge velocity and throws the canvas thousands of px.
       const dt = Math.max(16, last.t - first.t)

@@ -13,7 +13,6 @@ const flag = name => {
   return index >= 0 ? argv[index + 1] : undefined
 }
 const dataRoot = flag("data-root") ?? path.resolve(__dirname, "../../..")
-const scenario = process.env.SNIP_FAKE_SCENARIO ?? "success"
 const delay = Math.max(0, Number(process.env.SNIP_FAKE_DELAY ?? 40))
 const now = () => new Date().toISOString()
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
@@ -111,25 +110,8 @@ function saveStep(state, id, status, detail = "") {
 }
 
 async function setup() {
-  if (scenario === "cancel") {
-    // Hold at the first human action until main sends SIGINT.
-    emit({ event: "step", command, step: "preflight", status: "started", message: "Check this Mac" })
-    emit({ event: "step", step: "preflight", status: "ok", message: "Check this Mac", at: now() })
-    emit({ event: "human", step: "cloudflare-auth", action: "open_url", url: "https://dash.cloudflare.com/authorize", message: "Approve Snip in your browser" })
-    while (!cancelled) await sleep(50)
-    emit({ event: "result", ok: false, code: "CANCELLED", mode: "enabling" })
-    process.exitCode = 1
-    return
-  }
-  if (scenario === "needs-account" && !flag("account")) {
-    emit({ event: "needs_input", keys: [{ key: "account", label: "Cloudflare account", secret: false }] })
-    emit({ event: "result", ok: false, code: "NEEDS_INPUT", mode: "enabling" })
-    process.exitCode = 2
-    return
-  }
-
   const state = readState()
-  const empty = scenario === "empty" || !!state.empty
+  const empty = !!state.empty
   state.mode = "enabling"
   state.error = null
   state.steps = []
@@ -156,18 +138,6 @@ async function setup() {
     if (empty && ["quiesce", "release", "export", "import", "verify"].includes(id)) {
       skip(id)
       continue
-    }
-    if ((id === "export" || id === "import") && scenario === "fail-import" && id === "import") {
-      emit({ event: "step", command, step: id, status: "started", message: title, at: now() })
-      await sleep(delay)
-      emit({ event: "step", step: id, status: "failed", message: "Couldn't copy the library", data: { error: "HTTP 413" }, at: now() })
-      state.error = { step: id, code: "IMPORT_FAILED", message: "Cloudflare rejected part of the library copy.", hint: "Retry the step. Only the copy restarts; Cloudflare keeps nothing from the failed attempt.", at: now() }
-      state.mode = "enabling"
-      saveStep(state, id, "failed", state.error.message)
-      writeState(state)
-      emit({ event: "result", ok: false, code: "FAILED", mode: "enabling", data: { step: id } })
-      process.exitCode = 1
-      return
     }
     if (id === "export" || id === "import") {
       emit({ event: "step", command, step: id, status: "started", message: title, at: now() })

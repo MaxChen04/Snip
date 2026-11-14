@@ -160,19 +160,6 @@ function journalStep(dataRoot, id, status, detail = '') {
   });
 }
 
-function journalBulk(dataRoot, entries) {
-  return updateState(dataRoot, (state) => {
-    for (const { id, status, detail = '' } of entries) {
-      const at = new Date().toISOString();
-      const index = state.steps.findIndex((step) => step && step.id === id);
-      const entry = { id, status, at, detail };
-      if (index >= 0) state.steps[index] = { ...state.steps[index], ...entry };
-      else state.steps.push(entry);
-    }
-    return state;
-  });
-}
-
 function recordError(dataRoot, error) {
   return updateState(dataRoot, (state) => {
     state.error = {
@@ -235,10 +222,6 @@ function releaseLock(file, record) {
   } catch {}
 }
 
-function readLock(dataRoot) {
-  try { return JSON.parse(fs.readFileSync(lockPath(dataRoot), 'utf8')); } catch { return null; }
-}
-
 /** Locally generated Worker secrets. Kept out of cloud.json, which the renderer reads. */
 function readSecrets(dataRoot) {
   try {
@@ -263,12 +246,10 @@ module.exports = {
   beginEnabling,
   clearError,
   emptyState,
-  journalBulk,
   journalStep,
   lockPath,
   pidAlive,
   profileDir,
-  readLock,
   readSecrets,
   readState,
   recordError,

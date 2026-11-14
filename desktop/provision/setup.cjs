@@ -42,8 +42,6 @@ const ENABLE_STEPS = [
   'schema', 'deploy', 'secrets', 'quiesce', 'release', 'export', 'import', 'verify', 'owner', 'finish',
 ];
 
-const EMPTY_LIBRARY_STEPS = new Set(['quiesce', 'export', 'release', 'import', 'verify']);
-
 function guessLogin(root) {
   try {
     const result = require('node:child_process').spawnSync('git', ['config', 'github.user'], { cwd: root, encoding: 'utf8' });
@@ -1058,6 +1056,38 @@ function verifyStep() {
   };
 }
 
+/**
+ * Wait for the owner link to be used: take the session over the loopback when
+ * the app is listening, otherwise poll the Worker for an owner. Closes the loopback.
+ * `transfer` is only read when there is no loopback.
+ */
+async function awaitOwnerSignIn(ctx, { id, url, loopback, transfer }) {
+  try {
+    if (loopback) {
+      const token = await Promise.race([
+        loopback.token,
+        new Promise((_, reject) => { ctx.onCancel(() => reject(new CancelledError())); }),
+      ]);
+      ctx.emit.session(token, url);
+      return;
+    }
+    // No app: the browser completes the sign-in. Poll until the Worker reports an owner.
+    const deadline = ctx.deps.now() + 10 * 60_000;
+    for (;;) {
+      ctx.checkCancel();
+      const now = await transfer.status().catch(() => null);
+      if (now && now.hasOwner) return;
+      if (ctx.deps.now() > deadline) {
+        throw new StepError('OWNER_LINK_TIMEOUT', 'The sign-in link was not completed in time.', { hint: 'Run `owner link` to mint a fresh one.' });
+      }
+      ctx.emit.step(id, 'waiting', 'Waiting for the browser sign-in');
+      await ctx.deps.sleep(3000);
+    }
+  } finally {
+    if (loopback) loopback.close();
+  }
+}
+
 function ownerStep() {
   return {
     id: 'owner',
@@ -1083,30 +1113,7 @@ function ownerStep() {
       ctx.emit.human('owner', 'open_url', minted.link, 'Sign in to your Snip in the browser, then come back');
       if (!ctx.flags.noOpen && !ctx.flags['no-open']) await ctx.openUrl(minted.link).catch(() => {});
 
-      if (loopback) {
-        try {
-          const token = await Promise.race([
-            loopback.token,
-            new Promise((_, reject) => { ctx.onCancel(() => reject(new CancelledError())); }),
-          ]);
-          ctx.emit.session(token, ctx.cloud.url);
-        } finally {
-          loopback.close();
-        }
-      } else {
-        // No app: the browser completes the sign-in. Poll until the Worker reports an owner.
-        const deadline = ctx.deps.now() + 10 * 60_000;
-        for (;;) {
-          ctx.checkCancel();
-          const now = await transfer.status().catch(() => null);
-          if (now && now.hasOwner) break;
-          if (ctx.deps.now() > deadline) {
-            throw new StepError('OWNER_LINK_TIMEOUT', 'The sign-in link was not completed in time.', { hint: 'Run `owner link` to mint a fresh one.' });
-          }
-          ctx.emit.step('owner', 'waiting', 'Waiting for the browser sign-in');
-          await ctx.deps.sleep(3000);
-        }
-      }
+      await awaitOwnerSignIn(ctx, { id: 'owner', url: ctx.cloud.url, loopback, transfer });
       const after = await transfer.status().catch(() => null);
       if (after && !after.hasOwner) {
         ctx.emit.log('warn', 'The Worker does not report an owner yet. You can finish sign-in later with `owner link`.');
@@ -1203,4 +1210,4 @@ function setupSteps() {
   ];
 }
 
-module.exports = { EMPTY_LIBRARY_STEPS, ENABLE_STEPS, classifyAccount, bundleHash, finishStep, guessLogin, ownerStep, preflightStep, readLegacyDeployConfig, setupSteps, ownerSecretHash };
+module.exports = { ENABLE_STEPS, classifyAccount, bundleHash, finishStep, guessLogin, ownerStep, awaitOwnerSignIn, preflightStep, readLegacyDeployConfig, setupSteps, ownerSecretHash };

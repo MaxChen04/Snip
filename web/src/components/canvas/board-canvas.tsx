@@ -1,6 +1,6 @@
 import { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { flushSync } from "react-dom"
-import { Link, useLocation, useSearch } from "wouter"
+import { Link } from "wouter"
 import { toast } from "sonner"
 import { useAddFlow } from "@/components/add-flow"
 import { AgentBanner } from "@/components/agent-banner"
@@ -9,7 +9,7 @@ import { GlobeIcon, LayersIcon, MoreHorizontalIcon, StickyNoteIcon, Trash2Icon }
 import { notify } from "@/components/notify"
 import { TopBar } from "@/components/top-bar"
 import { at, autoPlace, bounds, centred, fitFrame, FRAME_PAD, frameAt, inRow, intersects, moveOnBoard, readingOrder, rowAt, type Box, type Placed } from "@/components/canvas/board-layout"
-import { Zoom } from "@/components/canvas/canvas-home"
+import { keyOf, useCanvasRoute, Zoom } from "@/components/canvas/canvas-home"
 import { DropOverlay } from "@/components/canvas/drop-overlay"
 import { FilterDock } from "@/components/canvas/filter-dock"
 import { frameCountLabel, GroupFrame } from "@/components/canvas/group-frame"
@@ -39,13 +39,11 @@ import { MAX_NAME, type BoardItemStyle } from "../../../shared/types"
 type Node = Placed & { kind: BoardItemKind; id: string; z: number; item?: CanvasItem; text?: string; style: BoardItemStyle }
 type Board = { collection: Collection; nodes: Node[]; groups: BoardGroup[] }
 
-const FILTERS: CanvasFilter[] = ["all", "websites", "pages", "sections", "animations", "images"]
 const DEFAULT_W: Record<BoardItemKind, number> = { reference: 232, page: 232, image: 232, note: 200 }
 const NOTE_H = 0.8 // a note's height per unit of width
 const NUDGE = 8
 const BATCH = 200
 
-const openKey = (it: CanvasItem) => `${it.kind}:${it.id}`
 const chunks = <T,>(xs: T[]) => Array.from({ length: Math.ceil(xs.length / BATCH) }, (_, i) => xs.slice(i * BATCH, (i + 1) * BATCH))
 const typing = (t: EventTarget | null) => t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))
 const dialogOpen = () => !!document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"]')
@@ -288,19 +286,6 @@ function BoardHeader({ board, onRename, onAddNote, onAddWebsite, onDelete }: { b
  * save shortly after), Shift-drag to marquee-select, group into titled frames, filter to dim what doesn't match.
  */
 export function BoardCanvas({ login, id }: { login: string; id: string }) {
-  const search = useSearch()
-  const [location, navigate] = useLocation()
-  const params = new URLSearchParams(search)
-  const raw = params.get("filter") as CanvasFilter | null
-  const filter: CanvasFilter = raw && FILTERS.includes(raw) ? raw : "all"
-  const open = params.get("open")
-  const setParams = (patch: Record<string, string | null>, replace = true) => {
-    const next = new URLSearchParams(search)
-    for (const [k, v] of Object.entries(patch)) (v === null ? next.delete(k) : next.set(k, v))
-    const qs = next.toString()
-    navigate(`${location}${qs ? `?${qs}` : ""}`, { replace })
-  }
-
   const [query, setQuery] = useDesktopState("snip:gallery:query", "")
   const q = useDeferredValue(query.trim().toLowerCase())
   const { collections, refresh } = useCollections()
@@ -459,17 +444,7 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
   usePoll(load, capturing || statuses.includes("queued") || statuses.includes("paused"), capturing ? LIVE_POLL : undefined)
   const collection = collections.find((c) => c.id === id) ?? board?.collection
   const title = collection?.name ?? "Board"
-  useEffect(() => {
-    document.title = `${title} · Snip`
-    return () => {
-      document.title = "Snip"
-    }
-  }, [title])
-  // Trackpad swipes over the chrome must not bounce the page or navigate back.
-  useEffect(() => {
-    document.documentElement.classList.add("overscroll-none")
-    return () => document.documentElement.classList.remove("overscroll-none")
-  }, [])
+  const { filter, open, navigate, setParams, onOpen, close } = useCanvasRoute(title)
 
   // ---- Moving ----
   /** Move items and frames by dx, dy (world px), regroup, save. `front` brings the moved items to the top. */
@@ -976,23 +951,13 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
 
   // ---- Inspector: ?open=<kind>:<id>, pushed so Back closes it; prev/next walk the board in reading order ----
   const order = useMemo(() => readingOrder(nodes.filter((n) => n.item)), [nodes])
-  const index = open ? order.findIndex((n) => openKey(n.item!) === open) : -1
+  const index = open ? order.findIndex((n) => keyOf(n.item!) === open) : -1
   const openItem = index >= 0 ? order[index]!.item : undefined
-  const pushed = useRef(false)
-  const close = () => {
-    if (pushed.current) {
-      pushed.current = false
-      history.back()
-    } else setParams({ open: null })
-  }
 
   // Stable callbacks for the memoised tiles, notes and frames; they call the latest closures.
   const act = useRef<Handlers>(null!)
   act.current = {
-    open: (item) => {
-      pushed.current = true
-      setParams({ open: openKey(item) }, false)
-    },
+    open: onOpen,
     noteEditing: (noteId, on) => {
       if (on && live.current?.nodes.some((n) => n.key === `note:${noteId}` && n.style.locked)) return say(LOCKED, false)
       setEditing((cur) => (on ? noteId : cur === noteId ? null : cur))
@@ -1362,8 +1327,8 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
           item={openItem}
           onClose={close}
           position={{ index, total: order.length }}
-          onPrev={index > 0 ? () => setParams({ open: openKey(order[index - 1]!.item!) }) : undefined}
-          onNext={index < order.length - 1 ? () => setParams({ open: openKey(order[index + 1]!.item!) }) : undefined}
+          onPrev={index > 0 ? () => setParams({ open: keyOf(order[index - 1]!.item!) }) : undefined}
+          onNext={index < order.length - 1 ? () => setParams({ open: keyOf(order[index + 1]!.item!) }) : undefined}
         />
       )}
     </div>

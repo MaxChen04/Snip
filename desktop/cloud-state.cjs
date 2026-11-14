@@ -228,31 +228,6 @@ function keepLocalCaptureEnv({ dataRoot, captureRoot, copy = fs.copyFileSync, ex
   return true
 }
 
-function formatBytes(bytes) {
-  if (!Number.isFinite(bytes) || bytes < 0) return null
-  const units = ["B", "KB", "MB", "GB", "TB"]
-  let value = bytes
-  let unit = 0
-  while (value >= 1000 && unit < units.length - 1) {
-    value /= 1000
-    unit++
-  }
-  const shown = value >= 100 || unit === 0 ? Math.round(value) : value >= 10 ? value.toFixed(0) : value.toFixed(1)
-  return `${shown} ${units[unit]}`
-}
-
-/** The one sentence Settings shows for the snapshot row. */
-function describeSnapshot(snapshot, locale = "en-GB") {
-  if (!snapshot) return null
-  const at = snapshot.takenAt ? Date.parse(snapshot.takenAt) : NaN
-  if (!Number.isFinite(at)) return null
-  const date = new Date(at)
-  const day = new Intl.DateTimeFormat(locale, { day: "numeric", month: "short" }).format(date)
-  const time = new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit", hour12: false }).format(date)
-  const size = formatBytes(snapshot.bytes)
-  return size ? `Snapshot from ${day}, ${time} — ${size}` : `Snapshot from ${day}, ${time}`
-}
-
 module.exports = {
   cloudPaths,
   normalizeCloudState,
@@ -266,6 +241,4 @@ module.exports = {
   captureEnvFiles,
   selectCaptureEnvFile,
   keepLocalCaptureEnv,
-  formatBytes,
-  describeSnapshot,
 }

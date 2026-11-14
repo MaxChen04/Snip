@@ -8,7 +8,7 @@ import {
   type WebAuthnCredential,
 } from "@simplewebauthn/server"
 import { app } from "../../worker/app"
-import { getPasskey } from "../../worker/db"
+import { getPasskeyLogin } from "../../worker/db"
 import { b64url, fromB64url } from "../helpers/webauthn"
 
 // Risk 3 from the architecture spec: "Passkey CPU on the free plan (10 ms)".
@@ -78,7 +78,7 @@ async function main() {
   const env = { DB: db, SESSION_SECRET: "s", OWNER_LINK_SECRET: "o", PUBLIC_URL: fixture.origin, DEV_LOGIN: "max" } as unknown as Env
   const ctx = { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext
 
-  const stored = (await getPasskey(db, fixture.credential.id))!
+  const stored = (await getPasskeyLogin(db, fixture.credential.id))!.passkey
   const challenge = () => b64url(crypto.getRandomValues(new Uint8Array(32)))
 
   // Warm-up: the first call pulls in the ASN.1/CBOR helpers and fills the module cache.

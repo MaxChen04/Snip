@@ -78,7 +78,6 @@ async function runSteps(steps, ctx, { journal = true } = {}) {
     const title = stepTitle(step);
     const progress = { done: index, total };
     ctx.emit.step(step.id, 'started', title, { progress });
-    ctx.setCurrentStep(step.id);
 
     if (step.skip) {
       let skipped = false;

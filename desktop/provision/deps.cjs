@@ -163,12 +163,7 @@ class ApiError extends StepError {
  */
 function createApi({ fetchImpl = fetch, token = readWranglerToken, base = 'https://api.cloudflare.com/client/v4', timeoutMs = 30_000 } = {}) {
   async function request(pathname, options = {}) {
-    let tokenValue;
-    try {
-      tokenValue = typeof token === 'function' ? token().token : token;
-    } catch (error) {
-      throw error;
-    }
+    const tokenValue = typeof token === 'function' ? token().token : token;
     let response;
     try {
       response = await fetchImpl(`${base}${pathname}`, {

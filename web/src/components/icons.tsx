@@ -17,7 +17,6 @@ import {
   CheckmarkCircle02Icon,
   ClipboardIcon as HClipboard,
   Clock01Icon,
-  CommandLineIcon,
   ComputerIcon,
   Copy01Icon,
   DatabaseIcon,
@@ -27,7 +26,6 @@ import {
   File01Icon,
   Folder01Icon,
   FolderAddIcon,
-  FolderMinusIcon as HFolderMinus,
   FullScreenIcon,
   Globe02Icon,
   HardDriveIcon as HHardDrive,
@@ -51,9 +49,7 @@ import {
   PlayIcon as HPlay,
   PanelRightCloseIcon as HPanelRightClose,
   PanelRightOpenIcon as HPanelRightOpen,
-  Plug01Icon,
   ServerStack01Icon,
-  Share08Icon,
   ShieldKeyIcon,
   SmartPhone01Icon,
   SparklesIcon as HSparkles,
@@ -117,7 +113,6 @@ export const Eye = make(EyeIcon, "Eye")
 export const FileIcon = make(File01Icon, "FileIcon")
 export const FolderIcon = make(Folder01Icon, "FolderIcon")
 export const FolderPlusIcon = make(FolderAddIcon, "FolderPlusIcon")
-export const FolderMinusIcon = make(HFolderMinus, "FolderMinusIcon")
 export const GlobeIcon = make(Globe02Icon, "GlobeIcon")
 export const HardDrive = make(HHardDrive, "HardDrive")
 export const InfoIcon = make(InformationCircleIcon, "InfoIcon")
@@ -140,7 +135,6 @@ export const PencilIcon = make(PencilEdit02Icon, "PencilIcon")
 export const PenLine = PencilIcon
 export const PanelRightCloseIcon = make(HPanelRightClose, "PanelRightCloseIcon")
 export const PanelRightOpenIcon = make(HPanelRightOpen, "PanelRightOpenIcon")
-export const PlugIcon = make(Plug01Icon, "PlugIcon")
 export const PlusIcon = make(Add01Icon, "PlusIcon")
 export const RefreshCwIcon = make(ArrowReloadHorizontalIcon, "RefreshCwIcon")
 export const SearchIcon = make(Search01Icon, "SearchIcon")
@@ -150,8 +144,6 @@ export const SmartphoneIcon = make(SmartPhone01Icon, "SmartphoneIcon")
 export const SparklesIcon = make(HSparkles, "SparklesIcon")
 export const StopIcon = make(HStop, "StopIcon")
 export const SunIcon = make(Sun03Icon, "SunIcon")
-export const TerminalIcon = make(CommandLineIcon, "TerminalIcon")
-export const Terminal = TerminalIcon
 export const Trash2Icon = make(Delete02Icon, "Trash2Icon")
 export const TriangleAlertIcon = make(Alert02Icon, "TriangleAlertIcon")
 export const XIcon = make(Cancel01Icon, "XIcon")
@@ -161,7 +153,6 @@ export const LayersIcon = make(Layers01Icon, "LayersIcon")
 export const MaximizeIcon = make(FullScreenIcon, "MaximizeIcon")
 export const McpServerIcon = make(HMcpServer, "McpServerIcon")
 export const SectionsIcon = make(Layout01Icon, "SectionsIcon")
-export const ShareIcon = make(Share08Icon, "ShareIcon")
 export const StickyNoteIcon = make(StickyNote02Icon, "StickyNoteIcon")
 export const UploadIcon = make(Upload01Icon, "UploadIcon")
 // The board's layer menu

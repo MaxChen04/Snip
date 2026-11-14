@@ -355,9 +355,6 @@ export function createFixtureBridge(): CloudBridge {
     async answer() {
       return { accepted: true }
     },
-    async openSettings() {
-      return { opened: true }
-    },
     async openUrl() {
       return { opened: true }
     },

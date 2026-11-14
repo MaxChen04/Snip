@@ -694,7 +694,6 @@ function registerCloudIpc() {
     cloudInput.set(payload.key.slice(0, 64), typeof payload.value === "string" ? payload.value.slice(0, 500) : "")
     return { accepted: true }
   }))
-  ipcMain.handle("snip:cloud-open-settings", guard(() => { openSettings(); return { opened: true } }))
   ipcMain.handle("snip:cloud-open-url", guard(payload => {
     const url = externalUrl(payload.url)
     if (!url) return { opened: false }

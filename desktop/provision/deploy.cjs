@@ -111,7 +111,7 @@ function failureMessage(result, fallback) {
   return meaningful || fallback;
 }
 
-function classifyWranglerFailure(result, { authHint = true } = {}) {
+function classifyWranglerFailure(result) {
   const text = `${result.stdout || ''}${result.stderr || ''}`;
   if (/not authenticated|not logged in|please run [`']?wrangler login|authentication error|10000/i.test(text)) {
     return new StepError('AUTH_REQUIRED', 'Cloudflare needs you to sign in again.', { hint: 'Run `npx wrangler login`, then try again.' });
@@ -119,7 +119,6 @@ function classifyWranglerFailure(result, { authHint = true } = {}) {
   if (/must be enabled|enable r2|r2.*not enabled|10042/i.test(text)) {
     return new StepError('R2_NOT_ENABLED', 'R2 is not enabled on this Cloudflare account.', { hint: 'Enable R2 once in the Cloudflare dashboard, then try again.' });
   }
-  void authHint;
   return null;
 }
 
@@ -239,13 +238,6 @@ async function deployWorker(wrangler, { dataRoot, accountId, onOutput, retry }) 
     });
   }
   return result;
-}
-
-async function dryRunDeploy(wrangler, { dataRoot, accountId, outdir }) {
-  const file = configPath(dataRoot);
-  const args = ['deploy', '--config', file, '--dry-run'];
-  if (outdir) args.push('--outdir', outdir);
-  return wrangler.run(args, { cwd: path.dirname(file), env: { CLOUDFLARE_ACCOUNT_ID: accountId } });
 }
 
 async function applyMigrations(wrangler, { dataRoot, accountId, remote = true, local = false, persistTo, config, retry }) {
@@ -448,7 +440,6 @@ module.exports = {
   configExists,
   configPath,
   deployWorker,
-  dryRunDeploy,
   exportLocal,
   importLocal,
   importRemote,

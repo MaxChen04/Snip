@@ -43,9 +43,9 @@ export function captureLabel(r: Reference, short = false) {
 
 /**
  * Pause, Resume and Stop for a running crawl. Each takes effect between pages, so the page
- * being captured always finishes. Compact renders icon-only buttons for the gallery tiles.
+ * being captured always finishes.
  */
-export function CaptureControls({ r, onChange, compact, className }: { r: Reference; onChange: () => void; compact?: boolean; className?: string }) {
+export function CaptureControls({ r, onChange, className }: { r: Reference; onChange: () => void; className?: string }) {
   const [busy, setBusy] = useState<Action | null>(null)
   const actions = captureActions(r)
   if (!actions.length) return null
@@ -72,7 +72,7 @@ export function CaptureControls({ r, onChange, compact, className }: { r: Refere
     }
   }
   return (
-    <span className={cn("inline-flex items-center", compact ? "gap-1" : "gap-2", className)}>
+    <span className={cn("inline-flex items-center", "gap-2", className)}>
       {actions.map((action) => {
         const { label, icon: Icon } = ACTIONS[action]
         // Nothing is being captured while the agent is quiet, so there is no page to wait for.
@@ -92,11 +92,11 @@ export function CaptureControls({ r, onChange, compact, className }: { r: Refere
             className={cn(
               "tactile press inline-flex shrink-0 items-center justify-center rounded-full font-medium text-foreground disabled:opacity-60",
               // Full size matches the status pill beside it on the reference page.
-              compact ? "size-6 text-2xs" : "h-7 gap-1.5 px-3 text-xs",
+              "h-7 gap-1.5 px-3 text-xs",
             )}
           >
-            {busy === action ? <Spinner className={compact ? "size-3" : "size-3.5"} /> : <Icon className={compact ? "size-3" : "size-3.5"} />}
-            {!compact && label}
+            {busy === action ? <Spinner className="size-3.5" /> : <Icon className="size-3.5" />}
+            {label}
           </button>
         )
       })}

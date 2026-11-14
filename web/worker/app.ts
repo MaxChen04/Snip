@@ -21,8 +21,8 @@ import { canvas } from "./canvas"
 import { signInPath } from "../shared/safe-next"
 import { CAPTURE_PROTOCOL, CAPTURE_PROTOCOL_HEADER, parseProtocol, refusalMessage } from "../shared/capture-protocol"
 import { loginOptions, loginVerify, registerOptions, registerVerify, listDevices, removeDevice } from "./passkeys"
-import { ownerLinkPage, ownerLinkSubmit } from "./owner"
-import { transfer } from "./transfer"
+import { escapeHtml, ownerLinkPage, ownerLinkSubmit } from "./owner"
+import { transfer, validKey } from "./transfer"
 import { WORKER_VERSION } from "./version"
 import { cachedStorageUsage } from "./storage-usage"
 
@@ -66,9 +66,6 @@ app.route("/transfer", transfer)
 // ---------- MCP OAuth consent ----------
 // MCP clients are sent here by the OAuth provider. Max signs in with the same
 // GitHub session as the web app, then approves the client explicitly.
-
-const escapeHtml = (s: string) =>
-  s.replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]!)
 
 app.get("/authorize", async (c) => {
   const session = await getSession(c)
@@ -143,12 +140,10 @@ app.post("/authorize", async (c) => {
 
 // Capture files. The agent may only write these.
 const KEY_RE = /^refs\/[a-z0-9]+\/[A-Za-z0-9._\/-]+$/
-// Served files: capture files plus the owner's uploaded images.
-const FILE_KEY_RE = /^(refs|uploads)\/[a-z0-9]+\/[A-Za-z0-9._\/-]+$/
 
 app.get("/files/*", async (c) => {
   const key = decodeURIComponent(c.req.path.slice("/files/".length))
-  if (!FILE_KEY_RE.test(key) || key.includes("..")) return c.notFound()
+  if (!validKey(key)) return c.notFound()
   const signedOk = await verifyFileSig(c.env, key, c.req.query("exp"), c.req.query("sig"))
   if (!signedOk && !(await getSession(c))) return c.json({ error: "unauthorized" }, 401)
   // Byte ranges, which Safari needs before it will play a video. R2 reads the Range header itself. A gzipped file has

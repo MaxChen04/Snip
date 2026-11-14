@@ -100,7 +100,7 @@ function webmWriter(browser: Browser, scale: number, quantizer = QUANTIZER): Rec
         at += c.n
         return frame
       })
-      const bytes = muxWebm({ codecId: "V_VP9", width, height, frames, durationMs: t, colorSpace: out.colorSpace })
+      const bytes = muxWebm({ width, height, frames, durationMs: t, colorSpace: out.colorSpace })
       return { bytes, width, height, ext: "webm", contentType: "video/webm" }
     },
   }

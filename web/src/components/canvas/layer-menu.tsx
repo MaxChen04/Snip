@@ -129,7 +129,6 @@ const VARS = {
   "--lmn-mute": "#9b9ba1", "--lmn-icon": "#a8a8ae", "--lmn-accent": ACCENT, "--lmn-toast": "#111111", "--lmn-speed": "2.2s",
   "--lmn-font": '"Inter Variable", Inter, system-ui, -apple-system, sans-serif',
 } as CSSProperties
-const LOCKED = "Layer is locked"
 
 // ---------------------------------------------------------------- component
 export function LayerMenu({

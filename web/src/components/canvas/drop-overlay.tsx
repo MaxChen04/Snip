@@ -16,7 +16,7 @@ const EASE = [0.23, 1, 0.32, 1] as const
 /**
  * Window-level drop target. Dragging image files (or a link) from outside the page shows the overlay;
  * dropping uploads the images (or captures the link), fires reloadCanvas(), then onDropped.
- * Drags that start inside the page (tiles carry "application/x-snip-item") are ignored.
+ * Drags that start inside the page are ignored.
  */
 export function DropOverlay({
   boardId,
@@ -42,7 +42,7 @@ export function DropOverlay({
     const types = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? [])
     const external = (e: DragEvent) => {
       const t = types(e)
-      return !internal && !t.includes("application/x-snip-item") && (t.includes("Files") || t.includes("text/uri-list"))
+      return !internal && (t.includes("Files") || t.includes("text/uri-list"))
     }
     const reset = () => {
       depth = 0

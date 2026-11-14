@@ -193,7 +193,6 @@ export interface CloudBridge {
   cancel(): Promise<{ cancelled: boolean }>
   abort(): Promise<CloudReply>
   answer(key: string, value: string): Promise<{ accepted: boolean }>
-  openSettings(): Promise<{ opened: boolean }>
   openUrl(url: string): Promise<{ opened: boolean }>
   signOutAll(): Promise<{ ok?: true; epoch?: number; error?: string }>
   deleteResources(confirm: string): Promise<CloudReply>
