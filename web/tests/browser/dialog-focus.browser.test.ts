@@ -47,7 +47,10 @@ const DIALOGS = [
     start: "/",
     title: "New reference",
     opener: "BUTTON:More options",
-    open: (page: Page) => page.getByRole("button", { name: "More options" }).click(),
+    open: async (page: Page) => {
+      await page.getByRole("button", { name: "Add a site or images" }).click()
+      await page.getByRole("button", { name: "More options" }).click()
+    },
   },
   {
     name: "Add (board header)",
@@ -104,6 +107,7 @@ test("the Add dialog opens with its URL field focused, every time it opens", asy
   const t = await withRef()
   const { page } = t
   await t.goto("/")
+  await page.getByRole("button", { name: "Add a site or images" }).click()
   const more = page.getByRole("button", { name: "More options" })
   for (let i = 0; i < 2; i++) {
     await more.click()

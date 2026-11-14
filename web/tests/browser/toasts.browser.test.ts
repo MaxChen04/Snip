@@ -47,14 +47,16 @@ test("asking to add a saved site again replaces its Already saved toast", async 
   const field = page.getByRole("textbox", { name: "Link to capture" })
   const submit = page.getByRole("button", { name: "Snip", exact: true })
   for (let i = 1; i <= 3; i++) {
+    // The field lives in the dock's + popover, which closes once the link is sent.
+    await page.getByRole("button", { name: "Add a site or images" }).click()
     await field.fill("example.com")
     await field.press("Enter")
     await until("POST sent", () => t.count("POST", "/api/references") === i)
     assert.equal(await submit.isDisabled(), true, "the form waits for the response")
     replies[i - 1]!.open()
-    // A previous "Already saved" toast stays visible during the next request. Only the completed form state
-    // proves this response has arrived and it is safe to start another capture.
-    await until("capture form ready again", async () => await submit.isEnabled() && await field.inputValue() === "")
+    // A previous "Already saved" toast stays visible during the next request. Only the popover closing proves this
+    // response has arrived and it is safe to start another capture.
+    await until("the popover closes once the reply arrives", async () => !(await field.isVisible()))
     await page.getByText("Already saved").first().waitFor()
   }
   await sleep(500)
