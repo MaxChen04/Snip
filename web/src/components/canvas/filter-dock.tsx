@@ -30,6 +30,8 @@ function rove(e: React.KeyboardEvent<HTMLElement>) {
   if (!step) return
   const all = [...e.currentTarget.querySelectorAll<HTMLElement>("button")]
   const at = all.indexOf(document.activeElement as HTMLElement)
+  // Portal events bubble through React even though the capture form is outside this toolbar.
+  if (at < 0 || e.target !== document.activeElement) return
   all[(at + step + all.length) % all.length]?.focus()
   e.preventDefault()
 }

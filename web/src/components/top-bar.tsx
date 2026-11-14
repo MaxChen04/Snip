@@ -78,13 +78,13 @@ export function TopBar({
  */
 function SearchField({ query, onQuery }: { query: string; onQuery: (q: string) => void }) {
   const [sites, setSites] = useState<Reference[] | null>(null)
-  const loadSites = () => sites || api.references({ status: "ready" }, null, 8).then((p) => setSites(p.items.filter((r, i, a) => a.findIndex((x) => x.domain === r.domain) === i)), () => setSites([]))
+  const loadSites = () => api.references({ status: "ready" }, null, 8).then((p) => setSites(p.items.filter((r, i, a) => a.findIndex((x) => x.domain === r.domain) === i)), () => setSites([]))
   return (
     <div className="group/search relative mx-auto min-w-0">
       <label
         className={cn(
           pill,
-          "w-60 min-w-0 gap-2 px-3 transition-[width] duration-200 ease-out focus-within:w-96 has-[input:not(:placeholder-shown)]:w-96 motion-reduce:transition-none has-focus-visible:outline-2 has-focus-visible:outline-offset-2 max-sm:focus-within:w-full max-sm:has-[input:not(:placeholder-shown)]:w-full",
+          "w-60 max-w-full min-w-0 gap-2 px-3 transition-[width] duration-200 ease-out focus-within:w-96 has-[input:not(:placeholder-shown)]:w-96 motion-reduce:transition-none has-focus-visible:outline-2 has-focus-visible:outline-offset-2 max-sm:focus-within:w-full max-sm:has-[input:not(:placeholder-shown)]:w-full",
         )}
       >
         <SearchIcon className="size-3.5 shrink-0 text-ink-9" />

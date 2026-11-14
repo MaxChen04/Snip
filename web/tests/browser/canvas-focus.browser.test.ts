@@ -2,7 +2,7 @@
 //   node --import tsx --test web/tests/browser/canvas-focus.browser.test.ts
 import assert from "node:assert/strict"
 import { after, before, test } from "node:test"
-import { savedPage, sleep, startApp, until, type App } from "./harness.ts"
+import { reference, savedPage, sleep, startApp, until, type App } from "./harness.ts"
 
 let app: App
 before(async () => {
@@ -60,4 +60,55 @@ test("Tab to a tile that is out of view pans it into view", { timeout: 60_000 },
   assert.equal(next.label, `Page ${n + 1}`)
   assert.ok(within(next, DESKTOP.width, DESKTOP.height), `the next tile is on the screen: ${JSON.stringify(next)}`)
   assert.deepEqual(t.consoleErrors, [])
+})
+
+test("capture popover preserves URL caret keys while dock arrows still work", async () => {
+  const { page } = await home(DESKTOP)
+  const add = page.getByRole("button", { name: "Add a site or images" })
+  await add.click()
+  const field = page.getByLabel("Link to capture")
+  await field.fill("example.com/path")
+  await field.press("ArrowLeft")
+  assert.equal(await field.evaluate((el) => document.activeElement === el), true)
+  assert.equal(await field.evaluate((el: HTMLInputElement) => el.selectionStart), 15)
+  await field.press("Escape")
+  await add.focus()
+  await add.press("ArrowRight")
+  assert.match(await page.locator(":focus").getAttribute("aria-label") ?? "", /^All/)
+})
+
+test("empty mobile search stays within its wrapper", async () => {
+  const { page } = await home({ width: 390, height: 844 })
+  const search = page.getByRole("textbox", { name: /^Search your saves/ })
+  const b = await search.evaluate(el => {
+    const label = el.closest("label")!.getBoundingClientRect()
+    const wrapper = el.closest("label")!.parentElement!.getBoundingClientRect()
+    return { labelRight: label.right, wrapperRight: wrapper.right }
+  })
+  assert.ok(b.labelRight <= b.wrapperRight + 1, JSON.stringify(b))
+})
+
+
+test("search suggestions refresh after saves and retry after a failed request", async () => {
+  const t = await app.session()
+  let attempt = 0
+  t.on("GET", "/api/references", (req) => {
+    if (req.query.get("status") !== "ready") return
+    attempt++
+    return attempt === 1 ? { status: 500, json: { error: "temporary" } } : {
+      json: { items: [reference({ domain: attempt === 2 ? "old.example" : "new.example" })], nextCursor: null },
+    }
+  })
+  await t.goto("/")
+  const search = t.page.getByRole("textbox", { name: /^Search your saves/ })
+  await search.focus()
+  await until("failed request returns", () => attempt === 1)
+  await sleep(200)
+  await search.press("Escape")
+  await search.focus()
+  await t.page.getByRole("button", { name: /old\.example/ }).waitFor()
+  await search.press("Escape")
+  await search.focus()
+  await t.page.getByRole("button", { name: /new\.example/ }).waitFor()
+  assert.equal(await t.page.getByRole("button", { name: /old\.example/ }).count(), 0)
 })
