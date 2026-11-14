@@ -23,7 +23,7 @@ const card = async (pages: ReturnType<typeof savedPage>[]) => {
   const t = await website(pages)
   t.on("GET", "/api/references", (req) => (req.query.get("status") === "queued" ? { json: { items: [{ ...t.state.references.ref1, status: "queued" }], nextCursor: null } } : undefined))
   await t.goto("/")
-  return t.page.locator("form")
+  return t.page.locator("[data-capture-status]")
 }
 
 test("the capture card says a saved page looks blank", async () => {
