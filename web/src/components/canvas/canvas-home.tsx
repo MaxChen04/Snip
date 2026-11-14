@@ -5,15 +5,17 @@ import { TopBar } from "@/components/top-bar"
 import { CaptureCard } from "@/components/canvas/capture-card"
 import { DropOverlay } from "@/components/canvas/drop-overlay"
 import { countOf, FilterDock } from "@/components/canvas/filter-dock"
-import { GAP, layoutHome, PLAZA, stageTiles, visibleTiles, type HomeLayout, type Placement } from "@/components/canvas/home-layout"
+import { GAP, layoutHome, PLAZA, stageTiles, visibleTiles, type HomeLayout, type Placement, type Plaza } from "@/components/canvas/home-layout"
 import { InfiniteCanvas, type CanvasView, type InfiniteCanvasHandle, type WorldRect } from "@/components/canvas/infinite-canvas"
 import { ItemInspector } from "@/components/canvas/item-inspector"
-import { HomeTile } from "@/components/canvas/tiles"
+import { CanvasTile, HomeTile } from "@/components/canvas/tiles"
 import { itemAspect, RELOAD_EVENT, reloadCanvas, type CanvasFilter, type CanvasItem } from "@/components/canvas/types"
 import { ZoomControls } from "@/components/canvas/zoom-controls"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useDesktopState } from "@/hooks/use-desktop-state"
 import { api, type Filters, type LibraryTypeCounts, type Paged } from "@/lib/api"
+import { masonryCols, useGridSize, useHomeView } from "@/lib/prefs"
+import { cn } from "@/lib/utils"
 
 const FILTERS: CanvasFilter[] = ["all", "websites", "pages", "sections", "animations", "images"]
 export const keyOf = (it: CanvasItem) => `${it.kind}:${it.id}`
@@ -131,9 +133,9 @@ const Field = memo(function Field({ layout, items, rect, onOpen }: { layout: Hom
 
 // Slots around the plaza: skeletons while loading, dashed placeholders when there's nothing to show yet.
 const GHOST_ITEMS = [1.6, 0.8, 1.3, 1, 1.6, 0.75, 1.45, 1.6, 1.1, 0.9, 1.6, 1.25, 1.6, 0.8].map((aspect, i) => ({ key: `ghost${i}`, aspect }))
-const Ghosts = memo(function Ghosts({ loading, plazaH }: { loading: boolean; plazaH: number }) {
+const Ghosts = memo(function Ghosts({ loading, plaza }: { loading: boolean; plaza: Plaza }) {
   // Laid out around the same measured plaza as the field, so they never cover the capture card.
-  const ghosts = useMemo(() => layoutHome(GHOST_ITEMS, { w: PLAZA.w, h: plazaH }).tiles, [plazaH])
+  const ghosts = useMemo(() => layoutHome(GHOST_ITEMS, plaza).tiles, [plaza])
   return ghosts.map((t) =>
     loading ? (
       <Skeleton key={t.key} className="pointer-events-none absolute rounded-md motion-reduce:animate-none" style={at(t)} />
@@ -223,24 +225,25 @@ export function CanvasHome({ login }: { login: string }) {
     return () => clearTimeout(t)
   }, [query])
 
+  const [view] = useHomeView()
+  const [gridSize] = useGridSize()
   const counts = useCounts(q)
   const total = counts ? countOf(counts, "all") : null
   const firstRun = !q && !!counts && counts.websites + total! === 0
-  // The dock and zoom wait for the counts, so a first run doesn't flash them.
-  const chrome = counts !== undefined && !firstRun
+  // The dock and zoom wait for the counts, so the page doesn't flash them. A first run gets the dock too: its + is how you add.
+  const chrome = counts !== undefined
   const { items, error } = useFeed(filter, q)
-  // The plaza hugs the capture card: its measured height, in 40-px steps so small text changes don't relayout the field.
-  const [plazaH, setPlazaH] = useState(PLAZA.h)
+  // The plaza hugs what it holds (a running capture, a message, the first-run prompt): its measured height, in 40-px
+  // steps so small text changes don't relayout the field. Holding nothing, it closes and the tiles meet in the middle.
+  const [plazaH, setPlazaH] = useState(0)
   const measurePlaza = useCallback((el: HTMLDivElement | null) => {
     if (!el) return
-    const ro = new ResizeObserver(() => setPlazaH(Math.max(PLAZA.h, Math.ceil((el.offsetHeight + 2 * GAP) / 40) * 40)))
+    const ro = new ResizeObserver(() => setPlazaH(el.offsetHeight ? Math.max(PLAZA.h, Math.ceil((el.offsetHeight + 2 * GAP) / 40) * 40) : 0))
     ro.observe(el)
     return () => ro.disconnect()
   }, [])
-  const layout = useMemo(
-    () => layoutHome((items ?? []).map((it) => ({ key: keyOf(it), aspect: itemAspect(it) })), { w: PLAZA.w, h: plazaH }),
-    [items, plazaH],
-  )
+  const plazaRect = useMemo(() => (plazaH ? { w: PLAZA.w, h: plazaH } : { w: 0, h: 0 }), [plazaH])
+  const layout = useMemo(() => layoutHome((items ?? []).map((it) => ({ key: keyOf(it), aspect: itemAspect(it) })), plazaRect), [items, plazaRect])
 
   const canvas = useRef<InfiniteCanvasHandle>(null)
   // A new filter or search lays the field out again around the plaza: bring the plaza back.
@@ -265,11 +268,9 @@ export function CanvasHome({ login }: { login: string }) {
     if (open && items && !openItem) closeRef.current()
   }, [open, items, openItem])
 
-  const plaza = useMemo(
-    () => (
-      <div ref={measurePlaza} className="absolute top-0 left-0 flex w-max -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-4">
-        <CaptureCard firstRun={firstRun} caption={caption} />
-        {error ? (
+  const messages = useMemo(
+    () =>
+        error ? (
           <p className="flex items-center gap-2 text-xs text-ink-11" role="alert">
             Couldn't load your saves.
             <button type="button" onClick={reloadCanvas} className="tactile press h-7 rounded-full px-3 text-xs">
@@ -287,12 +288,19 @@ export function CanvasHome({ login }: { login: string }) {
               .
             </p>
           </div>
-        ) : null}
+        ) : null,
+    [q, error, items, setQuery],
+  )
+  const plaza = useMemo(
+    () => (
+      <div ref={measurePlaza} className="absolute top-0 left-0 flex w-max -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-4">
+        <CaptureCard firstRun={firstRun} compact={!firstRun} />
+        {messages}
       </div>
     ),
-    [firstRun, q, caption, error, items, setQuery, measurePlaza],
+    [firstRun, messages, measurePlaza],
   )
-  const ghosts = useMemo(() => (!items || (items.length === 0 && !q) ? <Ghosts loading={!items && !error} plazaH={plazaH} /> : null), [items, q, error, plazaH])
+  const ghosts = useMemo(() => (!items || (items.length === 0 && !q) ? <Ghosts loading={!items && !error} plaza={plazaRect} /> : null), [items, q, error, plazaRect])
   const tileOpen = filter === "websites" ? undefined : onOpen
   const renderWorld = useCallback(
     // The plaza comes first so the capture card is the first stop when tabbing into the canvas.
@@ -323,11 +331,43 @@ export function CanvasHome({ login }: { login: string }) {
             value={filter}
             onChange={(f) => setParams({ filter: f === "all" ? null : f, open: null })}
             counts={counts}
+            canAdd
+            glow={firstRun}
           />
-          <Zoom canvas={canvas} sink={zoomSink} />
+          {view === "canvas" && <Zoom canvas={canvas} sink={zoomSink} />}
+          {view === "canvas" && caption && (
+            <p className="absolute bottom-6 left-6 z-50 flex h-10 max-w-[calc(50vw-320px)] items-center rounded-full bg-control px-4 text-2xs text-ink-11 shadow-button max-lg:hidden">{caption}</p>
+          )}
         </>
       )}
 
+      {view === "grid" ? (
+        <div className="absolute inset-0 overflow-y-auto overscroll-none px-4 pt-20 pb-28 sm:px-6">
+          {firstRun || (items?.length === 0 && !q) ? (
+            <CaptureCard firstRun={firstRun} className="mt-[12vh]" />
+          ) : (
+            <div className="flex flex-col gap-4">
+              <CaptureCard compact />
+              {(messages || caption) && <div className="flex flex-col items-center gap-2 text-2xs text-ink-10">{messages ?? caption}</div>}
+              {!items ? (
+                <div className={cn(masonryCols[gridSize], "gap-4 [&>*]:mb-4")}>
+                  {GHOST_ITEMS.map((g) => (
+                    <Skeleton key={g.key} className="rounded-md motion-reduce:animate-none" style={{ aspectRatio: g.aspect }} />
+                  ))}
+                </div>
+              ) : (
+                <div className={cn(masonryCols[gridSize], "gap-4 [&>*]:mb-4 [&>*]:break-inside-avoid")}>
+                  {items.map((it) => (
+                    <div key={keyOf(it)} style={{ aspectRatio: itemAspect(it) }}>
+                      <CanvasTile item={it} onOpen={tileOpen} />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      ) : (
       <InfiniteCanvas
         ref={canvas}
         tiled
@@ -337,6 +377,7 @@ export function CanvasHome({ login }: { login: string }) {
       >
         {renderWorld}
       </InfiniteCanvas>
+      )}
       {/* Fades from the ground so the chrome floats over the field. */}
       <div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 z-10 h-20 bg-linear-to-b from-background to-transparent" />
       <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-24 bg-linear-to-t from-background to-transparent" />

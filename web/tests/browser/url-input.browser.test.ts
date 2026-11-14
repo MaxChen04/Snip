@@ -35,6 +35,8 @@ const REFUSED = [
 const card = async () => {
   const t = await app.session({ state: { boards: { board1: boardOf() } } })
   await t.goto("/")
+  // The field lives in the dock's + popover.
+  await t.page.getByRole("button", { name: "Add a site or images" }).click()
   const field = t.page.getByRole("textbox", { name: "Link to capture" })
   await field.waitFor()
   return { t, field }

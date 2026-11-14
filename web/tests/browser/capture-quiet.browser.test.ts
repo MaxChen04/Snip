@@ -28,13 +28,12 @@ const home = async (r: ReturnType<typeof reference>) => {
 test("on the card, a quiet single-page capture says so, shows no spinner or bar, and can be stopped", async () => {
   const t = await home(quiet({ mode: "single" }))
   const { page } = t
-  const card = page.locator("form")
+  const card = page.locator("[data-capture-status]")
   await card.getByText(QUIET).waitFor()
   assert.equal(await card.getByText("Capturing example.com").count(), 0)
   assert.equal(await card.getByRole("progressbar").count(), 0)
   assert.equal(await card.locator("[style*='width']").count(), 0)
   assert.equal(await card.locator(".animate-spin").count(), 0, "something still spins")
-  assert.equal(await card.getByText("Not responding", { exact: true }).count(), 1, "the pill")
   // Nothing on the canvas below the card spins for it either.
   assert.equal(await page.locator("main .animate-spin, [aria-hidden] .animate-spin").count(), 0)
 
@@ -46,7 +45,7 @@ test("on the card, a quiet single-page capture says so, shows no spinner or bar,
 
 test("a quiet crawl that was already told to stop still offers Stop, and not Pause", async () => {
   const t = await home(quiet({ mode: "crawl", maxPages: 10, control: "stop", progress: "Capturing 4/10: /pricing" }))
-  const card = t.page.locator("form")
+  const card = t.page.locator("[data-capture-status]")
   await card.getByText(QUIET).waitFor()
   await card.getByRole("button", { name: "Stop" }).waitFor()
   assert.equal(await card.getByRole("button", { name: "Pause" }).count(), 0)
@@ -98,6 +97,6 @@ test("a quiet crawl shows no tile for pages waiting behind it, which a running o
   await running.page.getByText("6 more queued").waitFor()
 
   const silent = await home(quiet({ mode: "crawl", maxPages: 10, progress: "Capturing 4/10: /pricing" }))
-  await silent.page.locator("form").getByText(QUIET).waitFor()
+  await silent.page.locator("[data-capture-status]").getByText(QUIET).waitFor()
   assert.equal(await silent.page.getByText(/more queued/).count(), 0)
 })

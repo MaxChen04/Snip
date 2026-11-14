@@ -344,6 +344,14 @@ body:has([role="toolbar"][aria-label="Filter saves"]) {
 }
 
 /* A bar with no fraction to show: a segment sweeping along its track (40% of the track wide, so 250% of its own width carries it across). */
+/* The dock's + button on an empty library: a soft grey ring breathing out from its tinted fill. */
+@keyframes plus-glow {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--ink-9) 40%, transparent); }
+  50% { box-shadow: 0 0 0 7px color-mix(in oklab, var(--ink-9) 0%, transparent); }
+}
+
+
+
 @keyframes indeterminate {
   from { translate: -100% 0; }
   to { translate: 250% 0; }
