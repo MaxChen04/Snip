@@ -18,6 +18,7 @@ const { sessionCookie, externalUrl } = require("./cloud-session.cjs")
 const { snapshotFlags } = require("./cloud-confirm.cjs")
 const { ownerLinkFrom, LINK_NOTE, LINK_TTL_MS } = require("./cloud-link.cjs")
 const { resolveSettingsAsset, contentType, settingsCsp, settingsUrl, SETTINGS_ORIGIN } = require("./settings-assets.cjs")
+const { mainWindowChrome, installWindowChrome } = require("./window-chrome.cjs")
 
 // Settings is a static Vite bundle served from the app, so it keeps working while the
 // local Worker is stopped or the app is in cloud mode. Standard+secure makes ES
@@ -276,7 +277,8 @@ function createWindow() {
   const webPreferences = { contextIsolation: true, sandbox: true, nodeIntegration: false }
   // The cloud window gets no preload on purpose: the bridge only exists on pages we ship.
   if (!cloud) Object.assign(webPreferences, { preload: path.join(__dirname, "preload.cjs"), additionalArguments: [`--snip-ui-state=${restore}`] })
-  win = new BrowserWindow({ width: 1280, height: 860, minWidth: 720, minHeight: 480, title: identity.name, backgroundColor: "#f6f5f2", webPreferences })
+  win = new BrowserWindow({ width: 1280, height: 860, minWidth: 720, minHeight: 480, title: identity.name, backgroundColor: "#f6f5f2", ...mainWindowChrome(), webPreferences })
+  installWindowChrome(win)
   if (nightly) win.on("page-title-updated", event => { event.preventDefault(); win.setTitle("Snip Dev — Test library") })
   pinWindow(win, pin)
   configureLinks(win)
