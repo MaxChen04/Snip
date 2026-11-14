@@ -2,11 +2,13 @@
 
 # Snip
 
-A private library of website design references. Paste a URL, choose **Single page** or **Crawl site**, and a capture agent on your machine records every page. Your agent reads them back over MCP.
+A private library of website design references. Paste a URL, choose **Landing page** or **Whole site**, and a capture agent on your machine records the selected page or crawls its links up to your page limit. Your agent reads them back over MCP.
 
 ![Browsing a collection, opening a captured site and a page in Snip](docs/media/browse.gif)
 
-Website: [usesnip.dev](https://usesnip.dev) · Latest release: [v0.1.0](https://github.com/MaxChen04/Snip/releases/tag/v0.1.0) (source only) · License: [source-available](#license)
+Website: [usesnip.dev](https://usesnip.dev) · [Releases and downloads](https://github.com/MaxChen04/Snip/releases) · [0.1.36 beta release notes](docs/releases/0.1.36.md) · License: [source-available](#license)
+
+**0.1.36 is the next beta target, not a published download yet.** The current published release is [v0.1.0](https://github.com/MaxChen04/Snip/releases/tag/v0.1.0), which contains source only. Build from source below, or check the releases page for published assets. Signed installation and native update acceptance remain release gates; see [desktop release guidance](desktop/RELEASING.md).
 
 ## Quick start
 
@@ -26,7 +28,7 @@ npm run app:dev:build                    # separate Snip Dev.app with its own te
 
 Snip Dev uses the blue blueprint icon and separate test data. Nightlies follow `main`; stable releases use `vX.Y.Z` tags. See [desktop release channels](desktop/RELEASING.md#stable-and-snip-dev-in-one-repository) for downloads, updates and Apple signing setup.
 
-Open **Snip** from Applications or the menu bar. Paste a URL, pick **Single page** or **Crawl site**, and the capture agent starts working. `npm run doctor` checks the checkout, the two config files and the capture browser if something looks off; add `--check` to have it ask the cloud library whether it answers.
+Open **Snip** from Applications or the menu bar. Use the **+** button in the bottom dock, paste a URL, and pick **Landing page** or **Whole site**. For a crawl, choose a 10, 25, 50 or 100-page limit. The capture agent starts working, and pages appear as they finish. `npm run doctor` checks the checkout, the two config files and the capture browser if something looks off; add `--check` to have it ask the cloud library whether it answers.
 
 Prefer a terminal and hot reload? Run `npm run dev`, then `npm run capture` in a second terminal, and open http://localhost:5173.
 
@@ -100,24 +102,26 @@ Installs that were set up before this version and already have GitHub sign-in co
 - A **self-contained HTML snapshot**: linked and cross-origin CSS inlined, CSS-in-JS / CSSOM rules materialized, web fonts embedded, scripts stripped
 - **Scroll recordings** per page and **hover recordings** for elements with hover effects, as WebM video
 - Extracted **design tokens**: colors, fonts, type scale, spacing, radii, shadows, transitions
+- **Page sections** with individual crops, plus bounded **live clips** for moving sections and alternate light/dark captures when the site responds to the color-scheme change
+- **Motion measurements** from CSS transitions, CSS animations and Web Animations, with a per-site motion profile available to agents
 
 Pages behind a login can be captured with a saved sign-in (`STORAGE_STATE`, see [capture options](#capture-agent-options-captureenv)).
 
 ## Using it
 
-The app is an infinite gallery (Websites / Pages / Animations) with search and sort.
+Choose an **infinite canvas** or a **scrolling grid** in the account menu's **Gallery: Canvas | Grid** switch. Filter the library by websites, pages, sections, animations or uploaded images, then search or sort your saves.
 
-- **Add** from the Create menu, by pasting a URL anywhere in the app, or with the **bookmarklet** (account menu). Paste several URLs to add them all at once. Snip tells you when a URL is already saved.
-- **Notes**: say why you saved something. Notes are searchable and your agent sees them.
-- **Collections**: save whole websites or **individual pages**.
-- **Page viewer**: a resizable sidebar with **Tokens**, **HTML** and **CSS** tabs, desktop and mobile.
-- **Select** pages, animations and tokens, then **Copy prompt** to hand exactly those to an agent.
-- **Export** a website as a .zip (screenshots, HTML, styles, recordings, tokens) from its **More** menu.
-- **Connect MCP** in the top bar shows copy-ready setup for Claude, Codex, OpenCode, Cursor and other clients.
-- Press <kbd>/</kbd> to search. A banner tells you when captures are waiting on an offline capture agent, and the account menu shows how much storage your captures use: bytes on disk in the local app, and R2 usage against the 10 GB free tier in cloud mode.
-- In cloud mode a capture started elsewhere shows **Waiting for the capture agent** until this Mac's capture agent picks it up.
+- **Add** with the dock's **+** button, by pasting URLs, or with the **bookmarklet**. Paste several URLs to queue them together; Snip identifies URLs already saved. **Upload images** or drop PNG, JPEG, WebP, GIF or AVIF files into the app.
+- **Capture controls**: pause, resume or stop a crawl between pages while retaining completed pages. Failed captures show a diagnosis and **Retry**. Re-capture asks before replacing captured pages.
+- **Boards**: arrange saved references and uploaded images on a free-form board, with sticky notes, groups, positioning and layer controls. Existing collection APIs remain compatible.
+- **Inspector**: open a tile to inspect sections, colors and type, or motion; switch desktop/mobile and light/dark where captures are available. **Live** replays saved section clips, not the original website.
+- **Notes**: record why you saved something. Notes are searchable, available over MCP and included in copied reference prompts.
+- **Copy prompt**: select pages, animations and tokens in the reference view to hand an agent the specific references, viewport, theme and sections you want it to use.
+- **Export** a website as a .zip containing screenshots, HTML, styles, recordings and tokens.
+- **Connect MCP** in the top bar shows setup for Claude, Codex, OpenCode, Cursor and other clients.
+- Press <kbd>/</kbd> to search. A banner explains when captures are waiting for the capture agent. The account menu shows library storage use.
 
-**Page viewer.** Drag the sidebar to resize it, switch between Tokens, HTML and CSS, and flip between desktop and mobile captures.
+**Reference page viewer.** The detailed reference view retains the resizable Tokens, HTML and CSS sidebar and desktop/mobile captures. The canvas inspector instead groups its information into Sections, Colors & type and Motion tabs. The images below show the reference view.
 
 ![Page viewer with resizable Tokens, HTML and CSS sidebar](docs/media/viewer.gif)
 
@@ -297,6 +301,10 @@ npm run test:browser   # gallery and Settings browser suites, one test file at a
 - `web/site/`: the static [public site](docs/public-site.md) on usesnip.dev.
 
 ## Known limits
+
+- The canvas loads at most 400 items per feed and displays a notice when capped; search narrows the feed to find older saves.
+- Not every page has live clips or an alternate theme. Older captures need to be recaptured to gain newer section and motion data.
+- Cloud mode is single-owner and still requires this Mac to capture sites; it is not a hosted capture service.
 
 - Full-page screenshots are capped at 16,000px tall (Chromium's texture limit).
 - Crawls stay on the same hostname (with or without `www.`) and ignore query strings.
