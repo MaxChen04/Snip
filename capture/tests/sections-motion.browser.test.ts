@@ -159,10 +159,20 @@ test("motion installed before load logs entrance staggers, and names the page's 
         window.gsap = { version: "3.12.5" }
         document.querySelector("#gl").getContext("webgl2")
         document.querySelector("#flat").getContext("2d")
-        // Script starts each element in turn at set times after load. Spinning on the clock (rather than timers) makes the
-        // start times exact, so the inference is what is tested; "late" replays a measured case where the first timer
-        // fired late (gaps of 6, 40 and 40 ms), and "loose" has no even step at all.
-        const at = (offsets, run) => { const t0 = performance.now(); offsets.forEach((ms, i) => { while (performance.now() - t0 < ms) {} run(i) }) }
+        // Control only the clock sampled by the installed logger while creating real Web Animations.
+        // Busy-waiting still overshoots when a loaded runner deschedules the renderer. These exact inputs test
+        // inference, not scheduling: "late" has gaps of 6, 40 and 40 ms; "loose" has no even step.
+        const at = (offsets, run) => {
+          const ownNow = Object.getOwnPropertyDescriptor(performance, "now")
+          const t0 = performance.now()
+          let now = t0
+          Object.defineProperty(performance, "now", { configurable: true, value: () => now })
+          try { offsets.forEach((ms, i) => { now = t0 + ms; run(i) }) }
+          finally {
+            if (ownNow) Object.defineProperty(performance, "now", ownNow)
+            else delete performance.now
+          }
+        }
         addEventListener("load", () => {
           const fade = (el, duration) => el.animate([{ opacity: 0, filter: "blur(2px)" }, { opacity: 1, filter: "blur(0px)" }], { duration, easing: "cubic-bezier(.22,1,.36,1)" })
           at([0, 100, 200], () => document.querySelector("#pulse").animate([{ scale: 1 }, { scale: 1.1 }], { duration: 90 }))
