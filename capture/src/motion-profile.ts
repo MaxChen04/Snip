@@ -1,191 +1,239 @@
-import type { MotionEasing, MotionEntry, MotionProfile } from "../../web/shared/types"
+import type { DesignTokens, MotionEntry, MotionPhase, MotionProfile } from "../../web/shared/types"
 
-/** What inpage/tech.js reports. */
-export interface PageTech {
+/** What inpage/motion.js reports for { op: "tech" }. */
+export interface MotionTech {
   libraries: string[]
-  contexts: Record<string, number>
   canvases: { context: string | null; width: number; height: number; y: number }[]
-  shaders: { count: number; sources: string[] }
+  contexts: Record<string, number>
+  viewTransitions: boolean
+  scrollDriven: boolean
 }
 
-export interface MotionInput {
-  load: MotionEntry[]
-  scroll: MotionEntry[]
-  hovers: { label: string; motion: MotionEntry[] }[]
-  tech: PageTech | null
-  files: { kind: string; url: string }[]
-  cssVariables: Record<string, string>
-  keyframes: string[]
-  motionRules: { scrollDriven: string[]; viewTransitions: boolean } | null
+const MAX_TOKENS = 40
+const MAX_EASINGS = 16
+const MAX_DURATIONS = 16
+const MAX_STAGGERS = 20
+const MAX_ENTRANCE = 30
+const MAX_HOVERS = 30
+const TOKEN_NAME = /ease|easing|duration|delay|spring|bounce|motion|stagger|timing|transition|animation/i
+
+/** "cubic-bezier(.2,0,0,1)" and "cubic-bezier(0.2, 0, 0, 1)" are the same curve: compare them in one spelling. */
+export function normalizeEasing(v: string): string {
+  const s = v.trim().replace(/\s+/g, " ")
+  const m = /^cubic-bezier\(([^)]*)\)$/i.exec(s)
+  if (m) return `cubic-bezier(${m[1]!.split(",").map((n) => String(Number(n.trim()))).join(", ")})`
+  if (/^linear\(/i.test(s)) return s.replace(/\s*,\s*/g, ", ")
+  return s.toLowerCase()
 }
 
-const KEYWORDS: Record<string, [number, number, number, number]> = {
-  ease: [0.25, 0.1, 0.25, 1],
-  "ease-in": [0.42, 0, 1, 1],
-  "ease-out": [0, 0, 0.58, 1],
-  "ease-in-out": [0.42, 0, 0.58, 1],
+/** Duration in ms from "300ms", "0.3s" or ".3s"; null when it isn't one. */
+export function parseDuration(v: string): number | null {
+  const m = /^(-?[\d.]+)(ms|s)$/i.exec(v.trim())
+  if (!m) return null
+  const n = Number(m[1])
+  if (!Number.isFinite(n)) return null
+  return Math.round(m[2]!.toLowerCase() === "s" ? n * 1000 : n)
 }
 
-/** How an easing moves: its shape, and how far past the end it goes. Exported for tests. */
-export function easingShape(easing: string): Pick<MotionEasing, "shape" | "overshoot"> {
-  const e = easing.trim()
-  if (e === "linear" || /^linear\(\s*0\s*,\s*1\s*\)$/.test(e)) return { shape: "linear" }
-  if (/^steps|^step-/.test(e)) return { shape: "steps" }
-  if (e.startsWith("linear(")) {
-    // linear(0, 0.03 7%, …, 1): the outputs are the first number of each stop.
-    const ys = e.slice(7, -1).split(",").map((stop) => parseFloat(stop)).filter((n) => Number.isFinite(n))
-    const over = Math.max(...ys) - 1
-    const under = -Math.min(...ys)
-    const mid = ys[Math.floor(ys.length / 2)] ?? 0.5
-    if (over > 0.005 || under > 0.005) return { shape: "spring", overshoot: round(Math.max(over, 0), 3) }
-    return { shape: mid > 0.6 ? "ease-out" : mid < 0.4 ? "ease-in" : "ease-in-out" }
+const isEasing = (v: string) => /^(cubic-bezier|linear|steps)\(|^(ease|ease-in|ease-out|ease-in-out|linear|step-start|step-end)$/i.test(v.trim())
+
+/** A cubic Bézier easing as a function of progress x, plus its lowest and highest output (overshoot, anticipation). */
+function bezier(x1: number, y1: number, x2: number, y2: number) {
+  const at = (t: number, a: number, b: number) => 3 * (1 - t) ** 2 * t * a + 3 * (1 - t) * t * t * b + t ** 3
+  let lo = 0
+  let hi = 1
+  for (let i = 0; i <= 50; i++) {
+    const y = at(i / 50, y1, y2)
+    lo = Math.min(lo, y)
+    hi = Math.max(hi, y)
   }
-  const m = e.match(/^cubic-bezier\(([^)]+)\)$/)
-  const pts = m ? m[1]!.split(",").map(Number) : KEYWORDS[e]
-  if (!pts || pts.length !== 4 || pts.some((n) => !Number.isFinite(n))) return { shape: "unknown" }
-  const [x1, y1, x2, y2] = pts as [number, number, number, number]
-  const bez = (a: number, b: number, t: number) => 3 * (1 - t) ** 2 * t * a + 3 * (1 - t) * t ** 2 * b + t ** 3
-  let maxY = 1
-  for (let t = 0; t <= 1; t += 0.02) maxY = Math.max(maxY, bez(y1, y2, t))
-  if (maxY > 1.005) return { shape: "spring", overshoot: round(maxY - 1, 3) }
-  // Progress a fifth and four fifths of the way through its time: a fast start is an ease-out, a slow start
-  // and a slow end an ease-in-out, a slow start into a fast end an ease-in.
-  const yAt = (x: number) => {
-    let t = x
-    for (let i = 0; i < 24; i++) {
-      const slope = 3 * (1 - t) ** 2 * x1 + 6 * (1 - t) * t * (x2 - x1) + 3 * t ** 2 * (1 - x2)
-      t = Math.min(1, Math.max(0, t - (bez(x1, x2, t) - x) / Math.max(0.05, slope)))
+  const y = (x: number) => {
+    let a = 0
+    let b = 1
+    for (let i = 0; i < 40; i++) {
+      const t = (a + b) / 2
+      if (at(t, x1, x2) < x) a = t
+      else b = t
     }
-    return bez(y1, y2, t)
+    return at((a + b) / 2, y1, y2)
   }
-  const early = yAt(0.2) - 0.2
-  const late = yAt(0.8) - 0.8
-  return { shape: early > 0.08 ? "ease-out" : late < -0.05 ? "ease-in" : "ease-in-out" }
+  return { y, lo, hi }
 }
 
-const round = (n: number, digits = 0) => Math.round(n * 10 ** digits) / 10 ** digits
+const KEYWORD_SHAPES: Record<string, string> = {
+  linear: "linear: constant speed",
+  ease: "ease: quick start, soft landing",
+  "ease-in": "ease-in: slow start, accelerates",
+  "ease-out": "ease-out: fast start, decelerates",
+  "ease-in-out": "ease-in-out: slow at both ends",
+  "step-start": "steps: jumps, no tween",
+  "step-end": "steps: jumps, no tween",
+}
 
-const TOKEN_NAME = /ease|easing|duration|delay|spring|motion|timing|stagger|transition|bounce/i
+/** A plain-words description of an easing curve, so an agent can tell a spring from a soft ease-out. */
+export function easingShape(value: string): string {
+  const v = normalizeEasing(value)
+  if (KEYWORD_SHAPES[v]) return KEYWORD_SHAPES[v]!
+  if (v.startsWith("steps(")) return "steps: jumps, no tween"
+  const bez = /^cubic-bezier\(([^)]*)\)$/.exec(v)
+  if (bez) {
+    const [x1, y1, x2, y2] = bez[1]!.split(",").map(Number) as [number, number, number, number]
+    const { y, lo, hi } = bezier(x1, y1, x2, y2)
+    const parts: string[] = []
+    if (hi > 1.001) parts.push(`overshoots to ${hi.toFixed(2)} (back)`)
+    if (lo < -0.001) parts.push(`pulls back to ${lo.toFixed(2)} first (anticipation)`)
+    // Judged by how far along it is at a quarter, half and three quarters of the time.
+    const [q1, mid, q3] = [y(0.25), y(0.5), y(0.75)]
+    const kind = mid >= 0.6 ? "ease-out" : mid <= 0.4 ? "ease-in" : q1 < 0.2 && q3 > 0.8 ? "ease-in-out" : "near linear"
+    const strong = (kind === "ease-out" && mid >= 0.8) || (kind === "ease-in" && mid <= 0.2) || (kind === "ease-in-out" && q1 < 0.1)
+    return `${strong ? "strong " : ""}${kind}${parts.length ? ", " + parts.join(", ") : ""}`
+  }
+  if (v.startsWith("linear(")) {
+    // linear(0, 0.2 10%, 1.04, 1): the first number of each stop is its output value.
+    const outs = v.slice(7, -1).split(",").map((s) => Number(s.trim().split(/\s+/)[0])).filter(Number.isFinite)
+    const hi = Math.max(...outs)
+    const lo = Math.min(...outs)
+    if (outs.length >= 8 && hi > 1.001) return `spring (linear() curve, overshoots to ${hi.toFixed(3)}${lo < -0.001 ? `, dips to ${lo.toFixed(3)} first` : ""})`
+    if (hi > 1.001) return `custom curve, overshoots to ${hi.toFixed(3)}`
+    return "custom curve (linear() stops)"
+  }
+  return "custom"
+}
 
-/** Sums up a page's motion. Pure: everything it reads is passed in. */
-export function motionProfile(input: MotionInput): MotionProfile {
-  const hoverMotion = input.hovers.flatMap((h) => h.motion)
-  const phases: [string, MotionEntry[]][] = [["load", input.load], ["scroll", input.scroll], ["hover", hoverMotion]]
-  const all = phases.flatMap(([, list]) => list)
-  const weight = (e: MotionEntry) => e.count ?? 1
+/** Entries as reported, plus the phase they were logged in. */
+export interface PhasedMotion {
+  phase: MotionPhase
+  entries: MotionEntry[]
+  /** Hover recordings carry the label of the element hovered. */
+  label?: string
+}
 
-  const easingCounts = new Map<string, number>()
-  const durationCounts = new Map<number, number>()
-  const effects = { transitions: 0, animations: 0, webAnimations: 0 }
+export function buildMotionProfile(tokens: DesignTokens, motion: PhasedMotion[], tech: MotionTech | null): MotionProfile {
+  const vars = Object.entries(tokens.cssVariables ?? {}).filter(([name, value]) => TOKEN_NAME.test(name) && value)
+  const profileTokens = vars.map(([name, value]) => ({
+    name,
+    value: value.length > 300 ? value.slice(0, 300) + "…" : value,
+    kind: (parseDuration(value) != null ? "duration" : isEasing(value) ? "easing" : "other") as "duration" | "easing" | "other",
+  }))
+  const easingToken = new Map<string, string>()
+  const durationToken = new Map<number, string>()
+  for (const [name, value] of vars) {
+    const ms = parseDuration(value)
+    if (ms != null && !durationToken.has(ms)) durationToken.set(ms, name)
+    else if (isEasing(value) && !easingToken.has(normalizeEasing(value))) easingToken.set(normalizeEasing(value), name)
+  }
+
+  const easings = new Map<string, { elements: number; ran: number }>()
+  const durations = new Map<number, { elements: number; ran: number }>()
+  const bump = <K>(m: Map<K, { elements: number; ran: number }>, k: K, field: "elements" | "ran", n: number) => {
+    const e = m.get(k) ?? { elements: 0, ran: 0 }
+    e[field] += n
+    m.set(k, e)
+  }
+  // Computed transitions, "<property> <duration> <easing>", by how many elements carry them.
+  for (const t of tokens.transitions ?? []) {
+    const m = /^(\S+) (\S+) (.+)$/.exec(t.value)
+    if (!m) continue
+    const ms = parseDuration(m[2]!)
+    if (ms != null) bump(durations, ms, "elements", t.count)
+    bump(easings, normalizeEasing(m[3]!), "elements", t.count)
+  }
+  const all = motion.flatMap((p) => p.entries.map((e) => ({ ...e, phase: p.phase, label: p.label })))
   for (const e of all) {
-    // Looping effects (spinners, shimmers) run linear by design; they'd swamp the easing mix.
-    if (e.iterations !== "infinite") easingCounts.set(e.easing, (easingCounts.get(e.easing) ?? 0) + weight(e))
-    if (e.durationMs > 0) durationCounts.set(e.durationMs, (durationCounts.get(e.durationMs) ?? 0) + weight(e))
-    effects[e.type === "transition" ? "transitions" : e.type === "animation" ? "animations" : "webAnimations"] += weight(e)
+    const n = e.count ?? 1
+    if (e.durationMs > 0) bump(durations, Math.round(e.durationMs), "ran", n)
+    if (e.easing) bump(easings, normalizeEasing(e.easing), "ran", n)
   }
-  const easings = [...easingCounts].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([easing, count]) => ({ easing, count, ...easingShape(easing) }))
-  const durations = [...durationCounts].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([ms, count]) => ({ ms, count }))
+  const ranked = <K>(m: Map<K, { elements: number; ran: number }>) =>
+    [...m.entries()].sort((a, b) => b[1].elements + b[1].ran - (a[1].elements + a[1].ran))
 
-  // A stagger: one effect (same kind, property, duration, easing, keyframes) started with three or more evenly spaced delays.
-  const staggers: MotionProfile["staggers"] = []
-  for (const [phase, list] of phases) {
-    const groups = new Map<string, { e: MotionEntry; delays: Set<number> }>()
-    for (const e of list) {
-      const key = JSON.stringify([e.type, e.property, e.durationMs, e.easing, e.keyframes])
-      const g = groups.get(key) ?? { e, delays: new Set<number>() }
-      g.delays.add(e.delayMs)
-      groups.set(key, g)
-    }
-    for (const { e, delays } of groups.values()) {
-      const sorted = [...delays].sort((a, b) => a - b)
-      if (sorted.length < 3) continue
-      const steps = sorted.slice(1).map((d, i) => d - sorted[i]!).sort((a, b) => a - b)
-      const stepMs = steps[Math.floor(steps.length / 2)]!
-      // Evenly spaced means the gaps agree: 0, 100 and 10000 ms are three delays, not a stagger.
-      if (stepMs <= 0 || steps.at(-1)! - steps[0]! > Math.max(4, stepMs * 0.25)) continue
-      staggers.push({ property: e.property, stepMs, items: sorted.length, durationMs: e.durationMs, easing: e.easing, phase })
-    }
+  // Lists are capped to keep the profile small; totals records what each list held before, where it held more.
+  const totals: NonNullable<MotionProfile["totals"]> = {}
+  const cap = <T>(name: keyof NonNullable<MotionProfile["totals"]>, list: T[], n: number) => {
+    if (list.length > n) totals[name] = list.length
+    return list.slice(0, n)
   }
-  // Opacity and transform staggered together are one reveal.
-  const merged: MotionProfile["staggers"] = []
-  for (const s of staggers) {
-    const same = merged.find((m) => m.phase === s.phase && m.stepMs === s.stepMs && m.items === s.items && m.durationMs === s.durationMs)
-    if (same) same.property = [same.property, s.property].filter(Boolean).join(", ")
-    else merged.push({ ...s })
-  }
-  merged.sort((a, b) => b.items - a.items).splice(12)
 
-  const tokens = Object.fromEntries(Object.entries(input.cssVariables).filter(([k]) => !k.startsWith("--tw-") && TOKEN_NAME.test(k)).slice(0, 60))
+  const staggers = all
+    .filter((e) => e.stagger)
+    .sort((a, b) => (b.count ?? 1) - (a.count ?? 1))
+    .map((e) => ({ phase: e.phase, target: e.target, property: e.property, count: e.count ?? 1, durationMs: e.durationMs, easing: e.easing, ...e.stagger! }))
 
-  const tech = input.tech
-  const canvases = tech?.canvases ?? []
+  const hovers = motion
+    .filter((p) => p.phase === "hover")
+    .flatMap((p) => p.entries.map((e) => ({ label: p.label ?? "", target: e.target, property: e.property, durationMs: e.durationMs, delayMs: e.delayMs, easing: e.easing })))
+    // Entering and leaving usually run the same transition: list it once.
+    .filter((h, i, list) => list.findIndex((o) => JSON.stringify(o) === JSON.stringify(h)) === i)
+
   const pixelOnly: string[] = []
-  const gl = canvases.filter((c) => c.context && /webgl|webgpu/.test(c.context))
-  const twoD = canvases.filter((c) => c.context === "2d")
-  if (gl.length) pixelOnly.push(`${gl.length} WebGL/WebGPU canvas${gl.length > 1 ? "es" : ""} (${gl.map((c) => `${c.width}x${c.height} at y=${c.y}`).join(", ")}): only the shader sources and loaded files are readable, not the scene's motion.`)
-  if (twoD.length) pixelOnly.push(`${twoD.length} 2D canvas${twoD.length > 1 ? "es" : ""} (${twoD.map((c) => `${c.width}x${c.height} at y=${c.y}`).join(", ")}): drawn by script frame by frame; only the frames show it.`)
-  const unknownCanvas = canvases.filter((c) => !c.context).length
-  if (unknownCanvas) pixelOnly.push(`${unknownCanvas} canvas${unknownCanvas > 1 ? "es" : ""} with no context seen (drawn from a worker, or not yet drawn).`)
-  const videos = input.files.filter((f) => f.kind === "video").length
-  if (videos) pixelOnly.push(`${videos} video${videos > 1 ? "s" : ""}: motion baked into footage.`)
-  if (tech?.libraries.some((l) => /^GSAP|Lenis|Locomotive/.test(l)))
-    pixelOnly.push("A script animation library is present: motion it writes frame by frame (GSAP tweens, smooth scroll) does not appear among the effects, only in the frames.")
+  const names: Record<string, string> = { webgl: "WebGL", webgl2: "WebGL 2", webgpu: "WebGPU", "2d": "2D canvas", bitmap: "bitmap canvas" }
+  for (const c of tech?.canvases ?? []) {
+    const kind = c.context ? names[c.context] ?? c.context : "canvas (context not seen)"
+    pixelOnly.push(`${kind} ${c.width}×${c.height} at y=${c.y}: drawn by script; only its pixels are captured (see the page's live section clips)`)
+  }
+  const scripted = (tech?.libraries ?? []).filter((l) => /^(GSAP|Lenis|Locomotive)/.test(l))
+  if (scripted.length) pixelOnly.push(`${scripted.join(", ")}: writes styles frame by frame, so those tweens are not in the motion log`)
 
-  const observations: string[] = []
-  // linear() springs run to hundreds of characters; the full curve stays in easings.
-  const short = (easing: string) => (easing.length > 48 ? `${easing.slice(0, 45)}…` : easing)
-  const easeTotal = easings.reduce((n, e) => n + e.count, 0)
-  if (easings[0] && easeTotal) observations.push(`Most common easing: ${short(easings[0].easing)} (${easings[0].shape}, ${Math.round((easings[0].count / easeTotal) * 100)}% of effects).`)
-  const springs = easings.filter((e) => e.shape === "spring")
-  if (springs.length) observations.push(`Overshooting (spring/back) curves: ${springs.map((s) => `${short(s.easing)} (+${round((s.overshoot ?? 0) * 100, 1)}%)`).join("; ")}.`)
-  const hoverDur = hoverMotion.filter((e) => e.type === "transition").map((e) => e.durationMs).sort((a, b) => a - b)
-  const enterDur = [...input.load, ...input.scroll].filter((e) => e.iterations !== "infinite").map((e) => e.durationMs).sort((a, b) => a - b)
-  const median = (xs: number[]) => xs[Math.floor(xs.length / 2)]
-  if (hoverDur.length) observations.push(`Hover feedback runs ${hoverDur[0]}–${hoverDur.at(-1)} ms (median ${median(hoverDur)} ms).`)
-  if (enterDur.length) observations.push(`Load and scroll effects run ${enterDur[0]}–${enterDur.at(-1)} ms (median ${median(enterDur)} ms).`)
-  for (const s of merged.slice(0, 3)) observations.push(`Staggered ${s.phase} ${s.property ?? "effect"}: ${s.items} items, ${s.stepMs} ms apart, each ${s.durationMs} ms on ${short(s.easing)}.`)
-  const tokenCount = Object.keys(tokens).length
-  if (tokenCount) observations.push(`${tokenCount} named motion tokens on :root (see tokens).`)
-  if (input.motionRules?.scrollDriven.length) observations.push(`${input.motionRules.scrollDriven.length} CSS rules drive animations from scroll position (animation-timeline).`)
-  if (!all.length && !canvases.length) observations.push("No browser animations were seen during the capture.")
-
-  const compact = (list: MotionEntry[]) =>
-    list.slice(0, 24).map((e) => ({ ...e, keyframes: e.keyframes.length > 2 ? [e.keyframes[0]!, e.keyframes.at(-1)!] : e.keyframes }))
-  return {
+  const profile: MotionProfile = {
     version: 1,
     tech: {
       libraries: tech?.libraries ?? [],
-      cssKeyframes: input.keyframes.length,
-      effects,
-      scrollDriven: input.motionRules?.scrollDriven ?? [],
-      viewTransitions: !!input.motionRules?.viewTransitions || !!tech?.libraries.some((l) => l.includes("view transitions")),
-      canvases,
-      shaders: tech?.shaders ?? { count: 0, sources: [] },
-      files: input.files.slice(0, 30),
+      canvases: tech?.canvases ?? [],
+      viewTransitions: !!tech?.viewTransitions,
+      scrollDriven: !!tech?.scrollDriven,
     },
-    tokens,
-    easings,
-    durations,
-    staggers: merged,
-    load: compact(input.load),
-    scroll: compact(input.scroll),
-    hovers: input.hovers
-      .filter((h) => h.motion.length)
-      .slice(0, 12)
-      .map((h) => ({ label: h.label, motion: h.motion.slice(0, 8).map(({ type, property, durationMs, delayMs, easing }) => ({ type, property, durationMs, delayMs, easing })) })),
+    tokens: cap("tokens", profileTokens, MAX_TOKENS),
+    easings: cap("easings", ranked(easings), MAX_EASINGS).map(([value, c]) => ({ value, shape: easingShape(value), ...(easingToken.has(value) ? { tokenCandidate: easingToken.get(value) } : {}), ...c })),
+    durations: cap("durations", ranked(durations), MAX_DURATIONS).map(([ms, c]) => ({ ms, ...(durationToken.has(ms) ? { tokenCandidate: durationToken.get(ms) } : {}), ...c })),
+    staggers: cap("staggers", staggers, MAX_STAGGERS),
+    entrance: cap("entrance", motion.filter((p) => p.phase === "load").flatMap((p) => p.entries), MAX_ENTRANCE).map((e) => ({ ...e, keyframes: e.keyframes.slice(0, 4) })),
+    hovers: cap("hovers", hovers, MAX_HOVERS),
     pixelOnly,
-    observations,
   }
+  if (Object.keys(totals).length) profile.totals = totals
+  return profile
 }
 
-/** Which motion file a response is, by its URL and content type, or null. */
-export function motionFileKind(url: string, contentType: string): string | null {
-  const path = url.split(/[?#]/)[0]!.toLowerCase()
-  if (path.endsWith(".riv")) return "rive"
-  if (path.endsWith(".lottie") || (path.endsWith(".json") && /lottie|bodymovin/.test(path))) return "lottie"
-  if (path.endsWith(".splinecode")) return "spline"
-  if (/\.(glb|gltf)$/.test(path)) return "3d-model"
-  if (/unicorn\.studio|unicornstudio/.test(url)) return "unicorn-studio"
-  if (contentType.startsWith("video/") || /\.(mp4|webm|mov)$/.test(path)) return "video"
-  return null
+/** One profile for a reference: counts add up, lists are joined without repeats, the first page's entrance leads. */
+export function mergeMotionProfiles(list: MotionProfile[]): MotionProfile | undefined {
+  if (!list.length) return undefined
+  const sum = <K, T extends { elements: number; ran: number }>(items: T[], key: (t: T) => K) => {
+    const m = new Map<K, T>()
+    for (const t of items) {
+      const k = key(t)
+      const e = m.get(k)
+      m.set(k, e ? { ...e, elements: e.elements + t.elements, ran: e.ran + t.ran } : { ...t })
+    }
+    return [...m.values()].sort((a, b) => b.elements + b.ran - (a.elements + a.ran))
+  }
+  const flat = <T>(pick: (p: MotionProfile) => T[]) => list.flatMap(pick)
+  // A merged list's total is at least its distinct items across pages, and at least what any page held before its cap.
+  const totals: NonNullable<MotionProfile["totals"]> = {}
+  const cap = <T>(name: keyof NonNullable<MotionProfile["totals"]>, items: T[], n: number) => {
+    const most = Math.max(items.length, ...list.map((p) => p.totals?.[name] ?? 0))
+    if (most > n) totals[name] = most
+    return items.slice(0, n)
+  }
+  const distinct = <T>(items: T[], key: (t: T) => string) => {
+    const seen = new Set<string>()
+    return items.filter((t) => !seen.has(key(t)) && seen.add(key(t)))
+  }
+  const merged: MotionProfile = {
+    version: 1,
+    tech: {
+      libraries: [...new Set(flat((p) => p.tech.libraries))],
+      canvases: cap("canvases", distinct(flat((p) => p.tech.canvases), (c) => `${c.context}|${c.width}|${c.height}`), 12),
+      viewTransitions: list.some((p) => p.tech.viewTransitions),
+      scrollDriven: list.some((p) => p.tech.scrollDriven),
+    },
+    tokens: cap("tokens", distinct(flat((p) => p.tokens), (t) => t.name), MAX_TOKENS),
+    easings: cap("easings", sum(flat((p) => p.easings), (e) => e.value), MAX_EASINGS),
+    durations: cap("durations", sum(flat((p) => p.durations), (d) => d.ms), MAX_DURATIONS),
+    staggers: cap("staggers", distinct(flat((p) => p.staggers), (s) => `${s.target}|${s.property}|${s.stepMs}`), MAX_STAGGERS),
+    entrance: cap("entrance", distinct(flat((p) => p.entrance), (e) => `${e.target}|${e.property}|${e.durationMs}|${e.easing}`), MAX_ENTRANCE),
+    hovers: cap("hovers", distinct(flat((p) => p.hovers), (h) => `${h.target}|${h.property}|${h.durationMs}|${h.easing}`), MAX_HOVERS),
+    pixelOnly: cap("pixelOnly", distinct(flat((p) => p.pixelOnly), (s) => s), 12),
+  }
+  if (Object.keys(totals).length) merged.totals = totals
+  return merged
 }

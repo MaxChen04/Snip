@@ -2,13 +2,15 @@ import { existsSync, readFileSync } from "node:fs"
 import sharp from "sharp"
 import type { Browser, BrowserContext, BrowserContextOptions, CDPSession, Page as PwPage } from "playwright"
 import type { CrawlState, DesignTokens, Job, MotionEntry, PageSection, PageUpload, PageWarning } from "../../web/shared/types"
-import { JobGoneError, uploadText, type SnipApi } from "./api"
+import { JobGoneError, uploadStyleParts, uploadText, type SnipApi } from "./api"
 import { PAGE_STALL_MS, pageDeadline, within } from "./deadline"
+import type { CapturedStyles } from "./style-parts"
 import { imageSize, type Frame } from "./gif"
 import { allowPrivateUrls, assertPublicUrl, createCaptureNetwork, PrivateAddressError } from "./network-guard"
+import { buildMotionProfile, mergeMotionProfiles, type MotionTech } from "./motion-profile"
 import { buildStills, closeRenderer, cropBands, sampleIndexes } from "./sheet"
+import { pageText, TEXT_LIMITS, type TextBlock } from "./text"
 import { encodeRecording, recordingWriter, type Recording } from "./video"
-import { motionFileKind, motionProfile, type PageTech } from "./motion-profile"
 
 // Playwright's page.screenshot waits for document.fonts.ready before every shot, bounded only by the shot's own 30 s timeout, so one web
 // font whose request is never answered fails the whole page, where a person's browser shows the fallback font. That wait is switched
@@ -27,7 +29,7 @@ const DISMISS_JS = script("dismiss")
 const TRANSITION_JS = script("transition-ms")
 const SECTIONS_JS = script("sections")
 const MOTION_JS = script("motion")
-const TECH_JS = script("tech")
+const TEXT_JS = script("text")
 const MAX_SECTIONS = 24
 // Live section clips: a section is recorded only if two stills taken LIVE_PROBE_MS apart differ.
 const LIVE_SECTIONS = process.env.SNIP_LIVE_SECTIONS !== "false"
@@ -1314,6 +1316,7 @@ function mergeTokens(list: DesignTokens[]): DesignTokens | null {
     transitions: merge((t) => t.transitions, 24),
     keyframes: [...new Set(list.flatMap((t) => t.keyframes))],
     cssVariables: Object.assign({}, ...list.map((t) => t.cssVariables)),
+    motion: mergeMotionProfiles(list.flatMap((t) => (t.motion ? [t.motion] : []))),
   }
 }
 
@@ -1344,8 +1347,8 @@ export async function captureJob(browser: Browser, api: SnipApi, job: Job, signa
     const mobile = await browser.newContext({ ...common, viewport: MOBILE, deviceScaleFactor: MOBILE_DPR, isMobile: true, hasTouch: true, userAgent: MOBILE_UA })
     contexts.push(mobile)
     await Promise.all(contexts.flatMap((context) => [context.addInitScript(HOLD_RESIZE_JS), context.addInitScript(OBSERVED_JS)]))
-    // Motion and canvas logging start before the page's own scripts, so what plays as it loads is logged too.
-    await desktop.addInitScript(`(${MOTION_JS})({ op: "install" }); (${TECH_JS})({ op: "install" })`)
+    // Motion is logged on desktop only, from before the page's scripts run, so entrance animations are seen.
+    await desktop.addInitScript(`(${MOTION_JS})({ "op": "install" })`)
     // The sitemap, icon and fonts are fetched through a proxy of their own: a private address there loses that file,
     // while one the pages themselves ask for still fails the job.
     let sidecar = desktop
@@ -1490,12 +1493,6 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
     const capture = async () => {
       // ---- Desktop ----
       const dPage = await newPage(desktop)
-      // ponytail: motion files are told apart by URL and content type only; a Lottie JSON under a plain name is missed.
-      const motionFiles: { kind: string; url: string }[] = []
-      dPage.on("response", (res) => {
-        const kind = motionFileKind(res.url(), res.headers()["content-type"] ?? "")
-        if (kind && motionFiles.length < 30 && !motionFiles.some((f) => f.url === res.url())) motionFiles.push({ kind, url: res.url() })
-      })
       // Files the page itself (not an embed) could not load: with a flat shot they say the page came out blank for lack of them.
       let failedLoads = 0
       dPage.on("requestfailed", (r) => { if (!r.isNavigationRequest() && r.failure()?.errorText !== "net::ERR_ABORTED" && r.frame() === dPage.mainFrame()) failedLoads++ })
@@ -1567,8 +1564,8 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
         }
       })()
 
-      // Everything since the page started loading; the scroll's log starts from here.
-      const loadMotion = await run<MotionEntry[]>(dPage, MOTION_JS, { op: "take", max: 300 }).catch(() => [])
+      await run(dPage, MOTION_JS, { op: "install" }).then(() => tick(), () => {})
+      const loadMotion = await takeMotion(dPage) // what played while loading: its entrance
       tick()
       const scroll = await recordScroll(dPage, true, recordingFormat, tick)
       const scrollMotion = await takeMotion(dPage)
@@ -1577,6 +1574,13 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       const desktopShot = await fullPageShot(dPage, 1, tick)
       const sectionCuts = features.has("sections") ? (await findSections(dPage)).filter((s) => s.y < desktopShot.height) : []
       tick()
+      // Searchable text, read while the page is at the top like the section cuts it is matched to. Losing it loses only search.
+      const text = features.has("text")
+        ? await run<TextBlock[]>(dPage, TEXT_JS, { max: TEXT_LIMITS.blocks }).then((blocks) => pageText(blocks, sectionCuts), (e) => {
+          log("  page text skipped:", (e as Error).message.split("\n")[0])
+          return undefined
+        })
+        : undefined
       // In a crawl, only the first pages get clips: later pages mostly repeat the same chrome, at the same cost.
       const liveOn = features.has("live") && (job.mode !== "crawl" || captured < LIVE_CRAWL_PAGES)
       const inView: InView = { shot: desktopShot.buf, patches: [] }
@@ -1592,23 +1596,18 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       const desktopThumb = await viewportThumb(dPage, THUMB.desktop)
       tick()
       const other = features.has("schemes") ? await captureOtherScheme(dPage, job.options?.colorScheme === "dark" ? "dark" : "light", tick) : null
-      const styles = await run<{ tokens: DesignTokens; motionRules?: { scrollDriven: string[]; viewTransitions: boolean } }>(dPage, STYLES_JS, { maxElements: 3000 })
+      const styles = await run<{ tokens: DesignTokens } & CapturedStyles>(dPage, STYLES_JS, { maxElements: 3000 })
       tick()
       const html = await buildSnapshot(dPage, desktop, sidecar, tick)
       const hovers = await recordHovers(dPage, hoverSeen, recordingFormat, tick)
       const empty = await dPage.evaluate(() => !document.body?.innerText.trim() && !document.querySelector("img, picture, video, canvas, svg, iframe, object, embed")).catch(() => false)
       tick()
-      const tech = await run<PageTech>(dPage, TECH_JS, { op: "take" }).catch(() => null)
-      const profile = motionProfile({
-        load: loadMotion,
-        scroll: scrollMotion,
-        hovers: hovers.map((h) => ({ label: h.label, motion: h.motion })),
-        tech,
-        files: motionFiles,
-        cssVariables: styles.tokens.cssVariables,
-        keyframes: styles.tokens.keyframes,
-        motionRules: styles.motionRules ?? null,
-      })
+      const tech = await run<MotionTech | []>(dPage, MOTION_JS, { op: "tech" }).catch(() => null)
+      styles.tokens.motion = buildMotionProfile(styles.tokens, [
+        { phase: "load", entries: loadMotion },
+        { phase: "scroll", entries: scrollMotion },
+        ...hovers.map((h) => ({ phase: "hover" as const, entries: h.motion, label: h.label })),
+      ], tech && !Array.isArray(tech) ? tech : null)
       await dPage.close()
       tick()
       const mobileShots = await mobileTask
@@ -1721,6 +1720,7 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
       const warnings: PageWarning[] = []
       if ((failedLoads > 0 || empty) && await isFlat(desktopShot.buf)) warnings.push("blank")
       if (desktopShot.truncated) warnings.push("truncated")
+      const stylesKey = await uploadText(api, `${p}/styles.json`, JSON.stringify(styles), "application/json", features.has("gzip"))
       const upload: PageUpload = {
         url,
         path,
@@ -1735,11 +1735,13 @@ async function capturePages(browser: Browser, api: SnipApi, job: Job, desktop: B
         mobileWidth: mobileShot?.width ?? null,
         mobileHeight: mobileShot?.height ?? null,
         snapshotKey: await uploadText(api, `${p}/snapshot.html`, html, "text/html; charset=utf-8", features.has("gzip")),
-        stylesKey: await uploadText(api, `${p}/styles.json`, JSON.stringify({ ...styles, motionProfile: profile }), "application/json", features.has("gzip")),
+        stylesKey,
+        stylesSummary: features.has("style-parts") ? await uploadStyleParts(api, stylesKey, styles) : undefined,
         tokens: styles.tokens,
         sections: await uploadSections(),
         altScheme: await uploadOtherScheme(),
         ...(warnings.length ? { warnings } : {}),
+        ...(text ? { text } : {}),
         animations,
         // Saved with the page, so a crawl whose agent dies is resumed from its last saved page.
         state: { ...checkpoint(), captured: captured + 1, tokens: mergeTokens([...allTokens, styles.tokens]) },

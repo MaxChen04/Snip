@@ -7,7 +7,6 @@ import { chromium } from "playwright"
 process.env.SNIP_LIVE_PAGES = "1"
 const SECTIONS_JS = readFileSync(new URL("../src/inpage/sections.js", import.meta.url), "utf8")
 const MOTION_JS = readFileSync(new URL("../src/inpage/motion.js", import.meta.url), "utf8")
-const TECH_JS = readFileSync(new URL("../src/inpage/tech.js", import.meta.url), "utf8")
 const launch = () => chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined })
 
 test("sections are found through wrapper divs, open up a tall main, join heading bands, fold slivers and tile the page", async () => {
@@ -51,34 +50,6 @@ test("sections are found through wrapper divs, open up a tall main, join heading
   }
 })
 
-test("installed before load, motion and canvas logging see what plays as the page loads", async () => {
-  const browser = await launch()
-  try {
-    const page = await browser.newPage()
-    await page.addInitScript(`(${MOTION_JS})({ op: "install" }); (${TECH_JS})({ op: "install" })`)
-    // A real navigation: init scripts run on new documents, not on setContent.
-    await page.route("https://fixture.test/", (route) => route.fulfill({ contentType: "text/html", body: `<canvas id="gl" width="200" height="100"></canvas><h1><span>A</span><span>B</span><span>C</span></h1><script>
-      document.querySelectorAll("span").forEach((s, i) => s.animate({ opacity: [0, 1] }, { duration: 400, delay: i * 20, easing: "cubic-bezier(0.22, 1, 0.36, 1)" }))
-      const gl = document.getElementById("gl").getContext("webgl")
-      if (gl) { const sh = gl.createShader(gl.FRAGMENT_SHADER); gl.shaderSource(sh, "void main() { gl_FragColor = vec4(1.0); }") }
-    </script>` }))
-    await page.goto("https://fixture.test/")
-    const load = await page.evaluate(`(${MOTION_JS})({ op: "take", max: 300 })`) as Record<string, unknown>[]
-    assert.deepEqual(load.map((e) => e.delayMs).sort(), [0, 20, 40])
-    const tech = await page.evaluate(`(${TECH_JS})({ op: "take" })`) as { canvases: { context: string }[]; shaders: { count: number; sources: string[] } }
-    if (tech.canvases[0]?.context) {
-      assert.equal(tech.canvases[0].context, "webgl")
-      assert.equal(tech.shaders.count, 1)
-      assert.match(tech.shaders.sources[0]!, /gl_FragColor/)
-    }
-  } finally {
-    await browser.close()
-  }
-})
-
-// A sampled spring, as Motion and Tailwind plugins emit it: 60 stops, far longer than a keyframe value is kept.
-const SPRING = `linear(${Array.from({ length: 60 }, (_, i) => (1 - Math.exp(-i / 8) * Math.cos(i / 3)).toFixed(4)).join(", ")})`
-
 test("motion logging reports transitions, CSS animations and element.animate() with their real timing", async () => {
   const browser = await launch()
   try {
@@ -87,8 +58,7 @@ test("motion logging reports transitions, CSS animations and element.animate() w
       #card { transition: transform 300ms cubic-bezier(0.2, 0, 0, 1) 50ms } #card.on { transform: translateY(-8px) }
       .spin { animation: spin 1s linear infinite } @keyframes spin { to { rotate: 1turn } }
       .pop { animation: pop 400ms ease-out } @keyframes pop { from { opacity: 0 } }
-      .spring { animation: pop 600ms ${SPRING} }
-    </style><div id="card">card</div><div class="spin">loading</div><div id="pop">pop</div><div id="spring">spring</div><div id="wa">wa</div>`)
+    </style><div id="card">card</div><div class="spin">loading</div><div id="pop">pop</div><div id="wa">wa</div>`)
     const motion = (arg: object) => page.evaluate(`(${MOTION_JS})(${JSON.stringify(arg)})`) as Promise<Record<string, unknown>[]>
     await motion({ op: "install" })
     assert.deepEqual(await motion({ op: "take" }), [], "animations running before install don't count")
@@ -96,7 +66,6 @@ test("motion logging reports transitions, CSS animations and element.animate() w
     await page.evaluate(() => {
       document.querySelector("#card")!.classList.add("on")
       document.querySelector("#pop")!.classList.add("pop")
-      document.querySelector("#spring")!.classList.add("spring")
       document.querySelector("#wa")!.animate([{ opacity: 0, transform: "scale(0.9)" }, { opacity: 1, transform: "none" }], { duration: 250, easing: "ease-in-out" })
     })
     await page.waitForTimeout(100)
@@ -111,12 +80,10 @@ test("motion logging reports transitions, CSS animations and element.animate() w
     assert.equal(by("div#pop").type, "animation")
     assert.equal(by("div#pop").property, "pop")
     assert.equal(by("div#pop").durationMs, 400)
-    const spring = by("div#spring").easing as string
-    assert.ok(spring.length > 200 && spring.startsWith("linear(") && spring.endsWith(")"), "a long linear() easing is kept whole")
     assert.equal(by("div#wa").type, "web-animation")
     assert.equal(by("div#wa").easing, "ease-in-out")
     assert.ok(!entries.some((e) => e.property === "spin"), "the spinner was already running")
-    assert.equal(entries.length, 4)
+    assert.equal(entries.length, 3)
     assert.deepEqual(await motion({ op: "take" }), [], "each entry is reported once")
 
     // Keyframes are read when the log is taken, so an effect that already finished is still described.
@@ -129,6 +96,120 @@ test("motion logging reports transitions, CSS animations and element.animate() w
     const done = (await motion({ op: "take" })).find((e) => e.property === "opacity")!
     assert.equal(done.durationMs, 50)
     assert.deepEqual(done.keyframes, [{ offset: 0, opacity: "1" }, { offset: 1, opacity: "0.5" }])
+  } finally {
+    await browser.close()
+  }
+})
+
+test("motion logging preserves a long sampled spring easing as valid, replayable CSS", async () => {
+  const browser = await launch()
+  try {
+    const page = await browser.newPage()
+    const spring = `linear(${Array.from({ length: 81 }, (_, i) => {
+      const t = i / 80
+      const y = i === 80 ? 1 : 1 - Math.exp(-6 * t) * Math.cos(12 * t)
+      return `${y.toFixed(5)} ${(t * 100).toFixed(2)}%`
+    }).join(", ")})`
+    await page.setContent(`<style>
+      .spring { animation: enter 2s ${spring} both }
+      @keyframes enter { from { opacity: 0; transform: translateY(20px) } }
+    </style><div id="spring">Spring</div><div id="replay">Replay</div>`)
+    assert.ok(await page.evaluate((easing) => CSS.supports("animation-timing-function", easing), spring))
+    await page.evaluate(`(${MOTION_JS})({ "op": "install" })`)
+    await page.evaluate(() => document.querySelector("#spring")!.classList.add("spring"))
+    await page.waitForFunction(() => document.querySelector("#spring")!.getAnimations().length === 1)
+    const expected = await page.evaluate(() => document.querySelector("#spring")!.getAnimations()[0]!.effect!.getKeyframes()[0]!.easing)
+    const entries = await page.evaluate(`(${MOTION_JS})({ "op": "take" })`) as { target: string; easing: string; keyframes: { easing?: string }[] }[]
+    const captured = entries.find((entry) => entry.target === "div#spring")!
+    assert.ok(expected!.length > 200, "the browser-normalized easing exceeds the keyframe preview limit")
+    assert.equal(captured.easing, expected, "the motion profile retains the complete sampled spring")
+    assert.equal(captured.keyframes[0]!.easing?.length, 200, "keyframe previews remain bounded")
+    const replay = await page.evaluate((easing) => {
+      const valid = CSS.supports("animation-timing-function", easing)
+      const animation = document.querySelector("#replay")!.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 1000, easing })
+      const timing = animation.effect!.getTiming().easing
+      animation.cancel()
+      return { valid, timing }
+    }, captured.easing)
+    assert.equal(replay.valid, true, "the emitted easing is syntactically valid CSS")
+    assert.equal(replay.timing, captured.easing, "a downstream consumer can replay the same spring")
+  } finally {
+    await browser.close()
+  }
+})
+
+test("motion installed before load logs entrance staggers, and names the page's animation tech", async () => {
+  const browser = await launch()
+  try {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 800 } })
+    await context.addInitScript(`(${MOTION_JS})({ "op": "install" })`)
+    const page = await context.newPage()
+    await page.route("http://snip.test/", (route) => route.fulfill({ contentType: "text/html", body: `<!doctype html><style>
+        :root { --ease-spring: linear(0, 0.5 20%, 1.04 45%, 0.99 70%, 1) }
+        .glyph { animation: rise 600ms cubic-bezier(0.34, 1.56, 0.64, 1) both; animation-delay: calc(var(--i) * 70ms) }
+        @keyframes rise { from { opacity: 0; transform: translateY(8px) } }
+        .same { animation: rise 300ms ease-out both }
+      </style>
+      <div>${[0, 1, 2, 3, 4].map((i) => `<span class="glyph" style="--i:${i}">g</span>`).join("")}</div>
+      <div>${[0, 1, 2].map(() => `<b class="same">x</b>`).join("")}</div>
+      <p id="pulse">p</p><p class="word">a</p><p class="word">b</p><p class="word">c</p><p class="word">d</p>
+      <i class="late">1</i><i class="late">2</i><i class="late">3</i><i class="late">4</i><u class="loose">1</u><u class="loose">2</u><u class="loose">3</u><u class="loose">4</u>
+      <canvas id="gl" width="400" height="300" style="width:400px;height:300px"></canvas><canvas id="flat" width="200" height="100" style="width:200px;height:100px"></canvas>
+      <script>
+        window.gsap = { version: "3.12.5" }
+        document.querySelector("#gl").getContext("webgl2")
+        document.querySelector("#flat").getContext("2d")
+        // Script starts each element in turn at set times after load. Spinning on the clock (rather than timers) makes the
+        // start times exact, so the inference is what is tested; "late" replays a measured case where the first timer
+        // fired late (gaps of 6, 40 and 40 ms), and "loose" has no even step at all.
+        const at = (offsets, run) => { const t0 = performance.now(); offsets.forEach((ms, i) => { while (performance.now() - t0 < ms) {} run(i) }) }
+        addEventListener("load", () => {
+          const fade = (el, duration) => el.animate([{ opacity: 0, filter: "blur(2px)" }, { opacity: 1, filter: "blur(0px)" }], { duration, easing: "cubic-bezier(.22,1,.36,1)" })
+          at([0, 100, 200], () => document.querySelector("#pulse").animate([{ scale: 1 }, { scale: 1.1 }], { duration: 90 }))
+          at([0, 40, 80, 120], (i) => fade(document.querySelectorAll(".word")[i], 403))
+          at([0, 6, 46, 86], (i) => fade(document.querySelectorAll(".late")[i], 500))
+          at([0, 40, 250, 600], (i) => fade(document.querySelectorAll(".loose")[i], 600))
+        })
+      </script>` }))
+    await page.goto("http://snip.test/")
+    await page.waitForTimeout(400)
+    const motion = (arg: object) => page.evaluate(`(${MOTION_JS})(${JSON.stringify(arg)})`) as Promise<Record<string, any>[]>
+    await motion({ op: "install" }) // the capture calls it again after load: a no-op
+    const entries = await motion({ op: "take" })
+
+    const glyphs = entries.find((e) => e.property === "rise" && e.target.includes("glyph"))!
+    assert.equal(glyphs.count, 5)
+    assert.deepEqual(glyphs.stagger, { stepMs: 70, spanMs: 280, evenGaps: 4, gaps: 4, gapRangeMs: [70, 70], from: "delays" }, "a delay-driven stagger is one entry with its step")
+    assert.equal(glyphs.delayMs, 0, "the first element's delay")
+    assert.equal(glyphs.easing, "cubic-bezier(0.34, 1.56, 0.64, 1)", "a CSS animation's easing is its animation-timing-function, not the effect's linear")
+    const words = entries.find((e) => e.target === "body > p.word" || e.target === "p.word")!
+    assert.equal(words.count, 4)
+    // Start times are logged in whole ms, so each gap can read 1 ms either way.
+    const near = (actual: number, expected: number) => assert.ok(Math.abs(actual - expected) <= 1, `${actual} is not about ${expected}`)
+    const stagger = (s: Record<string, any>, step: number, span: number, even: number, low: number) => {
+      assert.deepEqual([s.evenGaps, s.gaps, s.from], [even, 3, "start times"])
+      near(s.stepMs, step)
+      near(s.spanMs, span)
+      near(s.gapRangeMs[0], low)
+    }
+    stagger(words.stagger, 40, 120, 3, 40) // elements started in turn are a stagger too
+    assert.equal(words.durationMs, 403)
+    const pulse = entries.find((e) => e.target === "p#pulse")!
+    assert.equal(pulse.count, 3)
+    assert.equal(pulse.stagger, undefined, "one element animated again and again is not a stagger")
+    const late = entries.find((e) => e.target.endsWith("i.late"))!
+    stagger(late.stagger, 40, 86, 2, 6) // a late first timer still reads as a stagger, and says one gap didn't fit
+    assert.equal(entries.find((e) => e.target.endsWith("u.loose"))!.stagger, undefined, "starts with no even step are not a stagger")
+    const same = entries.find((e) => e.target.includes("same"))!
+    assert.equal(same.count, 3)
+    assert.equal(same.stagger, undefined, "effects that start together are not a stagger")
+
+    const tech = await page.evaluate(`(${MOTION_JS})({ "op": "tech" })`) as Record<string, any>
+    assert.ok(tech.libraries.includes("GSAP 3.12.5"))
+    assert.deepEqual(tech.canvases.map((c: { context: string; width: number }) => [c.context, c.width]), [["webgl2", 400], ["2d", 200]])
+    assert.equal(tech.scrollDriven, false, "the animation shorthand's default animation-timeline drives nothing")
+    await page.addStyleTag({ content: ".reveal { animation: rise linear both; animation-timeline: view() }" })
+    assert.equal((await page.evaluate(`(${MOTION_JS})({ "op": "tech" })`) as Record<string, any>).scrollDriven, true)
   } finally {
     await browser.close()
   }

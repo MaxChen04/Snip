@@ -13,3 +13,4 @@ backups/
 web/wrangler.deploy.jsonc
 capture/.env.cloudflare
 web/wrangler.local.jsonc
+qa/discovery/results/

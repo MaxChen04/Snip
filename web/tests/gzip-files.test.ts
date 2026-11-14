@@ -67,11 +67,6 @@ const STYLES = {
   fontFaces: ['@font-face{font-family:"X";src:url("data:font/woff2;base64,' + "A".repeat(400) + '")}'],
   cssVariables: { "--brand": "#fa0" },
   truncated: false,
-  motionProfile: {
-    version: 1,
-    tech: { libraries: ["three.js r175"], cssKeyframes: 1, effects: { transitions: 1, animations: 0, webAnimations: 0 }, scrollDriven: [], viewTransitions: false, canvases: [], shaders: { count: 1, sources: ["void main() {}"] }, files: [] },
-    tokens: { "--ease-out": "cubic-bezier(0, 0, .2, 1)" }, easings: [], durations: [], staggers: [], load: [], scroll: [], hovers: [], pixelOnly: [], observations: [],
-  },
 }
 const STYLES_JSON = JSON.stringify(STYLES)
 const HTML_TYPE = "text/html; charset=utf-8"
@@ -203,11 +198,6 @@ async function assertReadsBack(lib: Library, c: Captured, label: string) {
     assert.equal(structuredContent.unavailable, undefined, `${label} ${section}`)
     answers[section] = { ...structuredContent, pageId: undefined }
   }
-  const motion = (await rpc("get_motion_profile", { page_id: c.page.id })).structuredContent
-  assert.deepEqual(motion.tokens, STYLES.motionProfile.tokens, `${label}: the motion profile is read from the styles file`)
-  assert.equal(motion.tech.shaders.sources, "1 omitted; pass include_shaders", label)
-  assert.deepEqual((await rpc("get_motion_profile", { page_id: c.page.id, include_shaders: true })).structuredContent.tech.shaders.sources, ["void main() {}"], label)
-  answers.motion = { ...motion, pageId: undefined }
   const filtered = await rpc("get_page_styles", { page_id: c.page.id, section: "elements", selector_contains: "button" })
   assert.equal(filtered.structuredContent.items.length, 1, label)
   for (const [field, expected, type] of [["htmlSnapshotUrl", HTML, HTML_TYPE], ["computedStylesUrl", STYLES_JSON, "application/json"]] as const) {

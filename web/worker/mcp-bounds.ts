@@ -1,15 +1,18 @@
 const encoder = new TextEncoder()
 export const jsonBytes = (value: unknown) => encoder.encode(JSON.stringify(value)).byteLength
 
-/** Bound the actual UTF-8 JSON array, including commas and omission markers. */
-export function bounded<T>(all: T[], offset: number, limit: number, bytes = 24_000, hint = "use the original signed file URL from get_page") {
+/**
+ * Bound the actual UTF-8 JSON array, including commas and omission markers. `indexBase` is added to an omission marker's
+ * index, for a caller that passes only the window it read (starting at that position) rather than the whole list.
+ */
+export function bounded<T>(all: T[], offset: number, limit: number, bytes = 24_000, hint = "use the original signed file URL from get_page", indexBase = 0) {
   const items: (T | { omitted: true; index: number; bytes: number; reason: string })[] = []
   let used = 2 // []
   let taken = 0
   for (let i = offset; i < all.length && taken < limit; i++) {
     const size = jsonBytes(all[i])
     const item = size + 2 > bytes
-      ? { omitted: true as const, index: i, bytes: size, reason: `Entry exceeds the response budget; ${hint}.` }
+      ? { omitted: true as const, index: indexBase + i, bytes: size, reason: `Entry exceeds the response budget; ${hint}.` }
       : all[i]!
     const cost = jsonBytes(item) + (items.length ? 1 : 0)
     if (used + cost > bytes) break
@@ -21,7 +24,8 @@ export function bounded<T>(all: T[], offset: number, limit: number, bytes = 24_0
   return { items, total: all.length, offset, nextOffset: next < all.length ? next : null }
 }
 
-export type ReferenceCursor = { referenceId: string; part: string; group?: string; offset: number; rev: string }
+/** `key` is the last row's sort key for parts read from the database a page at a time ("pages", "animations"). */
+export type ReferenceCursor = { referenceId: string; part: string; group?: string; offset: number; rev: string; key?: (string | number)[] }
 export const encodeCursor = (cursor: ReferenceCursor) => btoa(JSON.stringify(cursor))
 export function decodeCursor(value: string | undefined): ReferenceCursor | null {
   if (!value) return null
@@ -30,7 +34,8 @@ export function decodeCursor(value: string | undefined): ReferenceCursor | null 
     if (!c || typeof c !== "object" || Array.isArray(c)
       || typeof c.referenceId !== "string" || typeof c.part !== "string" || typeof c.rev !== "string"
       || (c.group !== undefined && typeof c.group !== "string")
-      || !Number.isSafeInteger(c.offset) || c.offset < 0) return null
+      || !Number.isSafeInteger(c.offset) || c.offset < 0
+      || (c.key !== undefined && !(Array.isArray(c.key) && c.key.length <= 3 && c.key.every((v: unknown) => typeof v === "string" || typeof v === "number")))) return null
     return c
   } catch {
     return null
