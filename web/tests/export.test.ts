@@ -45,6 +45,14 @@ test("export puts each page's files in its own folder", () => {
   ])
 })
 
+test("reference.json lists each page's warnings, with an empty list for a page with none", () => {
+  const r = { id: "r1", title: "Linear", domain: "linear.app" } as Reference
+  const page = (id: string, ord: number, warnings: Page["warnings"]) => ({ id, ord, path: `/${id}`, url: `https://linear.app/${id}`, title: id, warnings, tokens: null, desktopKey: null, mobileKey: null, snapshotKey: null, stylesKey: null }) as unknown as Page
+  const { metadata } = exportPlan(r, [page("a", 0, []), page("b", 1, ["blank"]), page("c", 2, ["truncated", "blank"])], [])
+  const written = JSON.parse(JSON.stringify(metadata, null, 2)) as { pages: { id: string; warnings: string[] }[] }
+  assert.deepEqual(written.pages.map((p) => [p.id, p.warnings]), [["a", []], ["b", ["blank"]], ["c", ["truncated", "blank"]]])
+})
+
 test("pasted text with several websites becomes a list", async () => {
   const { extractUrls, parseSiteUrl } = await import("../src/lib/site-url")
   assert.equal(parseSiteUrl("linear"), null)

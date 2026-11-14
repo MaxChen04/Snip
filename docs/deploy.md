@@ -30,11 +30,13 @@ There are no IDs to copy, no secrets to paste and no dashboard steps besides tho
 
 ### The owner link and passkey
 
-When the Worker is up, Snip opens a **one-time owner link** in your browser. It registers a passkey there (Touch ID on a Mac) and hands the signed-in session back to Snip.app, so the app arrives signed in without a second login.
+When the Worker is up, Snip opens a **one-time owner link** in your browser. It signs Snip.app in: the browser hands the session back to the app over a loopback on this Mac and the tab says **You can close this tab and return to Snip.** The app arrives signed in without a second login.
+
+The handoff is tied to the link it came from. The Worker's redirect carries the link's one-time nonce in the address fragment, which never leaves the browser, and the app's loopback takes a session only together with that nonce. Another process on this Mac can reach the loopback port but cannot post a session to it.
 
 - The link works once and expires after ten minutes.
 - The link always signs in as the library's one owner. On a fresh install that identity is created; on a re-enabled or adopted library it is reused, so a second owner row never appears.
-- The passkey is what you use to sign in to the cloud library from another browser or device. Registering one only adds a device: Snip never replaces or deletes an existing passkey, and adding the same device twice says **You already added a passkey on this device.**
+- A passkey is what you use to sign in to the cloud library from another browser or device. You add one in a browser that opened a **Sign in another browser** link (below), or from **/passkeys** at any time. Registering one only adds a device: Snip never replaces or deletes an existing passkey, and adding the same device twice says **You already added a passkey on this device.**
 - The app stores the secret that mints these links on this Mac. If it is ever lost, `owner rotate` sets a new one and mints a fresh link.
 
 ### Signing in later
@@ -62,15 +64,17 @@ The sheet is titled **Sign in another browser**, and says **Open this link in th
 
 Three buttons: **Copy** (which becomes **Copied**), **Open in browser**, and **Create a new link**. A failed mint shows the error and offers **Try again** instead. Nothing is claimed about the other device until it opens the link and registers a passkey.
 
+The browser that opens the link is signed in and lands on **Add a passkey for this device**: a device name and **Add passkey** (Touch ID, your device PIN or a security key), or **Not now**, which goes to the library. The offer appears only right after a link sign-in, and not in a browser that cannot make passkeys. A skipped browser stays signed in and can add one later at **/passkeys**.
+
 From a terminal, `owner link --no-handoff` mints the same link, which is the command that button runs.
 
 **/passkeys** (also **Passkeys and devices** in the account menu) lists every passkey that can open the library:
 
-<img src="media/passkeys.png" alt="The Passkeys and devices page: Add this device, the device list, and Sign out all devices" width="620">
+<img src="media/passkeys.png" alt="The Passkeys and devices page: Add this device, the device list, and Sign out everywhere" width="620">
 
 - **Add this device** names the device and asks for Touch ID, your device PIN or a security key. The passkey stays on the device; Snip keeps only the public half.
-- **Remove** retires one device, which is the recovery path for a lost laptop or phone. If it was your only passkey, you sign in again with the owner link.
-- **Sign out all devices** ends every browser session and the app's session. Passkeys stay registered, and agents connected over MCP keep their own tokens until those expire.
+- **Remove** retires one device, which is the recovery path for a lost laptop or phone. It also signs out every other browser and the app, and connected agents have to reconnect. If it was your only passkey, you sign in again with the owner link.
+- **Sign out everywhere, including connected agents** ends every browser session, the app's session and every agent connected over MCP. Browsers and the app sign in again, agents reconnect, and the Mac's owner link is the way back in. Passkeys stay registered.
 
 **Connecting a cloud MCP client.** The client sends the browser to `/authorize`, which redirects to `/sign-in?next=<the authorize URL>`. Sign in with a passkey and you land back on that same URL, query included, so the client's authorization request survives the detour and its approval screen appears. Approve there and the client is connected; the grant is bound to the owner identity, not to the method that signed in.
 
@@ -85,11 +89,11 @@ Snip creates the database, key-value store, bucket and Worker, applies the schem
 - **Cancel** stops safely after the current action and leaves the install recorded as `enabling`, so running it again resumes. **Undo setup** is the separate action that returns this Mac to local and deletes only the resources this run created. Your local library is never changed by either.
 - When it finishes, the window reloads on your cloud URL, Settings moves to the menu bar, and the capture agent serves the cloud library.
 
-### Waiting for your Mac
+### Waiting for the capture agent
 
 Capture is not hosted. A capture started from another device, including one started by an agent, is queued in the cloud database and runs when this Mac's capture agent next checks in.
 
-The gallery card and every agent status use the same words, **Waiting for your Mac**, whether the agent is busy or the Mac is asleep. Nothing captures while the Mac is off; the queue waits.
+The gallery card and every agent status use the same words, **Waiting for the capture agent**, whether the agent is busy or the Mac is asleep. Nothing captures while the Mac is off; the queue waits.
 
 ## Command line and agents
 
@@ -158,12 +162,12 @@ Pass `--capture-env replace` to point `capture/.env` at the cloud copy, or use t
 | `npm run setup:cloudflare -- snapshot restore --json` | Switch back to the **Previous library** left by a `pull`. Refuses when this Mac's own library never moved. |
 | `npm run setup:cloudflare -- snapshot delete --confirm <basename>` | Delete the **Previous library**. Destructive. |
 | `npm run setup:cloudflare -- snapshot delete-export --confirm <basename>` | Delete setup's portable dump and file list. It cannot restore anything on its own. |
-| `npm run setup:cloudflare -- delete-resources --confirm <host>` | Delete the Worker, D1, KV and R2 for this install. Destructive. |
+| `npm run setup:cloudflare -- delete-resources --confirm <host>` | Delete the Worker, D1, KV and R2 for this install. Destructive. Refused while this Mac is using the cloud library: `pull` or `detach` first. |
 | `npm run setup:cloudflare -- owner link` | Mint and open a fresh one-time sign-in link for this Mac. |
 | `npm run setup:cloudflare -- owner link --no-handoff` | Mint a link for another browser or device and print it. Settings' **Sign in another browser** runs exactly this. |
 | `npm run setup:cloudflare -- owner rotate` | Replace the owner-link secret and mint a new link. Recovery path. |
 | `npm run setup:cloudflare -- abort` | Clean up an interrupted enable. |
-| `npm run setup:cloudflare -- migrate --json` / `deploy --json` | Apply remote migrations or deploy the current build. Used by updates. |
+| `npm run setup:cloudflare -- migrate --json` / `deploy --json` | `migrate` applies this build's pending remote migrations. `deploy` applies them, then deploys this build's Worker. Used by updates. |
 
 The three destructive commands share one interlock. `--confirm` must equal the basename of the item being deleted: the directory name for `snapshot delete` and `snapshot delete-export`, and the cloud URL's host (for example `snip.max.workers.dev`) for `delete-resources`. Leave it out and the run exits 2 with the exact command to repeat; give a different value and it exits 1. Neither path changes anything. The app asks for the same value, typed by hand.
 
@@ -175,7 +179,7 @@ The three destructive commands share one interlock. `--confirm` must equal the b
 npm run setup:cloudflare -- owner link --no-handoff
 ```
 
-It mints the link, prints it in a `human` event and in the step result, and stops. Nothing is opened, no handoff is attempted, and no `session` event is emitted, because this Mac has no session to receive. Open the printed link on the other device within ten minutes and register a passkey there. This is the same command Settings runs when you press **Sign in another browser**.
+It mints the link, prints it in a `human` event and in the step result, and stops. Nothing is opened, no handoff is attempted, and no `session` event is emitted, because this Mac has no session to receive. Open the printed link on the other device within ten minutes: that browser is signed in and offered a passkey. This is the same command Settings runs when you press **Sign in another browser**.
 
 ## Turning cloud off
 
@@ -228,11 +232,11 @@ Deleting the cloud copy is separate, destructive and never offered inside the tu
 
 The local library and any previous library on this Mac are not touched. Deleting cannot be undone; the next enable starts a new install and copies the local library up again.
 
-### Sign out all devices
+### Sign out everywhere
 
-**/passkeys → Sign out all devices** (also in Settings → Cloud) ends every browser session and the app's session for this install. Use it if a laptop or browser with access is lost.
+**/passkeys → Sign out everywhere, including connected agents** (also in Settings → Cloud) ends every browser session, the app's session and every connected agent's access for this install. Use it if a laptop, browser or agent with access is lost.
 
-The page says exactly what it does: passkeys stay registered, and agents connected over MCP keep their own tokens until those expire. A passkey is a credential, not a session, so removing one from the list is a separate action, and signing out never removes devices.
+The page says exactly what it does: browsers and the app have to sign in again, agents connected over MCP have to reconnect, and the Mac's owner link is the way back in. One counter decides whether a browser session or an agent's grant is still valid, so there is no way to disconnect a single agent. Passkeys stay registered. A passkey is a credential, not a session, so removing one from the list is a separate action, and signing out never removes devices.
 
 ## One Snip per Cloudflare account
 
@@ -270,7 +274,7 @@ The local library is listed as **This Mac's library · 312 references**, with th
 
 <img src="media/settings-adopted.png" alt="Settings after adopting an existing library: the adopted status line, and This Mac's library with Switch back to it" width="620">
 
-The owner link on an adopted library signs in as the **same owner** and adds this device's passkey. It never replaces or deletes a passkey that was already there, so a re-enabled install keeps every device it had. Adding a device that already has a passkey shows **You already added a passkey on this device.**
+The owner link on an adopted library signs in as the **same owner**, and a browser that opens it is offered this device's passkey. It never replaces or deletes a passkey that was already there, so a re-enabled install keeps every device it had. Adding a device that already has a passkey shows **You already added a passkey on this device.**
 
 ### When the account has something else
 
@@ -296,18 +300,25 @@ Sharing a library with a second person is planned for later. When it ships, it w
 
 ## Updating a cloud install
 
-`npm run update` updates both halves when this Mac is in cloud mode: it fast-forwards, rebuilds, applies the remote database migrations, deploys the new Worker and then restarts capture. Existing captures and saved files are kept.
+In the Mac app, open **Settings → Cloud → Update cloud library**. This explicitly deploys the cloud build bundled with the installed app: it finishes the current capture, applies pending database migrations, deploys the Worker, verifies it, and then resumes captures. Existing captures and saved files are kept. If the update fails or is cancelled, captures stay paused for the current app session; retry the update before starting them again. Relaunching the app uses the normal capture-protocol check, which still refuses a mismatched Worker. Settings is bundled with the app, so this action is available even when the cloud page is signed out or cannot be reached.
 
-A release build does the same on its first launch after a version change, before the window loads. If that deploy fails, Snip shows it as a blocking step instead of running a new app against an old Worker.
+A release build, including one that updated itself in place, never deploys on startup. Update the Worker together with the app: owner sign-in and the capture agent (capture protocol 4) both need a Worker that matches the app, and the Worker rejects an agent with a different protocol until it is redeployed. The agent says which half is old: **Your cloud library is older than this Snip. In Snip, open Settings → Cloud → Update cloud library, or run npm run update.** when the Worker is behind it, and **This capture agent is older than your cloud library. Update the Snip app.** when the agent is.
 
-Snip records the Worker version it deployed. If the deployed Worker no longer matches that record, Snip reports the deployment as changed outside Snip and asks you to deploy again; it does not redeploy on its own, because someone may have changed the Worker deliberately.
+The app's sign-in handoff needs the Worker to send its nonce, so a Worker older than the app cannot sign the app in. The tab that opens after the owner link directs the owner to **Update cloud library**, then to sign in again. The app stays signed out until the Worker is redeployed. Nothing accepts a session without the nonce.
 
-To do it by hand, apply migrations before deploying:
+From a source checkout, `npm run update` updates both halves when this Mac is in cloud mode: it fast-forwards, rebuilds, applies the remote database migrations, deploys the new Worker and then restarts capture. Packaged app users do not need a source checkout for the Settings action.
+
+After a deploy, Snip asks the new Worker for its version and records it in `.snip/cloud.json`. If that differs from what the previous deploy recorded, which is normal after an update, the log shows a warning and the deploy carries on. Nothing checks the deployed Worker between deploys, so a Worker changed in the Cloudflare dashboard is not noticed. Run `deploy` again to put this build back.
+
+To do it by hand, `deploy` is enough: it applies the pending migrations and then deploys the Worker, in that order. `migrate` applies the migrations alone. Run it first if you want the database changed before the Worker is, because an older Worker keeps working on a newer schema:
 
 ```bash
+npm run build -w web   # a source checkout only; a release build is already built
 npm run setup:cloudflare -- migrate --json
 npm run setup:cloudflare -- deploy --json
 ```
+
+Both commands copy the build in this checkout into the deploy folder before they read anything from it, so they apply and deploy this build's migrations and Worker, never an earlier release's. They say what they did: `Applied 2 migrations`, or `Database is up to date` when none were pending.
 
 ## If the cloud library can't be reached
 

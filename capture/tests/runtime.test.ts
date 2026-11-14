@@ -91,8 +91,10 @@ test("claim request times out when a server never responds", async () => {
   }
 })
 
-test("healthy idle polling grows to a 30-second cap and resets to its baseline", () => {
-  assert.deepEqual([1, 2, 3, 4, 5, 1].map((n) => idlePollDelay(5000, n)), [5000, 10000, 20000, 30000, 30000, 5000])
+test("healthy idle polling grows to a 10-second cap and resets to its baseline", () => {
+  assert.deepEqual([1, 2, 3, 4, 1].map((n) => idlePollDelay(5000, n)), [5000, 10000, 10000, 10000, 5000])
+  assert.deepEqual([1, 2, 3].map((n) => idlePollDelay(1000, n)), [1000, 2000, 4000])
+  assert.deepEqual([1, 2].map((n) => idlePollDelay(60_000, n)), [60_000, 60_000], "a poll interval above the cap is the user's own choice")
 })
 
 for (const result of ["empty", "error"] as const) {

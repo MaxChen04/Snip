@@ -9,9 +9,10 @@
     "wrangler": "4.160.0"
   },
   "scripts": {
-    "test": "npm run test:core && npm run test:app",
+    "test": "npm run test:core && npm run test:app && npm run test:browser",
     "test:core": "node --import tsx --test web/tests/*.test.ts capture/tests/*.test.ts",
     "test:app": "node --test --test-concurrency=1 desktop/tests/*.test.cjs desktop/tests/*.test.mjs",
+    "test:browser": "node --import tsx --test --test-concurrency=1 web/tests/browser/*.browser.test.ts web/tests/browser-settings/*.browser.test.ts",
     "test:desktop": "node desktop/scripts/smoke.cjs",
     "dev": "npm run dev -w web",
     "deploy": "npm run deploy -w web",

@@ -82,6 +82,23 @@ test("moving items in and out of frames", () => {
   assert.deepEqual(r.frames[0], { ...frame, x: frame.x + 50, y: frame.y + 60 })
 })
 
+test("a locked item stays put, dragged itself or left behind by its frame, which it then leaves", () => {
+  const frame = { id: "g", ...fitFrame([{ x: 0, y: 0, w: 232, h: 145 }]) }
+  const items = [
+    { key: "free", groupId: "g", x: 0, y: 0, w: 100, h: 100 },
+    { key: "pinned", groupId: "g", x: 120, y: 0, w: 100, h: 100, style: { locked: true } },
+  ]
+  let r = moveOnBoard(items, [frame], new Set(), new Set(["g"]), 50, 60)
+  assert.deepEqual(r.items[1], { ...items[1], groupId: null })
+  assert.deepEqual(r.movedItems.map((it) => it.key), ["free"])
+  assert.deepEqual(r.leftBehind, [r.items[1]])
+  // Moved on its own it stays in the frame it never left.
+  r = moveOnBoard(items, [frame], new Set(["free", "pinned"]), new Set(), 2000, 0)
+  assert.equal(r.items[1], items[1])
+  assert.deepEqual(r.movedItems.map((it) => it.key), ["free"])
+  assert.deepEqual(r.leftBehind, [])
+})
+
 test("reading order goes row by row, left to right", () => {
   const at = (key: string, x: number, y: number) => ({ key, x, y, w: 232, h: 145 })
   const order = readingOrder([at("d", 0, 400), at("b", 300, 10), at("a", 0, 0), at("c", 600, -20)])

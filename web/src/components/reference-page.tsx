@@ -10,15 +10,18 @@ import {
   AlertCircleIcon,
   DownloadIcon,
   PauseIcon,
+  StopIcon,
 } from "@/components/icons"
 import { exportReference } from "@/lib/export-reference"
 import { toast } from "sonner"
 import { notify } from "@/components/notify"
 import { CollectionPicker } from "@/components/collection-picker"
 import { diagnoseCaptureError, RetryCaptureButton } from "@/components/capture-retry"
-import { CaptureControls, captureLabel } from "@/components/capture-controls"
-import { EMPTY_SELECTION, SelectCheck, SelectionBar, toggleIn, type Selection } from "@/components/prompt-selection"
+import { CaptureControls, captureLabel, isStopped } from "@/components/capture-controls"
+import { EMPTY_SELECTION, SelectCheck, SelectionBar, pruneSelection, toggleIn, togglePage, withPageView, type Selection } from "@/components/prompt-selection"
 import { SavePagesButton } from "@/components/save-pages"
+import { Button } from "@/components/ui/button"
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { TokensPanel } from "@/components/tokens-panel"
 import { ImageGeneration } from "@/components/image-generation"
@@ -35,7 +38,10 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { cn } from "@/lib/utils"
-import { api, fileUrl, type Animation, type Page, type Reference } from "@/lib/api"
+import { parseProgress } from "@/lib/capture-progress"
+import { warningText } from "@/lib/page-warnings"
+import { api, fileUrl, NotFoundError, type Animation, type Page, type Reference } from "@/lib/api"
+import { WAITING } from "../../shared/capture-errors"
 import { isVideoKey } from "../../shared/types"
 import { useCollections } from "@/lib/collections"
 import { referenceViewUrl, useDesktopState } from "@/hooks/use-desktop-state"
@@ -59,6 +65,23 @@ function CaptureFailure({ id, error, onRetried }: { id: string; error: string | 
         {error && <p className="font-mono text-2xs break-words text-(--red-11)/70">{error}</p>}
       </div>
       <RetryCaptureButton id={id} error={error} onRetried={onRetried} />
+    </div>
+  )
+}
+
+/** A capture the user stopped before it saved a page: not a failure, so no red and no raw error. Start again, or let it go. */
+function CaptureStopped({ id, error, onRetried, onDelete }: { id: string; error: string | null; onRetried: () => void; onDelete: () => void }) {
+  return (
+    <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+      <div role="status" className="flex h-7 items-center gap-2 rounded-full bg-control px-3 text-xs shadow-button">
+        <StopIcon className="size-3.5 text-ink-10" />
+        <span>{diagnoseCaptureError(error)?.summary}</span>
+      </div>
+      <RetryCaptureButton id={id} error={error} onRetried={onRetried} className="h-7 gap-1.5 px-3 text-xs" />
+      <button type="button" onClick={onDelete} className="tactile press inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full px-3 text-xs font-medium text-(--red-11)">
+        <Trash2Icon className="size-3.5" />
+        Delete
+      </button>
     </div>
   )
 }
@@ -115,7 +138,10 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
   const query = useSearch()
   const search = new URLSearchParams(query)
   const [data, setData] = useState<Detail | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  // Shown only while there is no data: a failed refresh keeps the last good page on screen.
+  const [error, setError] = useState<Error | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [recapturing, setRecapturing] = useState(false)
   const tab = search.get("tab") ?? "pages"
   const openPage = search.get("page")
   const setView = (key: "tab" | "page", value: string | null) => {
@@ -126,22 +152,57 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
   const [selecting, setSelecting] = useDesktopState(`snip:${id}:selecting`, false)
   const [sel, setSel] = useDesktopState<Selection>(`snip:${id}:selection`, EMPTY_SELECTION)
   const { collections, refresh: refreshCollections } = useCollections()
+  const [working, setWorking] = useState(false)
+  /** Re-capture and Delete: one at a time, and a failure is said. */
+  const act = async (fn: () => Promise<unknown>) => {
+    if (working) return
+    setWorking(true)
+    try {
+      await fn()
+    } catch (e) {
+      toast.error((e as Error).message)
+    } finally {
+      setWorking(false)
+    }
+  }
 
   const load = useCallback(() => {
     return api
       .reference(id)
-      .then(setData)
-      .catch((e) => setError((e as Error).message))
+      .then((d) => {
+        setData(d)
+        setError(null)
+      })
+      .catch((e) => {
+        // A reference that is gone has no page to keep, and nothing left to poll.
+        if (e instanceof NotFoundError) setData(null)
+        setError(e as Error)
+      })
   }, [id])
 
   useEffect(() => { void load() }, [load])
+  // A recapture gives every page and animation a new id: forget picks the current capture doesn't have.
+  useEffect(() => {
+    if (data) setSel((x) => pruneSelection(x, data.pages, data.animations))
+  }, [data, setSel])
 
   const busy = data && (data.reference.status === "queued" || data.reference.status === "capturing")
   // Each captured page appears as soon as it is saved: poll at a steady pace while capturing, back off while queued.
   usePoll(load, !!busy, data?.reference.status === "capturing" ? LIVE_POLL : undefined)
 
-  if (error) return <div className="grid min-h-svh place-items-center text-sm text-muted-foreground">{error}</div>
   if (!data) {
+    if (error)
+      return (
+        <div className="grid min-h-svh place-items-center px-4 text-center">
+          <div className="grid justify-items-center gap-3" role="alert">
+            <p className="text-sm text-ink-12">{error instanceof NotFoundError ? "This website doesn't exist" : "Couldn't load this website"}</p>
+            <p className="text-xs text-ink-11">{error instanceof NotFoundError ? "It may have been deleted." : error.message}</p>
+            <Link href="/" className="tactile press flex h-8 items-center rounded-full px-3.5 text-xs">
+              Go to All saves
+            </Link>
+          </div>
+        </div>
+      )
     return (
       <div className="mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6">
         <Skeleton className="h-8 w-64" />
@@ -156,9 +217,17 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
 
   const { reference: r, pages, animations } = data
   const toggleCollection = async (cid: string, member: boolean) => {
-    await api.setMembership(r.id, cid, member)
-    setData({ ...data, reference: { ...r, collectionIds: member ? [...r.collectionIds, cid] : r.collectionIds.filter((x) => x !== cid) } })
-    void refreshCollections()
+    try {
+      await api.setMembership(r.id, cid, member)
+    } catch (e) {
+      return void toast.error((e as Error).message)
+    }
+    setData((d) => {
+      if (!d) return d
+      const others = d.reference.collectionIds.filter((x) => x !== cid)
+      return { ...d, reference: { ...d.reference, collectionIds: member ? [...others, cid] : others } }
+    })
+    void refreshCollections().catch(() => {})
   }
   const setPageCollections = (pageIds: string[], cid: string, member: boolean) =>
     setData((d) =>
@@ -177,11 +246,18 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
   const hoverRecordings = animations.filter((a) => a.kind === "hover")
 
   const inCollections = collections.filter((c) => r.collectionIds.includes(c.id))
-  // The capture agent reports "Capturing 7/25: /enterprise" while it works on a page.
-  const capturing = r.progress?.match(/^Capturing (\d+)\/(\d+): (.+)$/)
-  const capturingPath = capturing?.[3]
-  // Share of pages already finished, so the last page reads 83%, not 100%, while it is still capturing.
-  const capturedPercent = capturing ? Math.round(((Number(capturing[1]) - 1) / Number(capturing[2])) * 100) : 0
+  const quiet = !!r.quietSince
+  const capturing = parseProgress(r)
+  const capturingPath = capturing?.path
+  const progressText = capturingPath ? `Capturing ${capturingPath}` : (r.progress ?? WAITING)
+  // Share of pages already finished, so the last page reads 83%, not 100%, while it is still capturing. Only a crawl has one.
+  const capturedPercent = capturing?.total && r.mode === "crawl" ? Math.round(((capturing.n - 1) / capturing.total) * 100) : null
+  const recapture = () =>
+    void act(async () => {
+      await api.recapture(r.id)
+      notify("Re-capture queued")
+      await load()
+    })
 
   return (
     <div className="min-h-svh">
@@ -189,8 +265,8 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
 
       <div className="flex flex-col items-center gap-3 px-4 pt-8 pb-2 text-center">
         {r.favicon && <img src={fileUrl(r.favicon)} alt="" className="size-8 rounded-md shadow-button" onError={(e) => (e.currentTarget.style.display = "none")} />}
-        <div className="max-w-2xl">
-          <p className="text-xs text-ink-10">
+        <div className="w-full max-w-2xl">
+          <p className="truncate text-xs text-ink-10">
             <Link href="/" className="hover:text-foreground">
               All saves
             </Link>
@@ -232,16 +308,14 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
               <CollectionPicker className="max-h-72" selected={r.collectionIds} onToggle={(cid, on) => void toggleCollection(cid, on)} />
             </PopoverContent>
           </Popover>
-          <ActionCircle
-            icon={<RefreshCwIcon />}
-            label="Re-capture"
-            onClick={async () => {
-              if (pages.length && !confirm(`Re-capture ${r.domain}? Its ${pages.length} captured ${pages.length === 1 ? "page" : "pages"} will be replaced.`)) return
-              await api.recapture(r.id)
-              notify("Re-capture queued")
-              load()
-            }}
-          />
+          {/* The server refuses to re-capture one that is still queued, capturing or paused. */}
+          {(r.status === "ready" || r.status === "failed") && (
+            <ActionCircle
+              icon={<RefreshCwIcon />}
+              label="Re-capture"
+              onClick={() => (pages.length ? setRecapturing(true) : recapture())}
+            />
+          )}
           <DropdownMenu>
             <DropdownMenuTrigger render={<button className="group flex flex-col items-center gap-1.5" />}>
               <span className="tactile press grid size-9 place-items-center rounded-full group-active:scale-[0.94] group-data-popup-open:bg-control-hover [&_svg]:size-4 [&_svg]:text-ink-11">
@@ -264,29 +338,30 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
               >
                 <DownloadIcon /> Export as .zip
               </DropdownMenuItem>
-              <DropdownMenuItem
-                variant="destructive"
-                onClick={async () => {
-                  if (!confirm("Delete this reference and all its captures?")) return
-                  await api.deleteReference(r.id)
-                  void refreshCollections()
-                  navigate("/")
-                }}
-              >
+              <DropdownMenuItem variant="destructive" onClick={() => setDeleting(true)}>
                 <Trash2Icon /> Delete reference
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
 
-        {r.status === "failed" ? (
+        {isStopped(r) ? (
+          <CaptureStopped id={r.id} error={r.error} onRetried={load} onDelete={() => setDeleting(true)} />
+        ) : r.status === "failed" ? (
           <CaptureFailure id={r.id} error={r.error} onRetried={load} />
         ) : r.status !== "ready" && (
           <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
-            <div className="flex h-7 items-center gap-2 rounded-full bg-control px-3 text-xs shadow-button">
-              {r.status === "paused" ? <PauseIcon className="size-3.5 text-ink-10" /> : <Spinner className="size-3.5 text-ink-10" />}
-              <span>{captureLabel(r) ?? r.progress ?? "Waiting for your Mac"}</span>
-            </div>
+            {quiet ? (
+              // The agent has gone quiet: plain words instead of a spinner, which would say it is working.
+              <p role="status" className="max-w-md text-xs text-balance text-ink-11">
+                {captureLabel(r)}
+              </p>
+            ) : (
+              <div className="flex h-7 items-center gap-2 rounded-full bg-control px-3 text-xs shadow-button">
+                {r.status === "paused" ? <PauseIcon className="size-3.5 text-ink-10" /> : <Spinner className="size-3.5 text-ink-10" />}
+                <span>{captureLabel(r) ?? r.progress ?? WAITING}</span>
+              </div>
+            )}
             <CaptureControls r={r} onChange={load} />
           </div>
         )}
@@ -345,10 +420,10 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
             <Masonry>
               {pages.map((p) => (
                 <div key={p.id} className="group relative">
-                <SelectCheck on={sel.pages.includes(p.id)} active={selecting} label={`Select ${p.path}`} onToggle={() => setSel((x) => ({ ...x, pages: toggleIn(x.pages, p.id) }))} />
+                <SelectCheck on={sel.pages.includes(p.id)} active={selecting} label={`Select ${p.path}`} onToggle={() => setSel((x) => togglePage(x, p.id))} />
                 <button
                   className={cn("group relative block w-full overflow-hidden rounded-lg bg-surface-top text-left shadow-card transition-[scale,box-shadow] duration-150 ease-out active:scale-[0.99]", sel.pages.includes(p.id) && "ring-2 ring-ink-12 ring-offset-2 ring-offset-background")}
-                  onClick={() => (selecting ? setSel((x) => ({ ...x, pages: toggleIn(x.pages, p.id) })) : setOpenPage(p.id))}
+                  onClick={() => (selecting ? setSel((x) => togglePage(x, p.id)) : setOpenPage(p.id))}
                 >                  <img src={fileUrl(p.desktopThumbKey)} alt={p.title ?? p.path} loading="lazy" className="aspect-[16/10] w-full object-cover object-top" />
                   {p.mobileThumbKey && (
                     <img
@@ -363,22 +438,23 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
                     <div className="truncate text-2xs text-white/75">{p.path}</div>
                   </div>
                 </button>
+                {p.warnings.length > 0 && <p className="mt-1.5 px-1 text-2xs text-pretty text-ink-11">{warningText(p)}</p>}
                 </div>
               ))}
-              {busy && (
+              {busy && !quiet && (
                 <ImageGeneration
                   status={r.status === "queued" ? "queued" : "generating"}
-                  label={capturingPath ? `Capturing ${capturingPath}` : (r.progress ?? "Waiting for your Mac")}
+                  label={progressText}
                   resolution={capturingPath ?? ""}
                   aspectRatio="16 / 10"
                   size="fluid"
-                  statusText={`${capturedPercent}%`}
+                  statusText={capturedPercent === null ? progressText : `${capturedPercent}%`}
                   statusClassName="tabular-nums"
                   className="[&_[role=img]]:rounded-lg [&_[role=img]]:shadow-card"
                 />
               )}
             </Masonry>
-            {!pages.length && !busy && <p className="py-16 text-center text-sm text-muted-foreground">No pages captured yet.</p>}
+            {!pages.length && (!busy || quiet) && <p className="py-16 text-center text-sm text-muted-foreground">No pages captured yet.</p>}
           </>
         )}
 
@@ -397,7 +473,66 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
         )}
       </div>
 
-      {current && <PageViewer page={current} onClose={() => setOpenPage(null)} onCollectionsChange={setPageCollections} />}
+      {current && (
+        <PageViewer
+          page={current}
+          onClose={() => setOpenPage(null)}
+          onCollectionsChange={setPageCollections}
+          promptView={sel.pages.includes(current.id) ? (sel.views?.[current.id] ?? { viewport: "desktop" }) : null}
+          onPromptView={(view) => {
+            setSel((x) => withPageView(x, current.id, view))
+            if (view) setSelecting(true)
+          }}
+        />
+      )}
+
+      <Dialog open={recapturing} onOpenChange={setRecapturing}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Re-capture {r.domain}?</DialogTitle>
+            <DialogDescription>
+              Its {pages.length} captured {pages.length === 1 ? "page" : "pages"} will be replaced.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
+            <Button
+              onClick={() => {
+                setRecapturing(false)
+                recapture()
+              }}
+            >
+              Re-capture
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={deleting} onOpenChange={setDeleting}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Delete {r.domain}?</DialogTitle>
+            <DialogDescription>Its pages, recordings and design tokens are deleted for good, and it leaves every board. This can't be undone.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
+            <Button
+              variant="destructive-confirm"
+              onClick={() => {
+                setDeleting(false)
+                void act(async () => {
+                  await api.deleteReference(r.id)
+                  void refreshCollections().catch(() => {})
+                  notify(`Deleted ${r.domain}`)
+                  navigate("/")
+                })
+              }}
+            >
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

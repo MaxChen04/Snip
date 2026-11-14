@@ -77,6 +77,25 @@ function fakeLibrary({ root = tempDir() } = {}) {
   return { root, dataRoot };
 }
 
+/** A context over `root` with no Cloudflare API and a wrangler that succeeds and does nothing. */
+function plainContext(root, flags, emit, deps) {
+  return createContext({ root, dataRoot: root, flags, emit, api: {}, wrangler: { bin: '/x', run: async () => ({ ok: true }) }, deps });
+}
+
+/** A context over a model's library with its fake Cloudflare API and the flags every setup run passes. */
+function modelContext(model, wrangler, flags, emit, deps) {
+  return createContext({ root: model.root, dataRoot: model.root, flags: { login: 'tester', domain: 'tester', noOpen: true, ...flags }, emit, api: fakeApi(model), wrangler, deps });
+}
+
+/** Put a library in cloud mode with an install record that starts from PROVIDED and an account. */
+function enterCloud(root, record = {}) {
+  stateModule.updateState(root, (next) => {
+    next.mode = 'cloud';
+    next.cloud = { url: PROVIDED, accountId: 'acct', ...record };
+    return next;
+  });
+}
+
 function digest(rows, sig) {
   return { rows, sig };
 }
@@ -377,15 +396,7 @@ async function runSetup(model, flags = {}, options = {}) {
     library: fakeLibraryModule(model),
     local: LOCAL_FAKE,
   };
-  const ctx = createContext({
-    root: model.root,
-    dataRoot: model.root,
-    flags: { login: 'tester', domain: 'tester', noOpen: true, ...flags },
-    emit: emitter.emit,
-    api: fakeApi(model),
-    wrangler,
-    deps,
-  });
+  const ctx = modelContext(model, wrangler, flags, emitter.emit, deps);
   // The emitter's human event is how the fake browser "completes" the owner link.
   const originalHuman = emitter.emit.human;
   emitter.emit.human = (step, action, url, message) => {
@@ -437,6 +448,30 @@ test('a build without rate-limit bindings takes them from the tracked template',
   const kept = lib.patchDeployConfig({ ...base, ratelimits: own }, { d1Id: 'd1-id', kvId: 'kv-id', login: 'tester', url: PROVIDED, ratelimits });
   assert.deepEqual(kept.ratelimits, own);
   assert.equal(lib.readRatelimits('{ "name": "snip" }'), null);
+});
+
+test('a failed result carries its sentence in the JSON stream, a successful one does not', () => {
+  const events = [];
+  const emit = createEmitter({ json: true, stdout: { write: (line) => { events.push(JSON.parse(line)); return true; } }, stderr: { write: () => true } });
+  emit.result({ ok: false, code: 'LOCKED', data: {}, message: 'Another Snip setup is running.', retryable: true });
+  emit.result({ ok: true, code: 'OK', mode: 'cloud', message: 'Done.' });
+  assert.equal(events[0].message, 'Another Snip setup is running.');
+  assert.equal('message' in events[1], false);
+});
+
+test('a build without the cleanup cron takes it from the tracked template', () => {
+  const template = fs.readFileSync(path.join(__dirname, '../../web/wrangler.jsonc'), 'utf8');
+  const triggers = lib.readTriggers(template);
+  assert.ok(triggers && triggers.crons.length, 'the tracked template declares a cron');
+  const base = { d1_databases: [{ binding: 'DB' }], kv_namespaces: [{ binding: 'OAUTH_KV' }] };
+  const options = { d1Id: 'd1-id', kvId: 'kv-id', login: 'tester', url: PROVIDED, triggers };
+  assert.deepEqual(lib.patchDeployConfig(base, options).triggers, triggers);
+  assert.deepEqual(lib.patchDeployConfig({ ...base, triggers: { crons: [] } }, options).triggers, triggers);
+  // A build that already has one keeps its own.
+  const own = { crons: ['*/30 * * * *'] };
+  assert.deepEqual(lib.patchDeployConfig({ ...base, triggers: own }, options).triggers, own);
+  assert.equal(lib.readTriggers('{ "name": "snip" }'), null);
+  assert.equal(lib.readTriggers('  // "triggers": { "crons": ["0 * * * *"] },'), null);
 });
 
 test('prepareDeployLayout copies snip, client and migrations and never touches the runtime', () => {
@@ -554,7 +589,7 @@ test('verify-then-skip: completed steps re-verify and are skipped, stale ones re
     async run() { runs++; valid = true; return { message: 'ran' }; },
     async verify() { return valid; },
   }];
-  const ctx = createContext({ root: dir, dataRoot: dir, flags: {}, emit: emitter.emit, api: {}, wrangler: { bin: '/x', run: async () => ({ ok: true }) } });
+  const ctx = plainContext(dir, {}, emitter.emit);
   await runSteps(steps, ctx);
   assert.equal(runs, 1);
   // Marked done and still valid → skipped.
@@ -576,7 +611,7 @@ test('a failing step journals the failure and stops the run', async () => {
     { id: 'bad', title: 'Bad', async run() { throw new StepError('NOPE', 'It broke.', { hint: 'Fix it.' }); }, async verify() { return false; } },
     { id: 'never', title: 'Never', async run() { order.push('never'); }, async verify() { return true; } },
   ];
-  const ctx = createContext({ root: dir, dataRoot: dir, flags: {}, emit: emitter.emit, api: {}, wrangler: { bin: '/x', run: async () => ({ ok: true }) } });
+  const ctx = plainContext(dir, {}, emitter.emit);
   await assert.rejects(() => runSteps(steps, ctx), (error) => error.code === 'NOPE' && error.step === 'bad');
   assert.deepEqual(order, ['ok']);
   assert.equal(ctx.stepStatus('bad'), 'failed');
@@ -588,7 +623,7 @@ test('needs_input propagates out of a step without being turned into a failure',
   const dir = tempDir();
   const emitter = collectedEmitter();
   const steps = [{ id: 'ask', title: 'Ask', async run() { throw new NeedsInputError([{ key: 'domain', label: 'domain', secret: false }]); }, async verify() { return false; } }];
-  const ctx = createContext({ root: dir, dataRoot: dir, flags: {}, emit: emitter.emit, api: {}, wrangler: { bin: '/x', run: async () => ({ ok: true }) } });
+  const ctx = plainContext(dir, {}, emitter.emit);
   await assert.rejects(() => runSteps(steps, ctx), (error) => error.code === 'NEEDS_INPUT');
   assert.notEqual(ctx.stepStatus('ask'), 'failed');
 });
@@ -607,6 +642,9 @@ test('owner links are signed, scoped and single-shaped', () => {
   assert.equal(transfer.ownerSecretHash(secret), crypto.createHash('sha256').update(`snip-owner-hash-v1|${secret}`).digest('base64url').slice(0, 16));
 });
 
+/** POST /store the way the loopback's own page does. */
+const storeToken = (port, body) => fetch(`http://127.0.0.1:${port}/store`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+
 test('the loopback accepts exactly one token and drops the fragment', async () => {
   const loopback = transfer.startLoopback({ timeoutMs: 5000 });
   const port = await loopback.listening;
@@ -615,11 +653,64 @@ test('the loopback accepts exactly one token and drops the fragment', async () =
   const html = await page.text();
   assert.match(html, /location\.hash/);
   assert.match(html, /history\.replaceState/);
-  const stored = await fetch(`http://127.0.0.1:${port}/store`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: 'session-value' }) });
+  const stored = await storeToken(port, { token: 'session-value', nonce: loopback.nonce });
   assert.equal(stored.status, 200);
   assert.equal(await tokenPromise, 'session-value');
-  const second = await fetch(`http://127.0.0.1:${port}/store`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: 'other' }) }).catch(() => null);
+  const second = await storeToken(port, { token: 'other', nonce: loopback.nonce }).catch(() => null);
   assert.ok(!second || second.status !== 200);
+  loopback.close();
+});
+
+test('the loopback refuses a token posted without its nonce, or with another, and keeps waiting for the real one', async () => {
+  const loopback = transfer.startLoopback({ timeoutMs: 5000 });
+  const port = await loopback.listening;
+  assert.match(loopback.nonce, /^[0-9a-f]{32}$/);
+  const other = transfer.startLoopback({ timeoutMs: 5000 });
+  assert.notEqual(other.nonce, loopback.nonce, 'every loopback has its own nonce');
+  other.close();
+  let received = null;
+  loopback.token.then((value) => { received = value; }, () => {});
+
+  const refused = [
+    { token: 'forged' },
+    { token: 'forged', nonce: '' },
+    { token: 'forged', nonce: null },
+    { token: 'forged', nonce: 42 },
+    { token: 'forged', nonce: 'a'.repeat(32) },
+    { token: 'forged', nonce: loopback.nonce.slice(0, -1) },
+    { token: 'forged', nonce: `${loopback.nonce}0` },
+    { token: 'forged', nonce: loopback.nonce.toUpperCase() },
+    { nonce: loopback.nonce },
+  ];
+  for (const body of refused) {
+    const response = await storeToken(port, body);
+    assert.equal(response.status, body.token ? 403 : 400, `${JSON.stringify(body)} is refused`);
+  }
+  assert.equal((await fetch(`http://127.0.0.1:${port}/store`, { method: 'POST', body: 'not json' })).status, 403);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(received, null, 'nothing a wrong nonce posted was taken');
+  assert.equal(loopback.closed, false, 'the loopback is still waiting for the real page');
+
+  assert.equal((await storeToken(port, { token: 'real', nonce: loopback.nonce })).status, 200);
+  assert.equal(await loopback.token, 'real');
+  assert.equal((await storeToken(port, { token: 'again', nonce: loopback.nonce }).catch(() => ({ status: 0 }))).status === 200, false, 'the right nonce works once');
+  loopback.close();
+});
+
+test('the loopback refuses a token posted by another web page', async () => {
+  const loopback = transfer.startLoopback({ timeoutMs: 5000 });
+  const port = await loopback.listening;
+  let received = null;
+  loopback.token.then((value) => { received = value; }, () => {});
+  const post = (origin) => fetch(`http://127.0.0.1:${port}/store`, { method: 'POST', headers: { 'content-type': 'text/plain', origin }, body: JSON.stringify({ token: `from ${origin}`, nonce: loopback.nonce }) });
+  for (const origin of ['https://evil.example', `http://localhost:${port}`, `http://127.0.0.1:${port + 1}`, 'null']) {
+    assert.equal((await post(origin)).status, 403, `${origin} is refused`);
+  }
+  assert.equal(received, null, 'no token was accepted');
+  // Its own /done page is the one sender a browser will name with this origin.
+  const own = `http://127.0.0.1:${port}`;
+  assert.equal((await post(own)).status, 200);
+  assert.equal(await loopback.token, `from ${own}`);
   loopback.close();
 });
 
@@ -725,7 +816,7 @@ test('the guard refuses a foreign Snip before creating anything', async () => {
   });
   const emitter = collectedEmitter();
   const wrangler = fakeWrangler(model);
-  const ctx = createContext({ root: model.root, dataRoot: model.root, flags: { login: 'tester', domain: 'tester', noOpen: true }, emit: emitter.emit, api: fakeApi(model), wrangler, deps: { fetch: fakeCloud(model).fetch, library: fakeLibraryModule(model), local: LOCAL_FAKE } });
+  const ctx = modelContext(model, wrangler, {}, emitter.emit, { fetch: fakeCloud(model).fetch, library: fakeLibraryModule(model), local: LOCAL_FAKE });
   await assert.rejects(() => commands.commandSetup(ctx), (error) => error.code === 'FOREIGN_SNIP');
   const failed = emitter.events.find((event) => event.event === 'step' && event.status === 'failed');
   assert.ok(failed, 'the run must report a failed step');
@@ -739,21 +830,13 @@ test('R2 disabled waits for the human, then fails clearly when it never arrives'
   const emitter = collectedEmitter();
   const wrangler = fakeWrangler(model);
   let clock = 1_700_000_000_000;
-  const ctx = createContext({
-    root: model.root,
-    dataRoot: model.root,
-    flags: { login: 'tester', domain: 'tester', noOpen: true, managed: true },
-    emit: emitter.emit,
-    api: fakeApi(model),
-    wrangler,
-    deps: {
-      fetch: fakeCloud(model).fetch,
-      library: fakeLibraryModule(model),
-      local: LOCAL_FAKE,
-      // A clock that jumps five minutes per sleep: the wait expires immediately.
-      now: () => clock,
-      sleep: async (ms) => { clock += Math.max(ms, 5 * 60_000); },
-    },
+  const ctx = modelContext(model, wrangler, { managed: true }, emitter.emit, {
+    fetch: fakeCloud(model).fetch,
+    library: fakeLibraryModule(model),
+    local: LOCAL_FAKE,
+    // A clock that jumps five minutes per sleep: the wait expires immediately.
+    now: () => clock,
+    sleep: async (ms) => { clock += Math.max(ms, 5 * 60_000); },
   });
   await assert.rejects(() => commands.commandSetup(ctx), (error) => error.code === 'R2_NOT_ENABLED');
   assert.ok(emitter.events.some((event) => event.event === 'human' && event.action === 'enable_r2'));
@@ -767,21 +850,13 @@ test('an empty library skips the copy steps and records no snapshot', async () =
   const emitter = collectedEmitter();
   const wrangler = fakeWrangler(model);
   const localModule = fakeLibraryModule(model);
-  const ctx = createContext({
-    root: model.root,
-    dataRoot: model.root,
-    flags: { login: 'tester', domain: 'tester', noOpen: true },
-    emit: emitter.emit,
-    api: fakeApi(model),
-    wrangler,
-    deps: {
-      fetch: fakeCloud(model).fetch,
-      library: localModule,
-      local: LOCAL_FAKE,
-      deploy: {
-        ...deploy,
-        localQuery: async () => [{ rows: 0 }],
-      },
+  const ctx = modelContext(model, wrangler, {}, emitter.emit, {
+    fetch: fakeCloud(model).fetch,
+    library: localModule,
+    local: LOCAL_FAKE,
+    deploy: {
+      ...deploy,
+      localQuery: async () => [{ rows: 0 }],
     },
   });
   emitter.emit.human = (step, action, url, message) => {
@@ -801,15 +876,7 @@ test('an empty library skips the copy steps and records no snapshot', async () =
 test('a second membership needs --account and exits as needs_input', async () => {
   const model = buildModel({ memberships: [{ id: 'acct_a', name: 'A' }, { id: 'acct_b', name: 'B' }] });
   const emitter = collectedEmitter();
-  const ctx = createContext({
-    root: model.root,
-    dataRoot: model.root,
-    flags: { login: 'tester', domain: 'tester', noOpen: true },
-    emit: emitter.emit,
-    api: fakeApi(model),
-    wrangler: fakeWrangler(model),
-    deps: { fetch: fakeCloud(model).fetch, library: fakeLibraryModule(model), local: LOCAL_FAKE },
-  });
+  const ctx = modelContext(model, fakeWrangler(model), {}, emitter.emit, { fetch: fakeCloud(model).fetch, library: fakeLibraryModule(model), local: LOCAL_FAKE });
   await assert.rejects(() => commands.commandSetup(ctx), (error) => error.code === 'NEEDS_INPUT' && error.keys[0].key === 'account');
 });
 
@@ -822,15 +889,7 @@ test('an existing Snip library asks before adopting, and --adopt-existing adopts
     remoteRows: { refs: 1284, pages: 9120, collections: 7 },
   });
   const emitter = collectedEmitter();
-  const ctx = createContext({
-    root: model.root,
-    dataRoot: model.root,
-    flags: { login: 'tester', domain: 'tester', noOpen: true },
-    emit: emitter.emit,
-    api: fakeApi(model),
-    wrangler: fakeWrangler(model),
-    deps: { fetch: fakeCloud(model).fetch, library: fakeLibraryModule(model), local: LOCAL_FAKE },
-  });
+  const ctx = modelContext(model, fakeWrangler(model), {}, emitter.emit, { fetch: fakeCloud(model).fetch, library: fakeLibraryModule(model), local: LOCAL_FAKE });
   await assert.rejects(() => commands.commandSetup(ctx), (error) => {
     assert.equal(error.code, 'NEEDS_INPUT');
     assert.equal(error.resumeWith, '--adopt-existing');
@@ -860,25 +919,17 @@ test('adopting an existing library copies nothing, keeps SESSION_SECRET and rota
     if (step === 'owner') cloudFake.setOwner(true);
     return createEmitter({ json: true, stdout: { write: (line) => { emitter.events.push(JSON.parse(line)); return true; } }, stderr: { write: () => true } }).human(step, action, url, message);
   };
-  const ctx = createContext({
-    root: model.root,
-    dataRoot: model.root,
-    flags: { login: 'tester', domain: 'tester', noOpen: true, adoptExisting: true },
-    emit: emitter.emit,
-    api: fakeApi(model),
-    wrangler,
-    deps: {
-      fetch: cloudFake.fetch,
-      library: fakeLibraryModule(model),
-      local: LOCAL_FAKE,
-      transferOf: (context) => ({ status: async () => ({
-        version: '1.1.0',
-        counts: { refs: 1284, pages: 9120, collections: 7 },
-        hasOwner: true,
-        ownerId: 'tester',
-        ownerSecretHash: transfer.ownerSecretHash(context.secrets().ownerLinkSecret),
-      }) }),
-    },
+  const ctx = modelContext(model, wrangler, { adoptExisting: true }, emitter.emit, {
+    fetch: cloudFake.fetch,
+    library: fakeLibraryModule(model),
+    local: LOCAL_FAKE,
+    transferOf: (context) => ({ status: async () => ({
+      version: '1.1.0',
+      counts: { refs: 1284, pages: 9120, collections: 7 },
+      hasOwner: true,
+      ownerId: 'tester',
+      ownerSecretHash: transfer.ownerSecretHash(context.secrets().ownerLinkSecret),
+    }) }),
   });
   await commands.commandSetup(ctx);
   const state = stateModule.readState(model.root);
@@ -929,27 +980,19 @@ test('adoption rotates OWNER_LINK_SECRET when the Worker has one and this Mac ha
     if (step === 'owner') cloudFake.setOwner(true);
     return createEmitter({ json: true, stdout: { write: (line) => { emitter.events.push(JSON.parse(line)); return true; } }, stderr: { write: () => true } }).human(step, action, url, message);
   };
-  const ctx = createContext({
-    root: model.root,
-    dataRoot: model.root,
-    flags: { login: 'tester', domain: 'tester', noOpen: true, adoptExisting: true },
-    emit: emitter.emit,
-    api: fakeApi(model),
-    wrangler,
-    deps: {
-      fetch: cloudFake.fetch,
-      library: fakeLibraryModule(model),
-      local: LOCAL_FAKE,
-      // What the Worker really holds, so a secret this Mac saved but never sent
-      // would fail the drift check instead of passing silently.
-      transferOf: () => ({ status: async () => ({
-        version: '1.1.4',
-        counts: { refs: 4, pages: 9, collections: 1 },
-        hasOwner: true,
-        ownerId: 'tester',
-        ownerSecretHash: transfer.ownerSecretHash(model.secretValues.OWNER_LINK_SECRET || ''),
-      }) }),
-    },
+  const ctx = modelContext(model, wrangler, { adoptExisting: true }, emitter.emit, {
+    fetch: cloudFake.fetch,
+    library: fakeLibraryModule(model),
+    local: LOCAL_FAKE,
+    // What the Worker really holds, so a secret this Mac saved but never sent
+    // would fail the drift check instead of passing silently.
+    transferOf: () => ({ status: async () => ({
+      version: '1.1.4',
+      counts: { refs: 4, pages: 9, collections: 1 },
+      hasOwner: true,
+      ownerId: 'tester',
+      ownerSecretHash: transfer.ownerSecretHash(model.secretValues.OWNER_LINK_SECRET || ''),
+    }) }),
   });
   const result = await commands.commandSetup(ctx);
   assert.equal(result.ok, true);
@@ -988,25 +1031,17 @@ test('adoption keeps OWNER_LINK_SECRET when this Mac already holds the matching 
     if (step === 'owner') cloudFake.setOwner(true);
     return createEmitter({ json: true, stdout: { write: (line) => { emitter.events.push(JSON.parse(line)); return true; } }, stderr: { write: () => true } }).human(step, action, url, message);
   };
-  const ctx = createContext({
-    root: model.root,
-    dataRoot: model.root,
-    flags: { login: 'tester', domain: 'tester', noOpen: true, adoptExisting: true },
-    emit: emitter.emit,
-    api: fakeApi(model),
-    wrangler: fakeWrangler(model),
-    deps: {
-      fetch: cloudFake.fetch,
-      library: fakeLibraryModule(model),
-      local: LOCAL_FAKE,
-      transferOf: () => ({ status: async () => ({
-        version: '1.1.4',
-        counts: { refs: 4, pages: 9, collections: 1 },
-        hasOwner: true,
-        ownerId: 'tester',
-        ownerSecretHash: transfer.ownerSecretHash(model.secretValues.OWNER_LINK_SECRET),
-      }) }),
-    },
+  const ctx = modelContext(model, fakeWrangler(model), { adoptExisting: true }, emitter.emit, {
+    fetch: cloudFake.fetch,
+    library: fakeLibraryModule(model),
+    local: LOCAL_FAKE,
+    transferOf: () => ({ status: async () => ({
+      version: '1.1.4',
+      counts: { refs: 4, pages: 9, collections: 1 },
+      hasOwner: true,
+      ownerId: 'tester',
+      ownerSecretHash: transfer.ownerSecretHash(model.secretValues.OWNER_LINK_SECRET),
+    }) }),
   });
   await commands.commandSetup(ctx);
   assert.equal(model.secretValues.OWNER_LINK_SECRET, mine, 'the shared secret was kept, not replaced');
@@ -1024,15 +1059,7 @@ test('an empty existing Snip is adopted silently and the move still runs', async
   const emitter = collectedEmitter();
   const cloudFake = fakeCloud(model);
   const wrangler = fakeWrangler(model);
-  const ctx = createContext({
-    root: model.root,
-    dataRoot: model.root,
-    flags: { login: 'tester', domain: 'tester', noOpen: true },
-    emit: emitter.emit,
-    api: fakeApi(model),
-    wrangler,
-    deps: { fetch: cloudFake.fetch, library: fakeLibraryModule(model), local: LOCAL_FAKE },
-  });
+  const ctx = modelContext(model, wrangler, {}, emitter.emit, { fetch: cloudFake.fetch, library: fakeLibraryModule(model), local: LOCAL_FAKE });
   emitter.emit.human = (step, action, url, message) => {
     if (step === 'owner') cloudFake.setOwner(true);
     return createEmitter({ json: true, stdout: { write: (line) => { emitter.events.push(JSON.parse(line)); return true; } }, stderr: { write: () => true } }).human(step, action, url, message);
@@ -1060,6 +1087,14 @@ test('CLI exit codes: 0 ok, 2 needs_input, 3 locked, 4 unsupported', async () =>
   assert.equal(locked.code, 3);
 });
 
+test('setup --check that fails preflight writes no state', async () => {
+  // Documented as "nothing is changed": a refusal is reported, never journalled or recorded.
+  const empty = tempDir();
+  const result = await cli.main(['setup', '--check', '--root', empty, '--data-root', empty, '--json'], { stdout: { write: () => true }, stderr: { write: () => true } });
+  assert.equal(result.code, 4);
+  assert.equal(fs.existsSync(stateModule.profileDir(empty)), false, 'setup --check must not create .snip/cloud.json');
+});
+
 test('CLI --json keeps stdout pure NDJSON and never reads stdin', async () => {
   const library = fakeLibrary();
   const model = buildModel({ root: library.root });
@@ -1079,11 +1114,7 @@ test('CLI --json keeps stdout pure NDJSON and never reads stdin', async () => {
 
 test('detach is offline, keeps the cloud record and refuses during enabling', async () => {
   const library = fakeLibrary();
-  stateModule.setMode(library.root, 'cloud');
-  stateModule.updateState(library.root, (next) => {
-    next.cloud = { url: PROVIDED, accountId: 'acct', workerName: 'snip', d1: { name: 'snip', id: 'd1' }, kv: { name: 'OAUTH_KV', id: 'kv' }, bucket: 'snip-files', ownerId: 'tester', detachedAt: null };
-    return next;
-  });
+  enterCloud(library.root, { workerName: 'snip', d1: { name: 'snip', id: 'd1' }, kv: { name: 'OAUTH_KV', id: 'kv' }, bucket: 'snip-files', ownerId: 'tester', detachedAt: null });
   const emitter = collectedEmitter();
   const deps = {
     fetch: async () => { throw new Error('detach must not use the network'); },
@@ -1105,7 +1136,6 @@ test('detach is offline, keeps the cloud record and refuses during enabling', as
 
 test('delete-resources refuses without an exact host confirmation', async () => {
   const library = fakeLibrary();
-  stateModule.setMode(library.root, 'cloud');
   stateModule.updateState(library.root, (next) => {
     next.cloud = { url: PROVIDED, accountId: 'acct', workerName: 'snip', d1: { name: 'snip', id: 'd1' }, kv: { name: 'OAUTH_KV', id: 'kv' }, bucket: 'snip-files' };
     return next;
@@ -1138,7 +1168,7 @@ test('delete-resources refuses without an exact host confirmation', async () => 
 test('abort returns an interrupted enabling to local and never touches a healthy cloud', async () => {
   const library = fakeLibrary();
   const emitter = collectedEmitter();
-  const ctx = createContext({ root: library.root, dataRoot: library.root, flags: {}, emit: emitter.emit, api: {}, wrangler: { bin: '/x', run: async () => ({ ok: true }) }, deps: { fetch: async () => { throw new Error('no network'); } } });
+  const ctx = plainContext(library.root, {}, emitter.emit, { fetch: async () => { throw new Error('no network'); } });
   stateModule.beginEnabling(library.root);
   const result = await commands.commandAbort(ctx);
   assert.equal(result.ok, true);
@@ -1265,28 +1295,20 @@ test('a usage error is one result event with retryable false, never a missing fi
 function snapshotContext(library, { action, confirm = undefined, mode = 'local', counts = { refs: 7, pages: 3, files: 2, bytes: 24 } } = {}) {
   const emitter = collectedEmitter();
   const started = [];
-  const ctx = createContext({
-    root: library.root,
-    dataRoot: library.root,
-    flags: { confirm, snapshotAction: action },
-    emit: emitter.emit,
-    api: {},
-    wrangler: { bin: '/x', run: async () => ({ ok: true }) },
-    deps: {
-      fetch: async () => { throw new Error('no network'); },
-      library: {
-        async withLocalWorker(options, fn) {
-          started.push(options.persist);
-          return fn({
-            transfer: {
-              async status() { return { counts: { refs: counts.refs, pages: counts.pages } }; },
-              async manifest() { return { keys: Array.from({ length: counts.files }, (_, index) => ({ key: `k${index}`, size: counts.bytes / Math.max(1, counts.files) })) }; },
-            },
-            async dispose() {},
-          });
-        },
-        libraryConfig: ({ dataRoot }) => path.join(dataRoot, 'web/wrangler.jsonc'),
+  const ctx = plainContext(library.root, { confirm, snapshotAction: action }, emitter.emit, {
+    fetch: async () => { throw new Error('no network'); },
+    library: {
+      async withLocalWorker(options, fn) {
+        started.push(options.persist);
+        return fn({
+          transfer: {
+            async status() { return { counts: { refs: counts.refs, pages: counts.pages } }; },
+            async manifest() { return { keys: Array.from({ length: counts.files }, (_, index) => ({ key: `k${index}`, size: counts.bytes / Math.max(1, counts.files) })) }; },
+          },
+          async dispose() {},
+        });
       },
+      libraryConfig: ({ dataRoot }) => path.join(dataRoot, 'web/wrangler.jsonc'),
     },
   });
   if (mode === 'cloud') stateModule.updateState(library.root, (next) => { next.mode = 'cloud'; return next; });
@@ -1529,21 +1551,13 @@ test('no resource is created before guard has classified the account', async () 
     };
     let classifyCalls = 0;
     const baseDeps = { fetch: cloudFake.fetch, library: fakeLibraryModule(model), local: LOCAL_FAKE };
-    const ctx = createContext({
-      root: model.root,
-      dataRoot: model.root,
-      flags: { login: 'tester', domain: 'tester', noOpen: true, adoptExisting: scenario === 'adopt-existing' },
-      emit: emitter.emit,
-      api: fakeApi(model),
-      wrangler,
-      deps: {
-        ...baseDeps,
-        classify: (context) => { classifyCalls++; return setup.classifyAccount(context); },
-        transferOf: (context) => ({ status: async () => ({
-          version: '1.1.0', counts: { refs: 1284, pages: 0, collections: 0 }, hasOwner: true, ownerId: 'tester',
-          ownerSecretHash: transfer.ownerSecretHash(context.secrets().ownerLinkSecret),
-        }) }),
-      },
+    const ctx = modelContext(model, wrangler, { adoptExisting: scenario === 'adopt-existing' }, emitter.emit, {
+      ...baseDeps,
+      classify: (context) => { classifyCalls++; return setup.classifyAccount(context); },
+      transferOf: (context) => ({ status: async () => ({
+        version: '1.1.0', counts: { refs: 1284, pages: 0, collections: 0 }, hasOwner: true, ownerId: 'tester',
+        ownerSecretHash: transfer.ownerSecretHash(context.secrets().ownerLinkSecret),
+      }) }),
     });
     emitter.emit.human = (step, action, url, message) => {
       if (step === 'owner') cloudFake.setOwner(true);
@@ -1570,15 +1584,7 @@ test('the choice path leaves no resource behind when the caller stops', async ()
   });
   const wrangler = fakeWrangler(model);
   const emitter = collectedEmitter();
-  const ctx = createContext({
-    root: model.root,
-    dataRoot: model.root,
-    flags: { login: 'tester', domain: 'tester', noOpen: true },
-    emit: emitter.emit,
-    api: fakeApi(model),
-    wrangler,
-    deps: { fetch: fakeCloud(model).fetch, library: fakeLibraryModule(model), local: LOCAL_FAKE },
-  });
+  const ctx = modelContext(model, wrangler, {}, emitter.emit, { fetch: fakeCloud(model).fetch, library: fakeLibraryModule(model), local: LOCAL_FAKE });
   await assert.rejects(() => commands.commandSetup(ctx), (error) => error.code === 'NEEDS_INPUT');
   const creates = wrangler.calls.map((call) => call.line).filter((line) => /^(d1 create|kv namespace create|r2 bucket create|deploy|secret|d1 migrations apply)/.test(line));
   assert.deepEqual(creates, [], 'Stop must change nothing');
@@ -1636,23 +1642,15 @@ test('facts survive a resumed run, where preflight is skipped', async () => {
   const library = fakeLibrary();
   const emitter = collectedEmitter();
   let queries = 0;
-  const ctx = createContext({
-    root: library.root,
-    dataRoot: library.root,
-    flags: {},
-    emit: emitter.emit,
-    api: {},
-    wrangler: { bin: '/x', run: async () => ({ ok: true }) },
-    deps: {
-      fetch: async () => { throw new Error('no network'); },
-      local: LOCAL_FAKE,
-      deploy: {
-        ...deploy,
-        localQuery: async (_wrangler, options) => {
-          queries++;
-          assert.ok(options.config, 'the local config must be discovered, not stashed by a skipped step');
-          return [{ rows: 3 }];
-        },
+  const ctx = plainContext(library.root, {}, emitter.emit, {
+    fetch: async () => { throw new Error('no network'); },
+    local: LOCAL_FAKE,
+    deploy: {
+      ...deploy,
+      localQuery: async (_wrangler, options) => {
+        queries++;
+        assert.ok(options.config, 'the local config must be discovered, not stashed by a skipped step');
+        return [{ rows: 3 }];
       },
     },
   });
@@ -1666,17 +1664,9 @@ test('facts survive a resumed run, where preflight is skipped', async () => {
   assert.equal(queries, 1);
 
   // A step that skips when the library is empty sees the same answer.
-  const emptyCtx = createContext({
-    root: library.root,
-    dataRoot: library.root,
-    flags: {},
-    emit: emitter.emit,
-    api: {},
-    wrangler: { bin: '/x', run: async () => ({ ok: true }) },
-    deps: {
-      local: LOCAL_FAKE,
-      deploy: { ...deploy, localQuery: async () => [{ rows: 0 }] },
-    },
+  const emptyCtx = plainContext(library.root, {}, emitter.emit, {
+    local: LOCAL_FAKE,
+    deploy: { ...deploy, localQuery: async () => [{ rows: 0 }] },
   });
   assert.equal((await emptyCtx.libraryFacts()).empty, true);
 });
@@ -1726,18 +1716,10 @@ test('the owner step never opens a browser with --no-open', async () => {
   const model = buildModel({ hasOwner: false });
   cloudFake.setOwner(true);
   void model;
-  const ctx = createContext({
-    root: library.root,
-    dataRoot: library.root,
-    flags: { noOpen: true },
-    emit: emitter.emit,
-    api: {},
-    wrangler: { bin: '/x', run: async () => ({ ok: true }) },
-    deps: {
-      fetch: cloudFake.fetch,
-      local: LOCAL_FAKE,
-      transferOf: () => ({ status: async () => ({ hasOwner: true, counts: {} }) }),
-    },
+  const ctx = plainContext(library.root, { noOpen: true }, emitter.emit, {
+    fetch: cloudFake.fetch,
+    local: LOCAL_FAKE,
+    transferOf: () => ({ status: async () => ({ hasOwner: true, counts: {} }) }),
   });
   ctx.openUrl = async () => { opened++; return { opened: true }; };
   stateModule.updateState(library.root, (next) => {
@@ -1862,7 +1844,7 @@ test('step messages name an adopted library, not an empty one', async () => {
     return next;
   });
   const emitter = collectedEmitter();
-  const ctx = createContext({ root: library.root, dataRoot: library.root, flags: {}, emit: emitter.emit, api: {}, wrangler: { bin: '/x', run: async () => ({ ok: true }) }, deps: { local: LOCAL_FAKE, deploy: { ...deploy, localQuery: async () => [{ rows: 4 }] } } });
+  const ctx = plainContext(library.root, {}, emitter.emit, { local: LOCAL_FAKE, deploy: { ...deploy, localQuery: async () => [{ rows: 4 }] } });
   const step = setup.setupSteps().find((entry) => entry.id === 'export');
   assert.equal(await step.skip(ctx), true);
   assert.match(step.skipMessage(ctx), /existing cloud library/);
@@ -1874,7 +1856,7 @@ test('a library of only uploaded images or boards is not empty, so the move copi
     const library = fakeLibrary();
     stateModule.beginEnabling(library.root);
     const localQuery = async (_wrangler, options) => [{ rows: new RegExp(`FROM ${table}\\b`).test(options.sql) ? rows : 0 }];
-    const ctx = createContext({ root: library.root, dataRoot: library.root, flags: {}, emit: collectedEmitter().emit, api: {}, wrangler: { bin: '/x', run: async () => ({ ok: true }) }, deps: { local: LOCAL_FAKE, deploy: { ...deploy, localQuery } } });
+    const ctx = plainContext(library.root, {}, collectedEmitter().emit, { local: LOCAL_FAKE, deploy: { ...deploy, localQuery } });
     assert.equal((await ctx.libraryFacts()).empty, empty, `${rows} ${table}`);
   }
 });
@@ -1984,21 +1966,11 @@ test('a second snapshot delete is NO_SNAPSHOT, not a journaled success', async (
 });
 
 test('owner link on a bare CLI does not wait when an owner already exists', async () => {
-  const library = fakeLibrary();
-  stateModule.writeSecrets(library.root, { version: 1, ownerLinkSecret: crypto.randomBytes(32).toString('hex'), captureToken: 'c' });
-  stateModule.updateState(library.root, (next) => {
-    next.mode = 'cloud';
-    next.cloud = { url: PROVIDED, accountId: 'acct', ownerId: 'tester' };
-    return next;
-  });
+  const library = ownerLibrary();
   const emitter = collectedEmitter();
-  const ctx = createContext({
-    root: library.root, dataRoot: library.root, flags: { ownerAction: 'link', noOpen: true }, emit: emitter.emit, api: {},
-    wrangler: { bin: '/x', run: async () => ({ ok: true }) },
-    deps: {
-      fetch: async () => { throw new Error('no network'); },
-      transferOf: () => ({ status: async () => ({ hasOwner: true, ownerId: 'tester' }) }),
-    },
+  const ctx = plainContext(library.root, { ownerAction: 'link', noOpen: true }, emitter.emit, {
+    fetch: async () => { throw new Error('no network'); },
+    transferOf: () => ({ status: async () => ({ hasOwner: true, ownerId: 'tester' }) }),
   });
   const result = await commands.commandOwner(ctx);
   assert.equal(result.ok, true);
@@ -2014,14 +1986,15 @@ function ownerLinkPort(link) {
   return Number(payload.split('|').pop());
 }
 
+/** The nonce an owner link carries, read back out of the signed payload (payload|ownerId|exp|nonce|port). */
+function ownerLinkNonce(link) {
+  return new URL(link).searchParams.get('t').split('.')[0].split('|')[3];
+}
+
 function ownerLibrary({ ownerId = 'tester' } = {}) {
   const library = fakeLibrary();
   stateModule.writeSecrets(library.root, { version: 1, ownerLinkSecret: crypto.randomBytes(32).toString('hex'), captureToken: 'c' });
-  stateModule.updateState(library.root, (next) => {
-    next.mode = 'cloud';
-    next.cloud = { url: PROVIDED, accountId: 'acct', ownerId };
-    return next;
-  });
+  enterCloud(library.root, { ownerId });
   return library;
 }
 
@@ -2029,14 +2002,10 @@ test('owner link --no-handoff mints a port-0 link and ends at the mint', async (
   const library = ownerLibrary();
   const emitter = collectedEmitter();
   const opened = [];
-  const ctx = createContext({
-    root: library.root, dataRoot: library.root, flags: { ownerAction: 'link', managed: true, noHandoff: true }, emit: emitter.emit, api: {},
-    wrangler: { bin: '/x', run: async () => ({ ok: true }) },
-    deps: {
-      // Neither call may happen: the run has nothing to wait for.
-      sleep: async () => { throw new Error('the command must not wait'); },
-      transferOf: () => ({ status: async () => { throw new Error('the command must not poll'); } }),
-    },
+  const ctx = plainContext(library.root, { ownerAction: 'link', managed: true, noHandoff: true }, emitter.emit, {
+    // Neither call may happen: the run has nothing to wait for.
+    sleep: async () => { throw new Error('the command must not wait'); },
+    transferOf: () => ({ status: async () => { throw new Error('the command must not poll'); } }),
   });
   ctx.openUrl = async (url) => { opened.push(url); return { opened: true }; };
 
@@ -2058,11 +2027,7 @@ test('owner link --no-handoff mints a port-0 link and ends at the mint', async (
 test('owner link --managed still hands off when --no-handoff is absent', async () => {
   const library = ownerLibrary();
   const emitter = collectedEmitter();
-  const ctx = createContext({
-    root: library.root, dataRoot: library.root, flags: { ownerAction: 'link', noOpen: true, managed: true }, emit: emitter.emit, api: {},
-    wrangler: { bin: '/x', run: async () => ({ ok: true }) },
-    deps: { transferOf: () => ({ status: async () => ({ hasOwner: true, ownerId: 'tester' }) }) },
-  });
+  const ctx = plainContext(library.root, { ownerAction: 'link', noOpen: true, managed: true }, emitter.emit, { transferOf: () => ({ status: async () => ({ hasOwner: true, ownerId: 'tester' }) }) });
 
   const pending = commands.commandOwner(ctx).then((value) => value, (error) => ({ error }));
   let link = null;
@@ -2074,7 +2039,10 @@ test('owner link --managed still hands off when --no-handoff is absent', async (
   assert.ok(link, 'the link is emitted before the run waits on the token');
   const port = ownerLinkPort(link);
   assert.ok(port > 0, 'the app\'s own link still carries a live loopback port');
-  const stored = await fetch(`http://127.0.0.1:${port}/store`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: 'session-value' }) });
+  // The loopback only takes the nonce of the link it minted: a process that has the port but not the link is refused.
+  assert.equal((await storeToken(port, { token: 'forged' })).status, 403);
+  assert.equal((await storeToken(port, { token: 'forged', nonce: 'f'.repeat(32) })).status, 403);
+  const stored = await storeToken(port, { token: 'session-value', nonce: ownerLinkNonce(link) });
   assert.equal(stored.status, 200);
 
   const settled = await Promise.race([pending, new Promise((resolve) => setTimeout(() => resolve('timeout'), 5000))]);
@@ -2095,9 +2063,7 @@ test('setup ignores --no-handoff: its owner step is how this Mac signs itself in
       if (step !== 'owner') return;
       const port = ownerLinkPort(url);
       ports.push(port);
-      if (port > 0) {
-        fetch(`http://127.0.0.1:${port}/store`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: 'app-session' }) }).catch(() => {});
-      }
+      if (port > 0) storeToken(port, { token: 'app-session', nonce: ownerLinkNonce(url) }).catch(() => {});
     },
   });
   assert.deepEqual(ports.length, 1);
@@ -2110,22 +2076,14 @@ test('setup ignores --no-handoff: its owner step is how this Mac signs itself in
 test('owner link waits for the first owner, then reports Signed in', async () => {
   const library = fakeLibrary();
   stateModule.writeSecrets(library.root, { version: 1, ownerLinkSecret: crypto.randomBytes(32).toString('hex'), captureToken: 'c' });
-  stateModule.updateState(library.root, (next) => {
-    next.mode = 'cloud';
-    next.cloud = { url: PROVIDED, accountId: 'acct' };
-    return next;
-  });
+  enterCloud(library.root);
   let hasOwner = false;
   let ticks = 0;
   const emitter = collectedEmitter();
-  const ctx = createContext({
-    root: library.root, dataRoot: library.root, flags: { ownerAction: 'link', noOpen: true }, emit: emitter.emit, api: {},
-    wrangler: { bin: '/x', run: async () => ({ ok: true }) },
-    deps: {
-      fetch: async () => { throw new Error('no network'); },
-      sleep: async () => { ticks++; hasOwner = true; },
-      transferOf: () => ({ status: async () => ({ hasOwner }) }),
-    },
+  const ctx = plainContext(library.root, { ownerAction: 'link', noOpen: true }, emitter.emit, {
+    fetch: async () => { throw new Error('no network'); },
+    sleep: async () => { ticks++; hasOwner = true; },
+    transferOf: () => ({ status: async () => ({ hasOwner }) }),
   });
   const result = await commands.commandOwner(ctx);
   assert.equal(result.ok, true);
@@ -2139,13 +2097,9 @@ test('status is offline, and status --check is the only form that goes to the ne
   stateModule.setMode(library.root, 'local');
   let calls = 0;
   const emitter = collectedEmitter();
-  const make = (check) => createContext({
-    root: library.root, dataRoot: library.root, flags: { check }, emit: emitter.emit, api: {},
-    wrangler: { bin: '/x', run: async () => ({ ok: true }) },
-    deps: {
-      fetch: async () => { calls++; return new Response('ok'); },
-      local: { ...LOCAL_FAKE, reachable: async () => true },
-    },
+  const make = (check) => plainContext(library.root, { check }, emitter.emit, {
+    fetch: async () => { calls++; return new Response('ok'); },
+    local: { ...LOCAL_FAKE, reachable: async () => true },
   });
   const offline = await commands.commandStatus(make(false));
   assert.equal(calls, 0, 'status never reaches the network');
@@ -2161,11 +2115,7 @@ test('status --check fails when the active surface does not answer', async () =>
   const library = fakeLibrary();
   stateModule.setMode(library.root, 'local');
   const emitter = collectedEmitter();
-  const ctx = createContext({
-    root: library.root, dataRoot: library.root, flags: { check: true }, emit: emitter.emit, api: {},
-    wrangler: { bin: '/x', run: async () => ({ ok: true }) },
-    deps: { fetch: async () => { throw new Error('no network'); }, local: { ...LOCAL_FAKE, reachable: async () => false } },
-  });
+  const ctx = plainContext(library.root, { check: true }, emitter.emit, { fetch: async () => { throw new Error('no network'); }, local: { ...LOCAL_FAKE, reachable: async () => false } });
   await assert.rejects(() => commands.commandStatus(ctx, { check: true }), (error) => error.code === 'LOCAL_UNREACHABLE');
 });
 
@@ -2179,24 +2129,20 @@ test('pull keeps the replaced library as a backup with real counts read through 
   stateDir(stagedState, 'cloud-copy');
   const seen = [];
   const emitter = collectedEmitter();
-  const ctx = createContext({
-    root: library.root, dataRoot: library.root, flags: {}, emit: emitter.emit, api: {},
-    wrangler: { bin: '/x', run: async () => ({ ok: true }) },
-    deps: {
-      fetch: async () => { throw new Error('no network'); },
-      library: {
-        async withLocalWorker(options, fn) {
-          seen.push(options.persist);
-          return fn({
-            transfer: {
-              async status() { return { counts: { refs: 9, pages: 4 } }; },
-              async manifest() { return { keys: [{ key: 'a', size: 10 }, { key: 'b', size: 5 }] }; },
-            },
-            async dispose() {},
-          });
-        },
-        libraryConfig: ({ dataRoot }) => path.join(dataRoot, 'web/wrangler.jsonc'),
+  const ctx = plainContext(library.root, {}, emitter.emit, {
+    fetch: async () => { throw new Error('no network'); },
+    library: {
+      async withLocalWorker(options, fn) {
+        seen.push(options.persist);
+        return fn({
+          transfer: {
+            async status() { return { counts: { refs: 9, pages: 4 } }; },
+            async manifest() { return { keys: [{ key: 'a', size: 10 }, { key: 'b', size: 5 }] }; },
+          },
+          async dispose() {},
+        });
       },
+      libraryConfig: ({ dataRoot }) => path.join(dataRoot, 'web/wrangler.jsonc'),
     },
   });
   const swap = commands.pullSteps({ stagedRoot, stagedState }).find((step) => step.id === 'pull-swap');
@@ -2221,11 +2167,7 @@ test('pull-finish points capture at the local Worker with the local capture toke
   stateModule.writeSecrets(library.root, { version: 1, ownerLinkSecret: 'a'.repeat(64), captureToken: 'cloud-token' });
   fs.mkdirSync(path.join(library.root, 'capture'), { recursive: true });
   fs.writeFileSync(path.join(library.root, 'capture/.env'), 'SNIP_URL=https://snip.example.workers.dev\nCAPTURE_TOKEN=cloud-token\n');
-  const ctx = createContext({
-    root: library.root, dataRoot: library.root, flags: {}, emit: collectedEmitter().emit, api: {},
-    wrangler: { bin: '/x', run: async () => ({ ok: true }) },
-    deps: { fetch: async () => { throw new Error('no network'); }, deploy: { configExists: () => false } },
-  });
+  const ctx = plainContext(library.root, {}, collectedEmitter().emit, { fetch: async () => { throw new Error('no network'); }, deploy: { configExists: () => false } });
   const finish = commands.pullSteps({ stagedRoot: '/unused', stagedState: '/unused' }).find((step) => step.id === 'pull-finish');
   await finish.run(ctx);
   const env = fs.readFileSync(path.join(library.root, 'capture/.env'), 'utf8');
@@ -2280,15 +2222,11 @@ test('pull puts the previous library back when its counts cannot be read', async
   const stagedState = path.join(stagedRoot, 'state');
   stateDir(stagedState, 'cloud-copy');
   const emitter = collectedEmitter();
-  const ctx = createContext({
-    root: library.root, dataRoot: library.root, flags: {}, emit: emitter.emit, api: {},
-    wrangler: { bin: '/x', run: async () => ({ ok: true }) },
-    deps: {
-      fetch: async () => { throw new Error('no network'); },
-      library: {
-        async withLocalWorker() { throw new Error('cannot open'); },
-        libraryConfig: ({ dataRoot }) => path.join(dataRoot, 'web/wrangler.jsonc'),
-      },
+  const ctx = plainContext(library.root, {}, emitter.emit, {
+    fetch: async () => { throw new Error('no network'); },
+    library: {
+      async withLocalWorker() { throw new Error('cannot open'); },
+      libraryConfig: ({ dataRoot }) => path.join(dataRoot, 'web/wrangler.jsonc'),
     },
   });
   const swap = commands.pullSteps({ stagedRoot, stagedState }).find((step) => step.id === 'pull-swap');
@@ -2305,11 +2243,7 @@ test('pull with no previous library records no snapshot at all', async () => {
   const stagedState = path.join(stagedRoot, 'state');
   stateDir(stagedState, 'cloud-copy');
   const emitter = collectedEmitter();
-  const ctx = createContext({
-    root: library.root, dataRoot: library.root, flags: {}, emit: emitter.emit, api: {},
-    wrangler: { bin: '/x', run: async () => ({ ok: true }) },
-    deps: { fetch: async () => { throw new Error('no network'); }, library: { async withLocalWorker() { throw new Error('must not be called'); }, libraryConfig: () => null } },
-  });
+  const ctx = plainContext(library.root, {}, emitter.emit, { fetch: async () => { throw new Error('no network'); }, library: { async withLocalWorker() { throw new Error('must not be called'); }, libraryConfig: () => null } });
   const swap = commands.pullSteps({ stagedRoot, stagedState }).find((step) => step.id === 'pull-swap');
   await swap.run(ctx);
   assert.equal(stateModule.readState(library.root).snapshot, null);
@@ -2350,7 +2284,6 @@ test('the snapshot command runs the contract step ids, in order', async () => {
 
 test('delete-resources verifies every artifact and clears the install record', async () => {
   const library = fakeLibrary();
-  stateModule.setMode(library.root, 'cloud');
   stateModule.updateState(library.root, (next) => {
     next.cloud = { url: PROVIDED, accountId: 'acct', workerName: 'snip', d1: { name: 'snip', id: 'd1' }, kv: { name: 'OAUTH_KV', id: 'kv' }, bucket: 'snip-files' };
     return next;
@@ -2378,7 +2311,6 @@ test('delete-resources verifies every artifact and clears the install record', a
 
   // A surviving database is a failed delete, not a success.
   const library2 = fakeLibrary();
-  stateModule.setMode(library2.root, 'cloud');
   stateModule.updateState(library2.root, (next) => {
     next.cloud = { url: PROVIDED, accountId: 'acct', workerName: 'snip', d1: { name: 'snip', id: 'd1' }, bucket: 'snip-files' };
     return next;
@@ -2393,52 +2325,61 @@ test('delete-resources verifies every artifact and clears the install record', a
   assert.equal(stateModule.readState(library2.root).cloud.url, PROVIDED, 'the record stays until everything is gone');
 });
 
+test('delete-resources refuses while this Mac is using the cloud library', async () => {
+  const library = fakeLibrary();
+  stateModule.updateState(library.root, (next) => {
+    next.mode = 'cloud';
+    next.cloud = { url: PROVIDED, accountId: 'acct', workerName: 'snip', d1: { name: 'snip', id: 'd1' }, kv: { name: 'OAUTH_KV', id: 'kv' }, bucket: 'snip-files' };
+    return next;
+  });
+  const calls = [];
+  const ctx = createContext({
+    root: library.root, dataRoot: library.root, flags: { confirm: 'snip.tester.workers.dev' }, emit: collectedEmitter().emit,
+    api: { workerExists: async () => false },
+    wrangler: { bin: '/x', run: async (args) => { calls.push(args); return { ok: true, stdout: '', stderr: '' }; } },
+    deps: { fetch: async () => { throw new Error('no network'); } },
+  });
+  await assert.rejects(() => commands.commandDeleteResources(ctx), (error) => error.code === 'CLOUD_IN_USE' && /pull/.test(error.hint) && /detach/.test(error.hint));
+  assert.deepEqual(calls, [], 'nothing was deleted');
+  const record = stateModule.readState(library.root);
+  assert.equal(record.mode, 'cloud');
+  assert.equal(record.cloud.url, PROVIDED);
+});
+
 /** A pull-verify context that records which tables verify actually compares. */
-function pullVerifyContext({ library, stagedState, manifestValue, dump, counts, localCounts = counts }) {
+function pullVerifyContext({ library, stagedState, manifestValue, dump, counts, localCounts = counts, stagedKeys = manifestValue.keys }) {
   const queried = [];
   const tableOf = (sql) => (sql.match(/FROM "([A-Za-z0-9_]+)"/) || [])[1];
   const emitter = collectedEmitter();
-  const ctx = createContext({
-    root: library.root,
-    dataRoot: library.root,
-    flags: {},
-    emit: emitter.emit,
-    api: {},
-    wrangler: { bin: '/x', run: async () => ({ ok: true }) },
-    deps: {
-      fetch: async () => { throw new Error('no network'); },
-      deploy: {
-        ...deploy,
-        // The quoted identifier only appears in a per-table digest, so the
-        // "is the library empty" count does not pollute the recording.
-        remoteQuery: async (_wrangler, options) => {
-          const table = tableOf(options.sql);
-          if (table) queried.push(`remote:${table}`);
-          return [{ rows: counts[table] || 0, sig: counts[table] || 0 }];
-        },
-        localQuery: async (_wrangler, options) => {
-          const table = tableOf(options.sql);
-          if (table) queried.push(`local:${table}`);
-          return [{ rows: localCounts[table] || 0, sig: localCounts[table] || 0 }];
-        },
+  const ctx = plainContext(library.root, {}, emitter.emit, {
+    fetch: async () => { throw new Error('no network'); },
+    deploy: {
+      ...deploy,
+      // The quoted identifier only appears in a per-table digest, so the
+      // "is the library empty" count does not pollute the recording.
+      remoteQuery: async (_wrangler, options) => {
+        const table = tableOf(options.sql);
+        if (table) queried.push(`remote:${table}`);
+        return [{ rows: counts[table] || 0, sig: counts[table] || 0 }];
       },
-      library: {
-        async withLocalWorker(_options, fn) {
-          return fn({
-            transfer: { async head() { return 10; } },
-            async dispose() {},
-          });
-        },
-        libraryConfig: ({ dataRoot }) => path.join(dataRoot, 'web/wrangler.jsonc'),
+      localQuery: async (_wrangler, options) => {
+        const table = tableOf(options.sql);
+        if (table) queried.push(`local:${table}`);
+        return [{ rows: localCounts[table] || 0, sig: localCounts[table] || 0 }];
       },
-      local: { ...LOCAL_FAKE, localOrigin: () => 'http://localhost:5199' },
     },
+    library: {
+      async withLocalWorker(_options, fn) {
+        return fn({
+          transfer: { async manifest() { return { keys: stagedKeys }; } },
+          async dispose() {},
+        });
+      },
+      libraryConfig: ({ dataRoot }) => path.join(dataRoot, 'web/wrangler.jsonc'),
+    },
+    local: { ...LOCAL_FAKE, localOrigin: () => 'http://localhost:5199' },
   });
-  stateModule.updateState(library.root, (next) => {
-    next.mode = 'cloud';
-    next.cloud = { url: PROVIDED, accountId: 'acct' };
-    return next;
-  });
+  enterCloud(library.root);
   ctx.reload();
   fs.mkdirSync(path.dirname(stagedState), { recursive: true });
   fs.writeFileSync(path.join(path.dirname(stagedState), 'dump.sql'), dump);
@@ -2514,6 +2455,15 @@ test('a newer Worker that excludes a table the engine has never heard of still v
   assert.deepEqual(queried, ['remote:refs', 'local:refs']);
 });
 
+test('pull-verify fails a downloaded file that is missing or the wrong size', async () => {
+  const key = SYNTHETIC.fileKey(5, 'shot.png');
+  const base = { manifestValue: { tables: { refs: 1 }, keys: [{ key, size: 10 }] }, dump: DUMP_WITH_LEDGER, counts: { refs: 1 } };
+  const truncated = pullVerifyContext({ ...base, library: fakeLibrary(), stagedState: path.join(tempDir(), 'pull/state'), stagedKeys: [{ key, size: 4 }] });
+  await assert.rejects(() => truncated.verify.run(truncated.ctx), (error) => error.code === 'VERIFY_SIZE_MISMATCH' && error.data.cloud === 10 && error.data.local === 4);
+  const absent = pullVerifyContext({ ...base, library: fakeLibrary(), stagedState: path.join(tempDir(), 'pull/state'), stagedKeys: [] });
+  await assert.rejects(() => absent.verify.run(absent.ctx), (error) => error.code === 'VERIFY_FILES_MISSING' && error.data.key === key);
+});
+
 test('pull-verify fails when two zeros would otherwise pass for a copy', async () => {
   const { root } = fakeLibrary();
   const stagedState = path.join(root, 'backups/pull-empty/state');
@@ -2547,23 +2497,19 @@ test('setup verify skips an excluded ledger and compares what the manifest copie
   const queried = [];
   const tableOf = (sql) => (sql.match(/FROM "([A-Za-z0-9_]+)"/) || [])[1];
   const emitter = collectedEmitter();
-  const ctx = createContext({
-    root, dataRoot: root, flags: {}, emit: emitter.emit, api: {},
-    wrangler: { bin: '/x', run: async () => ({ ok: true }) },
-    deps: {
-      // The only network call this step makes is the manifest, over the
-      // transfer client the context builds from deps.fetch.
-      fetch: async () => new Response(JSON.stringify({ tables: { refs: 1, pages: 1 }, keys: [{ key: SYNTHETIC.fileKey(5, 'shot.png'), size: 10 }] }), { status: 200, headers: { 'content-type': 'application/json' } }),
-      local: { ...LOCAL_FAKE, localOrigin: () => null },
-      library: { libraryConfig: ({ dataRoot }) => path.join(dataRoot, 'web/wrangler.jsonc'), async withLocalWorker() { throw new Error('not used'); } },
-      deploy: {
-        ...deploy,
-        remoteQuery: async (_w, options) => { const t = tableOf(options.sql); if (t) queried.push(t); return [{ rows: 1, sig: 1 }]; },
-        localQuery: async (_w, options) => {
-          const t = tableOf(options.sql);
-          if (!t) return [{ rows: 0 }];
-          return [{ rows: 1, sig: 1 }];
-        },
+  const ctx = plainContext(root, {}, emitter.emit, {
+    // The only network call this step makes is the manifest, over the
+    // transfer client the context builds from deps.fetch.
+    fetch: async () => new Response(JSON.stringify({ tables: { refs: 1, pages: 1 }, keys: [{ key: SYNTHETIC.fileKey(5, 'shot.png'), size: 10 }] }), { status: 200, headers: { 'content-type': 'application/json' } }),
+    local: { ...LOCAL_FAKE, localOrigin: () => null },
+    library: { libraryConfig: ({ dataRoot }) => path.join(dataRoot, 'web/wrangler.jsonc'), async withLocalWorker() { throw new Error('not used'); } },
+    deploy: {
+      ...deploy,
+      remoteQuery: async (_w, options) => { const t = tableOf(options.sql); if (t) queried.push(t); return [{ rows: 1, sig: 1 }]; },
+      localQuery: async (_w, options) => {
+        const t = tableOf(options.sql);
+        if (!t) return [{ rows: 0 }];
+        return [{ rows: 1, sig: 1 }];
       },
     },
   });
@@ -2575,11 +2521,7 @@ test('setup verify skips an excluded ledger and compares what the manifest copie
 
 test('deploy waits for the transfer secret to go live before judging the deploy', async () => {
   const library = fakeLibrary();
-  stateModule.setMode(library.root, 'cloud');
-  stateModule.updateState(library.root, (next) => {
-    next.cloud = { url: PROVIDED, accountId: 'acct', workerName: 'snip', d1: { name: 'snip', id: 'd1' }, kv: { name: 'OAUTH_KV', id: 'kv' }, bucket: 'snip-files', workerVersion: '1.1.0' };
-    return next;
-  });
+  enterCloud(library.root, { workerName: 'snip', d1: { name: 'snip', id: 'd1' }, kv: { name: 'OAUTH_KV', id: 'kv' }, bucket: 'snip-files', workerVersion: '1.1.0' });
   const emitter = collectedEmitter();
   let attempts = 0;
   const ctx = createContext({
@@ -2612,11 +2554,7 @@ test('deploy waits for the transfer secret to go live before judging the deploy'
 
 test('deploy still fails when the Worker never answers its status route', async () => {
   const library = fakeLibrary();
-  stateModule.setMode(library.root, 'cloud');
-  stateModule.updateState(library.root, (next) => {
-    next.cloud = { url: PROVIDED, accountId: 'acct', d1: { name: 'snip', id: 'd1' }, kv: { name: 'OAUTH_KV', id: 'kv' }, bucket: 'snip-files' };
-    return next;
-  });
+  enterCloud(library.root, { d1: { name: 'snip', id: 'd1' }, kv: { name: 'OAUTH_KV', id: 'kv' }, bucket: 'snip-files' });
   const emitter = collectedEmitter();
   const ctx = createContext({
     root: library.root, dataRoot: library.root, flags: {}, emit: emitter.emit, api: {},
@@ -2641,6 +2579,7 @@ test('every deploy uploads the bundle again instead of replaying a journaled run
     // A finished earlier deploy in the journal.
     next.steps = [
       { id: 'deploy-preflight', status: 'done', at: new Date().toISOString(), detail: '' },
+      { id: 'deploy-layout', status: 'done', at: new Date().toISOString(), detail: '' },
       { id: 'deploy-schema', status: 'done', at: new Date().toISOString(), detail: '' },
       { id: 'deploy-worker', status: 'done', at: new Date().toISOString(), detail: '' },
       { id: 'deploy-verify', status: 'done', at: new Date().toISOString(), detail: '' },
@@ -2675,8 +2614,210 @@ test('every deploy uploads the bundle again instead of replaying a journaled run
   assert.equal(uploads, 1, 'the bundle is uploaded even though the journal says it was done');
   assert.equal(migrations, 1, 'migrations are re-applied too');
   const started = emitter.events.filter((event) => event.event === 'step' && event.status === 'started').map((event) => event.step);
-  assert.deepEqual(started, ['deploy-preflight', 'deploy-schema', 'deploy-worker', 'deploy-verify']);
+  assert.deepEqual(started, ['deploy-preflight', 'deploy-layout', 'deploy-schema', 'deploy-worker', 'deploy-verify']);
   assert.equal(stateModule.readState(library.root).cloud.workerVersion, '1.1.3');
+});
+
+// ---------- deploy and migrate apply THIS build's migrations ----------
+//
+// `<dataRoot>/cloud` is a copy of the build, refreshed by the deploy layout. The
+// database step reads the migrations from that copy, so the copy has to be
+// refreshed before the step runs, or the first update after a release applies the
+// previous release's migrations and the new Worker goes live on the old schema.
+
+const OLD_MIGRATIONS = ['0001_init.sql', '0002_boards.sql'];
+const NEW_MIGRATIONS = [...OLD_MIGRATIONS, '0003_board_item_z.sql', '0004_capture_lease.sql'];
+const NEWLY_ADDED = ['0003_board_item_z.sql', '0004_capture_lease.sql'];
+
+function writeBuild(root, { migrations, bundle }) {
+  const dir = path.join(root, 'web/migrations');
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  for (const name of migrations) fs.writeFileSync(path.join(dir, name), `-- ${name}\n`);
+  fs.writeFileSync(path.join(root, 'web/dist/snip/index.js'), `export default { bundle: "${bundle}" }\n`);
+}
+
+/**
+ * The state `npm run update` finds: the previous deploy laid out cloud/ from the
+ * OLD build, and the checkout now holds the NEW build.
+ */
+function cloudInstallAfterUpdate() {
+  const library = fakeLibrary();
+  writeBuild(library.root, { migrations: OLD_MIGRATIONS, bundle: 'old-bundle' });
+  deploy.prepareDeployLayout({ root: library.root, dataRoot: library.root, d1Id: 'd1', kvId: 'kv', login: 'tester', url: PROVIDED });
+  writeBuild(library.root, { migrations: NEW_MIGRATIONS, bundle: 'new-bundle' });
+  stateModule.setMode(library.root, 'cloud');
+  stateModule.updateState(library.root, (next) => {
+    next.cloud = { url: PROVIDED, accountId: 'acct', d1: { name: 'snip', id: 'd1' }, kv: { name: 'OAUTH_KV', id: 'kv' }, bucket: 'snip-files', workerVersion: '1.4.0' };
+    return next;
+  });
+  return library;
+}
+
+/**
+ * wrangler's own listing, in the shape the real one prints (boxed tables with a rule
+ * between rows): the pending names, then the same names again with a status.
+ */
+function appliedListing(names) {
+  const pending = ['┌────────────────────────┐', '│ name                   │', '├────────────────────────┤', names.map((name) => `│ ${name.padEnd(22)} │`).join('\n├────────────────────────┤\n'), '└────────────────────────┘'];
+  const done = ['┌────────────────────────┬────────┐', '│ name                   │ status │', '├────────────────────────┼────────┤', names.map((name) => `│ ${name.padEnd(22)} │ ✅     │`).join('\n├────────────────────────┼────────┤\n'), '└────────────────────────┴────────┘'];
+  return `Migrations to be applied:\n${pending.join('\n')}\n? About to apply ${names.length} migration(s)\n🤖 Using fallback value in non-interactive context: yes\n${done.join('\n')}`;
+}
+
+/**
+ * A wrangler double that reads what the real one reads: the migrations folder the
+ * deploy config points at, and the bundle in cloud/snip at the moment of `deploy`.
+ */
+function orderWrangler(dataRoot, applied) {
+  const ledger = new Set(applied);
+  const calls = [];
+  const reply = (stdout) => ({ ok: true, code: 0, stdout, stderr: '', output: stdout });
+  return {
+    bin: '/fake/wrangler.js',
+    calls,
+    ledger,
+    async run(args) {
+      if (args[0] === 'd1' && args[1] === 'migrations' && args[2] === 'apply') {
+        const config = args[args.indexOf('--config') + 1];
+        const folder = path.resolve(path.dirname(config), JSON.parse(fs.readFileSync(config, 'utf8')).d1_databases[0].migrations_dir);
+        const pending = fs.readdirSync(folder).filter((name) => name.endsWith('.sql')).sort().filter((name) => !ledger.has(name));
+        calls.push({ kind: 'migrate', pending });
+        for (const name of pending) ledger.add(name);
+        return reply(pending.length ? appliedListing(pending) : '✅ No migrations to apply!');
+      }
+      if (args[0] === 'deploy') {
+        calls.push({ kind: 'deploy', bundle: fs.readFileSync(path.join(dataRoot, 'cloud/snip/index.js'), 'utf8'), schema: [...ledger].sort() });
+        return reply('Uploaded snip');
+      }
+      calls.push({ kind: args.join(' ') });
+      return reply('');
+    },
+  };
+}
+
+function updateContext(library, wrangler) {
+  const emitter = collectedEmitter();
+  const layouts = [];
+  const ctx = createContext({
+    root: library.root, dataRoot: library.root, flags: {}, emit: emitter.emit, api: {}, wrangler,
+    deps: {
+      fetch: async () => { throw new Error('no network'); },
+      sleep: async () => {},
+      cloud: { ...cloudModule, putSecrets: async () => {}, deleteSecret: async () => {} },
+      // The real layout, counted: one refresh per command is the contract.
+      deploy: { ...deploy, prepareDeployLayout: (options) => { layouts.push(options); return deploy.prepareDeployLayout(options); } },
+      transferOf: () => ({ status: async () => ({ version: '1.5.0' }) }),
+    },
+  });
+  ctx.reload();
+  return { ctx, events: emitter.events, layouts };
+}
+
+const startedSteps = (events) => events.filter((event) => event.event === 'step' && event.status === 'started').map((event) => event.step);
+const stepMessage = (events, step) => events.find((event) => event.event === 'step' && event.step === step && event.status === 'ok').message;
+const kinds = (wrangler) => wrangler.calls.map((call) => call.kind).filter((kind) => kind === 'migrate' || kind === 'deploy');
+
+test('deploy applies the new build\'s migrations, and only then deploys the Worker', async () => {
+  const library = cloudInstallAfterUpdate();
+  const wrangler = orderWrangler(library.root, OLD_MIGRATIONS);
+  const { ctx, events, layouts } = updateContext(library, wrangler);
+
+  const result = await commands.commandDeploy(ctx);
+
+  assert.equal(result.ok, true);
+  const migrate = wrangler.calls.find((call) => call.kind === 'migrate');
+  assert.deepEqual(migrate.pending, NEWLY_ADDED, 'the migrations applied are the new release\'s, not the previous one\'s');
+  assert.deepEqual(kinds(wrangler), ['migrate', 'deploy'], 'the schema is migrated before the Worker goes live');
+  const worker = wrangler.calls.find((call) => call.kind === 'deploy');
+  assert.deepEqual(worker.schema, NEW_MIGRATIONS, 'the new Worker only ever goes live on the new schema');
+  assert.match(worker.bundle, /new-bundle/, 'and the Worker uploaded is the new build');
+  assert.equal(layouts.length, 1, 'the deploy layout is refreshed in exactly one place');
+  const order = startedSteps(events);
+  assert.ok(order.indexOf('deploy-layout') !== -1 && order.indexOf('deploy-layout') < order.indexOf('deploy-schema'), 'the layout is refreshed before anything reads it');
+  assert.ok(order.indexOf('deploy-schema') < order.indexOf('deploy-worker'));
+  assert.equal(stepMessage(events, 'deploy-schema'), 'Applied 2 migrations');
+  assert.deepEqual(result.data.migrations, NEWLY_ADDED);
+});
+
+test('deploy says so when no migration is pending', async () => {
+  const library = cloudInstallAfterUpdate();
+  const wrangler = orderWrangler(library.root, NEW_MIGRATIONS);
+  const { ctx, events, layouts } = updateContext(library, wrangler);
+
+  const result = await commands.commandDeploy(ctx);
+
+  assert.equal(result.ok, true);
+  assert.equal(stepMessage(events, 'deploy-schema'), 'Database is up to date');
+  assert.deepEqual(result.data.migrations, []);
+  assert.deepEqual(kinds(wrangler), ['migrate', 'deploy']);
+  assert.equal(layouts.length, 1);
+});
+
+test('migrate applies the new build\'s migrations from a copy it refreshed itself', async () => {
+  const library = cloudInstallAfterUpdate();
+  const wrangler = orderWrangler(library.root, OLD_MIGRATIONS);
+  const { ctx, events, layouts } = updateContext(library, wrangler);
+
+  const result = await commands.commandMigrate(ctx);
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(wrangler.calls.find((call) => call.kind === 'migrate').pending, NEWLY_ADDED);
+  assert.deepEqual(kinds(wrangler), ['migrate'], 'migrate never deploys the Worker');
+  assert.equal(layouts.length, 1, 'the same single layout step as deploy');
+  const order = startedSteps(events);
+  assert.ok(order.indexOf('migrate-layout') !== -1 && order.indexOf('migrate-layout') < order.indexOf('migrate-apply'));
+  assert.equal(stepMessage(events, 'migrate-apply'), 'Applied 2 migrations');
+  assert.equal(result.message, 'Applied 2 migrations');
+  assert.deepEqual(result.data.migrations, NEWLY_ADDED);
+});
+
+test('migrate says so when no migration is pending', async () => {
+  const library = cloudInstallAfterUpdate();
+  const wrangler = orderWrangler(library.root, NEW_MIGRATIONS);
+  const { ctx } = updateContext(library, wrangler);
+
+  const result = await commands.commandMigrate(ctx);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.message, 'Database is up to date');
+  assert.deepEqual(result.data.migrations, []);
+});
+
+test('migrate, then deploy by hand, leaves the new schema under the new Worker', async () => {
+  const library = cloudInstallAfterUpdate();
+  const wrangler = orderWrangler(library.root, OLD_MIGRATIONS);
+
+  await commands.commandMigrate(updateContext(library, wrangler).ctx);
+  const deployed = updateContext(library, wrangler);
+  const result = await commands.commandDeploy(deployed.ctx);
+
+  assert.equal(result.ok, true);
+  const migrations = wrangler.calls.filter((call) => call.kind === 'migrate');
+  assert.deepEqual(migrations.map((call) => call.pending), [NEWLY_ADDED, []], 'the deploy has nothing left to apply');
+  const worker = wrangler.calls.find((call) => call.kind === 'deploy');
+  assert.deepEqual(worker.schema, NEW_MIGRATIONS);
+  assert.match(worker.bundle, /new-bundle/);
+});
+
+test('deploy and migrate stop before touching Cloudflare when the build is gone, instead of using the old copy', async () => {
+  for (const [command, run] of [['deploy', commands.commandDeploy], ['migrate', commands.commandMigrate]]) {
+    const library = cloudInstallAfterUpdate();
+    fs.rmSync(path.join(library.root, 'web/migrations'), { recursive: true, force: true });
+    const wrangler = orderWrangler(library.root, OLD_MIGRATIONS);
+    const { ctx, layouts } = updateContext(library, wrangler);
+    await assert.rejects(() => run(ctx), (error) => error.code === 'NO_BUILD', `${command} reports the missing build`);
+    assert.deepEqual(wrangler.calls, [], `${command} did not apply the previous release's migrations`);
+    assert.equal(layouts.length, 0, `${command} did not half-refresh the copy`);
+  }
+});
+
+test('the applied migrations are read from wrangler\'s listing, whatever form it prints them in', () => {
+  const at = (stdout, stderr = '') => deploy.appliedMigrations({ stdout, stderr });
+  assert.deepEqual(at(appliedListing(NEWLY_ADDED)), NEWLY_ADDED, 'a boxed table, listed again with a status, counts each once');
+  assert.deepEqual(at('✅ No migrations to apply!'), []);
+  assert.deepEqual(at('', appliedListing(['0001_init.sql'])), ['0001_init.sql'], 'stderr is read too');
+  assert.deepEqual(at('Migrations to be applied:\n0001_init.sql\n\n✅ Applied 1 migration'), ['0001_init.sql'], 'a plain list works');
+  assert.deepEqual(at(''), []);
 });
 
 // ---------- transient Cloudflare failures ----------
@@ -2848,11 +2989,7 @@ test('a create is never retried, because a second database cannot be undone', as
 
 test('deploy rides out a Cloudflare hiccup and says so once', async () => {
   const library = fakeLibrary();
-  stateModule.setMode(library.root, 'cloud');
-  stateModule.updateState(library.root, (next) => {
-    next.cloud = { url: PROVIDED, accountId: 'acct', d1: { name: 'snip', id: 'd1' }, kv: { name: 'OAUTH_KV', id: 'kv' }, bucket: 'snip-files', workerVersion: '1.1.3' };
-    return next;
-  });
+  enterCloud(library.root, { d1: { name: 'snip', id: 'd1' }, kv: { name: 'OAUTH_KV', id: 'kv' }, bucket: 'snip-files', workerVersion: '1.1.3' });
   const emitter = collectedEmitter();
   const clock = recordingSleep();
   let deploys = 0;
@@ -2895,6 +3032,27 @@ test('a deploy that stays broken reports retryable in the CLI result', async () 
   assert.equal(last.ok, false);
   assert.equal(last.data.code, 'LOCAL_UNREACHABLE');
   assert.equal(last.retryable, true, 'a step failure that names itself retryable now says so');
+});
+
+test('a failed setup --check and a failed status --check write nothing', async () => {
+  const io = { stdout: { write: () => true }, stderr: { write: () => true } };
+  const empty = tempDir();
+  const check = await cli.main(['setup', '--check', '--root', empty, '--data-root', empty, '--json'], io);
+  assert.equal(check.code, 4, 'harness check: the preflight failed');
+  assert.deepEqual(fs.readdirSync(empty), [], 'no journal, no lock, nothing');
+
+  const library = fakeLibrary();
+  fs.writeFileSync(path.join(library.root, 'web/.dev.vars'), 'PUBLIC_URL=http://127.0.0.1:1\n');
+  const status = await cli.main(['status', '--check', '--root', library.root, '--data-root', library.root, '--json'], io);
+  assert.equal(status.code, 1, 'harness check: the status check failed');
+  assert.equal(fs.existsSync(path.join(library.root, '.snip')), false);
+});
+
+test('a mode this engine never writes reads as local', () => {
+  const library = fakeLibrary();
+  stateModule.writeState(library.root, { ...stateModule.emptyState(), mode: 'disabling' });
+  assert.equal(stateModule.readState(library.root).mode, 'local');
+  assert.throws(() => stateModule.setMode(library.root, 'disabling'), (error) => error.code === 'STATE_INVALID');
 });
 
 test('setup --resume behaves exactly like setup', async () => {

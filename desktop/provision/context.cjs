@@ -120,8 +120,6 @@ function createContext({ root, dataRoot, flags = {}, emit, api, wrangler, releas
       }
       return libraryFactsPromise;
     },
-    runningStep: null,
-    setCurrentStep(id) { ctx.runningStep = id; },
     journal(id, status, detail = '') { current = state.journalStep(dataRoot, id, status, detail); return current; },
     stepStatus(id) {
       const step = (current.steps || []).find((entry) => entry && entry.id === id);
@@ -206,6 +204,22 @@ function createContext({ root, dataRoot, flags = {}, emit, api, wrangler, releas
   return ctx;
 }
 
+/** An interrupted setup resumes on the account and address it recorded; a different one needs an abort first. */
+function refuseChangedTarget(ctx, record) {
+  const { WORKER_NAME, canonicalOrigin, publicUrlFrom } = require('./lib.cjs');
+  const { account, domain } = ctx.flags;
+  const changed = account && record.accountId && account !== record.accountId
+    ? 'Cloudflare account'
+    : domain && record.url && canonicalOrigin(publicUrlFrom(domain, WORKER_NAME)) !== record.url
+      ? 'address'
+      : null;
+  if (!changed) return;
+  throw new StepError('SETUP_TARGET_CHANGED', `An interrupted setup on this Mac is using a different ${changed}.`, {
+    hint: 'Run `abort` first, then run setup again. To continue the interrupted setup instead, leave the option out.',
+    retryable: false,
+  });
+}
+
 /** Mark the run `enabling` before any mutation, then run the steps. */
 async function runSetup(ctx, steps) {
   const { beginEnabling } = state;
@@ -213,16 +227,11 @@ async function runSetup(ctx, steps) {
   if (before.mode === 'cloud') {
     throw new StepError('ALREADY_CLOUD', 'This library is already using the cloud.', { hint: 'Run `pull` to copy it back, or `status` to see it.' });
   }
-  if (before.mode !== 'enabling') beginEnabling(ctx.dataRoot);
-  else if (!ctx.reload().cloud) beginEnabling(ctx.dataRoot);
+  if (before.mode !== 'enabling' || !before.cloud) beginEnabling(ctx.dataRoot);
+  else refuseChangedTarget(ctx, before.cloud);
   ctx.reload();
   const result = await runSteps(steps, ctx);
   return result;
-}
-
-function pendingStepIds(all, done) {
-  const finished = new Set((done || []).filter((step) => step && (step.status === 'done' || step.status === 'skipped')).map((step) => step.id));
-  return all.filter((id) => !finished.has(id));
 }
 
 /**
@@ -240,4 +249,4 @@ function retryOf(ctx) {
   };
 }
 
-module.exports = { createContext, pendingStepIds, retryOf, runSetup };
+module.exports = { createContext, retryOf, runSetup };

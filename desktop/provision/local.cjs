@@ -119,12 +119,17 @@ function createLocalApi(origin, { fetchImpl = fetch, timeoutMs = 20_000 } = {}) 
     return { ok: result.ok, status: result.status, reference: result.body };
   }
 
+  async function resumeReference(id) {
+    const result = await call(`/api/references/${encodeURIComponent(id)}/resume`, { method: 'POST', body: {} });
+    return { ok: result.ok, status: result.status };
+  }
+
   async function agent() {
     const result = await call('/api/agent');
     return result.ok ? result.body : null;
   }
 
-  return { agent, call, listReferences, origin, pauseReference };
+  return { agent, call, listReferences, origin, pauseReference, resumeReference };
 }
 
 module.exports = {

@@ -229,7 +229,7 @@ const api = {
   pause: async () => true,
   fail: async () => {},
 } as unknown as SnipApi
-const job: Job = { id: "bench", url, mode: "crawl", maxPages: pageCount, attempt: "a1", resume: null, options: null, recordingFormats: ["gif", "webm"] }
+const job: Job = { id: "bench", url, mode: "crawl", maxPages: pageCount, attempt: "a1", lease: "l1", resume: null, options: null, recordingFormats: ["gif", "webm"] }
 
 const browser = await chromium.launch({ headless: true, args: [...CHROMIUM_ARGS, ...extraArgs], executablePath: process.env.CHROMIUM_PATH || undefined })
 await sampler.start()

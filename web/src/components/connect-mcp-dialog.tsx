@@ -5,20 +5,16 @@ import { notify } from "@/components/notify"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { claudeCodeCommand, codexCommand, codexToml, isLocalOrigin, mcpJsonConfig, mcpUrl, opencodeJson } from "@/lib/mcp"
-import { cn } from "@/lib/utils"
+import { cn, copyToClipboard } from "@/lib/utils"
 
 // Pattern from MCP connect screens on Mobbin (Descript, Cursor, Perplexity): the server URL up
 // top with its own copy button, then per-client steps, then what happens on first sign-in.
 
 async function copyText(text: string, label: string) {
-  try {
-    await navigator.clipboard.writeText(text)
-    notify(`Copied ${label}`)
-    return true
-  } catch {
-    window.prompt(`Copy the ${label}`, text)
-    return false
-  }
+  const copied = await copyToClipboard(text)
+  if (copied) notify(`Copied ${label}`)
+  else window.prompt(`Copy the ${label}`, text)
+  return copied
 }
 
 function CopyButton({ text, label, className, children }: { text: string; label: string; className?: string; children?: ReactNode }) {

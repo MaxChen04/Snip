@@ -2,6 +2,7 @@ import { memo, useState } from "react"
 import { GridIcon, MoreHorizontalIcon, PencilIcon } from "@/components/icons"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import type { BoardGroup, BoardItemKind } from "@/lib/api"
+import { MAX_NAME } from "../../../shared/types"
 
 const WORDS: [BoardItemKind, string][] = [
   ["page", "page"],
@@ -65,7 +66,7 @@ export const GroupFrame = memo(function GroupFrame({
             data-no-drag
             defaultValue={group.name}
             aria-label="Group name"
-            maxLength={120}
+            maxLength={MAX_NAME}
             onFocus={(e) => e.currentTarget.select()}
             onBlur={(e) => done(e.currentTarget.value)}
             onKeyDown={(e) => {

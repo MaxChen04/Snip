@@ -19,10 +19,11 @@ test("the HTML snapshot and styles file are gzipped only for a Worker that says 
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`
   const browser = await chromium.launch()
   try {
-    for (const { name, features, gzipped } of [
+    for (const { name, features, gzipped, split = false } of [
       { name: "older Worker omits features", features: undefined, gzipped: false },
       { name: "Worker that predates the flag", features: ["sections", "live", "schemes"] as Job["features"], gzipped: false },
       { name: "Worker that advertises gzip", features: ["sections", "live", "schemes", "gzip"] as Job["features"], gzipped: true },
+      { name: "Worker that takes split styles", features: ["sections", "live", "schemes", "gzip", "style-parts"] as Job["features"], gzipped: true, split: true },
     ]) {
       await t.test(name, async () => {
         const uploads = new Map<string, { bytes: Buffer; contentType: string }>()
@@ -37,7 +38,7 @@ test("the HTML snapshot and styles file are gzipped only for a Worker that says 
           addPage: async (_id: string, page: PageUpload) => { pages.push(page) },
           complete: async () => {},
         } as unknown as SnipApi
-        const job: Job = { id: "gz", url, mode: "single", maxPages: 1, attempt: "a".repeat(32), resume: null, options: null, ...(features ? { features } : {}) }
+        const job: Job = { id: "gz", url, mode: "single", maxPages: 1, attempt: "a".repeat(32), lease: "b".repeat(32), resume: null, options: null, ...(features ? { features } : {}) }
         await captureJob(browser, api, job)
         assert.equal(pages.length, 1)
         const { snapshotKey, stylesKey } = pages[0]!
@@ -56,6 +57,22 @@ test("the HTML snapshot and styles file are gzipped only for a Worker that says 
         const parsed = JSON.parse(text(styles)) as { elements: unknown[]; tokens?: unknown }
         assert.ok(Array.isArray(parsed.elements) && parsed.elements.length > 0, "the styles file parses")
         assert.ok(!uploads.has(gzipped ? snapshotKey.replace(".gz.", ".") : snapshotKey.replace(".html", ".gz.html")), "only one of the two names is uploaded")
+        // The split styles file goes only to a Worker that lists "style-parts", next to the full file.
+        const summary = pages[0]!.stylesSummary
+        const partsKeys = [...uploads.keys()].filter((k) => k.endsWith("/styles-parts.gzm"))
+        if (!split) {
+          assert.equal(summary, undefined)
+          assert.deepEqual(partsKeys, [])
+        } else {
+          assert.ok(summary)
+          assert.deepEqual(partsKeys, [stylesKey.replace("styles.gz.json", "styles-parts.gzm")])
+          assert.equal(summary.parts.key, partsKeys[0])
+          assert.equal(summary.elements, parsed.elements.length)
+          const bytes = uploads.get(partsKeys[0]!)!.bytes
+          const [at, len] = summary.parts.index
+          const index = JSON.parse(gunzipSync(bytes.subarray(at, at + len)).toString("utf8")) as [string | null, string | null][]
+          assert.ok(index.some(([, text]) => text?.includes("gzip fixture — café")), "the index holds lowercased own text")
+        }
       })
     }
   } finally {

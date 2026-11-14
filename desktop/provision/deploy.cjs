@@ -7,7 +7,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { StepError } = require('./engine.cjs');
-const { patchDeployConfig, readRatelimits, BUCKET_NAME } = require('./lib.cjs');
+const { patchDeployConfig, readRatelimits, readTriggers, BUCKET_NAME } = require('./lib.cjs');
 
 const cloudDir = (dataRoot) => path.join(dataRoot, 'cloud');
 const configPath = (dataRoot) => path.join(cloudDir(dataRoot), 'snip/wrangler.json');
@@ -81,9 +81,9 @@ function prepareDeployLayout({ root, dataRoot, d1Id, kvId, login, url, now = new
   } catch (error) {
     throw new StepError('BAD_CONFIG', 'The built Worker config could not be read.', { hint: 'Reinstall Snip; the bundled build is incomplete.', data: { cause: error.message } });
   }
-  let ratelimits = null;
-  try { ratelimits = readRatelimits(fs.readFileSync(path.join(root, 'web/wrangler.jsonc'), 'utf8')); } catch { /* no template in this build */ }
-  const patched = patchDeployConfig(built, { d1Id, kvId, login, url, migrations: '../migrations', ratelimits });
+  let template = '';
+  try { template = fs.readFileSync(path.join(root, 'web/wrangler.jsonc'), 'utf8'); } catch { /* no template in this build */ }
+  const patched = patchDeployConfig(built, { d1Id, kvId, login, url, migrations: '../migrations', ratelimits: readRatelimits(template), triggers: readTriggers(template) });
   const temp = `${file}.${process.pid}.${Date.now()}.tmp`;
   fs.writeFileSync(temp, `${JSON.stringify(patched, null, 2)}\n`, { mode: 0o600 });
   fs.renameSync(temp, file);
@@ -111,7 +111,7 @@ function failureMessage(result, fallback) {
   return meaningful || fallback;
 }
 
-function classifyWranglerFailure(result, { authHint = true } = {}) {
+function classifyWranglerFailure(result) {
   const text = `${result.stdout || ''}${result.stderr || ''}`;
   if (/not authenticated|not logged in|please run [`']?wrangler login|authentication error|10000/i.test(text)) {
     return new StepError('AUTH_REQUIRED', 'Cloudflare needs you to sign in again.', { hint: 'Run `npx wrangler login`, then try again.' });
@@ -119,7 +119,6 @@ function classifyWranglerFailure(result, { authHint = true } = {}) {
   if (/must be enabled|enable r2|r2.*not enabled|10042/i.test(text)) {
     return new StepError('R2_NOT_ENABLED', 'R2 is not enabled on this Cloudflare account.', { hint: 'Enable R2 once in the Cloudflare dashboard, then try again.' });
   }
-  void authHint;
   return null;
 }
 
@@ -241,13 +240,6 @@ async function deployWorker(wrangler, { dataRoot, accountId, onOutput, retry }) 
   return result;
 }
 
-async function dryRunDeploy(wrangler, { dataRoot, accountId, outdir }) {
-  const file = configPath(dataRoot);
-  const args = ['deploy', '--config', file, '--dry-run'];
-  if (outdir) args.push('--outdir', outdir);
-  return wrangler.run(args, { cwd: path.dirname(file), env: { CLOUDFLARE_ACCOUNT_ID: accountId } });
-}
-
 async function applyMigrations(wrangler, { dataRoot, accountId, remote = true, local = false, persistTo, config, retry }) {
   const file = config || configPath(dataRoot);
   const args = ['d1', 'migrations', 'apply', 'DB', '--config', file];
@@ -268,6 +260,29 @@ async function applyMigrations(wrangler, { dataRoot, accountId, remote = true, l
     });
   }
   return result;
+}
+
+/**
+ * The migrations a `d1 migrations apply` run applied, in order, read from the
+ * "Migrations to be applied:" listing wrangler prints. Wrangler draws that list as
+ * a boxed table and prints the names again, with a status, once they are applied,
+ * so each name counts once. An empty list means nothing was pending.
+ */
+function appliedMigrations(result) {
+  const text = `${(result && result.stdout) || ''}\n${(result && result.stderr) || ''}`;
+  const marker = 'Migrations to be applied:';
+  const at = text.indexOf(marker);
+  if (at < 0) return [];
+  const names = [];
+  for (const match of text.slice(at + marker.length).matchAll(/\b(\d{4}_[A-Za-z0-9_.-]*\.sql)\b/g)) {
+    if (!names.includes(match[1])) names.push(match[1]);
+  }
+  return names;
+}
+
+/** What a step says about a migration run: how many were applied, or that none were pending. */
+function migrationSummary(applied) {
+  return applied.length ? `Applied ${applied.length} migration${applied.length === 1 ? '' : 's'}` : 'Database is up to date';
 }
 
 async function listMigrations(wrangler, { dataRoot, accountId, remote = true }) {
@@ -416,6 +431,7 @@ async function importLocal(wrangler, { dataRoot, persistTo, statements, config }
 }
 
 module.exports = {
+  appliedMigrations,
   applyMigrations,
   libraryStatements,
   bucketName: BUCKET_NAME,
@@ -424,7 +440,6 @@ module.exports = {
   configExists,
   configPath,
   deployWorker,
-  dryRunDeploy,
   exportLocal,
   importLocal,
   importRemote,
@@ -432,6 +447,7 @@ module.exports = {
   listMigrations,
   localConfigPath,
   localQuery,
+  migrationSummary,
   prepareDeployLayout,
   readDeployConfig,
   remoteQuery,

@@ -2,6 +2,7 @@ import {
   type AgentPresence,
   type Animation,
   type AnimationMeta,
+  type MotionProfile,
   type CaptureControl,
   type CaptureMode,
   type CaptureOptions,
@@ -12,8 +13,10 @@ import {
   type DesignTokens,
   type Job,
   type JobComplete,
+  MAX_NAME,
   type Page,
   type PageSection,
+  type PageWarning,
   type AltScheme,
   type PageUpload,
   type Paged,
@@ -21,7 +24,11 @@ import {
   type Reference,
   type StorageUsage,
 } from "../shared/types"
-import { STOPPED_EMPTY } from "../shared/capture-errors"
+import { ABANDONED, STOPPED_EMPTY, WAITING } from "../shared/capture-errors"
+import { checkSiteUrl } from "../shared/site-url"
+import { outdatedHalf } from "../shared/capture-protocol"
+import { agentAdvice, agentState } from "../shared/agent-state"
+import type { StylesSummary } from "../shared/style-parts"
 
 // Data access shared by the HTTP API and the MCP server.
 
@@ -67,6 +74,7 @@ export function toReference(r: Row): Reference {
     createdAt: r.created_at as string,
     updatedAt: r.updated_at as string,
     claimedAt: (r.claimed_at as string) ?? null,
+    quietSince: r.status === "capturing" && typeof r.claimed_at === "string" && r.claimed_at < staleBefore(now()) ? r.claimed_at : null,
     captureRun: (r.capture_run as number) ?? 1,
   }
 }
@@ -93,10 +101,18 @@ export function toPage(r: Row): Page {
     sections: parse<PageSection[]>(r.sections_json) ?? [],
     sectionsCaptured: r.sections_json != null,
     altScheme: parse<AltScheme>(r.alt_scheme_json),
+    warnings: parse<PageWarning[]>(r.warnings_json) ?? [],
     collectionIds: r.collection_ids ? String(r.collection_ids).split(",") : [],
     createdAt: r.created_at as string,
   }
 }
+
+/**
+ * A page row without its tokens, for lists and search: tokens are the largest column and lists never return
+ * them (toPage gives null). Alias the pages table as `t`.
+ */
+export const PAGE_LIST_COLUMNS = `t.id, t.reference_id, t.url, t.path, t.title, t.ord, t.desktop_key, t.desktop_thumb_key, t.desktop_width, t.desktop_height,
+  t.mobile_key, t.mobile_thumb_key, t.mobile_width, t.mobile_height, t.snapshot_key, t.styles_key, t.sections_json, t.alt_scheme_json, t.created_at, t.warnings_json`
 
 /** Selects a page row plus the collections it was saved to individually. Alias the pages table as `t`. */
 export const PAGE_COLLECTIONS = `(SELECT group_concat(pc.collection_id) FROM page_collections pc WHERE pc.reference_id = t.reference_id AND pc.page_path = t.path) AS collection_ids`
@@ -119,12 +135,12 @@ function toAnimation(r: Row): Animation {
   }
 }
 
-// Cursor = base64("<sortValue>|<id>")
-export const encodeCursor = (v: string | number, id: string) => btoa(`${v}|${id}`)
-export const decodeCursor =(c?: string | null): [string, string] | null => {
+// Cursor = base64 of the UTF-8 bytes of "<sortValue>|<id>"
+export const encodeCursor = (v: string | number, id: string) => btoa(String.fromCharCode(...new TextEncoder().encode(`${v}|${id}`)))
+export const decodeCursor = (c?: string | null): [string, string] | null => {
   if (!c) return null
   try {
-    const s = atob(c)
+    const s = new TextDecoder().decode(Uint8Array.from(atob(c), (ch) => ch.charCodeAt(0)))
     const i = s.lastIndexOf("|")
     return [s.slice(0, i), s.slice(i + 1)]
   } catch {
@@ -137,6 +153,8 @@ export type SortOrder = "newest" | "oldest" | "name"
 export interface ListFilter {
   q?: string
   collectionId?: string
+  /** Pages and animations of one website. */
+  referenceId?: string
   domain?: string
   status?: string
   sort?: SortOrder
@@ -147,6 +165,15 @@ export interface ListFilter {
 export const REF_SELECT = `SELECT r.*, (SELECT group_concat(collection_id) FROM reference_collections rc WHERE rc.reference_id = r.id) AS collection_ids,
   (SELECT group_concat(k, '|') FROM (SELECT coalesce(p.desktop_thumb_key, p.mobile_thumb_key) AS k FROM pages p
     WHERE p.reference_id = r.id AND coalesce(p.desktop_thumb_key, p.mobile_thumb_key) IS NOT NULL ORDER BY p.ord LIMIT 3)) AS preview_keys
+  FROM refs r`
+
+/**
+ * A websites row for MCP summaries and search: no merged tokens, capture options, crawl state or preview
+ * thumbnails, which summaries never return (toReference gives null or empty for them).
+ */
+export const REF_SUMMARY_SELECT = `SELECT r.id, r.url, r.domain, r.title, r.description, r.favicon, r.mode, r.max_pages, r.status, r.capture_control,
+  r.progress, r.error, r.cover_key, r.page_count, r.animation_count, r.notes, r.created_at, r.updated_at, r.claimed_at, r.capture_run,
+  (SELECT group_concat(collection_id) FROM reference_collections rc WHERE rc.reference_id = r.id) AS collection_ids
   FROM refs r`
 
 export type Where = { where: string[]; args: unknown[] }
@@ -177,40 +204,22 @@ export function referenceWhere(f: ListFilter): Where {
   return { where, args }
 }
 
-export async function listReferences(db: D1Database, f: ListFilter): Promise<Paged<Reference>> {
+/** `summary` reads only what an MCP summary returns (REF_SUMMARY_SELECT); the gallery reads whole rows. */
+export async function listReferences(db: D1Database, f: ListFilter & { summary?: boolean }): Promise<Paged<Reference>> {
   const limit = Math.min(Math.max(f.limit ?? 24, 1), 100)
   const { where, args } = referenceWhere(f)
-  const sort = f.sort ?? "newest"
+  // One expression is the sort key: it orders the rows, bounds the next page and is read back for the cursor.
+  const key = f.sort === "name" ? `lower(coalesce(r.title, r.domain))` : `r.created_at`
+  const [dir, after] = f.sort === "name" || f.sort === "oldest" ? ["ASC", ">"] : ["DESC", "<"]
   const cur = decodeCursor(f.cursor)
-  let order: string
-  if (sort === "name") {
-    order = `ORDER BY lower(coalesce(r.title, r.domain)) ASC, r.id ASC`
-    if (cur) {
-      where.push(`(lower(coalesce(r.title, r.domain)) > ? OR (lower(coalesce(r.title, r.domain)) = ? AND r.id > ?))`)
-      args.push(cur[0], cur[0], cur[1])
-    }
-  } else if (sort === "oldest") {
-    order = `ORDER BY r.created_at ASC, r.id ASC`
-    if (cur) {
-      where.push(`(r.created_at > ? OR (r.created_at = ? AND r.id > ?))`)
-      args.push(cur[0], cur[0], cur[1])
-    }
-  } else {
-    order = `ORDER BY r.created_at DESC, r.id DESC`
-    if (cur) {
-      where.push(`(r.created_at < ? OR (r.created_at = ? AND r.id < ?))`)
-      args.push(cur[0], cur[0], cur[1])
-    }
+  if (cur) {
+    where.push(`(${key} ${after} ? OR (${key} = ? AND r.id ${after} ?))`)
+    args.push(cur[0], cur[0], cur[1])
   }
-  const sql = `${REF_SELECT} ${whereSql(where)} ${order} LIMIT ?`
+  const sql = `${(f.summary ? REF_SUMMARY_SELECT : REF_SELECT).replace("SELECT", `SELECT ${key} AS sort_key,`)} ${whereSql(where)} ORDER BY ${key} ${dir}, r.id ${dir} LIMIT ?`
   const { results } = await db.prepare(sql).bind(...args, limit + 1).all<Row>()
-  const rows = results.slice(0, limit).map(toReference)
-  const last = rows[rows.length - 1]
-  const nextCursor =
-    results.length > limit && last
-      ? encodeCursor(sort === "name" ? (last.title ?? last.domain).toLowerCase() : last.createdAt, last.id)
-      : null
-  return { items: rows, nextCursor }
+  const last = results.length > limit ? results[limit - 1] : null
+  return { items: results.slice(0, limit).map(toReference), nextCursor: last ? encodeCursor(last.sort_key as string, last.id as string) : null }
 }
 
 export async function getReferenceRecord(db: D1Database, id: string) {
@@ -233,13 +242,117 @@ export async function getReference(db: D1Database, id: string) {
 }
 
 export async function getAnimation(db: D1Database, id: string) {
-  const r = await db.prepare(`SELECT * FROM animations WHERE id = ?`).bind(id).first<Row>()
-  return r ? toAnimation(r) : null
+  const r = await db.prepare(`SELECT t.*, (SELECT capture_run FROM refs WHERE id = t.reference_id) AS ref_capture_run FROM animations t WHERE t.id = ?`).bind(id).first<Row>()
+  return r ? { ...toAnimation(r), captureRun: (r.ref_capture_run as number) ?? 1 } : null
 }
 
-export async function getPage(db: D1Database, id: string) {
+/** One page's motion profile and where it sits, without the rest of its row. motion is null for older captures. */
+export async function getPageMotion(db: D1Database, id: string) {
+  const r = await db.prepare(`SELECT id, reference_id, path, json_extract(tokens_json, '$.motion') AS motion FROM pages WHERE id = ?`).bind(id).first<Row>()
+  return r ? { id: r.id as string, referenceId: r.reference_id as string, path: r.path as string, motion: parse<MotionProfile>(r.motion) } : null
+}
+
+/**
+ * A reference's recordings, or one page's, in capture order: only the columns a list shows (no metadata), plus the
+ * total. Reads at most `limit` rows however large the reference is.
+ */
+export async function listRecordings(db: D1Database, referenceId: string, pageId: string | null, offset: number, limit: number) {
+  const where = `a.reference_id = ?${pageId ? " AND a.page_id = ?" : ""}`
+  const args = pageId ? [referenceId, pageId] : [referenceId]
+  const [rows, count] = await db.batch<Row>([
+    db.prepare(
+      `SELECT a.id, a.page_id, a.kind, a.label, a.selector, a.gif_key, a.sheet_key, coalesce(json_array_length(a.meta_json, '$.frames'), 0) AS frame_count
+       FROM animations a WHERE ${where} ORDER BY a.created_at, a.id LIMIT ? OFFSET ?`,
+    ).bind(...args, limit, offset),
+    db.prepare(`SELECT count(*) AS n FROM animations a WHERE ${where}`).bind(...args),
+  ])
+  return {
+    total: (count!.results[0]?.n as number) ?? 0,
+    items: rows!.results.map((r) => ({
+      id: r.id as string,
+      pageId: (r.page_id as string) ?? null,
+      kind: r.kind as Animation["kind"],
+      label: (r.label as string) ?? null,
+      selector: (r.selector as string) ?? null,
+      gifKey: r.gif_key as string,
+      sheetKey: (r.sheet_key as string) ?? null,
+      frameCount: (r.frame_count as number) ?? 0,
+    })),
+  }
+}
+
+/** One page with everything stored on its row, including its styles summary (null for pages captured before it). */
+export async function getPage(db: D1Database, id: string): Promise<(Page & { stylesSummary: StylesSummary | null }) | null> {
   const r = await db.prepare(`SELECT t.*, ${PAGE_COLLECTIONS} FROM pages t WHERE t.id = ?`).bind(id).first<Row>()
-  return r ? toPage(r) : null
+  return r ? { ...toPage(r), stylesSummary: parse<StylesSummary>(r.styles_summary_json) } : null
+}
+
+/** Saves a styles summary for a page captured before summaries existed, unless its styles file has changed since. */
+export async function setStylesSummary(db: D1Database, pageId: string, stylesKey: string, summary: StylesSummary) {
+  const result = await db.prepare(`UPDATE pages SET styles_summary_json = ? WHERE id = ? AND styles_key = ? AND styles_summary_json IS NULL`).bind(JSON.stringify(summary), pageId, stylesKey).run()
+  return result.meta.changes > 0
+}
+
+/** Records the intent to write a page's split styles file, only while the page still exists without one (see beginUpload). */
+export async function beginStylePartsUpload(db: D1Database, pageId: string, stylesKey: string, key: string) {
+  const upload = crypto.randomUUID()
+  const result = await db.prepare(`INSERT INTO capture_uploads (id, object_key)
+    SELECT ?, ? WHERE EXISTS (SELECT 1 FROM pages WHERE id = ? AND styles_key = ? AND styles_summary_json IS NULL)`)
+    .bind(upload, key, pageId, stylesKey).run()
+  return result.meta.changes ? upload : null
+}
+
+export async function pageHasStyles(db: D1Database, pageId: string, stylesKey: string) {
+  return !!(await db.prepare(`SELECT 1 FROM pages WHERE id = ? AND styles_key = ?`).bind(pageId, stylesKey).first())
+}
+
+// Ordered reads of one reference's pages and animations, a page at a time. The key is the last row's sort key, so a
+// page reads about `limit` rows however large the reference is (indexes pages_ref_order and animations_ref_order).
+// Rows leave out page tokens, sections and styles summaries, and animation metadata: a list doesn't show them.
+
+export type PageKey = [ord: number, createdAt: string, id: string]
+export type AnimationKey = [createdAt: string, id: string]
+
+const LISTED_PAGE_COLUMNS = `t.id, t.reference_id, t.url, t.path, t.title, t.ord, t.desktop_key, t.desktop_thumb_key, t.desktop_width, t.desktop_height,
+  t.mobile_key, t.mobile_thumb_key, t.mobile_width, t.mobile_height, t.snapshot_key, t.styles_key, t.warnings_json, t.created_at`
+
+export async function listReferencePages(db: D1Database, referenceId: string, after: PageKey | null, limit: number) {
+  const { results } = await db
+    .prepare(
+      `SELECT ${LISTED_PAGE_COLUMNS} FROM pages t WHERE t.reference_id = ? ${after ? "AND (t.ord, t.created_at, t.id) > (?, ?, ?)" : ""}
+       ORDER BY t.ord, t.created_at, t.id LIMIT ?`,
+    )
+    .bind(referenceId, ...(after ?? []), limit)
+    .all<Row>()
+  return results.map((r) => ({ ...toPage(r), key: [r.ord, r.created_at, r.id] as PageKey }))
+}
+
+export type ListedAnimation = Omit<Animation, "meta"> & { frameCount: number; pagePath: string | null; key: AnimationKey }
+
+export async function listReferenceAnimations(db: D1Database, referenceId: string, after: AnimationKey | null, limit: number): Promise<ListedAnimation[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT a.id, a.reference_id, a.page_id, a.kind, a.label, a.selector, a.viewport, a.gif_key, a.width, a.height, a.sheet_key, a.created_at,
+         coalesce(json_array_length(a.meta_json, '$.frames'), 0) AS frame_count, p.path AS page_path
+       FROM animations a LEFT JOIN pages p ON p.id = a.page_id
+       WHERE a.reference_id = ? ${after ? "AND (a.created_at, a.id) > (?, ?)" : ""}
+       ORDER BY a.created_at, a.id LIMIT ?`,
+    )
+    .bind(referenceId, ...(after ?? []), limit)
+    .all<Row>()
+  return results.map((r) => {
+    const { meta: _meta, ...a } = toAnimation(r)
+    return { ...a, frameCount: (r.frame_count as number) ?? 0, pagePath: (r.page_path as string) ?? null, key: [r.created_at, r.id] as AnimationKey }
+  })
+}
+
+/** A page plus its reference's capture run and options, so a single page read over MCP can say which capture it came from. */
+export async function getPageInCapture(db: D1Database, id: string) {
+  const r = await db
+    .prepare(`SELECT t.*, ${PAGE_COLLECTIONS}, r.capture_run AS ref_capture_run, r.capture_options AS ref_capture_options FROM pages t JOIN refs r ON r.id = t.reference_id WHERE t.id = ?`)
+    .bind(id)
+    .first<Row>()
+  return r ? { ...toPage(r), captureRun: (r.ref_capture_run as number) ?? 1, captureOptions: parse<CaptureOptions>(r.ref_capture_options) } : null
 }
 
 /** The pages or animations feed's q and collection filters. Alias the table as `t` and its refs row as `r`. */
@@ -261,6 +374,10 @@ export function childWhere(table: "pages" | "animations", f: ListFilter): Where 
         : `EXISTS (SELECT 1 FROM pages p JOIN page_collections pc ON pc.reference_id = p.reference_id AND pc.page_path = p.path WHERE p.id = t.page_id AND pc.collection_id = ?)`
     where.push(`(EXISTS (SELECT 1 FROM reference_collections rc WHERE rc.reference_id = t.reference_id AND rc.collection_id = ?) OR ${pinned})`)
     args.push(f.collectionId, f.collectionId)
+  }
+  if (f.referenceId) {
+    where.push(`t.reference_id = ?`)
+    args.push(f.referenceId)
   }
   return { where, args }
 }
@@ -284,7 +401,7 @@ async function listChildren<T>(
     args.push(cur[0], cur[0], cur[1])
   }
   const dir = asc ? "ASC" : "DESC"
-  const sql = `SELECT t.*, r.title AS ref_title, r.domain AS ref_domain, r.favicon AS ref_favicon${table === "pages" ? `, ${PAGE_COLLECTIONS}` : ""} FROM ${table} t JOIN refs r ON r.id = t.reference_id ${whereSql(where)} ORDER BY t.created_at ${dir}, t.id ${dir} LIMIT ?`
+  const sql = `SELECT ${table === "pages" ? `${PAGE_LIST_COLUMNS}, ${PAGE_COLLECTIONS}` : "t.*"}, r.title AS ref_title, r.domain AS ref_domain, r.favicon AS ref_favicon FROM ${table} t JOIN refs r ON r.id = t.reference_id ${whereSql(where)} ORDER BY t.created_at ${dir}, t.id ${dir} LIMIT ?`
   const { results } = await db.prepare(sql).bind(...args, limit + 1).all<Row>()
   const page = results.slice(0, limit)
   const items = page.map((r) => ({
@@ -300,15 +417,14 @@ async function listChildren<T>(
 
 // Lists leave out each page's design tokens (about 26 KB a page, most of the response); getPage and getReference carry them.
 // ponytail: the row is still read with tokens_json; select columns explicitly if the D1 read ever shows up.
-export const listPages = (db: D1Database, f: ListFilter) => listChildren(db, "pages", (r) => toPage({ ...r, tokens_json: null }), f)
+export const listPages = (db: D1Database, f: ListFilter) => listChildren(db, "pages", toPage, f)
 export const listAnimations = (db: D1Database, f: ListFilter) => listChildren(db, "animations", toAnimation, f)
 
+/** The URL a user adds, normalised, or an Error whose message is the sentence to show them. The rule lives in shared/site-url.ts, which the app imports too. */
 export function normalizeUrl(input: string): URL {
-  const raw = input.trim()
-  const url = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`)
-  if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("Only http(s) URLs are supported")
-  url.hash = ""
-  return url
+  const checked = checkSiteUrl(input)
+  if ("error" in checked) throw new Error(checked.error)
+  return checked.url
 }
 
 export const MAX_NOTES = 2000
@@ -326,11 +442,33 @@ export function cleanOptions(input: unknown): CaptureOptions | null {
 
 const cleanNotes = (notes: unknown) => (typeof notes === "string" && notes.trim() ? notes.trim().slice(0, MAX_NOTES) : null)
 
-/** The most recent reference already saved for this URL, if any. */
+/** The site a URL belongs to: its host in lower case without a leading www. */
+const domainOf = (url: URL) => url.hostname.replace(/^www\./, "")
+
+/**
+ * What makes two URLs the same site URL, for the duplicate check only (the stored URL stays as the user gave it).
+ * Ignored: the scheme (http or https), a leading www., the fragment, a trailing slash on the path, the order of the query,
+ * and the tracking parameters utm_*, gclid, fbclid and ref.
+ */
+function siteKey(url: URL): string {
+  const query = [...url.searchParams]
+    .filter(([name]) => !/^(utm_.*|gclid|fbclid|ref)$/i.test(name))
+    .map(([name, value]) => `${encodeURIComponent(name)}=${encodeURIComponent(value)}`)
+    .sort()
+    .join("&")
+  return `${domainOf(url)}${url.port && `:${url.port}`}${url.pathname.replace(/\/$/, "")}?${query}`
+}
+
+/**
+ * The most recent reference already saved for this site URL, if any. The key is computed here, on both sides, so it needs
+ * no stored column and covers references saved before it existed: the SQL only narrows to the same site.
+ */
 export async function findReferenceByUrl(db: D1Database, input: string): Promise<Reference | null> {
-  const url = normalizeUrl(input).toString()
-  const r = await db.prepare(`${REF_SELECT} WHERE r.url = ? ORDER BY r.created_at DESC LIMIT 1`).bind(url).first<Row>()
-  return r ? toReference(r) : null
+  const url = normalizeUrl(input)
+  const key = siteKey(url)
+  const { results } = await db.prepare(`SELECT id, url FROM refs WHERE domain = ? ORDER BY created_at DESC`).bind(domainOf(url)).all<{ id: string; url: string }>()
+  const match = results.find((r) => siteKey(new URL(r.url)) === key)
+  return match ? getReferenceRecord(db, match.id) : null
 }
 
 export async function setNotes(db: D1Database, id: string, notes: unknown) {
@@ -350,9 +488,9 @@ export async function createReference(
   const stmts = [
     db
       .prepare(
-        `INSERT INTO refs (id, url, domain, mode, max_pages, status, progress, notes, capture_options, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'queued', 'Waiting for your Mac', ?, ?, ?, ?)`,
+        `INSERT INTO refs (id, url, domain, mode, max_pages, status, progress, notes, capture_options, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'queued', '${WAITING}', ?, ?, ?, ?)`,
       )
-      .bind(id, url.toString(), url.hostname.replace(/^www\./, ""), input.mode, maxPages, cleanNotes(input.notes), options ? JSON.stringify(options) : null, ts, ts),
+      .bind(id, url.toString(), domainOf(url), input.mode, maxPages, cleanNotes(input.notes), options ? JSON.stringify(options) : null, ts, ts),
   ]
   for (const cid of input.collectionIds ?? []) {
     stmts.push(
@@ -363,16 +501,19 @@ export async function createReference(
   return (await getReference(db, id))!.reference
 }
 
+/** Recapture a finished reference. False when it does not exist or its capture is still waiting, running or paused. */
 export async function requeueReference(db: D1Database, id: string) {
-  await db.batch([
-    db.prepare(`INSERT OR IGNORE INTO capture_cleanup (prefix) SELECT 'refs/' || id || '/' || coalesce(capture_attempt || '/', 'p') FROM refs WHERE id = ?`).bind(id),
-    db.prepare(`DELETE FROM pages WHERE reference_id = ?`).bind(id), // animations cascade
+  const finished = `id = ? AND status IN ('ready', 'failed')`
+  const results = await db.batch([
+    db.prepare(`INSERT OR IGNORE INTO capture_cleanup (prefix) SELECT 'refs/' || id || '/' || coalesce(capture_attempt || '/', 'p') FROM refs WHERE ${finished}`).bind(id),
+    db.prepare(`DELETE FROM pages WHERE reference_id IN (SELECT id FROM refs WHERE ${finished})`).bind(id), // animations cascade
     db
       .prepare(
-        `UPDATE refs SET status = 'queued', progress = 'Waiting for your Mac', error = NULL, page_count = 0, animation_count = 0, cover_key = NULL, favicon = NULL, tokens_json = NULL, claimed_at = NULL, capture_control = NULL, crawl_state = NULL, capture_run = capture_run + 1, updated_at = ? WHERE id = ?`,
+        `UPDATE refs SET status = 'queued', progress = '${WAITING}', error = NULL, page_count = 0, animation_count = 0, cover_key = NULL, favicon = NULL, tokens_json = NULL, claimed_at = NULL, capture_control = NULL, crawl_state = NULL, stale_reclaims = 0, capture_run = capture_run + 1, updated_at = ? WHERE ${finished}`,
       )
       .bind(now(), id),
   ])
+  return results[2]!.meta.changes > 0
 }
 
 export async function deleteReference(db: D1Database, id: string) {
@@ -431,14 +572,22 @@ export async function listCollections(db: D1Database): Promise<Collection[]> {
   return results.map(toCollection)
 }
 
+/** The one check for a board's name, when it is created and when it is renamed: the sentence to refuse it with, or null. */
+export function nameError(name: unknown): string | null {
+  if (typeof name !== "string" || !name.trim()) return "name is required"
+  return name.trim().length > MAX_NAME ? `name must be at most ${MAX_NAME} characters` : null
+}
+
 export async function createCollection(db: D1Database, name: string, description?: string | null) {
   const id = newId()
   await db.prepare(`INSERT INTO collections (id, name, description, created_at) VALUES (?, ?, ?, ?)`).bind(id, name.trim(), description ?? null, now()).run()
   return id
 }
 
+/** An omitted description keeps the stored one; null or an empty string clears it. */
 export async function updateCollection(db: D1Database, id: string, name: string, description?: string | null) {
-  await db.prepare(`UPDATE collections SET name = ?, description = ? WHERE id = ?`).bind(name.trim(), description ?? null, id).run()
+  if (description === undefined) await db.prepare(`UPDATE collections SET name = ? WHERE id = ?`).bind(name.trim(), id).run()
+  else await db.prepare(`UPDATE collections SET name = ?, description = ? WHERE id = ?`).bind(name.trim(), description || null, id).run()
 }
 
 export async function deleteCollection(db: D1Database, id: string) {
@@ -513,7 +662,13 @@ export async function setPageCollection(db: D1Database, collectionId: string, pa
 
 // Capture queue
 
-const STALE_MINUTES = 30
+/**
+ * The heartbeat (every 30 s, and every progress report) is the one sign an agent is alive, and this is how old the last one may be:
+ * three missed beats. Everything that asks whether the agent is there answers from it, so they flip together: the offline banner
+ * (presence), a capture's `quietSince`, its reclaim by the next agent that asks, and the settling of a Stop or Pause.
+ * Safe to be short because every claim issues a new lease, so a replaced agent is refused, and a page saved starts the reclaim count again.
+ */
+const AGENT_ALIVE_SECONDS = 90
 
 export async function cleanupRetiredFiles(db: D1Database, files: R2Bucket) {
   const tasks = await db.prepare(`SELECT prefix, attempts FROM capture_cleanup WHERE next_attempt IS NULL OR next_attempt <= ? LIMIT 20`)
@@ -536,44 +691,108 @@ export async function cleanupRetiredFiles(db: D1Database, files: R2Bucket) {
   }
 }
 
+/** Whether a refs row has saved pages. A capture with pages is resumed in its attempt; one without starts fresh. */
+const HAS_PAGES = `EXISTS (SELECT 1 FROM pages WHERE reference_id = refs.id)`
+/**
+ * A refs row whose crawl checkpoint is missing (or is no object). A resume is only as good as its checkpoint: the queue is what is left to
+ * visit, and an agent given an empty one takes the crawl for finished and completes with what it has. A protocol 3 agent never saved a
+ * checkpoint with its pages, so a crawl cut off by the upgrade has pages and none. Nothing says what was left, so it is never resumed (claimJob).
+ */
+const NO_CHECKPOINT = `coalesce(json_type(CASE WHEN json_valid(crawl_state) THEN crawl_state END), '') != 'object'`
+/** Reclaims in a row that saved no page in between. A page saved under the lease starts the count again (addPage), so a Mac that sleeps now and then is not abandoned. */
+const MAX_STALE_RECLAIMS = 3
+
+/** Ends the captures matching `where` (its bound values in `args`) with what they have: ready with their pages, stopped-empty without. */
+const settleStopped = (db: D1Database, where: string, args: unknown[], ts: string) => [
+  db.prepare(`UPDATE refs SET status = 'ready', progress = NULL, error = NULL, capture_control = NULL, capture_lease = NULL,
+    title = coalesce(json_extract(crawl_state, '$.meta.title'), title), description = coalesce(json_extract(crawl_state, '$.meta.description'), description),
+    favicon = CASE WHEN instr(json_extract(crawl_state, '$.meta.favicon'), 'refs/' || id || '/' || capture_attempt || '/') = 1 THEN json_extract(crawl_state, '$.meta.favicon') ELSE favicon END,
+    tokens_json = json_extract(crawl_state, '$.tokens'), crawl_state = NULL, updated_at = ?
+    WHERE ${where} AND ${HAS_PAGES}`).bind(ts, ...args),
+  db.prepare(`UPDATE refs SET status = 'failed', progress = NULL, error = ?, capture_control = NULL, capture_lease = NULL, crawl_state = NULL, updated_at = ? WHERE ${where}`).bind(STOPPED_EMPTY, ts, ...args),
+]
+
+/** A capture whose agent has not renewed its claim since the bound time. */
+const STALE_CAPTURE = `status = 'capturing' AND claimed_at < ?`
+/** The time a heartbeat has to be later than, at `ts`, for the agent to count as alive. */
+const staleBefore = (ts: string) => new Date(Date.parse(ts) - AGENT_ALIVE_SECONDS * 1000).toISOString()
+
+/**
+ * Settles what an agent that went silent left behind: a stop it never acted on ends the capture with its pages, a pause it never
+ * took parks it, and a capture already reclaimed too often fails. `id` limits this to one capture. A claim, a stop or pause request
+ * and the hourly sweep all run it, so a request lands at once on an agent that is already gone and within the hour on one that goes quiet later.
+ */
+const settleAbandoned = (db: D1Database, ts: string, id: string | null = null) => {
+  const abandoned = `${STALE_CAPTURE} AND id = coalesce(?, id)`
+  const args = [staleBefore(ts), id]
+  return [
+    ...settleStopped(db, `${abandoned} AND capture_control = 'stop'`, args, ts),
+    db.prepare(`UPDATE refs SET status = 'queued', capture_control = 'paused', progress = 'Paused', claimed_at = NULL, capture_lease = NULL, updated_at = ? WHERE ${abandoned} AND capture_control = 'pause'`).bind(ts, ...args),
+    db.prepare(`UPDATE refs SET status = 'failed', progress = NULL, error = ?, crawl_state = NULL, capture_lease = NULL, updated_at = ? WHERE ${abandoned} AND stale_reclaims >= ${MAX_STALE_RECLAIMS}`).bind(ABANDONED, ts, ...args),
+  ]
+}
+
+export const sweepAbandoned = (db: D1Database) => db.batch(settleAbandoned(db, now()))
+
+/**
+ * The last checkpoint brought up to the pages saved since: they count as captured and are not visited again.
+ * The agent numbers a page, and names its files, by its place in `visited`, so `visited` is filled up to each
+ * saved page's ord: the next page takes a number, and a file prefix, no saved page has.
+ */
+function resumeState(base: CrawlState, pages: [url: string, ord: number][]): CrawlState {
+  const since = pages.slice(base.captured)
+  const visited = [...base.visited]
+  for (const [url, ord] of since) do visited.push(url); while (visited.length <= ord)
+  return { ...base, queue: base.queue.filter((url) => !since.some(([saved]) => saved === url)), visited, captured: pages.length }
+}
+
+/**
+ * Hands out the next capture. The Worker owns the rule for what is resumed: a capture with pages and a checkpoint continues in its attempt,
+ * one with pages and no checkpoint starts over from the root as a fresh attempt (its pages and files are dropped, as a recapture drops them),
+ * and one without pages starts fresh. The agent follows `resume` as given and never second-guesses it.
+ */
 export async function claimJob(db: D1Database): Promise<Job | null> {
-  const stale = new Date(Date.now() - STALE_MINUTES * 60_000).toISOString()
   const ts = now()
-  const attempt = crypto.randomUUID().replace(/-/g, "")
-  const candidate = `SELECT id FROM refs WHERE (status = 'queued' AND coalesce(capture_control, '') != 'paused') OR (status = 'capturing' AND claimed_at < ?) ORDER BY created_at LIMIT 1`
-  // A resumed crawl (crawl_state set) keeps its attempt, pages and files. Anything else starts over.
-  const fresh = (yes: string, no: string) => `CASE WHEN crawl_state IS NULL OR capture_attempt IS NULL THEN ${yes} ELSE ${no} END`
-  // D1 batches are transactions. Record the old namespace before replacing the lease,
-  // and remove old pages within the same transaction as the claim.
+  const stale = staleBefore(ts)
+  const token = () => crypto.randomUUID().replace(/-/g, "")
+  const candidate = `SELECT id FROM refs WHERE (status = 'queued' AND coalesce(capture_control, '') != 'paused') OR (${STALE_CAPTURE}) ORDER BY created_at LIMIT 1`
+  // D1 batches are transactions. Record the old namespace before the claim replaces the attempt.
   const results = await db.batch([
-    db.prepare(`INSERT OR IGNORE INTO capture_cleanup (prefix) SELECT 'refs/' || id || '/' || coalesce(capture_attempt || '/', 'p') FROM refs WHERE id = (${candidate}) AND (crawl_state IS NULL OR capture_attempt IS NULL)`).bind(stale),
-    db.prepare(`SELECT crawl_state FROM refs WHERE id = (${candidate}) AND capture_attempt IS NOT NULL`).bind(stale),
-    db.prepare(`UPDATE refs SET status = 'capturing', capture_attempt = ${fresh("?1", "capture_attempt")}, claimed_at = ?2, updated_at = ?2,
-      progress = ${fresh("'Starting capture'", "'Resuming capture'")}, cover_key = ${fresh("NULL", "cover_key")}, page_count = ${fresh("0", "page_count")},
-      animation_count = ${fresh("0", "animation_count")}, tokens_json = NULL, capture_control = NULL, crawl_state = NULL
-      WHERE id = (${candidate.replace("?", "?3")}) RETURNING id, url, mode, max_pages, capture_attempt, capture_options`).bind(attempt, ts, stale),
-    db.prepare(`DELETE FROM pages WHERE reference_id IN (SELECT id FROM refs WHERE capture_attempt = ? AND status = 'capturing')`).bind(attempt),
+    ...settleAbandoned(db, ts),
+    db.prepare(`INSERT OR IGNORE INTO capture_cleanup (prefix) SELECT 'refs/' || id || '/' || coalesce(capture_attempt || '/', 'p') FROM refs WHERE id = (${candidate}) AND (NOT ${HAS_PAGES} OR ${NO_CHECKPOINT})`).bind(stale),
+    // Pages and no checkpoint: start over. The pages go (animations cascade) and what was counted or chosen from them with them, before the claim sees them.
+    db.prepare(`UPDATE refs SET page_count = 0, animation_count = 0, cover_key = NULL, favicon = NULL, tokens_json = NULL WHERE id = (${candidate}) AND ${HAS_PAGES} AND ${NO_CHECKPOINT}`).bind(stale),
+    db.prepare(`DELETE FROM pages WHERE reference_id IN (SELECT id FROM refs WHERE id = (${candidate}) AND ${NO_CHECKPOINT})`).bind(stale),
+    // Every claim, a stale reclaim and a resume included, issues a new lease: the attempt only names the files.
+    db.prepare(`UPDATE refs SET stale_reclaims = stale_reclaims + (status = 'capturing'), status = 'capturing', claimed_at = ?2, updated_at = ?2, capture_lease = ?4,
+      capture_attempt = CASE WHEN ${HAS_PAGES} THEN capture_attempt ELSE ?1 END, progress = CASE WHEN ${HAS_PAGES} THEN 'Resuming capture' ELSE 'Starting capture' END,
+      crawl_state = CASE WHEN ${HAS_PAGES} THEN crawl_state END
+      WHERE id = (${candidate.replace("?", "?3")}) RETURNING id, url, mode, max_pages, capture_attempt, capture_lease, capture_options, crawl_state,
+      (SELECT json_group_array(json_array(url, ord)) FROM (SELECT url, ord FROM pages WHERE reference_id = refs.id ORDER BY ord)) AS pages`).bind(token(), ts, stale, token()),
   ])
-  const r = results[2]?.results[0] as Row | undefined
+  const r = results[results.length - 1]?.results[0] as Row | undefined
   if (!r) return null
-  const state = (results[1]?.results[0] as Row | undefined)?.crawl_state
+  const pages = parse<[string, number][]>(r.pages) ?? []
+  // Pages left here have a checkpoint: the statements above dropped those that had none.
+  const checkpoint = parse<CrawlState>(r.crawl_state)
   return {
     id: r.id as string,
     url: r.url as string,
     mode: r.mode as CaptureMode,
     maxPages: r.max_pages as number,
     attempt: r.capture_attempt as string,
-    resume: parse<CrawlState>(state),
+    lease: r.capture_lease as string,
+    resume: pages.length && checkpoint ? resumeState(checkpoint, pages) : null,
     options: parse<CaptureOptions>(r.capture_options),
   }
 }
 
 // Admission and reference state are checked atomically, before any R2 write.
-export async function beginUpload(db: D1Database, id: string, attempt: string, key: string) {
+export async function beginUpload(db: D1Database, id: string, lease: string, key: string) {
   const upload = crypto.randomUUID()
   const result = await db.prepare(`INSERT INTO capture_uploads (id, object_key)
-    SELECT ?, ? WHERE EXISTS (SELECT 1 FROM refs WHERE id = ? AND status = 'capturing' AND capture_attempt = ?)`)
-    .bind(upload, key, id, attempt).run()
+    SELECT ?, ? WHERE EXISTS (SELECT 1 FROM refs WHERE id = ? AND status = 'capturing' AND capture_lease = ?)`)
+    .bind(upload, key, id, lease).run()
   return result.meta.changes ? upload : null
 }
 
@@ -581,37 +800,53 @@ export async function finishUpload(db: D1Database, upload: string) {
   await db.prepare(`DELETE FROM capture_uploads WHERE id = ?`).bind(upload).run()
 }
 
-export async function isCapturing(db: D1Database, id: string, attempt: string) {
-  return !!(await db.prepare(`SELECT 1 FROM refs WHERE id = ? AND status = 'capturing' AND capture_attempt = ?`).bind(id, attempt).first())
+export async function isCapturing(db: D1Database, id: string, lease: string) {
+  return !!(await db.prepare(`SELECT 1 FROM refs WHERE id = ? AND status = 'capturing' AND capture_lease = ?`).bind(id, lease).first())
 }
 
-export async function setProgress(db: D1Database, id: string, attempt: string, progress: string) {
-  const result = await db.prepare(`UPDATE refs SET progress = ?, claimed_at = ?, updated_at = ? WHERE id = ? AND status = 'capturing' AND capture_attempt = ?`).bind(progress.slice(0, 300), now(), now(), id, attempt).run()
+/** The file namespace of the capture this lease holds; null once another claim or a finish has taken it. */
+export async function leasedAttempt(db: D1Database, id: string, lease: string) {
+  const r = await db.prepare(`SELECT capture_attempt FROM refs WHERE id = ? AND status = 'capturing' AND capture_lease = ?`).bind(id, lease).first<Row>()
+  return (r?.capture_attempt as string | undefined) ?? null
+}
+
+export async function setProgress(db: D1Database, id: string, lease: string, progress: string) {
+  const result = await db.prepare(`UPDATE refs SET progress = ?, claimed_at = ?, updated_at = ? WHERE id = ? AND status = 'capturing' AND capture_lease = ?`).bind(progress.slice(0, 300), now(), now(), id, lease).run()
   return result.meta.changes > 0
 }
 
-export async function renewLease(db: D1Database, id: string, attempt: string) {
-  const result = await db.prepare(`UPDATE refs SET claimed_at = ? WHERE id = ? AND status = 'capturing' AND capture_attempt = ?`).bind(now(), id, attempt).run()
+export async function renewLease(db: D1Database, id: string, lease: string) {
+  const result = await db.prepare(`UPDATE refs SET claimed_at = ? WHERE id = ? AND status = 'capturing' AND capture_lease = ?`).bind(now(), id, lease).run()
   return result.meta.changes > 0
 }
 
-export async function addPage(db: D1Database, referenceId: string, attempt: string, p: PageUpload) {
+export async function addPage(db: D1Database, referenceId: string, lease: string, p: PageUpload) {
   const pageId = newId()
   const ts = now()
   const stmts = [
     db
       .prepare(
         `INSERT INTO pages (id, reference_id, url, path, title, ord, desktop_key, desktop_thumb_key, desktop_width, desktop_height,
-          mobile_key, mobile_thumb_key, mobile_width, mobile_height, snapshot_key, styles_key, tokens_json, sections_json, alt_scheme_json, created_at)
-         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM refs WHERE id = ? AND status = 'capturing' AND capture_attempt = ?)`,
+          mobile_key, mobile_thumb_key, mobile_width, mobile_height, snapshot_key, styles_key, tokens_json, sections_json, alt_scheme_json, warnings_json, styles_summary_json, created_at)
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM refs WHERE id = ? AND status = 'capturing' AND capture_lease = ?)`,
       )
       .bind(
         pageId, referenceId, p.url, p.path, p.title, p.ord,
         p.desktopKey, p.desktopThumbKey, p.desktopWidth, p.desktopHeight,
         p.mobileKey, p.mobileThumbKey, p.mobileWidth, p.mobileHeight,
-        p.snapshotKey, p.stylesKey, p.tokens ? JSON.stringify(p.tokens) : null, Array.isArray(p.sections) ? JSON.stringify(p.sections) : null, p.altScheme ? JSON.stringify(p.altScheme) : null, ts, referenceId, attempt,
+        p.snapshotKey, p.stylesKey, p.tokens ? JSON.stringify(p.tokens) : null, Array.isArray(p.sections) ? JSON.stringify(p.sections) : null, p.altScheme ? JSON.stringify(p.altScheme) : null, p.warnings?.length ? JSON.stringify(p.warnings) : null, p.stylesSummary && p.stylesKey ? JSON.stringify(p.stylesSummary) : null, ts, referenceId, lease,
       ),
   ]
+  // What search reads besides the page row (see search.ts). Section labels come from the sections themselves,
+  // so a page from an older agent, which sends no text, is still found by them.
+  const labels = Array.isArray(p.sections) && p.sections.length ? p.sections.map((s) => `${s.kind}: ${s.label}`).join(" | ") : null
+  const sectionText = p.text?.sections && p.sections && p.text.sections.length === p.sections.length ? JSON.stringify(p.text.sections) : null
+  if (labels || p.text?.body)
+    stmts.push(
+      db
+        .prepare(`INSERT INTO page_text (page_id, reference_id, sections, body, section_text_json) SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM pages WHERE id = ?)`)
+        .bind(pageId, referenceId, labels, p.text?.body || null, sectionText, pageId),
+    )
   for (const a of p.animations) {
     stmts.push(
       db
@@ -630,27 +865,27 @@ export async function addPage(db: D1Database, referenceId: string, attempt: stri
       .prepare(
         `UPDATE refs SET page_count = (SELECT count(*) FROM pages WHERE reference_id = ?1),
           animation_count = (SELECT count(*) FROM animations WHERE reference_id = ?1),
-          cover_key = coalesce(cover_key, ?2), updated_at = ?3 WHERE id = ?1 AND status = 'capturing' AND capture_attempt = ?4`,
+          cover_key = coalesce(cover_key, ?2), crawl_state = coalesce(?5, crawl_state), stale_reclaims = 0, updated_at = ?3 WHERE id = ?1 AND status = 'capturing' AND capture_lease = ?4`,
       )
-      .bind(referenceId, p.desktopThumbKey, ts, attempt),
+      .bind(referenceId, p.desktopThumbKey, ts, lease, p.state ? JSON.stringify(p.state) : null),
   )
   const results = await db.batch(stmts)
   return results[0]?.meta.changes ? pageId : null
 }
 
-export async function completeJob(db: D1Database, id: string, attempt: string, c: JobComplete) {
+export async function completeJob(db: D1Database, id: string, lease: string, c: JobComplete) {
   const result = await db
     .prepare(
-      `UPDATE refs SET status = 'ready', progress = NULL, error = NULL, capture_control = NULL, title = coalesce(?, title), description = coalesce(?, description),
-        favicon = coalesce(?, favicon), cover_key = coalesce(?, cover_key), tokens_json = ?, updated_at = ? WHERE id = ? AND status = 'capturing' AND capture_attempt = ?`,
+      `UPDATE refs SET status = 'ready', progress = NULL, error = NULL, capture_control = NULL, capture_lease = NULL, crawl_state = NULL, title = coalesce(?, title), description = coalesce(?, description),
+        favicon = coalesce(?, favicon), cover_key = coalesce(?, cover_key), tokens_json = ?, updated_at = ? WHERE id = ? AND status = 'capturing' AND capture_lease = ?`,
     )
-    .bind(c.title, c.description, c.favicon, c.coverKey, c.tokens ? JSON.stringify(c.tokens) : null, now(), id, attempt)
+    .bind(c.title, c.description, c.favicon, c.coverKey, c.tokens ? JSON.stringify(c.tokens) : null, now(), id, lease)
     .run()
   return result.meta.changes > 0
 }
 
-export async function failJob(db: D1Database, id: string, attempt: string, error: string) {
-  const result = await db.prepare(`UPDATE refs SET status = 'failed', progress = NULL, error = ?, capture_control = NULL, updated_at = ? WHERE id = ? AND status = 'capturing' AND capture_attempt = ?`).bind(error.slice(0, 1000), now(), id, attempt).run()
+export async function failJob(db: D1Database, id: string, lease: string, error: string) {
+  const result = await db.prepare(`UPDATE refs SET status = 'failed', progress = NULL, error = ?, capture_control = NULL, capture_lease = NULL, crawl_state = NULL, updated_at = ? WHERE id = ? AND status = 'capturing' AND capture_lease = ?`).bind(error.slice(0, 1000), now(), id, lease).run()
   return result.meta.changes > 0
 }
 
@@ -658,12 +893,13 @@ export async function failJob(db: D1Database, id: string, attempt: string, error
 // The agent finishes the page it is on, then asks for its control before the next one.
 
 
-/** Pause a capture. A queued one pauses now; a running one pauses after its current page. */
+/** Pause a capture. A queued one pauses now; a running one pauses after its current page, or now when its agent is already gone. */
 export async function requestPause(db: D1Database, id: string) {
   const ts = now()
   const [queued, running] = await db.batch([
     db.prepare(`UPDATE refs SET capture_control = 'paused', progress = 'Paused', updated_at = ? WHERE id = ? AND status = 'queued' AND capture_control IS NULL`).bind(ts, id),
     db.prepare(`UPDATE refs SET capture_control = 'pause', updated_at = ? WHERE id = ? AND status = 'capturing' AND capture_control IS NULL`).bind(ts, id),
+    ...settleAbandoned(db, ts, id),
   ])
   return !!(queued!.meta.changes || running!.meta.changes)
 }
@@ -672,7 +908,7 @@ export async function requestPause(db: D1Database, id: string) {
 export async function resumeReference(db: D1Database, id: string) {
   const ts = now()
   const [paused, pending] = await db.batch([
-    db.prepare(`UPDATE refs SET capture_control = NULL, progress = 'Waiting for your Mac', updated_at = ? WHERE id = ? AND status = 'queued' AND capture_control = 'paused'`).bind(ts, id),
+    db.prepare(`UPDATE refs SET capture_control = NULL, progress = '${WAITING}', updated_at = ? WHERE id = ? AND status = 'queued' AND capture_control = 'paused'`).bind(ts, id),
     db.prepare(`UPDATE refs SET capture_control = NULL, updated_at = ? WHERE id = ? AND status = 'capturing' AND capture_control = 'pause'`).bind(ts, id),
   ])
   return !!(paused!.meta.changes || pending!.meta.changes)
@@ -680,26 +916,22 @@ export async function resumeReference(db: D1Database, id: string) {
 
 /**
  * Stop a capture and keep the pages it has. A running one stops after its current page.
- * A paused one (or one resumed but not picked up yet) finishes here, from the metadata and tokens saved when it paused.
+ * A paused one (or one resumed but not picked up yet) finishes here, from the metadata and tokens saved when it paused,
+ * and so does a running one whose agent is already gone.
  */
 export async function requestStop(db: D1Database, id: string) {
   const ts = now()
   const results = await db.batch([
-    db.prepare(`UPDATE refs SET status = 'ready', progress = NULL, error = NULL, capture_control = NULL,
-      title = coalesce(json_extract(crawl_state, '$.meta.title'), title), description = coalesce(json_extract(crawl_state, '$.meta.description'), description),
-      favicon = CASE WHEN instr(json_extract(crawl_state, '$.meta.favicon'), 'refs/' || id || '/' || capture_attempt || '/') = 1 THEN json_extract(crawl_state, '$.meta.favicon') ELSE favicon END,
-      tokens_json = json_extract(crawl_state, '$.tokens'), crawl_state = NULL, updated_at = ?
-      WHERE id = ? AND status = 'queued' AND crawl_state IS NOT NULL AND page_count > 0`).bind(ts, id),
-    db.prepare(`UPDATE refs SET status = 'failed', progress = NULL, error = ?, capture_control = NULL, crawl_state = NULL, updated_at = ?
-      WHERE id = ? AND status = 'queued'`).bind(STOPPED_EMPTY, ts, id),
+    ...settleStopped(db, `id = ? AND status = 'queued'`, [id], ts),
     db.prepare(`UPDATE refs SET capture_control = 'stop', updated_at = ? WHERE id = ? AND status = 'capturing'`).bind(ts, id),
+    ...settleAbandoned(db, ts, id),
   ])
   return results.some((r) => r.meta.changes > 0)
 }
 
 /** What the agent should do before its next page. Null means the job is gone. */
-export async function getControl(db: D1Database, id: string, attempt: string): Promise<{ control: CaptureControl | null } | null> {
-  const r = await db.prepare(`SELECT capture_control FROM refs WHERE id = ? AND status = 'capturing' AND capture_attempt = ?`).bind(id, attempt).first<Row>()
+export async function getControl(db: D1Database, id: string, lease: string): Promise<{ control: CaptureControl | null } | null> {
+  const r = await db.prepare(`SELECT capture_control FROM refs WHERE id = ? AND status = 'capturing' AND capture_lease = ?`).bind(id, lease).first<Row>()
   if (!r) return null
   return { control: r.capture_control === "pause" || r.capture_control === "stop" ? r.capture_control : null }
 }
@@ -707,21 +939,30 @@ export async function getControl(db: D1Database, id: string, attempt: string): P
 /**
  * The agent pauses at a page boundary and hands back where it was. Only applies while a pause is
  * still requested, so a stop or resume that arrived meanwhile wins: "changed" tells the agent to check again.
+ * With `release` the agent itself is stopping: when nothing is requested the capture goes back to the queue, to be resumed by the next claim.
  */
-export async function pauseJob(db: D1Database, id: string, attempt: string, state: CrawlState): Promise<"paused" | "changed" | "gone"> {
-  const result = await db.prepare(`UPDATE refs SET status = 'queued', capture_control = 'paused', crawl_state = ?, progress = 'Paused', claimed_at = NULL, updated_at = ?
-    WHERE id = ? AND status = 'capturing' AND capture_attempt = ? AND capture_control = 'pause'`).bind(JSON.stringify(state), now(), id, attempt).run()
+export async function pauseJob(db: D1Database, id: string, lease: string, state: CrawlState, release = false): Promise<"paused" | "changed" | "gone"> {
+  const result = await db.prepare(`UPDATE refs SET status = 'queued', crawl_state = ?1, claimed_at = NULL, capture_lease = NULL, updated_at = ?2,
+    progress = CASE WHEN capture_control = 'pause' THEN 'Paused' ELSE '${WAITING}' END, capture_control = CASE WHEN capture_control = 'pause' THEN 'paused' END
+    WHERE id = ?3 AND status = 'capturing' AND capture_lease = ?4 AND (capture_control = 'pause' OR (?5 AND capture_control IS NULL))`).bind(JSON.stringify(state), now(), id, lease, release ? 1 : 0).run()
   if (result.meta.changes) return "paused"
-  return (await isCapturing(db, id, attempt)) ? "changed" : "gone"
+  return (await isCapturing(db, id, lease)) ? "changed" : "gone"
 }
 
 // ---------- Capture worker presence ----------
 
 const PRESENCE_ID = "capture"
+/** The row of the last agent turned away for its protocol (noteRefusedAgent). It shares the table, not the meaning: it is never the agent's contact. */
+const REFUSED_ID = "refused"
 const PRESENCE_WRITE_SECONDS = 20
-const RECENT_SECONDS = 90
 
-/** Record that the capture worker contacted the server. Throttled so idle polling costs at most a few writes a minute. */
+/** The agent's contact as the offline banner reads it, by the same threshold and comparison as a capture's `quietSince`. */
+const freshnessOf = (lastSeenAt: string | null): AgentPresence["freshness"] => (!lastSeenAt ? "never" : lastSeenAt < staleBefore(now()) ? "stale" : "recent")
+
+/**
+ * Record that the capture worker contacted the server. Idle polling is throttled to a few writes a minute. A busy touch is
+ * always written, so presence is never older than the capture's own heartbeat (claimed_at) and the two go quiet together.
+ */
 export async function touchPresence(db: D1Database, activity: "idle" | "busy", jobId: string | null) {
   const ts = now()
   const before = new Date(Date.now() - PRESENCE_WRITE_SECONDS * 1000).toISOString()
@@ -729,22 +970,50 @@ export async function touchPresence(db: D1Database, activity: "idle" | "busy", j
     .prepare(
       `INSERT INTO worker_presence (id, last_seen_at, activity, job_id) VALUES (?1, ?2, ?3, ?4)
        ON CONFLICT (id) DO UPDATE SET last_seen_at = ?2, activity = ?3, job_id = ?4
-       WHERE worker_presence.last_seen_at < ?5 OR worker_presence.activity != ?3 OR coalesce(worker_presence.job_id, '') != coalesce(?4, '')`,
+       WHERE ?3 = 'busy' OR worker_presence.last_seen_at < ?5 OR worker_presence.activity != ?3 OR coalesce(worker_presence.job_id, '') != coalesce(?4, '')`,
     )
     .bind(PRESENCE_ID, ts, activity, jobId, before)
     .run()
 }
 
-export async function getPresence(db: D1Database): Promise<AgentPresence> {
-  const w = await db.prepare(`SELECT * FROM worker_presence WHERE id = ?`).bind(PRESENCE_ID).first<Row>()
+/**
+ * Remember that an agent holding the capture token was turned away for its protocol, on the row `REFUSED_ID`: `last_seen_at` is when and
+ * `protocol` is what it sent (null if it sent none). Written like idle presence, at most once per PRESENCE_WRITE_SECONDS, and at once when
+ * the protocol is not the one already there. Not presence: `getPresence` keeps the two apart.
+ */
+export async function noteRefusedAgent(db: D1Database, protocol: number | null) {
+  const before = new Date(Date.now() - PRESENCE_WRITE_SECONDS * 1000).toISOString()
+  await db
+    .prepare(
+      `INSERT INTO worker_presence (id, last_seen_at, activity, protocol) VALUES (?1, ?2, 'idle', ?3)
+       ON CONFLICT (id) DO UPDATE SET last_seen_at = ?2, protocol = ?3
+       WHERE worker_presence.last_seen_at < ?4 OR coalesce(worker_presence.protocol, -1) != coalesce(?3, -1)`,
+    )
+    .bind(REFUSED_ID, now(), protocol, before)
+    .run()
+}
+
+/** The one reader of presence: the agent's contact and the last refusal in one query, plus the job the agent last said it was on. */
+async function readPresence(db: D1Database): Promise<{ presence: AgentPresence; jobId: string | null }> {
+  const rows = await db.prepare(`SELECT * FROM worker_presence WHERE id IN (?, ?)`).bind(PRESENCE_ID, REFUSED_ID).all<Row>()
+  const w = rows.results.find((r) => r.id === PRESENCE_ID)
+  const turnedAway = rows.results.find((r) => r.id === REFUSED_ID)
   const lastSeenAt = (w?.last_seen_at as string) ?? null
-  const seconds = lastSeenAt ? (Date.now() - Date.parse(lastSeenAt)) / 1000 : null
+  // A refusal counts for as long as an agent would: by that point the one turned away has stopped polling, or is polling a Worker that was updated.
+  const refusedAt = (turnedAway?.last_seen_at as string) ?? null
+  const protocol = (turnedAway?.protocol as number | null) ?? null
   return {
-    lastSeenAt,
-    freshness: seconds == null ? "never" : seconds <= RECENT_SECONDS ? "recent" : "stale",
-    activity: (w?.activity as "idle" | "busy") ?? null,
+    presence: {
+      lastSeenAt,
+      freshness: freshnessOf(lastSeenAt),
+      activity: (w?.activity as "idle" | "busy") ?? null,
+      refused: refusedAt && freshnessOf(refusedAt) === "recent" ? { at: refusedAt, protocol, outdated: outdatedHalf(protocol) } : null,
+    },
+    jobId: (w?.job_id as string) ?? null,
   }
 }
+
+export const getPresence = async (db: D1Database): Promise<AgentPresence> => (await readPresence(db)).presence
 
 // ---------- Storage ----------
 
@@ -770,13 +1039,12 @@ export async function storageUsage(files: R2Bucket): Promise<StorageUsage> {
 }
 
 export async function getCaptureStatus(db: D1Database, ref: Reference): Promise<CaptureStatus> {
-  const w = await db.prepare(`SELECT * FROM worker_presence WHERE id = ?`).bind(PRESENCE_ID).first<Row>()
-  const lastSeenAt = (w?.last_seen_at as string) ?? null
+  const { presence, jobId: currentJobId } = await readPresence(db)
+  const { lastSeenAt, freshness, activity, refused } = presence
   const secondsSinceSeen = lastSeenAt ? Math.max(0, Math.round((Date.now() - Date.parse(lastSeenAt)) / 1000)) : null
-  const freshness = secondsSinceSeen == null ? "never" : secondsSinceSeen <= RECENT_SECONDS ? "recent" : "stale"
-  const activity = (w?.activity as "idle" | "busy") ?? null
-  const currentJobId = (w?.job_id as string) ?? null
-  const claimedAt = ref.claimedAt
+  const state = agentState(presence)
+  const agent = agentAdvice(state, "assistant")
+  const online = state.kind === "online"
   let advice: string
   let pollAfterSeconds: number | null = null
   switch (ref.status) {
@@ -790,34 +1058,21 @@ export async function getCaptureStatus(db: D1Database, ref: Reference): Promise<
       advice = `Capture failed${ref.error ? `: ${ref.error}` : ""}. Tell the user; they can recapture from the Snip app.`
       break
     case "queued":
-      // Queued means "waiting for this Mac", whether the agent is busy or absent.
+      // Queued means waiting for the capture agent, whether it is busy, absent or turned away for its version.
       // The phrase matches the gallery card, so an agent relays it verbatim.
-      if (freshness === "recent") {
-        advice =
-          activity === "busy"
-            ? "Waiting for your Mac: the capture agent is finishing another job and will pick this up next."
-            : "Waiting for your Mac: the capture agent is online and should pick this up shortly."
-        pollAfterSeconds = activity === "busy" ? 60 : 15
-      } else {
-        advice =
-          freshness === "never"
-            ? "Waiting for your Mac: no capture agent has ever contacted Snip. Ask the user to run `npm run capture` on their Mac. Stop polling until they do."
-            : `Waiting for your Mac: the capture agent was last seen ${secondsSinceSeen}s ago and is probably not running. Ask the user to start \`npm run capture\`. Stop polling until they do.`
-      }
+      advice = `${WAITING}: ${agent.headline} ${agent.action}`
+      if (online) pollAfterSeconds = activity === "busy" ? 60 : 15
       break
     case "capturing": {
-      const progressAge = claimedAt ? Math.round((Date.now() - Date.parse(claimedAt)) / 1000) : null
-      if (freshness !== "recent") {
-        advice = `The capture was in progress but the worker has not been seen for ${secondsSinceSeen ?? "?"}s. It may have stopped; it will be retried when a worker reconnects. Ask the user to check \`npm run capture\`.`
+      if (!online) {
+        advice = `The capture was in progress. ${agent.headline} It is retried when an agent that works with this library connects. ${agent.action}`
       } else if (currentJobId && currentJobId !== ref.id) {
         advice = "The worker is online but busy with a different job; this capture may have been interrupted and will be retried."
         pollAfterSeconds = 60
       } else {
-        advice =
-          progressAge != null && progressAge > 300
-            ? `The worker is online but this capture has not reported progress for ${progressAge}s. A slow page can cause this; keep polling slowly.`
-            : "Capturing. Progress shows the current page."
-        pollAfterSeconds = progressAge != null && progressAge > 300 ? 120 : 20
+        // A heartbeat renews claimed_at, so a worker that is online never leaves its capture quiet.
+        advice = "Capturing. Progress shows the current page."
+        pollAfterSeconds = 20
       }
       break
     }
@@ -826,9 +1081,9 @@ export async function getCaptureStatus(db: D1Database, ref: Reference): Promise<
     state: ref.status,
     progress: ref.progress,
     error: ref.error,
-    // claimed_at is refreshed on every progress report, so it is the last progress time, not the attempt start.
-    lastProgressAt: ref.status === "capturing" ? claimedAt : null,
-    worker: { lastSeenAt, secondsSinceSeen, freshness, activity, currentJobId },
+    // claimed_at is refreshed on every heartbeat and progress report, so it is the last sign of life, not the attempt start.
+    lastProgressAt: ref.status === "capturing" ? ref.claimedAt : null,
+    worker: { lastSeenAt, secondsSinceSeen, freshness, activity, currentJobId, refused },
     pollAfterSeconds,
     advice,
   }
@@ -943,11 +1198,6 @@ export async function listPasskeys(db: D1Database, ownerId?: string): Promise<Pa
     ? await db.prepare(`SELECT * FROM passkeys WHERE owner_id = ? ORDER BY created_at`).bind(ownerId).all<PasskeyRow>()
     : await db.prepare(`SELECT * FROM passkeys ORDER BY created_at`).all<PasskeyRow>()
   return rows.results.map(toPasskey)
-}
-
-export async function getPasskey(db: D1Database, id: string): Promise<PasskeyRecord | null> {
-  const row = await db.prepare(`SELECT * FROM passkeys WHERE id = ?`).bind(id).first<PasskeyRow>()
-  return row ? toPasskey(row) : null
 }
 
 /**

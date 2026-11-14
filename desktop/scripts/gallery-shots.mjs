@@ -1,4 +1,4 @@
-// Captures the gallery's "Waiting for your Mac" card from the real built app, with a
+// Captures the gallery's "Queued" card from the real built app, with a
 // real local Worker and a queued reference. Dev tool only: it never touches Max's
 // library, Cloudflare or the running Snip.app.
 // Usage: node desktop/scripts/gallery-shots.mjs [outDir]
@@ -14,7 +14,7 @@ import { chromium } from "playwright"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(here, "../..")
-const out = path.resolve(process.argv[2] ?? "/Users/Maxsc/.factory/worktrees/98cfc78f/screenshots/desktop")
+const out = path.resolve(process.argv[2] ?? path.join(os.tmpdir(), "snip-screenshots/desktop"))
 const run = promisify(execFile)
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -66,8 +66,8 @@ try {
     "snip",
     "--command",
     `INSERT INTO refs (id, url, domain, title, mode, max_pages, status, progress, created_at, updated_at) VALUES ` +
-      `('galwaiting0000001','https://linear.app/','linear.app','Linear',  'crawl', 40, 'queued', 'Waiting for your Mac', '${now}', '${now}'),` +
-      `('galwaiting0000002','https://arc.net/','arc.net','Arc Browser','crawl', 12, 'queued', 'Waiting for your Mac', '${now}', '${now}'),` +
+      `('galwaiting0000001','https://linear.app/','linear.app','Linear',  'crawl', 40, 'queued', 'Waiting for the capture agent', '${now}', '${now}'),` +
+      `('galwaiting0000002','https://arc.net/','arc.net','Arc Browser','crawl', 12, 'queued', 'Waiting for the capture agent', '${now}', '${now}'),` +
       `('galwaiting0000003','https://www.stripe.com/','stripe.com','Stripe','crawl', 18, 'failed', 'Capture failed', '${now}', '${now}')`,
   )
 
@@ -89,7 +89,7 @@ try {
       const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 2, colorScheme: theme })
       const page = await context.newPage()
       await page.goto(origin, { waitUntil: "networkidle" })
-      const waiting = page.getByText("Waiting for your Mac").first()
+      const waiting = page.getByText("Queued", { exact: true }).first()
       await waiting.waitFor({ timeout: 30000 }).catch(async error => {
         console.error("URL:", page.url())
         console.error("BODY:", (await page.locator("body").innerText().catch(() => "unavailable")).slice(0, 1500))
@@ -97,7 +97,7 @@ try {
       })
       await sleep(600) // let the folder tiles finish their entrance
       await page.screenshot({ path: path.join(out, `gallery-waiting-${theme}.png`) })
-      const tile = waiting.locator("xpath=ancestor::div[contains(@class,'group')]").first()
+      const tile = waiting.locator("xpath=ancestor::*[self::a or self::button][1]")
       await tile.screenshot({ path: path.join(out, `gallery-waiting-card-${theme}.png`) })
       console.log(path.join(out, `gallery-waiting-${theme}.png`))
       await context.close()

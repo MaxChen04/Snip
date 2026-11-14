@@ -1,20 +1,15 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react"
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react"
 import { useLocation } from "wouter"
-import { XIcon } from "@/components/icons"
-import { toast } from "sonner"
-import { AddReferenceDialog, extractUrls } from "@/components/add-reference-dialog"
+import { AddReferenceDialog } from "@/components/add-reference-dialog"
 import { trackCapture } from "@/components/canvas/capture-card"
 import { ConnectMcpDialog } from "@/components/connect-mcp-dialog"
-import { notify } from "@/components/notify"
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
-import { api } from "@/lib/api"
-import { useCollections } from "@/lib/collections"
+import { extractUrls } from "@/lib/site-url"
 
 // One place that owns the "Create" dialogs so the top bar, board views and empty
 // states on any page open the same flow.
 
-type Ctx = { addReference: (collectionId?: string, url?: string) => void; newCollection: () => void; connectMcp: () => void }
-const AddFlowCtx = createContext<Ctx>({ addReference: () => {}, newCollection: () => {}, connectMcp: () => {} })
+type Ctx = { addReference: (collectionId?: string, url?: string) => void; connectMcp: () => void }
+const AddFlowCtx = createContext<Ctx>({ addReference: () => {}, connectMcp: () => {} })
 export const useAddFlow = () => useContext(AddFlowCtx)
 
 /** True while the user is typing somewhere, so global shortcuts stay out of the way. */
@@ -29,7 +24,6 @@ const currentBoard = () =>
 
 export function AddFlowProvider({ children }: { children: ReactNode }) {
   const [adding, setAdding] = useState<{ collection?: string; url?: string; n: number } | null>(null)
-  const [naming, setNaming] = useState(false)
   const [connecting, setConnecting] = useState(false)
   const [location, navigate] = useLocation()
   const open = (collection?: string, url?: string) => setAdding((a) => ({ collection, url, n: (a?.n ?? 0) + 1 }))
@@ -49,9 +43,10 @@ export function AddFlowProvider({ children }: { children: ReactNode }) {
       // The canvas capture card takes its own pastes (data-capture-input).
       if (typing(e.target) || (e.target as Element | null)?.closest?.("[data-capture-input]") || dialogOpen()) return
       const text = e.clipboardData?.getData("text") ?? ""
-      if (!extractUrls(text).length) return
+      const found = extractUrls(text)
+      if (!found.length) return
       e.preventDefault()
-      open(currentBoard(), text)
+      open(currentBoard(), found.map((u) => u.href).join(" "))
     }
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey || typing(e.target) || dialogOpen()) return
@@ -73,7 +68,6 @@ export function AddFlowProvider({ children }: { children: ReactNode }) {
     <AddFlowCtx.Provider
       value={{
         addReference: open,
-        newCollection: () => setNaming(true),
         connectMcp: () => setConnecting(true),
       }}
     >
@@ -86,73 +80,8 @@ export function AddFlowProvider({ children }: { children: ReactNode }) {
         onOpenChange={(o) => !o && setAdding(null)}
         // Captures started here show on the canvas capture card too.
         onCreated={(r) => trackCapture(r.id)}
-        onAdded={() => {
-          setAdding(null)
-          window.dispatchEvent(new Event("rs:reload"))
-        }}
       />
-      <NewCollectionDialog open={naming} onOpenChange={setNaming} />
       <ConnectMcpDialog open={connecting} onOpenChange={setConnecting} />
     </AddFlowCtx.Provider>
-  )
-}
-
-function NewCollectionDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
-  const { refresh } = useCollections()
-  const [, navigate] = useLocation()
-  const [name, setName] = useState("")
-  const [busy, setBusy] = useState(false)
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!name.trim() || busy) return
-    setBusy(true)
-    try {
-      const { id } = await api.createCollection(name.trim())
-      await refresh()
-      onOpenChange(false)
-      notify(`Created board “${name.trim()}”`)
-      setName("")
-      navigate(`/b/${id}`)
-    } catch (err) {
-      toast.error((err as Error).message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent showCloseButton={false} className="gap-0 p-0 sm:max-w-[400px]">
-        <form onSubmit={submit}>
-          <div className="flex items-center justify-between px-5 pt-5 pb-4">
-            <DialogTitle className="text-base font-medium">New board</DialogTitle>
-            <DialogDescription className="sr-only">Name a board to group saves by project or mood.</DialogDescription>
-            <DialogClose className="press -mr-1.5 grid size-7 place-items-center rounded-md text-ink-10 hover:bg-ink-3 hover:text-foreground active:scale-[0.92]" aria-label="Close">
-              <XIcon className="size-4" />
-            </DialogClose>
-          </div>
-          <div className="px-5 pb-5">
-            <input
-              autoFocus
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Pricing pages"
-              aria-label="Board name"
-              className="well h-10 w-full rounded-lg px-3 text-sm outline-none placeholder:text-ink-10 focus:bg-ink-4 pointer-coarse:text-base"
-            />
-          </div>
-          <div className="border-t-[0.5px] border-border p-3">
-            <button
-              type="submit"
-              disabled={!name.trim() || busy}
-              className="press h-10 w-full rounded-lg bg-primary px-3.5 text-sm font-medium tracking-[-0.01em] text-primary-foreground shadow-primary hover:bg-(--primary-hover) disabled:opacity-60 disabled:active:scale-100 dark:disabled:bg-ink-4 dark:disabled:text-ink-8 dark:disabled:opacity-100 dark:disabled:shadow-none"
-            >
-              {busy ? "Creating…" : "Create board"}
-            </button>
-          </div>
-        </form>
-      </DialogContent>
-    </Dialog>
   )
 }

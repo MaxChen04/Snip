@@ -17,12 +17,12 @@ function subscribe(channel, callback) {
 contextBridge.exposeInMainWorld("snipCloud", {
   state: () => ipcRenderer.invoke("snip:cloud-state", {}),
   enable: options => ipcRenderer.invoke("snip:cloud-enable", options ?? {}),
+  update: () => ipcRenderer.invoke("snip:cloud-update", {}),
   disable: action => ipcRenderer.invoke("snip:cloud-disable", { action }),
   retryStep: step => ipcRenderer.invoke("snip:cloud-retry-step", { step }),
   cancel: () => ipcRenderer.invoke("snip:cloud-cancel", {}),
   abort: () => ipcRenderer.invoke("snip:cloud-abort", {}),
   answer: (key, value) => ipcRenderer.invoke("snip:cloud-answer", { key, value }),
-  openSettings: () => ipcRenderer.invoke("snip:cloud-open-settings", {}),
   openUrl: url => ipcRenderer.invoke("snip:cloud-open-url", { url }),
   signOutAll: () => ipcRenderer.invoke("snip:cloud-sign-out-all", {}),
   deleteResources: confirmName => ipcRenderer.invoke("snip:cloud-delete-resources", { confirm: confirmName }),

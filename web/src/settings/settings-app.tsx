@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from "react"
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react"
 import { useTheme } from "@/components/theme-provider"
 import { toast } from "sonner"
 import { cn } from "cn"
@@ -42,7 +42,7 @@ export function SettingsApp() {
   const [turnOffChoice, setTurnOffChoice] = useState<TurnOffChoice>("stay")
   const [linkCopied, setLinkCopied] = useState(false)
   const mode = cloud.mode
-  const working = cloud.busy || mode === "enabling" || mode === "disabling"
+  const working = cloud.busy || mode === "enabling"
   const adopted = cloud.file?.move?.status === "skipped"
   // Say where the library actually is, not where it started.
   const intro =
@@ -50,9 +50,11 @@ export function SettingsApp() {
       ? adopted
         ? "Your library lives in your Cloudflare account, and this Mac keeps its own copy. Captures still run on this Mac."
         : "Your library lives in your Cloudflare account. Captures still run on this Mac."
-      : cloud.cloud?.detachedAt
-        ? "Your library lives on this Mac. Your detached cloud copy is still live, so other devices and agents can still read it."
-        : "Your library lives on this Mac. Enabling cloud copies it to your own Cloudflare account, so other devices and agents can read it."
+      : mode === "unreadable"
+        ? "Snip hasn’t opened this library."
+        : cloud.cloud?.detachedAt
+          ? "Your library lives on this Mac. Your detached cloud copy is still live, so other devices and agents can still read it."
+          : "Your library lives on this Mac. Enabling cloud copies it to your own Cloudflare account, so other devices and agents can read it."
 
   // A screenshot or a support run may open a specific dialog; harmless in normal use.
   useEffect(() => {
@@ -72,7 +74,7 @@ export function SettingsApp() {
 
   const startEnable = async () => {
     setDialog(null)
-    await cloud.begin(() => cloud.bridge!.enable())
+    await cloud.begin("setup", () => cloud.bridge!.enable())
   }
 
   const chooseTurnOff = async (choice: TurnOffChoice) => {
@@ -81,26 +83,26 @@ export function SettingsApp() {
       return
     }
     setDialog(null)
-    await cloud.begin(() => cloud.bridge!.disable(choice))
+    await cloud.begin(choice, () => cloud.bridge!.disable(choice))
   }
 
   const confirmDelete = async () => {
     const host = hostOf(cloud.cloud?.url)
     setDialog(null)
-    await cloud.begin(() => cloud.bridge!.deleteResources(host))
+    await cloud.begin("delete-resources", () => cloud.bridge!.deleteResources(host))
   }
 
   const confirmSnapshotDelete = async () => {
     const name = dirName(cloud.snapshotRecord?.path)
     setDialog(null)
-    await cloud.begin(() => cloud.bridge!.snapshot("delete", name))
+    await cloud.begin("snapshot delete", () => cloud.bridge!.snapshot("delete", name))
   }
 
   const confirmExportDelete = async () => {
     const name = dirName(cloud.snapshotRecord?.export?.path)
     setDialog(null)
     // The export is delete-only; there is no restore path for it by design.
-    await cloud.begin(() => cloud.bridge!.snapshot("delete-export", name))
+    await cloud.begin("snapshot delete-export", () => cloud.bridge!.snapshot("delete-export", name))
   }
 
   const signOut = async () => {
@@ -113,10 +115,11 @@ export function SettingsApp() {
 
   const undoSetup = async () => {
     setDialog(null)
-    const reply = await cloud.bridge!.abort()
-    if (reply.error) toast.error(reply.error)
-    else toast.success("Setup undone. This Mac is back on its local library.")
+    await cloud.begin("abort", () => cloud.bridge!.abort())
   }
+
+  // Main decides what a retry runs: the unfinished setup, or the command that last failed.
+  const retry = () => void cloud.begin(null, () => cloud.bridge!.retryStep(""))
 
   const openCloud = () => {
     if (cloud.cloud?.url) void cloud.bridge!.openUrl(cloud.cloud.url)
@@ -140,19 +143,33 @@ export function SettingsApp() {
     if (!cloud.link) createLink()
   }
 
+  const errorCard =
+    cloud.error && !cloud.choice && !cloud.needed ? (
+      <ErrorCard
+        error={cloud.error}
+        canRetry={cloud.snapshot.canRetry === true}
+        onRetry={retry}
+        onRefresh={() => {
+          cloud.clearError()
+          void cloud.refresh()
+        }}
+      />
+    ) : null
+
   return (
     <div className="flex min-h-svh flex-col bg-ground text-foreground">
       <Header />
       <main className="mx-auto flex w-full max-w-[620px] flex-1 flex-col gap-7 px-6 pt-7 pb-16">
-        {working || cloud.choice ? (
+        {!cloud.loaded ? null : working || cloud.choice || cloud.needed ? (
           <ProgressView
             cloud={cloud}
-            onAdopt={() => void cloud.begin(() => cloud.bridge!.enable({ adoptExisting: true }))}
+            errorCard={errorCard}
+            onAdopt={() => void cloud.begin("setup", () => cloud.bridge!.enable({ adoptExisting: true }))}
             onStopChoice={() => {
               cloud.clearChoice()
               void cloud.refresh()
             }}
-            onResume={() => void cloud.begin(() => cloud.bridge!.retryStep(""))}
+            onResume={retry}
             onUndo={() => setDialog("abort")}
           />
         ) : (
@@ -162,10 +179,19 @@ export function SettingsApp() {
               <p className="mt-1.5 text-sm leading-[1.55] text-muted-foreground">{intro}</p>
             </div>
 
-            {mode === "cloud" ? (
+            {errorCard}
+
+            {mode === "unreadable" ? (
+              // Main started nothing for this library; the engine would refuse every command.
+              <Panel
+                title="Snip can’t read this library’s cloud record"
+                description={`Repair or remove .snip/cloud.json in ${cloud.snapshot.app?.dataRoot ?? "your Snip library folder"}, or update Snip, then reopen it. Nothing can be changed here until then.`}
+              />
+            ) : mode === "cloud" ? (
               <CloudPanels
                 cloud={cloud}
                 onOpen={openCloud}
+                onUpdate={() => void cloud.begin("deploy", () => cloud.bridge!.update())}
                 onTurnOff={() => {
                   setTurnOffChoice("stay")
                   setDialog("turn-off")
@@ -178,7 +204,6 @@ export function SettingsApp() {
                 onDeleteExport={() => setDialog("export-delete")}
                 onSignOut={() => setDialog("sign-out")}
                 onOwnerLink={showOwnerLink}
-                onDeleteResources={() => setDialog("delete")}
                 onCopyPrompt={copyPrompt}
                 onPasskeys={() => void cloud.bridge!.openUrl(`${cloud.cloud?.url?.replace(/\/$/, "")}/passkeys`)}
               />
@@ -189,9 +214,10 @@ export function SettingsApp() {
                 onOpen={openCloud}
                 onCopyPrompt={copyPrompt}
                 onRestorePrevious={async () => {
-                  await cloud.begin(() => cloud.bridge!.snapshot("restore"))
+                  await cloud.begin("snapshot restore", () => cloud.bridge!.snapshot("restore"))
                 }}
                 onDeleteSnapshot={() => setDialog("snapshot-delete")}
+                onDeleteResources={() => setDialog("delete")}
               />
             )}
           </>
@@ -283,6 +309,7 @@ function LocalPanels({
   onCopyPrompt,
   onRestorePrevious,
   onDeleteSnapshot,
+  onDeleteResources,
 }: {
   cloud: ReturnType<typeof useCloud>
   onEnable: () => void
@@ -290,6 +317,7 @@ function LocalPanels({
   onCopyPrompt: (kind: "setup" | "pull") => Promise<void>
   onRestorePrevious: () => void
   onDeleteSnapshot: () => void
+  onDeleteResources: () => void
 }) {
   const detached = cloud.cloud?.detachedAt ? cloud.cloud : null
   const local = cloud.local
@@ -359,6 +387,26 @@ function LocalPanels({
           }
         />
       </Panel>
+
+      {/* Only a detached copy can be deleted: while this Mac uses the cloud library it is the only current copy. */}
+      {detached ? (
+        <section className="rounded-xl px-5 py-4 shadow-[inset_0_0_0_1px_var(--red-6)]">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <h2 className="flex items-center gap-2 text-sm font-medium text-(--red-11)">
+                <TriangleAlertIcon className="size-3.5" />
+                Delete cloud resources
+              </h2>
+              <p className="mt-1 text-xs leading-[1.5] text-muted-foreground">
+                Removes the Worker, database, KV and stored screenshots from Cloudflare. Devices and agents lose access, and it can’t be undone.
+              </p>
+            </div>
+            <Button variant="destructive" size="sm" onClick={onDeleteResources}>
+              Delete…
+            </Button>
+          </div>
+        </section>
+      ) : null}
     </>
   )
 }
@@ -366,25 +414,25 @@ function LocalPanels({
 function CloudPanels({
   cloud,
   onOpen,
+  onUpdate,
   onTurnOff,
   onRestore,
   onDeleteSnapshot,
   onDeleteExport,
   onSignOut,
   onOwnerLink,
-  onDeleteResources,
   onCopyPrompt,
   onPasskeys,
 }: {
   cloud: ReturnType<typeof useCloud>
   onOpen: () => void
+  onUpdate: () => void
   onTurnOff: () => void
   onRestore: () => void
   onDeleteSnapshot: () => void
   onDeleteExport: () => void
   onSignOut: () => void
   onOwnerLink: () => void
-  onDeleteResources: () => void
   onCopyPrompt: (kind: "setup" | "pull") => Promise<void>
   onPasskeys: () => void
 }) {
@@ -394,22 +442,8 @@ function CloudPanels({
   const label = snapshotLabel(snapshot)
   const detached = cloud.cloud?.detachedAt
   const adopted = cloud.file?.move?.status === "skipped" && cloud.file?.move?.reason === "adopted-existing"
-  const deployed = cloud.cloud?.workerVersion
-  const expected = cloud.cloud?.expectedWorkerVersion
-  const changedOutside = !!deployed && !!expected && deployed !== expected
   return (
     <>
-      {changedOutside ? (
-        <section className="flex items-start gap-3 rounded-xl bg-fill-2 px-4 py-3.5 text-sm leading-[1.55]">
-          <InfoIcon className="mt-0.5 size-4 shrink-0 text-ink-10" />
-          <p>
-            Your cloud copy was changed outside Snip.{" "}
-            <span className="text-ink-11">
-              It runs {deployed}; this Mac expects {expected}. Reading and capturing still work.
-            </span>
-          </p>
-        </section>
-      ) : null}
       {adopted ? (
         <section className="flex items-start gap-3 rounded-xl bg-fill-2 px-4 py-3.5 text-sm leading-[1.55]">
           <InfoIcon className="mt-0.5 size-4 shrink-0 text-ink-10" />
@@ -435,6 +469,16 @@ function CloudPanels({
             <Button variant="outline" size="sm" onClick={onOpen}>
               Open
               <ArrowUpRightIcon data-icon="inline-end" />
+            </Button>
+          }
+        />
+        <Row
+          icon={<RefreshCwIcon className="size-4" />}
+          title="Update cloud library"
+          body="Install the cloud version included with this app. Captures pause until the update is verified."
+          action={
+            <Button variant="outline" size="sm" onClick={onUpdate} disabled={!cloud.bridge || !cloud.engineAvailable || cloud.snapshot.ready === false}>
+              Update cloud library
             </Button>
           }
         />
@@ -522,8 +566,8 @@ function CloudPanels({
         />
         <Row
           icon={<ShieldCheckIcon className="size-4" />}
-          title="Sign out all devices"
-          body="Signs out browsers and this app. Agents keep access until their token expires, up to 7 days."
+          title="Sign out everywhere, including connected agents"
+          body="Signs out browsers, this app and connected agents. All of them have to sign in or reconnect again."
           action={
             <Button variant="outline" size="sm" onClick={onSignOut}>
               Sign out…
@@ -559,23 +603,6 @@ function CloudPanels({
         />
       </Panel>
 
-      <section className="rounded-xl px-5 py-4 shadow-[inset_0_0_0_1px_var(--red-6)]">
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <h2 className="flex items-center gap-2 text-sm font-medium text-(--red-11)">
-              <TriangleAlertIcon className="size-3.5" />
-              Delete cloud resources
-            </h2>
-            <p className="mt-1 text-xs leading-[1.5] text-muted-foreground">
-              Removes the Worker, database, KV and stored screenshots from Cloudflare. Devices and agents lose access, and it can’t be undone.
-            </p>
-          </div>
-          <Button variant="destructive" size="sm" onClick={onDeleteResources}>
-            Delete…
-          </Button>
-        </div>
-      </section>
-
       <Meta>
         {cloud.snapshotRecord?.takenAt ? "Turn off cloud to restore the snapshot, or copy the cloud library back first." : "This library started empty, so there is no snapshot to restore."}
       </Meta>
@@ -603,32 +630,36 @@ function DetachedPanel({ cloud, onOpen }: { cloud: CloudRecord; onOpen: () => vo
 
 function ProgressView({
   cloud,
+  errorCard,
   onAdopt,
   onStopChoice,
   onResume,
   onUndo,
 }: {
   cloud: ReturnType<typeof useCloud>
+  errorCard: ReactNode
   onAdopt: () => void
   onStopChoice: () => void
   onResume: () => void
   onUndo: () => void
 }) {
-  const command = commandFor(cloud.running?.command ?? null, cloud.mode)
+  const command = commandFor(cloud.running?.command ?? null)
   const ids = useMemo(() => stepsFor(command), [command])
   const doneCount = ids.filter(id => {
     const status = cloud.steps[id]?.status
     return status === "done" || status === "skipped"
   }).length
-  const error = cloud.error
   const percent = ids.length ? Math.round((doneCount / ids.length) * 100) : 0
   const copy = {
     setup: { title: "Setting up your cloud library", body: "Keep this window open. Cloudflare asks for two approvals: your account, and R2 if it's off." },
+    deploy: { title: "Updating your cloud library", body: "Snip finishes the current capture, installs this app’s cloud update, and verifies it before captures resume. Keep this window open." },
     pull: { title: "Bringing your cloud library back", body: "Snip downloads a fresh copy, checks it, then switches this Mac to it." },
     detach: { title: "Turning off cloud", body: "This Mac goes back to its local library. The cloud copy stays live." },
     "delete-resources": { title: "Deleting cloud resources", body: "Removing the Worker, database, KV and stored files from Cloudflare." },
     "snapshot restore": { title: "Restoring the snapshot", body: "Bringing the copy from before cloud back as the live library." },
     "snapshot delete": { title: "Deleting the snapshot", body: "Removing the local copy from before cloud." },
+    "snapshot delete-export": { title: "Deleting the export", body: "Removing the database dump and file list made during setup." },
+    abort: { title: "Undoing setup", body: "Removing what the unfinished setup created. This Mac goes back to its local library." },
   }[command] ?? { title: "Working", body: "Keep this window open." }
 
   return (
@@ -654,20 +685,14 @@ function ProgressView({
           needed={cloud.needed}
           onContinue={async values => {
             for (const [key, value] of Object.entries(values)) await cloud.bridge!.answer(key, value)
-            await cloud.begin(() => cloud.bridge!.retryStep(""))
+            onResume()
           }}
           onCancel={cloud.clearNeeded}
         />
       ) : cloud.action ? (
         <HumanActionCard action={cloud.action} onOpen={url => void cloud.bridge?.openUrl(url)} />
       ) : null}
-      {error && !cloud.choice ? (
-        <ErrorCard
-          error={error}
-          onRetry={() => void cloud.begin(() => cloud.bridge!.retryStep(error.step ?? ""))}
-          onRefresh={() => void cloud.refresh()}
-        />
-      ) : null}
+      {errorCard}
 
       <ol className="flex flex-col">
         {ids.map(id => {
@@ -693,7 +718,7 @@ function ProgressView({
 
       <div className="flex items-center justify-between gap-3 pt-1">
         <span className="text-2xs text-muted-foreground">
-          {cloud.note?.message ?? (cloud.busy ? "You can keep using Snip while this runs." : cloud.choice ? "Nothing has changed yet." : "Stopped. Nothing on Cloudflare was changed.")}
+          {cloud.note?.message ?? (cloud.busy ? "You can keep using Snip while this runs." : cloud.choice ? "Nothing has changed yet." : "Stopped.")}
         </span>
         <div className="flex items-center gap-1.5">
           {cloud.busy ? (
@@ -806,10 +831,12 @@ function NeedsInputCard({
   onCancel: () => void
 }) {
   const [values, setValues] = useState<Record<string, string>>({})
+  const [sending, setSending] = useState(false)
   useEffect(() => {
     setValues({})
+    setSending(false)
   }, [needed])
-  const ready = needed.every(entry => (values[entry.key] ?? "").trim().length > 0)
+  const ready = !sending && needed.every(entry => (values[entry.key] ?? "").trim().length > 0)
   return (
     <div className="rounded-xl bg-card p-4 shadow-[inset_0_0_0_1px_var(--ink-6)]">
       <p className="flex items-start gap-2 text-sm leading-5">
@@ -817,26 +844,55 @@ function NeedsInputCard({
         Snip needs one more thing before it can continue.
       </p>
       <div className="mt-3 flex flex-col gap-2.5">
-        {needed.map(entry => (
-          <label key={entry.key} className="flex flex-col gap-1.5">
-            <span className="text-xs font-medium text-muted-foreground">{entry.label}</span>
-            <Input
-              autoFocus={entry === needed[0]}
-              type={entry.secret ? "password" : "text"}
-              value={values[entry.key] ?? ""}
-              onChange={event => setValues(current => ({ ...current, [entry.key]: event.target.value }))}
-              spellCheck={false}
-              autoComplete="off"
-              aria-label={entry.label}
-            />
-          </label>
-        ))}
+        {needed.map(entry =>
+          entry.options?.length ? (
+            // The answer is a value the person cannot be asked to type, such as an account id.
+            <div key={entry.key} role="group" aria-label={entry.label} className="flex flex-col gap-1.5">
+              <span className="text-xs font-medium text-muted-foreground">{entry.label}</span>
+              {entry.options.map(option => (
+                <button
+                  key={option.value}
+                  type="button"
+                  aria-pressed={values[entry.key] === option.value}
+                  onClick={() => setValues(current => ({ ...current, [entry.key]: option.value }))}
+                  className={cn(
+                    "rounded-lg px-3.5 py-2.5 text-left transition-[background-color,box-shadow] duration-150 ease-out",
+                    values[entry.key] === option.value ? "bg-fill-2 shadow-[0_0_0_1px_var(--ink-7)]" : "hover:bg-fill-2/70",
+                  )}
+                >
+                  <span className="block text-sm">{option.label}</span>
+                  <span className="mt-0.5 block font-mono text-xs text-muted-foreground">{option.value}</span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <label key={entry.key} className="flex flex-col gap-1.5">
+              <span className="text-xs font-medium text-muted-foreground">{entry.label}</span>
+              <Input
+                autoFocus={entry === needed[0]}
+                type={entry.secret ? "password" : "text"}
+                value={values[entry.key] ?? ""}
+                onChange={event => setValues(current => ({ ...current, [entry.key]: event.target.value }))}
+                spellCheck={false}
+                autoComplete="off"
+                aria-label={entry.label}
+              />
+            </label>
+          ),
+        )}
       </div>
       <div className="mt-3 flex items-center justify-end gap-1.5">
         <Button variant="ghost" size="sm" onClick={onCancel}>
           Cancel
         </Button>
-        <Button size="sm" disabled={!ready} onClick={() => void onContinue(values)}>
+        <Button
+          size="sm"
+          disabled={!ready}
+          onClick={() => {
+            setSending(true)
+            void onContinue(values)
+          }}
+        >
           Continue
         </Button>
       </div>
@@ -865,8 +921,10 @@ function HumanActionCard({ action, onOpen }: { action: NonNullable<ReturnType<ty
   )
 }
 
-function ErrorCard({ error, onRetry, onRefresh }: { error: NonNullable<ReturnType<typeof useCloud>["error"]>; onRetry: () => void; onRefresh: () => void }) {
+function ErrorCard({ error, canRetry, onRetry, onRefresh }: { error: NonNullable<ReturnType<typeof useCloud>["error"]>; canRetry: boolean; onRetry: () => void; onRefresh: () => void }) {
+  // The error text can outlive the command (an app restart); main says whether Retry has one to run.
   const action = errorAction(error)
+  const offered = action === "refresh" || (action === "retry" && canRetry)
   return (
     <div className="rounded-xl bg-(--red-3) px-4 py-3.5">
       <p className="flex items-center gap-2 text-sm leading-5 text-(--red-11)">
@@ -874,14 +932,14 @@ function ErrorCard({ error, onRetry, onRefresh }: { error: NonNullable<ReturnTyp
         {error.message}
       </p>
       {error.hint ? <p className="mt-1 text-xs leading-[1.5] text-ink-11">{error.hint}</p> : null}
-      {action === "none" ? null : (
+      {offered ? (
         <div className="mt-2.5">
           <Button size="sm" variant="outline" onClick={action === "refresh" ? onRefresh : onRetry}>
             <RefreshCwIcon data-icon="inline-start" />
             {action === "refresh" ? "Refresh" : "Retry"}
           </Button>
         </div>
-      )}
+      ) : null}
     </div>
   )
 }

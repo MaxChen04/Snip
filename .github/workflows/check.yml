@@ -19,4 +19,17 @@ jobs:
       - run: npm run typecheck
       - run: npm run build -w web
       - run: npx --no-install playwright install --with-deps chromium
-      - run: npm test
+      # The UI browser suite has its own job and budget; do not run it twice.
+      - run: npm run test:core && npm run test:app
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npx --no-install playwright install --with-deps chromium
+      - run: npm run test:browser

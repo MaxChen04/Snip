@@ -42,8 +42,6 @@ const ENABLE_STEPS = [
   'schema', 'deploy', 'secrets', 'quiesce', 'release', 'export', 'import', 'verify', 'owner', 'finish',
 ];
 
-const EMPTY_LIBRARY_STEPS = new Set(['quiesce', 'export', 'release', 'import', 'verify']);
-
 function guessLogin(root) {
   try {
     const result = require('node:child_process').spawnSync('git', ['config', 'github.user'], { cwd: root, encoding: 'utf8' });
@@ -268,7 +266,7 @@ function accountStep() {
       return { message: chosen.name, detail: chosen.id };
     },
     async verify(ctx) {
-      return Boolean(ctx.cloud.accountId) && Boolean(ctx.state().cloud && ctx.state().cloud.accountId === ctx.cloud.accountId);
+      return Boolean(ctx.cloud.accountId);
     },
   };
 }
@@ -292,7 +290,7 @@ function urlStep() {
       return { message: ctx.cloud.url };
     },
     async verify(ctx) {
-      return Boolean(ctx.cloud.url) && Boolean(ctx.state().cloud && ctx.state().cloud.url === ctx.cloud.url);
+      return Boolean(ctx.cloud.url);
     },
   };
 }
@@ -354,31 +352,31 @@ function resourcesStep() {
       }
       if (outcome === 'foreign') throw foreignError(ctx, { database: null });
 
+      // `created` is the abort scope: abort may delete only what this run made, so
+      // each resource is recorded the moment it exists, not after all three do.
+      const recordCreated = (patch) => ctx.setCloud({ created: { ...(ctx.cloud.created || {}), ...patch } });
+
       const databases = await ctx.deps.cloud.listD1(ctx.wrangler, { accountId });
       let database = databases.find((entry) => entry.name === D1_NAME) || null;
-      const created = {};
       if (!database) {
         database = await ctx.deps.cloud.createD1(ctx.wrangler, { accountId });
-        created.d1 = { name: D1_NAME, id: database.id };
+        recordCreated({ d1: { name: D1_NAME, id: database.id } });
       }
 
       const namespaces = await ctx.deps.cloud.listKv(ctx.wrangler, { accountId });
       let namespace = namespaces.find((entry) => entry.title === KV_NAME) || null;
       if (!namespace) {
         namespace = await ctx.deps.cloud.createKv(ctx.wrangler, { accountId });
-        created.kv = { name: KV_NAME, id: namespace.id };
+        recordCreated({ kv: { name: KV_NAME, id: namespace.id } });
       }
 
       const buckets = await ctx.deps.cloud.listBuckets(ctx.wrangler, { accountId });
-      let bucket = buckets.some((entry) => entry.name === BUCKET_NAME) ? null : null;
       if (!buckets.some((entry) => entry.name === BUCKET_NAME)) {
         await ctx.deps.cloud.createBucket(ctx.wrangler, { accountId });
-        created.bucket = BUCKET_NAME;
+        recordCreated({ bucket: BUCKET_NAME });
       }
-      bucket = BUCKET_NAME;
 
-      // `created` is the abort scope: abort may delete only what this run made.
-      ctx.setCloud({ d1: { name: D1_NAME, id: database.id }, kv: { name: KV_NAME, id: namespace.id }, bucket, created });
+      ctx.setCloud({ d1: { name: D1_NAME, id: database.id }, kv: { name: KV_NAME, id: namespace.id }, bucket: BUCKET_NAME });
       return { message: 'Database, key-value store and bucket ready', detail: JSON.stringify({ d1: database.id, kv: namespace.id }) };
     },
     async verify(ctx) {
@@ -516,10 +514,8 @@ function schemaStep() {
     title: 'Applying database migrations',
     async run(ctx) {
       const result = await ctx.deps.deploy.applyMigrations(ctx.wrangler, { dataRoot: ctx.dataRoot, accountId: ctx.cloud.accountId, remote: true, retry: retryOf(ctx) });
-      const text = `${result.stdout}${result.stderr}`;
-      const applied = (text.match(/Migrations to be applied:/) ? text.split('Migrations to be applied:')[1] : '')
-        .split('\n').map((line) => line.trim()).filter((line) => /^\d{4}_/.test(line));
-      return { message: applied.length ? `Applied ${applied.length} migration${applied.length === 1 ? '' : 's'}` : 'Database is up to date', detail: applied.join(', ') };
+      const applied = deploy.appliedMigrations(result);
+      return { message: deploy.migrationSummary(applied), detail: applied.join(', ') };
     },
     async verify(ctx) {
       const result = await ctx.deps.deploy.listMigrations(ctx.wrangler, { dataRoot: ctx.dataRoot, accountId: ctx.cloud.accountId, remote: true });
@@ -569,15 +565,16 @@ function secretsStep() {
       // agent this run rewrites), and keep OWNER_LINK_SECRET and GitHub when present.
       if (!next.captureToken || adopted) next.captureToken = randomSecret();
       if (!next.ownerLinkSecret) next.ownerLinkSecret = randomSecret();
-      const values = {};
+      // A Worker secret cannot be read back, so this Mac's copy is the truth and
+      // the Worker's is rewritten from it on every run of this step.
+      const values = { CAPTURE_TOKEN: next.captureToken };
       if (!existing.has('SESSION_SECRET')) values.SESSION_SECRET = randomSecret();
-      if (adopted || !existing.has('CAPTURE_TOKEN')) values.CAPTURE_TOKEN = next.captureToken;
       // An owner secret can only be kept if this Mac has a copy to match it;
       // a Worker secret cannot be read back. Without a local copy the legacy
       // value is unusable, so it is replaced (owner links are new in this design,
       // so a legacy install has nothing to preserve).
       if (!existing.has('OWNER_LINK_SECRET') || !stored.ownerLinkSecret) values.OWNER_LINK_SECRET = next.ownerLinkSecret;
-      if (Object.keys(values).length) await ctx.deps.cloud.putSecrets(ctx.wrangler, { dataRoot: ctx.dataRoot, accountId, secrets: values, retry: retryOf(ctx) });
+      await ctx.deps.cloud.putSecrets(ctx.wrangler, { dataRoot: ctx.dataRoot, accountId, secrets: values, retry: retryOf(ctx) });
       ctx.saveSecrets(next);
 
       // TRANSFER_TOKEN is the engine's only cloud credential; it is set here and
@@ -594,7 +591,7 @@ function secretsStep() {
       try {
         const ping = await ctx.deps.fetch(new URL('/agent/ping', ctx.cloud.url), {
           method: 'GET',
-          headers: { authorization: `Bearer ${next.captureToken}`, 'x-snip-capture-protocol': '3' },
+          headers: { authorization: `Bearer ${next.captureToken}`, 'x-snip-capture-protocol': '4' },
           signal: AbortSignal.timeout(15000),
         });
         proof.captureToken = ping.ok;
@@ -618,7 +615,6 @@ function secretsStep() {
       }
       proof.ownerLinkSecret = status.ownerSecretHash === ownerSecretHash(next.ownerLinkSecret);
       if (proof.ownerLinkSecret === false) {
-        ctx.saveSecrets({ ...next });
         throw new StepError('SECRET_DRIFT', 'The deployed Worker is using a different owner secret than this Mac.', { hint: 'Run `owner rotate` to replace it.' });
       }
       ctx.setCloud({ secretsAt: new Date().toISOString(), workerVersion: status.version });
@@ -651,7 +647,11 @@ function quiesceStep() {
           for (const reference of await api.listReferences(status)) {
             ctx.checkCancel();
             const result = await api.pauseReference(reference.id);
-            if (result.ok) paused.add(reference.id);
+            if (result.ok) {
+              paused.add(reference.id);
+              // Recorded as each one is paused, so an interrupted run still knows what to resume.
+              ctx.setPausedForMove([...paused]);
+            }
           }
         }
         const deadline = ctx.deps.now() + 60_000;
@@ -1014,17 +1014,9 @@ function verifyStep() {
         sql: 'SELECT COUNT(*) AS rows FROM refs',
       }))[0] : null) || null;
 
-      const transfer = ctx.transfer();
-      const manifest = await transfer.manifest();
-      const remoteSizes = new Map((manifest.keys || []).map((entry) => [entry.key, Number(entry.size) || 0]));
-      let present = 0;
-      const missing = [];
-      for (const entry of files) {
-        const size = remoteSizes.has(entry.key) ? remoteSizes.get(entry.key) : null;
-        if (size === null) missing.push(entry.key);
-        else if (size !== entry.size) {
-          throw new StepError('VERIFY_SIZE_MISMATCH', 'A file in the cloud copy has a different size.', { data: { key: entry.key, local: entry.size, remote: size } });
-        } else present++;
+      const { missing, mismatch, present } = lib.compareFiles(files, (await ctx.transfer().manifest()).keys);
+      if (mismatch) {
+        throw new StepError('VERIFY_SIZE_MISMATCH', 'A file in the cloud copy has a different size.', { data: { key: mismatch.key, local: mismatch.expected, remote: mismatch.actual } });
       }
       if (missing.length) {
         throw new StepError('VERIFY_FILES_MISSING', `${missing.length} file${missing.length === 1 ? '' : 's'} did not arrive in the cloud copy.`, {
@@ -1064,6 +1056,38 @@ function verifyStep() {
   };
 }
 
+/**
+ * Wait for the owner link to be used: take the session over the loopback when
+ * the app is listening, otherwise poll the Worker for an owner. Closes the loopback.
+ * `transfer` is only read when there is no loopback.
+ */
+async function awaitOwnerSignIn(ctx, { id, url, loopback, transfer }) {
+  try {
+    if (loopback) {
+      const token = await Promise.race([
+        loopback.token,
+        new Promise((_, reject) => { ctx.onCancel(() => reject(new CancelledError())); }),
+      ]);
+      ctx.emit.session(token, url);
+      return;
+    }
+    // No app: the browser completes the sign-in. Poll until the Worker reports an owner.
+    const deadline = ctx.deps.now() + 10 * 60_000;
+    for (;;) {
+      ctx.checkCancel();
+      const now = await transfer.status().catch(() => null);
+      if (now && now.hasOwner) return;
+      if (ctx.deps.now() > deadline) {
+        throw new StepError('OWNER_LINK_TIMEOUT', 'The sign-in link was not completed in time.', { hint: 'Run `owner link` to mint a fresh one.' });
+      }
+      ctx.emit.step(id, 'waiting', 'Waiting for the browser sign-in');
+      await ctx.deps.sleep(3000);
+    }
+  } finally {
+    if (loopback) loopback.close();
+  }
+}
+
 function ownerStep() {
   return {
     id: 'owner',
@@ -1083,36 +1107,13 @@ function ownerStep() {
         }
       }
       const ownerId = ctx.cloud.ownerId || 'owner';
-      const minted = mintOwnerLink({ secret: stored.ownerLinkSecret, url: ctx.cloud.url, ownerId, port });
+      const minted = mintOwnerLink({ secret: stored.ownerLinkSecret, url: ctx.cloud.url, ownerId, port, nonce: loopback?.nonce });
       ctx.setCloud({ ownerId, ownerLinkMintedAt: new Date().toISOString() });
 
       ctx.emit.human('owner', 'open_url', minted.link, 'Sign in to your Snip in the browser, then come back');
       if (!ctx.flags.noOpen && !ctx.flags['no-open']) await ctx.openUrl(minted.link).catch(() => {});
 
-      if (loopback) {
-        try {
-          const token = await Promise.race([
-            loopback.token,
-            new Promise((_, reject) => { ctx.onCancel(() => reject(new CancelledError())); }),
-          ]);
-          ctx.emit.session(token, ctx.cloud.url);
-        } finally {
-          loopback.close();
-        }
-      } else {
-        // No app: the browser completes the sign-in. Poll until the Worker reports an owner.
-        const deadline = ctx.deps.now() + 10 * 60_000;
-        for (;;) {
-          ctx.checkCancel();
-          const now = await transfer.status().catch(() => null);
-          if (now && now.hasOwner) break;
-          if (ctx.deps.now() > deadline) {
-            throw new StepError('OWNER_LINK_TIMEOUT', 'The sign-in link was not completed in time.', { hint: 'Run `owner link` to mint a fresh one.' });
-          }
-          ctx.emit.step('owner', 'waiting', 'Waiting for the browser sign-in');
-          await ctx.deps.sleep(3000);
-        }
-      }
+      await awaitOwnerSignIn(ctx, { id: 'owner', url: ctx.cloud.url, loopback, transfer });
       const after = await transfer.status().catch(() => null);
       if (after && !after.hasOwner) {
         ctx.emit.log('warn', 'The Worker does not report an owner yet. You can finish sign-in later with `owner link`.');
@@ -1209,4 +1210,4 @@ function setupSteps() {
   ];
 }
 
-module.exports = { EMPTY_LIBRARY_STEPS, ENABLE_STEPS, classifyAccount, bundleHash, finishStep, guessLogin, ownerStep, preflightStep, readLegacyDeployConfig, setupSteps, ownerSecretHash };
+module.exports = { ENABLE_STEPS, classifyAccount, bundleHash, finishStep, guessLogin, ownerStep, awaitOwnerSignIn, preflightStep, readLegacyDeployConfig, setupSteps, ownerSecretHash };

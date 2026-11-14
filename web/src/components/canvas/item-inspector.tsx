@@ -25,7 +25,8 @@ import { RecordingTile } from "@/components/reference-page"
 import { SiteIcon } from "@/components/site-icon"
 import { TokensPanel } from "@/components/tokens-panel"
 import { Segmented } from "@/components/top-bar"
-import { Dialog, DialogClose, DialogDescription, DialogOverlay, DialogPortal, DialogTitle } from "@/components/ui/dialog"
+import { Button } from "@/components/ui/button"
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogOverlay, DialogPortal, DialogTitle, wrapTab } from "@/components/ui/dialog"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -121,6 +122,7 @@ export function ItemInspector({
   const [tab, setTab] = useState<Tab>("sections")
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    wrapTab(e)
     if ((e.key !== "ArrowLeft" && e.key !== "ArrowRight") || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return
     const t = e.target as HTMLElement
     // Menus and popovers portal out of the popup; tabs and fields use the arrows themselves.
@@ -262,12 +264,14 @@ function Body({
       () => toast.error("Copy failed"),
     )
   }
+  const [deleting, setDeleting] = useState(false)
   const deleteImage = async () => {
-    if (item.kind !== "image" || !confirm("Delete this image? It comes off every board too.")) return
+    if (item.kind !== "image") return
     try {
       await api.deleteImage(item.image.id)
       reloadCanvas()
       void refresh().catch(() => {})
+      notify("Deleted image")
       close()
     } catch (e) {
       toast.error((e as Error).message)
@@ -389,7 +393,7 @@ function Body({
                   <Link2 /> Copy link
                 </DropdownMenuItem>
                 {item.kind === "image" && (
-                  <DropdownMenuItem variant="destructive" onClick={() => void deleteImage()}>
+                  <DropdownMenuItem variant="destructive" onClick={() => setDeleting(true)}>
                     <Trash2Icon /> Delete image
                   </DropdownMenuItem>
                 )}
@@ -474,6 +478,27 @@ function Body({
           </div>
         )}
       </aside>
+
+      <Dialog open={deleting} onOpenChange={setDeleting}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Delete this image?</DialogTitle>
+            <DialogDescription>It comes off every board too. This can't be undone.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
+            <Button
+              variant="destructive-confirm"
+              onClick={() => {
+                setDeleting(false)
+                void deleteImage()
+              }}
+            >
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   )
 }

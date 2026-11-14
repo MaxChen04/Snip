@@ -27,12 +27,6 @@ function isAppRoute(url, appOrigin) {
 /** The local gallery never gains the desktop bridge on any other localhost page. */
 const isGallery = isAppRoute
 
-/** The cloud window accepts the whole cloud app; it has no bridge to protect. */
-function isCloudUi(url, cloudOrigin) {
-  const parsed = parse(url)
-  return !!parsed && !!cloudOrigin && parsed.origin === cloudOrigin
-}
-
 function isSettingsUrl(url) {
   return parse(url)?.origin === "snip://settings"
 }
@@ -60,4 +54,4 @@ function trustedSender({ pin, localOrigin, senderMatches, frameIsMain, frameUrl 
   return false
 }
 
-module.exports = { parse, originOf, isAppRoute, isGallery, isCloudUi, isSettingsUrl, allowsNavigation, trustedSender }
+module.exports = { parse, originOf, isAppRoute, isGallery, isSettingsUrl, allowsNavigation, trustedSender }

@@ -1,6 +1,6 @@
 // The mode lives in cloud.json, which the engine writes. These tests pin the readings
-// the app depends on: a missing or broken file means local, never a crash, and the
-// capture env choice follows the mode.
+// the app depends on: a missing file means local, a broken one is unreadable and never
+// a crash, and the capture env choice follows the mode.
 const { test } = require("node:test")
 const assert = require("node:assert/strict")
 const fs = require("node:fs")
@@ -12,11 +12,12 @@ const {
   readCloudState,
   cloudMode,
   usesCloud,
+  modePlan,
+  modeServices,
+  cloudModeFor,
   captureEnvFiles,
   selectCaptureEnvFile,
   keepLocalCaptureEnv,
-  formatBytes,
-  describeSnapshot,
 } = require("../cloud-state.cjs")
 
 function library(t) {
@@ -33,7 +34,6 @@ test("a missing cloud.json is a local library", t => {
   const root = library(t)
   assert.equal(readCloudState(root), null)
   assert.equal(cloudMode(null), "local")
-  assert.equal(usesCloud(null), false)
 })
 
 test("modes other than the four known values fall back to local", () => {
@@ -42,13 +42,6 @@ test("modes other than the four known values fall back to local", () => {
   assert.equal(cloudMode(normalizeCloudState({ mode: "self-destruct" })), "local")
   assert.equal(cloudMode(normalizeCloudState({})), "local")
   assert.equal(normalizeCloudState("nope"), null)
-})
-
-test("cloud mode needs a usable cloud url", () => {
-  const state = normalizeCloudState({ mode: "cloud", cloud: { url: "https://snip.max.workers.dev" } })
-  assert.equal(usesCloud(state), true)
-  assert.equal(usesCloud(normalizeCloudState({ mode: "cloud", cloud: null })), false)
-  assert.equal(usesCloud(normalizeCloudState({ mode: "enabling", cloud: { url: "https://snip.max.workers.dev" } })), false)
 })
 
 test("unknown fields and step order survive normalization", () => {
@@ -117,19 +110,6 @@ test("keepLocalCaptureEnv does nothing without a live .env", t => {
   assert.equal(keepLocalCaptureEnv({ dataRoot: root }), false)
 })
 
-test("snapshot and size copy use the engine's numbers", () => {
-  assert.equal(formatBytes(812_000_000), "812 MB")
-  assert.equal(formatBytes(999), "999 B")
-  assert.equal(formatBytes(1_500_000_000_000), "1.5 TB")
-  assert.equal(formatBytes(null), null)
-  // A local-time value: the label shows this Mac's clock, not UTC.
-  assert.equal(
-    describeSnapshot({ takenAt: "2026-11-06T10:12:00", bytes: 812_000_000 }, "en-GB"),
-    "Snapshot from 6 Nov, 10:12 — 812 MB",
-  )
-  assert.equal(describeSnapshot(null), null)
-})
-
 test("a live snapshot is this Mac's library, a backup is a real second copy", () => {
   // kind is explicit; path is only meaningful for a backup (contracts §1.11).
   const live = normalizeCloudState({ mode: "cloud", cloud: { url: "https://snip.max.workers.dev" }, snapshot: { kind: "live", path: "backups/cloud-move-x", refs: 42 } }).snapshot
@@ -164,4 +144,35 @@ test("cloud paths stay inside .snip", t => {
   const paths = cloudPaths(root)
   assert.equal(paths.state, path.join(root, ".snip", "cloud.json"))
   assert.equal(paths.lock, path.join(root, ".snip", "cloud.lock"))
+})
+
+test("a finished run is followed by whatever the recorded mode needs, whatever the result", () => {
+  // A failed or cancelled local run: the engine stopped captures or the Worker, and both come back.
+  assert.deepEqual(modePlan({ mode: "local", applied: "local", webRunning: false }), { kind: "local", stopCapture: false, stopWeb: false, recreateWindow: false, start: ["web", "capture"] })
+  assert.deepEqual(modePlan({ mode: "enabling", applied: "local", webRunning: true }), { kind: "local", stopCapture: false, stopWeb: false, recreateWindow: false, start: ["web", "capture"] })
+  // The mode moved, even under a failed result: capture changes destination and the window its origin.
+  assert.deepEqual(modePlan({ mode: "cloud", applied: "local", webRunning: true }), { kind: "cloud", stopCapture: true, stopWeb: true, recreateWindow: true, start: ["capture"] })
+  assert.deepEqual(modePlan({ mode: "local", applied: "cloud", webRunning: false }), { kind: "local", stopCapture: true, stopWeb: false, recreateWindow: true, start: ["web", "capture"] })
+  // The local Worker never runs beside a cloud library.
+  assert.deepEqual(modePlan({ mode: "cloud", applied: "cloud", webRunning: true }), { kind: "cloud", stopCapture: false, stopWeb: true, recreateWindow: false, start: ["capture"] })
+})
+
+test("an unreadable or unsupported record starts nothing and is never a local library", t => {
+  assert.deepEqual(modeServices("unreadable"), [])
+  assert.deepEqual(modeServices("cloud"), ["capture"])
+  assert.deepEqual(modeServices("enabling"), ["web", "capture"])
+  assert.deepEqual(modePlan({ mode: "unreadable", applied: "local", webRunning: true }), { kind: "unreadable", stopCapture: true, stopWeb: true, recreateWindow: true, start: [] })
+  // The engine refuses any record version but 1 (provision/state.cjs); so does the app.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "snip-cloud-version-"))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  fs.mkdirSync(path.join(root, ".snip"))
+  fs.writeFileSync(path.join(root, ".snip", "cloud.json"), JSON.stringify({ version: 2, mode: "local" }))
+  assert.equal(cloudModeFor(root), "unreadable")
+  fs.writeFileSync(path.join(root, ".snip", "cloud.json"), JSON.stringify({ version: 1, mode: "enabling" }))
+  assert.equal(cloudModeFor(root), "enabling")
+})
+
+test("only the modes the engine writes are modes", () => {
+  // Nothing ever wrote "disabling"; a record that claims it is read like any unknown mode.
+  assert.equal(normalizeCloudState({ mode: "disabling" }).mode, "local")
 })

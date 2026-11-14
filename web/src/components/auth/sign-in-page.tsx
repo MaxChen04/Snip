@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react"
 import { Link } from "wouter"
 import { KeyRound, Lock } from "@/components/icons"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { AuthError, AuthShell } from "@/components/auth/auth-shell"
 import { api, type Me } from "@/lib/api"
@@ -139,15 +138,5 @@ export function SignInPage() {
       )}
       <AuthError>{error}</AuthError>
     </AuthShell>
-  )
-}
-
-/** Small badge naming the method a session used, for the gallery's account row. */
-export function MethodBadge({ method }: { method: Me["method"] }) {
-  const label = method === "passkey" ? "Passkey" : method === "github" ? "GitHub" : "Owner link"
-  return (
-    <Badge variant="secondary" size="lg">
-      {label}
-    </Badge>
   )
 }

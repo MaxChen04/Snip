@@ -38,14 +38,8 @@ function confirmTarget(recordPath) {
   return path.basename(path.join(String(recordPath), '.'));
 }
 
-const CONFIRM_COMMANDS = {
-  'snapshot delete': 'snapshot delete',
-  'snapshot delete-export': 'snapshot delete-export',
-  'delete-resources': 'delete-resources',
-};
-
 function rerunCommand(command, expected) {
-  return `npm run setup:cloudflare -- ${CONFIRM_COMMANDS[command] || command} --confirm ${expected}`;
+  return `npm run setup:cloudflare -- ${command} --confirm ${expected}`;
 }
 
 /**

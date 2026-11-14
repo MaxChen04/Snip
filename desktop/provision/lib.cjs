@@ -17,11 +17,6 @@ const D1_NAME = 'snip';
 const KV_NAME = 'OAUTH_KV';
 const BUCKET_NAME = 'snip-files';
 
-/** Tables the move copies. Everything user-visible; nothing Miniflare-internal. */
-const LIBRARY_TABLES = ['refs', 'pages', 'animations', 'collections', 'reference_collections', 'page_collections'];
-/** Per-device or in-flight state that must not be copied or compared across a move. */
-const EPHEMERAL_TABLES = new Set(['owner_nonces', 'webauthn_challenges', 'sessions', 'worker_presence', 'capture_cleanup', 'capture_uploads', 'd1_migrations', 'sqlite_sequence']);
-
 /** A workers.dev subdomain, a bare host or a URL, as the Worker's public origin. */
 function publicUrlFrom(input, worker = WORKER_NAME) {
   const raw = String(input ?? '').trim().replace(/\/+$/, '');
@@ -92,8 +87,22 @@ function readRatelimits(text) {
   }
 }
 
-function patchDeployConfig(config, { d1Id, kvId, login, url, migrations = '../migrations', ratelimits = null }) {
+/** The `triggers` object from a wrangler.jsonc, or null. The tracked file keeps it on one line. */
+function readTriggers(text) {
+  const match = String(text || '').match(/^\s*"triggers"\s*:\s*(\{.*\})\s*,?\s*$/m);
+  if (!match) return null;
+  try {
+    const value = JSON.parse(match[1]);
+    return Array.isArray(value.crons) && value.crons.length ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function patchDeployConfig(config, { d1Id, kvId, login, url, migrations = '../migrations', ratelimits = null, triggers = null }) {
   const next = JSON.parse(JSON.stringify(config));
+  // The same older build has no cron either, and without it retired files are never swept.
+  if (!(next.triggers && Array.isArray(next.triggers.crons) && next.triggers.crons.length) && triggers) next.triggers = triggers;
   // A build from an older web/wrangler.local.jsonc has no rate-limit bindings, and the
   // hosted OAuth guards answer 503 without them, so take them from the tracked template.
   if ((!Array.isArray(next.ratelimits) || !next.ratelimits.length) && ratelimits) next.ratelimits = JSON.parse(JSON.stringify(ratelimits));
@@ -228,16 +237,6 @@ function batchStatements(statements, maxBytes = 900_000, maxStatements = 500) {
 }
 
 /**
- * Tables the move copies, discovered from the local schema so tables added by a
- * newer Worker move too. Only ephemeral bookkeeping is skipped.
- */
-function libraryTablesFrom(names) {
-  return [...new Set(names)]
-    .filter((name) => typeof name === 'string' && name && !EPHEMERAL_TABLES.has(name) && !name.startsWith('sqlite_') && !name.startsWith('_cf_') && !/^(_mf_|__)/.test(name))
-    .sort();
-}
-
-/**
  * One SQL statement per table that summarizes its rows without returning them:
  * COUNT(*), plus a length signature built from every column with `quote()` so
  * NULL and text values cannot collide. Deterministic on local and remote D1.
@@ -281,13 +280,24 @@ function digestOf(perTable) {
   return `snip-digest-v1:${hash.digest('hex')}`;
 }
 
+/** Check the `{ key, size }` entries a copy should hold against a bucket listing of what it does hold. */
+function compareFiles(expected, listed) {
+  const sizes = new Map((listed || []).map((entry) => [entry.key, Number(entry.size) || 0]));
+  const missing = [];
+  let mismatch = null;
+  for (const entry of expected) {
+    const size = Number(entry.size) || 0;
+    if (!sizes.has(entry.key)) missing.push(entry.key);
+    else if (!mismatch && sizes.get(entry.key) !== size) mismatch = { key: entry.key, expected: size, actual: sizes.get(entry.key) };
+  }
+  return { missing, mismatch, present: expected.length - missing.length };
+}
+
 module.exports = {
   BUCKET_NAME,
   D1_NAME,
   DEFAULT_EXCLUDED,
-  EPHEMERAL_TABLES,
   KV_NAME,
-  LIBRARY_TABLES,
   PLACEHOLDERS,
   WORKER_NAME,
   batchStatements,
@@ -295,15 +305,16 @@ module.exports = {
   captureEnvText,
   columnsFromDump,
   comparableTables,
+  compareFiles,
   countsFromDump,
   digestOf,
   digestSql,
   excludedTables,
-  libraryTablesFrom,
   originHost,
   parseCreatedId,
   patchDeployConfig,
   readRatelimits,
+  readTriggers,
   publicUrlFrom,
   randomSecret,
   readValues,

@@ -7,7 +7,7 @@ import { captureJob } from "../src/capture"
 
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64")
 
-test("the icon is saved beside the first page, kept in the pause checkpoint, reused on resume, and never holds up completion", { timeout: 240_000 }, async () => {
+test("the icon is saved beside the first page, kept in the pause checkpoint, reused on resume, and holds up completion only until its fetch gives up", { timeout: 240_000 }, async () => {
   const previous = process.env.ALLOW_PRIVATE_URLS
   process.env.ALLOW_PRIVATE_URLS = "true"
   const hits = { icon: 0, hang: 0 }
@@ -59,11 +59,11 @@ test("the icon is saved beside the first page, kept in the pause checkpoint, reu
     assert.equal(retried.complete!.favicon, key)
     assert.equal(hits.icon, 2)
 
-    // An icon that never answers: its fetch starts with the first page, and the capture is ready as soon as the last
-    // page lands. With the fetch at the end this gap was the fetch's whole ten-second timeout.
+    // An icon that never answers: its fetch starts with the first page, so completion waits out only what is left of
+    // the fetch's ten-second timeout, not a whole one started at the end.
     const hung = await run({ url: `${base}hang` })
     assert.equal(hits.hang, 1, "the fetch did start")
-    assert.ok(hung.complete!.at - hung.pageAt < 3000, `completion waited ${hung.complete!.at - hung.pageAt}ms after the last page`)
+    assert.ok(hung.complete!.at - hung.pageAt < 10_000, `completion waited ${hung.complete!.at - hung.pageAt}ms after the last page`)
     assert.equal(hung.complete!.favicon, `${base}hang.ico`, "unsaved, so the checkpoint and completion still carry the URL")
   } finally {
     await browser.close()

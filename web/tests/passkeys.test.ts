@@ -5,6 +5,7 @@ import { Miniflare, convertV4MiniflareOptions } from "miniflare"
 import { app } from "../worker/app"
 import { SESSION_COOKIE } from "../worker/auth"
 import { createAssertion, createCredential, type Credential } from "./helpers/webauthn"
+import { PasskeyError, passkeyError } from "../src/lib/passkeys"
 
 // End-to-end passkeys with a software authenticator: real CBOR, real ECDSA, real D1 challenges.
 // This is the path a browser takes, so a broken verify shape fails here rather than in Safari.
@@ -143,7 +144,8 @@ test("an unknown credential id is refused without touching the challenge table",
     const assertion = await createAssertion({ rpID: RP_ID, origin: PUBLIC_URL, challenge: options.challenge, credential: stranger.credential })
     const res = await ctx.call("/auth/passkey/login/verify", { method: "POST", body: JSON.stringify({ response: assertion.response }), headers: { "content-type": "application/json" } })
     assert.equal(res.status, 400)
-    assert.match(await res.text(), /not registered/)
+    // The one place the server can tell a passkey it has never heard of: the sign-in page shows this text as it is.
+    assert.match(((await res.json()) as { error: string }).error, /^This passkey is no longer registered for this Snip library\. Use the owner link or GitHub to sign in\.$/)
     const left = await ctx.db.prepare(`SELECT count(*) AS n FROM webauthn_challenges WHERE kind = 'login'`).first<{ n: number }>()
     assert.equal(left!.n, 1, "the challenge stays for the genuine attempt")
   }))
@@ -165,6 +167,30 @@ test("removing a device deletes only that passkey, and only for its owner", () =
     // Signing in with the removed credential is now impossible: it is not in the allow list.
     const options = (await (await ctx.call("/auth/passkey/login/options")).json()) as { allowCredentials: { id: string }[] }
     assert.deepEqual(options.allowCredentials.map((c) => c.id), [second.credential.id])
+  }))
+
+test("removing a device signs out the sessions it had, and keeps the one that removed it", () =>
+  withWorker(async (ctx) => {
+    const signIn = async (credential: Credential) => {
+      const options = (await (await ctx.call("/auth/passkey/login/options")).json()) as { challenge: string }
+      const assertion = await createAssertion({ rpID: RP_ID, origin: PUBLIC_URL, challenge: options.challenge, credential })
+      const login = await ctx.call("/auth/passkey/login/verify", { method: "POST", body: JSON.stringify({ response: assertion.response }), headers: { "content-type": "application/json" } })
+      return login.headers.getSetCookie().find((c) => c.startsWith(`${SESSION_COOKIE}=`))!.split(";")[0]!
+    }
+    const me = async (cookie: string) => (await ctx.call("/api/me", { headers: { cookie } })).status
+    const lost = await register(ctx, "Lost laptop")
+    const kept = await register(ctx, "Phone")
+    const lostSession = await signIn(lost.credential)
+    const keptSession = await signIn(kept.credential)
+    assert.equal(await me(lostSession), 200)
+
+    const removed = await ctx.call(`/api/passkeys/${lost.credential.id}`, { method: "DELETE", headers: { cookie: keptSession } })
+    assert.equal(removed.status, 200)
+    assert.equal(await me(lostSession), 401, "the removed device's session is over")
+    const renewed = removed.headers.getSetCookie().find((c) => c.startsWith(`${SESSION_COOKIE}=`))!.split(";")[0]!
+    assert.equal(await me(renewed), 200, "the device that removed it stays signed in")
+    assert.equal((await ctx.call("/api/passkeys/missing", { method: "DELETE", headers: { cookie: renewed } })).status, 404)
+    assert.equal(await me(renewed), 200, "removing nothing signs nobody out")
   }))
 
 test("registering the same credential twice refreshes that row instead of returning 500", () =>
@@ -241,3 +267,14 @@ test("a credential id held by another owner is refused, not overwritten", () =>
     const assertion = await createAssertion({ rpID: RP_ID, origin: PUBLIC_URL, challenge: login.challenge, credential: first.credential })
     assert.equal((await ctx.call("/auth/passkey/login/verify", { method: "POST", body: JSON.stringify({ response: assertion.response }), headers: { "content-type": "application/json" } })).status, 200)
   }))
+
+test("a cancel, a timeout and a device whose passkey was removed all reach the page as the same browser error, so its text stays generic", () => {
+  // Browsers answer all three with NotAllowedError, deliberately (WebAuthn privacy considerations): Chromium gives the same name
+  // and message whether the allowed credential is missing from the device, the prompt timed out or the user cancelled, and the
+  // server is never asked. Nothing here can say "removed", so the text must not.
+  const generic = "Cancelled, or the prompt timed out. Try again or use a different device."
+  assert.equal(passkeyError(Object.assign(new Error("The operation either timed out or was not allowed."), { name: "NotAllowedError" })).message, generic)
+  // What the server does say passes through untouched: an unknown passkey, or a library with none left.
+  const unknown = new PasskeyError("This passkey is no longer registered for this Snip library. Use the owner link or GitHub to sign in.")
+  assert.equal(passkeyError(unknown), unknown)
+})

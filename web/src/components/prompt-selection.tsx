@@ -3,16 +3,10 @@ import { notify } from "@/components/notify"
 import { buildAgentPrompt } from "@/lib/agent-prompt"
 import { mcpUrl } from "@/lib/mcp"
 import type { Animation, Page, Reference } from "@/lib/api"
-import { cn } from "@/lib/utils"
+import { cn, copyToClipboard } from "@/lib/utils"
 
-export interface Selection {
-  pages: string[]
-  animations: string[]
-  tokens: boolean
-}
-export const EMPTY_SELECTION: Selection = { pages: [], animations: [], tokens: false }
-export const selectionSize = (s: Selection) => s.pages.length + s.animations.length + (s.tokens ? 1 : 0)
-export const toggleIn = (xs: string[], id: string) => (xs.includes(id) ? xs.filter((x) => x !== id) : [...xs, id])
+export { EMPTY_SELECTION, pruneSelection, selectionSize, toggleIn, togglePage, withPageView, type Selection } from "@/lib/selection-state"
+import { selectionSize, type Selection } from "@/lib/selection-state"
 
 /** Round check in a tile's corner. Visible on hover, or always while selecting. */
 export function SelectCheck({ on, active, onToggle, label }: { on: boolean; active: boolean; onToggle: () => void; label: string }) {
@@ -67,16 +61,13 @@ export function SelectionBar({
         animations: animations.filter((a) => selection.animations.includes(a.id)),
         tokens: selection.tokens,
         mcpUrl: mcpUrl(),
+        views: selection.views,
       },
       pages,
     )
-    try {
-      await navigator.clipboard.writeText(prompt)
-      notify("Prompt copied. Paste it into your agent chat")
-    } catch {
-      // Clipboard blocked (e.g. insecure origin): fall back to a prompt dialog the user can copy from.
-      window.prompt("Copy this prompt", prompt)
-    }
+    if (await copyToClipboard(prompt)) notify("Prompt copied. Paste it into your agent chat")
+    // Clipboard blocked (e.g. insecure origin): fall back to a prompt dialog the user can copy from.
+    else window.prompt("Copy this prompt", prompt)
   }
 
   return (

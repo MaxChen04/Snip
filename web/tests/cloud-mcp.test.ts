@@ -17,7 +17,8 @@ const env = {
           : null
       return {
         first: async () => row,
-        bind: () => ({ first: async () => row, all: async () => ({ results: [] }) }),
+        // getPresence asks for the agent's row and the last refusal's row in one query.
+        bind: () => ({ first: async () => row, all: async () => ({ results: sql.includes("FROM worker_presence") && row ? [row] : [] }) }),
         all: async () => ({ results: [] }),
       }
     },
@@ -88,7 +89,7 @@ test("the status tool reports what the Worker can see and says what it cannot", 
   assert.equal(data.deployedUrl, null)
   assert.deepEqual(data.checks.map((c) => c.id), ["origin-local", "owner-configured", "capture-agent"])
   assert.ok(data.checks.every((c) => c.ok))
-  assert.match(data.checks[2]!.detail!, /^seen \d+s ago$/)
+  assert.equal(data.checks[2]!.detail, "A capture agent is online.", "the one wording of an agent that is checking in")
   assert.equal(data.next.run, "npm run setup:cloudflare -- setup --check --json")
   assert.equal(data.next.cwd, null, "the Worker cannot know the repo path")
   assert.ok(data.next.humanActions.length > 0)
