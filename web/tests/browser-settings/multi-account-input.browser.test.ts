@@ -29,23 +29,23 @@ async function reachAccountQuestion(page: Page) {
   await sim(page, "step", "preflight", "ok")
   await sim(page, "step", "cloudflare-auth", "ok")
   await sim(page, "step", "account", "started")
-  await sim(page, "emit", {
-    v: 1,
-    event: "needs_input",
-    keys: [
-      {
+  // The engine can finish before React commits the question. Deliver the terminal
+  // events together so a toast cannot depend on a render between bridge callbacks.
+  await page.evaluate(([idA, idB]) => {
+    const engine = (window as any).__sim
+    engine.emit({
+      v: 1,
+      event: "needs_input",
+      keys: [{
         key: "account",
         label: "Cloudflare account (Personal aaaaaaaa…, Work bbbbbbbb…)",
         secret: false,
-        options: [
-          { value: ID_A, label: "Personal" },
-          { value: ID_B, label: "Work" },
-        ],
-      },
-    ],
-  })
-  await sim(page, "result", { ok: false, code: "NEEDS_INPUT", mode: "enabling" })
-  await sim(page, "exit", { code: 2 })
+        options: [{ value: idA, label: "Personal" }, { value: idB, label: "Work" }],
+      }],
+    })
+    engine.result({ ok: false, code: "NEEDS_INPUT", mode: "enabling" })
+    engine.exit({ code: 2 })
+  }, [ID_A, ID_B])
 }
 
 test("the account question shows no red error card or error toast next to the input card", async () => {
@@ -119,6 +119,26 @@ test("the account question shows even when the snapshot still says this Mac is l
     assert.equal(await page.evaluate(() => (window as any).__sim.mode), "local")
     assert.equal(await page.getByText("Snip needs one more thing before it can continue.").count(), 1)
     assert.equal(await page.locator("main").getByRole("button", { name: /Work/ }).count(), 1)
+  } finally {
+    await close()
+  }
+})
+
+test("a failed run after answering the account question still shows its error toast", async () => {
+  const { page, close } = await openSettings(browser, server, { mode: "enabling" })
+  try {
+    await reachAccountQuestion(page)
+    const main = page.locator("main")
+    await main.getByRole("button", { name: /Work/ }).click()
+    await main.getByRole("button", { name: "Continue" }).click()
+    await page.waitForFunction(() => (window as any).__sim.run?.command === "setup")
+    await page.evaluate(() => {
+      const engine = (window as any).__sim
+      engine.result({ ok: false, code: "FAILED", mode: "enabling" })
+      engine.exit({ code: 1 })
+    })
+    await page.locator("[data-sonner-toast][data-type='error']")
+      .filter({ hasText: "Setup stopped before it finished. Retry the step that failed." }).waitFor()
   } finally {
     await close()
   }

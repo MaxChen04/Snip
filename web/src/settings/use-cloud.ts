@@ -63,8 +63,9 @@ export function useCloud(bridge = window.snipCloud) {
   // The bridge callbacks are installed once; these let them read what is on screen.
   const minting = useRef(false)
   minting.current = linkPending
+  // The closing log can arrive before React renders a terminal question.
+  // Track it synchronously with bridge events and the actions that clear it.
   const asking = useRef(false)
-  asking.current = choice !== null || needed !== null
   // `state()` replies can land out of order: one issued before the last applied is dropped.
   const reads = useRef({ issued: 0, applied: 0 })
   const starting = useRef(false)
@@ -140,6 +141,7 @@ export function useCloud(bridge = window.snipCloud) {
       }
       if (event.event === "choice") {
         // Terminal: the engine stopped so a consequence is never inferred from a default.
+        asking.current = true
         setChoice(event)
         setAction(null)
         return
@@ -152,9 +154,11 @@ export function useCloud(bridge = window.snipCloud) {
           .slice(0, 4)
         if (keys.some(entry => entry.key === "confirm")) {
           // `confirm` is never typed by a person: the record the shell rendered is stale.
+          asking.current = false
           setError({ step: null, code: "CONFIRM_MISMATCH", message: "This item changed. Refresh and try again.", hint: null, at: null, retryable: false })
           setNeeded(null)
         } else {
+          asking.current = keys.length > 0
           setNeeded(keys.length ? keys : null)
         }
         return
@@ -234,6 +238,7 @@ export function useCloud(bridge = window.snipCloud) {
     setSteps({})
     setAction(null)
     setError(null)
+    asking.current = false
     setChoice(null)
     setNeeded(null)
     setSnapshot(current => ({ ...current, busy: true, running: command ? { command, step: null } : null }))
@@ -277,8 +282,8 @@ export function useCloud(bridge = window.snipCloud) {
     requestLink,
     refresh,
     begin,
-    clearChoice: () => setChoice(null),
-    clearNeeded: () => setNeeded(null),
+    clearChoice: () => { asking.current = false; setChoice(null) },
+    clearNeeded: () => { asking.current = false; setNeeded(null) },
     clearError: () => setError(null),
     clearNote: () => setNote(null),
   }
