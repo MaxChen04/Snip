@@ -28,11 +28,12 @@ test("the icon is saved beside the first page, kept in the pause checkpoint, reu
   // Only the "icon" feature: no sections, clips or other scheme, so each capture is quick.
   const run = async (job: Partial<Job>, controls: ("pause" | null)[] = []) => {
     const seen = { uploads: [] as string[], pageAt: 0, complete: null as { favicon: string | null; at: number } | null, paused: null as CrawlState | null }
+    let pages = 0
     const api = {
-      control: async () => controls.shift() ?? null,
+      control: async () => controls[pages] ?? null,
       progress: async () => {},
       upload: async (k: string) => { seen.uploads.push(k); return k },
-      addPage: async () => { seen.pageAt = Date.now() },
+      addPage: async () => { pages++; seen.pageAt = Date.now() },
       complete: async (_id: string, c: JobComplete) => { seen.complete = { favicon: c.favicon, at: Date.now() } },
       pause: async (_id: string, state: CrawlState) => { seen.paused = state; return true },
     }

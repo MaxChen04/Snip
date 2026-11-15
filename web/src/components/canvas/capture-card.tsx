@@ -398,7 +398,7 @@ export function CaptureCard({
 
       {cur && (
         <div data-capture-status className="surface-raised w-[520px] max-w-[calc(100vw-2rem)] rounded-3xl bg-card p-2 shadow-modal">
-          <Status r={r} pages={view?.pages ?? []} more={more} onChange={() => void poll().catch(() => {})} onOpen={(id) => navigate(`/r/${id}`)} />
+          <Status r={r} pages={view?.pages ?? []} more={more} onChange={() => poll().catch(() => {})} onOpen={(id) => navigate(`/r/${id}`)} />
         </div>
       )}
 
@@ -429,7 +429,7 @@ function Status({
   r: Reference | undefined
   pages: Page[]
   more: number
-  onChange: () => void
+  onChange: () => void | Promise<void>
   onOpen: (id: string) => void
 }) {
   const moreNote = more > 0 ? <span className="shrink-0 text-ink-10">+{more} more</span> : null
@@ -513,10 +513,10 @@ function Status({
   const fraction = paused ? r.pageCount / Math.max(1, r.maxPages) : p?.total && r.mode === "crawl" ? (p.n - 1) / p.total : null
   return (
     <div className="flex flex-col gap-2 px-1.5 py-1">
-      <div className="flex min-h-7 items-center gap-2 text-xs">
-        <p aria-live="polite" className="flex min-w-0 items-center gap-2">
+      <div className="flex min-h-7 items-center gap-2 text-xs max-sm:flex-wrap">
+        <p aria-live="polite" className="flex min-w-0 flex-1 items-center gap-2 max-sm:basis-full">
           <span className="truncate text-ink-12">{title}</span>
-          {meta && <span className="shrink-0 text-ink-10 tabular-nums">{meta}</span>}
+          {meta && <span className={cn("min-w-0 truncate text-ink-10 tabular-nums", r.mode === "crawl" && "shrink-0")}>{meta}</span>}
           {moreNote}
         </p>
         <CaptureControls r={r} onChange={onChange} className="ml-auto gap-1" />

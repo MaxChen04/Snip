@@ -5,6 +5,7 @@ import { Miniflare, convertV4MiniflareOptions } from "miniflare"
 import { app } from "../worker/app"
 import * as db from "../worker/db"
 import type { CrawlState, PageUpload } from "../shared/types"
+import { STOPPED_EMPTY } from "../shared/capture-errors"
 
 const page = (id: string, attempt: string, ord: number): PageUpload => {
   const key = `refs/${id}/${attempt}/p${ord}/desktop.jpg`
@@ -31,6 +32,106 @@ async function setup() {
   }
   return { mf, database }
 }
+
+test("Cancel immediately fences queued, running and paused captures in either mode", async () => {
+  const { mf, database } = await setup()
+  const files = await mf.getR2Bucket("FILES") as unknown as R2Bucket
+  const pending: Promise<unknown>[] = []
+  const ctx = { waitUntil(p: Promise<unknown>) { pending.push(p) }, passThroughOnException() {} } as ExecutionContext
+  const env = { DB: database, FILES: files, DEV_LOGIN: "tester", SESSION_SECRET: "test", CAPTURE_TOKEN: "test" } as Env
+  try {
+    for (const mode of ["single", "crawl"] as const) for (const status of ["queued", "capturing", "paused"] as const) {
+      const ref = await db.createReference(database, { url: `https://${mode}-${status}.example`, mode })
+      const job = status === "queued" ? null : (await db.claimJob(database))!
+      if (status === "paused") {
+        await db.requestPause(database, ref.id)
+        assert.equal(await db.pauseJob(database, ref.id, job!.lease, state(0)), "paused")
+      }
+      const url = `http://localhost/api/references/${ref.id}/cancel`
+      assert.equal((await app.request(url, { method: "POST" }, { ...env, DEV_LOGIN: undefined }, ctx)).status, 401)
+      const response = await app.request(url, { method: "POST" }, env, ctx)
+      assert.equal(response.status, 200)
+      const stopped = await response.json() as { status: string; error: string; control: string | null }
+      assert.deepEqual([stopped.status, stopped.error, stopped.control], ["failed", STOPPED_EMPTY, null])
+      assert.equal(await db.claimJob(database), null, "a cancelled capture cannot be claimed again")
+      if (job) {
+        assert.equal(await db.getControl(database, ref.id, job.lease), null)
+        assert.equal(await db.renewLease(database, ref.id, job.lease), false)
+        assert.equal(await db.setProgress(database, ref.id, job.lease, "late"), false)
+        assert.equal(await db.addPage(database, ref.id, job.lease, page(ref.id, job.attempt, 0)), null)
+        assert.equal(await db.completeJob(database, ref.id, job.lease, { title: "late", description: null, favicon: null, coverKey: null, tokens: null }), false)
+        assert.equal(await db.failJob(database, ref.id, job.lease, "late failure"), false)
+        assert.equal(await db.pauseJob(database, ref.id, job.lease, state(0), true), "gone")
+      }
+      assert.equal((await app.request(url, { method: "POST" }, env, ctx)).status, 409)
+      await Promise.all(pending)
+    }
+  } finally { await Promise.allSettled(pending); await mf.dispose() }
+})
+
+test("Cancel preserves committed pages and their icon, and retries cleanup past an in-flight upload", async () => {
+  const { mf, database } = await setup()
+  const files = await mf.getR2Bucket("FILES") as unknown as R2Bucket
+  try {
+    const ref = await db.createReference(database, { url: "https://partial.example", mode: "crawl" })
+    const job = (await db.claimJob(database))!
+    const prefix = `refs/${ref.id}/${job.attempt}/`
+    const icon = `${prefix}icon.png`
+    const saved = `${prefix}p2/desktop.jpg`
+    const clip = `${prefix}p2/section-live.webm`
+    const orphan = `${prefix}p3/desktop.jpg`
+    const late = `${prefix}p7/desktop.jpg`
+    for (const key of [icon, saved, clip, orphan]) await files.put(key, "fixture")
+    await db.addPage(database, ref.id, job.lease, { ...page(ref.id, job.attempt, 2), state: { ...state(1), meta: { title: "Kept title", description: "Kept description", favicon: icon } } })
+    const upload = (await db.beginUpload(database, ref.id, job.lease, late))!
+    assert.equal(await db.cancelReference(database, ref.id), true)
+    const kept = (await db.getReference(database, ref.id))!
+    assert.deepEqual([kept.reference.status, kept.reference.pageCount, kept.reference.title, kept.reference.favicon], ["ready", 1, "Kept title", icon])
+    assert.deepEqual(kept.reference.tokens, state(1).tokens)
+    assert.equal(kept.pages.length, 1)
+    assert.equal(await db.beginUpload(database, ref.id, job.lease, late), null)
+    await db.cleanupRetiredFiles(database, files)
+    assert.equal(await files.head(orphan), null)
+    assert.ok(await database.prepare("SELECT prefix FROM capture_cleanup WHERE prefix = ?").bind(prefix).first(), "the writer pins the cleanup task")
+    // Simulate a put that started before cancellation but lands after the first sweep.
+    await files.put(late, "late")
+    await db.finishUpload(database, upload)
+    await database.prepare("UPDATE capture_cleanup SET next_attempt = NULL").run()
+    await db.cleanupRetiredFiles(database, files)
+    assert.deepEqual((await files.list({ prefix })).objects.map((o) => o.key).sort(), [icon, saved, clip].sort())
+    assert.equal(await database.prepare("SELECT prefix FROM capture_cleanup WHERE prefix = ?").bind(prefix).first(), null)
+    assert.equal(await db.cancelReference(database, ref.id), false, "completed pages cannot be cancelled again")
+  } finally { await mf.dispose() }
+})
+
+test("a recapture during cancellation cleanup cannot strand retained files or erase the next attempt", async () => {
+  const { mf, database } = await setup()
+  const files = await mf.getR2Bucket("FILES") as unknown as R2Bucket
+  try {
+    const ref = await db.createReference(database, { url: "https://race.example", mode: "crawl" })
+    const job = (await db.claimJob(database))!
+    const saved = page(ref.id, job.attempt, 0)
+    await files.put(saved.desktopKey!, "old")
+    await db.addPage(database, ref.id, job.lease, saved)
+    await db.cancelReference(database, ref.id)
+    let replacement: string | undefined
+    const raced = { list: async (options: R2ListOptions) => {
+      if (!replacement && options.prefix === `refs/${ref.id}/${job.attempt}/`) {
+        assert.equal(await db.requeueReference(database, ref.id), true)
+        const next = (await db.claimJob(database))!
+        replacement = page(ref.id, next.attempt, 0).desktopKey!
+        await files.put(replacement, "new")
+      }
+      return files.list(options)
+    }, delete: files.delete.bind(files) } as R2Bucket
+    await db.cleanupRetiredFiles(database, raced)
+    assert.ok(await files.head(saved.desktopKey!))
+    await database.prepare("UPDATE capture_cleanup SET next_attempt = NULL").run()
+    await db.cleanupRetiredFiles(database, files)
+    assert.equal(await files.head(saved.desktopKey!), null)
+    assert.ok(await files.head(replacement!))
+  } finally { await mf.dispose() }
+})
 
 test("a paused crawl keeps its pages and resumes where it left off", async () => {
   const { mf, database } = await setup()

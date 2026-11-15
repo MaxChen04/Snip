@@ -171,7 +171,7 @@ export const api = {
     return result
   },
   /** Pause, resume or stop a capture. Pause and stop let the page being captured finish first. */
-  captureControl: async (id: string, action: "pause" | "resume" | "stop") => {
+  captureControl: async (id: string, action: "pause" | "resume" | "stop" | "cancel") => {
     const result = await request<Reference | null>(`/api/references/${id}/${action}`, { method: "POST" })
     if (action === "resume") window.snipDesktop?.checkQueue()
     return result
