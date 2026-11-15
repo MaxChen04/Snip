@@ -1,26 +1,21 @@
-// Build an isolated Apple Silicon app. --release is signed/notarized; --standalone is for local smoke tests only.
+// --release is signed/notarized; --standalone --beta publishes a manual-install Snip Dev build.
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { packager } from '@electron/packager'
-import { APP_FILES, REPOSITORY, stableVersion, releaseCredentials, subprocessEnvironment, requirePublicRepository, repairAndValidateRuntime } from './release-contract.mjs'
+import { APP_FILES, REPOSITORY, releaseOptions, releaseCredentials, subprocessEnvironment, requirePublicRepository, repairAndValidateRuntime } from './release-contract.mjs'
 import channels from './channels.cjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const root = path.dirname(here)
 const args = process.argv.slice(2)
-const release = args.includes('--release')
-const standalone = args.includes('--standalone')
-const nightly = args.includes('--nightly')
-const channel = nightly ? 'nightly' : 'stable'
-const identity = channels.channelConfig(channel)
-if (release === standalone || args.some(arg => !['--release', '--standalone', '--nightly'].includes(arg))) throw new Error('Choose exactly one of --release or --standalone, optionally with --nightly.')
-if (process.platform !== 'darwin' || process.arch !== 'arm64') throw new Error('Build requires native Apple Silicon macOS.')
 const manifest = JSON.parse(fs.readFileSync(path.join(here, 'package.json')))
-if (!stableVersion(manifest.version)) throw new Error('Desktop version must be a stable X.Y.Z version.')
-const version = nightly ? channels.nightlyVersion(process.env.SNIP_NIGHTLY_BUILD) : manifest.version
+const { release, beta, channel, version } = releaseOptions(args, manifest.version, process.env)
+const nightly = channel === 'nightly'
+const identity = channels.channelConfig(channel)
+if (process.platform !== 'darwin' || process.arch !== 'arm64') throw new Error('Build requires native Apple Silicon macOS.')
 const signing = release ? releaseCredentials(process.env) : null
 if (release) await requirePublicRepository()
 const nodeDistribution = process.env.SNIP_NODE_DISTRIBUTION
@@ -73,7 +68,7 @@ try {
   // the checkout; it must exist next to main.cjs so it loads with no local Worker.
   copy(path.join(stage, 'web/dist-settings'), path.join(app, 'settings'))
   fs.rmSync(path.join(stage, 'web/dist-settings'), { recursive: true, force: true })
-  fs.writeFileSync(path.join(app, 'release.json'), JSON.stringify({ channel, repository: REPOSITORY, updatesEnabled: release }) + '\n')
+  fs.writeFileSync(path.join(app, 'release.json'), JSON.stringify({ channel, repository: REPOSITORY, updatesEnabled: release, ...(beta ? { manualOnly: true } : {}) }) + '\n')
   const icon = path.join(here, 'assets', identity.icon)
   const electronVersion = JSON.parse(fs.readFileSync(path.join(here, 'node_modules/electron/package.json'))).version
   const [result] = await packager({ dir: app, name: identity.name, appVersion: version, buildVersion: version, platform: 'darwin', arch: 'arm64', electronVersion, asar: false, out, overwrite: true, icon, appBundleId: identity.bundleId, appCategoryType: 'public.app-category.developer-tools', extendInfo: { LSMinimumSystemVersion: '14.0' }, extraResource: stage, prune: false,
@@ -90,6 +85,6 @@ try {
     const archive = path.join(out, `${identity.name.replaceAll(' ', '-')}-${version}-darwin-arm64.zip`)
     fs.rmSync(archive, { force: true })
     run('ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', built, archive])
-    console.log(`${release ? 'Signed and notarized release' : 'Ad-hoc signed nightly (manual installation only)'}: ${archive}`)
+    console.log(`${release ? 'Signed and notarized release' : `Ad-hoc signed ${beta ? 'beta' : 'nightly'} (manual installation only)`}: ${archive}`)
   } else console.log(`Standalone smoke-test app: ${built} (updates disabled; do not publish)`)
 } finally { fs.rmSync(work, { recursive: true, force: true }) }

@@ -1,0 +1,70 @@
+name: Publish manual-install macOS beta
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Desktop package version on main (X.Y.Z)'
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: snip-versioned-beta
+  cancel-in-progress: false
+jobs:
+  beta:
+    if: github.repository == 'MaxChen04/Snip' && github.ref == 'refs/heads/main'
+    runs-on: macos-15
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            desktop/package-lock.json
+      - name: Validate version and architecture
+        run: |
+          node --input-type=module -e 'import { stableVersion } from "./desktop/release-contract.mjs"; import fs from "node:fs"; if (!stableVersion(process.env.VERSION) || JSON.parse(fs.readFileSync("desktop/package.json")).version !== process.env.VERSION || process.arch !== "arm64") process.exit(1)'
+          test -f "docs/releases/$VERSION.md"
+          test -z "$(git ls-remote --tags origin "refs/tags/beta-v$VERSION")"
+      - run: npm ci
+      - run: npm ci --prefix desktop
+      - run: npm run typecheck
+      - run: npm run build -w web
+      - run: npx --no-install playwright install chromium
+      - run: npm test
+      - run: npm run test:desktop
+      - name: Build versioned Snip Dev beta
+        run: |
+          export SNIP_NODE_DISTRIBUTION="$(dirname "$(dirname "$(command -v node)")")"
+          node desktop/release.mjs --standalone --beta
+      - name: Verify bundle version, capture and library persistence
+        env:
+          SNIP_EXPECTED_VERSION: ${{ inputs.version }}
+          SNIP_EXPECT_MANUAL_ONLY: '1'
+        run: node desktop/scripts/release-smoke.cjs 'desktop/dist/Snip Dev-darwin-arm64/Snip Dev.app'
+      - name: Publish verified beta archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          TAG="beta-v$VERSION"
+          ARCHIVE_NAME="Snip-Dev-$VERSION-darwin-arm64.zip"
+          cd desktop/dist
+          shasum -a 256 "$ARCHIVE_NAME" > "$ARCHIVE_NAME.sha256"
+          DIGEST="sha256:$(cut -d ' ' -f 1 "$ARCHIVE_NAME.sha256")"
+          # Create the immutable tag atomically; never reuse a tag or an old archive.
+          gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$TAG" -f sha="$COMMIT"
+          gh release create "$TAG" "$ARCHIVE_NAME" "$ARCHIVE_NAME.sha256" --verify-tag --draft --prerelease --latest=false --title "Snip $VERSION beta" --notes-file "$GITHUB_WORKSPACE/docs/releases/$VERSION.md"
+          # Check the uploaded draft's digest before publishing it.
+          test "$(gh release view "$TAG" --json assets --jq ".assets[] | select(.name == \"$ARCHIVE_NAME\") | .digest")" = "$DIGEST"
+          gh release edit "$TAG" --draft=false --prerelease --latest=false

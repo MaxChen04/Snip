@@ -1,9 +1,19 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import channels from './channels.cjs'
 
 export const REPOSITORY = 'MaxChen04/Snip'
 export const APP_FILES = Object.freeze(['package.json', 'main.cjs', 'channels.cjs', 'local-server.cjs', 'runtime-layout.cjs', 'updates.cjs', 'source-updates.cjs', 'node-runtime.cjs', 'rotating-log.cjs', 'service.cjs', 'preload.cjs', 'preload-settings.cjs', 'loading.html', 'cloud-unreachable.html', 'cloud-state.cjs', 'cloud-engine.cjs', 'cloud-session.cjs', 'cloud-confirm.cjs', 'cloud-link.cjs', 'window-origin.cjs', 'window-chrome.cjs', 'settings-assets.cjs', 'provision'])
 export const stableVersion = value => typeof value === 'string' && /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(value) && value.split('.').every(n => Number.isSafeInteger(Number(n)))
+export function releaseOptions(args, manifestVersion, env = {}) {
+  const release = args.includes('--release'), standalone = args.includes('--standalone')
+  const nightly = args.includes('--nightly'), beta = args.includes('--beta')
+  if (release === standalone || args.some(arg => !['--release', '--standalone', '--nightly', '--beta'].includes(arg)) || (beta && (release || nightly))) {
+    throw new Error('Choose --release or --standalone, optionally with --nightly; --beta requires --standalone without --nightly.')
+  }
+  if (!stableVersion(manifestVersion)) throw new Error('Desktop version must be a stable X.Y.Z version.')
+  return { release, beta, channel: nightly || beta ? 'nightly' : 'stable', version: nightly ? channels.nightlyVersion(env.SNIP_NIGHTLY_BUILD) : manifestVersion }
+}
 export function releaseCredentials(env) {
   const { SNIP_SIGN_IDENTITY: identity, APPLE_ID: appleId, APPLE_APP_SPECIFIC_PASSWORD: appleIdPassword, APPLE_TEAM_ID: teamId, APPLE_NOTARY_KEYCHAIN_PROFILE: keychainProfile } = env
   if (!identity?.startsWith('Developer ID Application:') || !(keychainProfile || (appleId && appleIdPassword && teamId))) throw new Error('Release requires a Developer ID Application identity and notarization credentials (APPLE_NOTARY_KEYCHAIN_PROFILE or APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD and APPLE_TEAM_ID).')

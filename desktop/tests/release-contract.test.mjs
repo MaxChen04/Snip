@@ -3,7 +3,17 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { APP_FILES, stableVersion, releaseCredentials, subprocessEnvironment, requirePublicRepository, repairAndValidateRuntime } from '../release-contract.mjs'
+import { APP_FILES, stableVersion, releaseOptions, releaseCredentials, subprocessEnvironment, requirePublicRepository, repairAndValidateRuntime } from '../release-contract.mjs'
+
+test('versioned betas keep the manifest version and isolated identity without changing nightly sequencing', () => {
+  assert.deepEqual(releaseOptions(['--standalone', '--beta'], '0.1.38', { SNIP_NIGHTLY_BUILD: '42' }), { release: false, beta: true, channel: 'nightly', version: '0.1.38' })
+  assert.deepEqual(releaseOptions(['--standalone', '--nightly'], '0.1.38', { SNIP_NIGHTLY_BUILD: '42' }), { release: false, beta: false, channel: 'nightly', version: '0.0.42' })
+  assert.deepEqual(releaseOptions(['--release'], '0.1.38'), { release: true, beta: false, channel: 'stable', version: '0.1.38' })
+  assert.deepEqual(releaseOptions(['--standalone'], '0.1.38'), { release: false, beta: false, channel: 'stable', version: '0.1.38' })
+  for (const args of [[], ['--beta'], ['--release', '--standalone'], ['--release', '--beta'], ['--standalone', '--nightly', '--beta'], ['--standalone', '--unknown']]) assert.throws(() => releaseOptions(args, '0.1.38'))
+  assert.throws(() => releaseOptions(['--standalone', '--beta'], '0.1.38-beta'))
+  assert.throws(() => releaseOptions(['--standalone', '--nightly'], '0.1.38'))
+})
 
 test('stable release versions and credentials are required', () => {
   for (const value of ['0.1.0', '1.20.300']) assert.equal(stableVersion(value), true)

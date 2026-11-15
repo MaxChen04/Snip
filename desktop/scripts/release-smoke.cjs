@@ -23,6 +23,16 @@ async function main() {
   await new Promise(resolve => reservation.close(resolve))
   const resourcesPath = path.join(bundle, 'Contents/Resources')
   const config = JSON.parse(await fs.readFile(path.join(resourcesPath, 'app/release.json'), 'utf8'))
+  const manifest = JSON.parse(await fs.readFile(path.join(resourcesPath, 'app/package.json'), 'utf8'))
+  if (process.env.SNIP_EXPECTED_VERSION) assert.equal(manifest.version, process.env.SNIP_EXPECTED_VERSION)
+  if (process.env.SNIP_EXPECT_MANUAL_ONLY === '1') assert.equal(config.manualOnly, true)
+  for (const key of ['CFBundleShortVersionString', 'CFBundleVersion']) {
+    assert.equal((await run('/usr/libexec/PlistBuddy', ['-c', `Print :${key}`, path.join(bundle, 'Contents/Info.plist')])).stdout.trim(), manifest.version)
+  }
+  if (config.manualOnly === true) {
+    assert.equal(config.channel, 'nightly')
+    assert.equal(config.updatesEnabled, false)
+  }
   const nightly = config.channel === 'nightly'
   const name = nightly ? 'Snip Dev' : 'Snip'
   const layout = prepareRuntimeLayout({ release: true, isolated: nightly, resourcesPath, userData: profile, port })
@@ -46,13 +56,14 @@ async function main() {
   try {
     application = await launch(bundle)
     assert.equal(await application.evaluate(({ app }) => app.getName()), name)
+    assert.equal(await application.evaluate(({ app }) => app.getVersion()), manifest.version)
     let page = await application.firstWindow()
     await page.waitForURL(`${origin}/`, { timeout: 120000 })
     assert.equal((await page.evaluate(() => fetch('/api/me').then(r => r.json()))).login, 'local')
     const identityPath = path.join(layout.dataRoot, '.snip/storage-identities.json')
     const identities = await fs.readFile(identityPath, 'utf8')
     assert.equal(JSON.parse(identities).d1_databases[0].database_id, '7c44c913-8643-41ac-82d9-f88906cff813')
-    assert.equal(await application.evaluate(({ Menu }) => Menu.getApplicationMenu().getMenuItemById('snip-update').label), 'Check for updates…')
+    assert.equal(await application.evaluate(({ Menu }) => Menu.getApplicationMenu().getMenuItemById('snip-update')?.label ?? null), config.manualOnly === true ? null : 'Check for updates…')
     const ref = await page.evaluate(async url => fetch('/api/references', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url, mode: 'single' }) }).then(r => r.json()), `http://127.0.0.1:${fixturePort}`)
     let detail
     const deadline = Date.now() + 90000
