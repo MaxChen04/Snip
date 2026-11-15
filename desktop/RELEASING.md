@@ -78,6 +78,25 @@ node desktop/scripts/release-smoke.cjs 'desktop/dist/Snip Dev-darwin-arm64/Snip 
 Use `--release --nightly` for a Developer ID signed nightly. Stable
 `--standalone` builds remain acceptance fixtures and must not be published.
 
+### Versioned manual-install betas
+
+Without Apple credentials, the **Publish manual-install macOS beta** workflow can
+publish an explicitly approved version from `main`. Set the desktop manifest and
+lockfile to `X.Y.Z`, add `docs/releases/X.Y.Z.md`, merge and validate the changes,
+then dispatch the workflow on `main` with that exact version. It runs the test
+suites, builds a fresh bundle, verifies its version and capture/library persistence,
+and publishes `beta-vX.Y.Z` as a prerelease, never GitHub's latest stable release.
+The assets are `Snip-Dev-X.Y.Z-darwin-arm64.zip` and its SHA-256 checksum.
+
+This uses `node desktop/release.mjs --standalone --beta`: the actual app version
+comes from the manifest, while the app name, bundle ID and test-library isolation
+remain Snip Dev's. It is ad-hoc signed, not Developer ID signed or notarized.
+Install it manually alongside Snip; it uses the existing Snip Dev test library if
+one exists. Update checks and native installation are disabled for this beta so
+its version cannot mix with the independent `0.0.N` nightly sequence. Future beta
+updates are manual too. Stable signing requirements and nightly behavior are
+unchanged. Never relabel a nightly archive or publish a stable smoke fixture.
+
 ## Before enabling updates
 
 1. Enroll in the Apple Developer Program and create a **Developer ID Application** certificate. Keep the same team and application identity (`dev.snip.desktop`) across releases.

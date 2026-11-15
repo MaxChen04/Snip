@@ -858,6 +858,7 @@ function configureSourceUpdates() {
   sourceUpdates.start()
 }
 function configureUpdates() {
+  if (releaseConfig?.manualOnly === true) return // Versioned betas do not participate in the 0.0.N nightly sequence.
   if (!releaseBuild && !nightly && !development && fs.existsSync(path.join(ROOT, ".git"))) return configureSourceUpdates()
   const config = releaseConfig
   updates = new Updates({ native: autoUpdater, version: nightly && !releaseBuild ? "0.0.0" : app.getVersion(), channel, directory: path.join(app.getPath("userData"), "updates"),

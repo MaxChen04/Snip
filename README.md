@@ -6,9 +6,7 @@ A private library of website design references. Paste a URL, choose **Landing pa
 
 ![Browsing the canvas, filtering websites and opening a saved site in Snip](docs/media/browse.gif)
 
-Website: [usesnip.dev](https://usesnip.dev) · [Releases and downloads](https://github.com/MaxChen04/Snip/releases) · [0.1.36 beta release notes](docs/releases/0.1.36.md) · License: [source-available](#license)
-
-0.1.36 is the beta target release.
+Website: [usesnip.dev](https://usesnip.dev) · License: [source-available](#license)
 
 ## Quick start
 
@@ -26,7 +24,7 @@ npm run app                              # builds Snip.app and installs it in /A
 npm run app:dev:build                    # separate Snip Dev.app with its own test library
 ```
 
-Snip Dev uses the blue blueprint icon and separate test data. Nightlies follow `main`; stable releases use `vX.Y.Z` tags. See [desktop release channels](desktop/RELEASING.md#stable-and-snip-dev-in-one-repository) for downloads, updates and Apple signing setup.
+Snip Dev uses the blue blueprint icon and separate test data.
 
 Open **Snip** from Applications or the menu bar. Use the **+** button in the bottom dock, paste a URL, and pick **Landing page** or **Whole site**. For a crawl, choose a 10, 25, 50 or 100-page limit. The capture agent starts working, and pages appear as they finish. `npm run doctor` checks the checkout, the two config files and the capture browser if something looks off; add `--check` to have it ask the cloud library whether it answers.
 
