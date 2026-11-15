@@ -1355,7 +1355,9 @@ export async function captureJob(browser: Browser, api: SnipApi, job: Job, signa
       if (error instanceof JobGoneError && !polling.signal.aborted) {
         cancelled.abort(error)
         clearInterval(timer)
-        closing = Promise.allSettled(contexts.map((context) => context.close()))
+        // The shared stills/video helper is separate from the site's contexts and
+        // can itself be stuck encoding. Closing it also ends its pending calls.
+        closing = Promise.allSettled([closeRenderer(), ...contexts.map((context) => context.close())])
         await closing
       }
       // A transient control outage is not cancellation. Retry on the next tick.

@@ -10,10 +10,11 @@ import * as db from "../../web/worker/db"
 import { STOPPED_EMPTY } from "../../web/shared/capture-errors"
 import { SnipApi, JobGoneError } from "../src/api"
 import { captureJob } from "../src/capture"
+import { renderer } from "../src/sheet"
 
-// Real HTTP -> Worker/D1 -> lease polling -> Chromium, with only the scraped site
-// replaced by a local fixture that deliberately never finishes its response.
-for (const mode of ["single", "crawl"] as const) test(`Cancel interrupts a stuck ${mode} capture and releases only its browser contexts`, { timeout: 30_000 }, async () => {
+// Real HTTP -> Worker/D1 -> lease polling -> Chromium. The fixture site never
+// finishes its response, or the separate video encoder deliberately never resolves.
+for (const [mode, stall] of [["single", "navigation"], ["crawl", "navigation"], ["single", "encoding"]] as const) test(`Cancel interrupts ${mode} capture during stuck ${stall} and releases only its browser contexts`, { timeout: 30_000 }, async () => {
   const previous = process.env.ALLOW_PRIVATE_URLS
   process.env.ALLOW_PRIVATE_URLS = "true"
   const mf = new Miniflare(convertV4MiniflareOptions({ modules: true, script: 'export default {fetch(){return new Response("ok")}}', d1Databases: ["DB"], r2Buckets: ["FILES"] }))
@@ -37,6 +38,7 @@ for (const mode of ["single", "crawl"] as const) test(`Cancel interrupts a stuck
       connections++
       res.on("close", () => connections--)
       res.writeHead(200, { "content-type": "text/html" })
+      if (stall === "encoding") { res.end('<!doctype html><title>Encoder fixture</title><body style="height:3000px">Scroll this page</body>'); return }
       res.write("<!doctype html><title>Unfinished page</title><body>Loading")
       entered.resolve()
       return
@@ -63,6 +65,16 @@ for (const mode of ["single", "crawl"] as const) test(`Cancel interrupts a stuck
   let running: Promise<unknown> | undefined
   try {
     const unrelated = await browser.newContext()
+    if (stall === "encoding") {
+      const helper = await renderer(browser)
+      await helper.exposeFunction("captureEncoding", () => entered.resolve())
+      await helper.evaluate(`window.snipVideo = {
+          supported: async () => true,
+          start: async () => {},
+          add: async () => { await window.captureEncoding(); return new Promise(() => {}) },
+          finish: async () => { throw new Error("The stuck encoder cannot finish") },
+        }`)
+    }
     const ref = await db.createReference(database, { url: `${base}/site`, mode, maxPages: 5 })
     const api = new SnipApi(base, "test-token")
     const job = (await api.claim())!
@@ -75,7 +87,10 @@ for (const mode of ["single", "crawl"] as const) test(`Cancel interrupts a stuck
     const response = await fetch(`${base}/api/references/${ref.id}/cancel`, { method: "POST" })
     assert.equal(response.status, 200)
     assert.equal((await response.json() as { error: string }).error, STOPPED_EMPTY)
-    const result = await running
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    const result = await Promise.race([running, new Promise((_, reject) => {
+      timeout = setTimeout(() => reject(new Error("Cancel did not stop the capture within five seconds")), 5000)
+    })]).finally(() => clearTimeout(timeout))
     assert.ok(result instanceof JobGoneError, String(result))
     assert.ok(performance.now() - start < 5000, "cancellation does not wait for navigation or the page deadline")
     assert.deepEqual(browser.contexts(), [unrelated], "only this job's contexts were closed")
