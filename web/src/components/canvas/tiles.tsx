@@ -1,38 +1,63 @@
-import { memo, useRef, useState, type CSSProperties, type FocusEvent, type PointerEvent, type Ref } from "react"
-import { Link } from "wouter"
-import { ChevronRightIcon } from "@/components/icons"
+import { memo, useRef, useState, type AnchorHTMLAttributes, type CSSProperties, type FocusEvent, type PointerEvent, type Ref } from "react"
+import { CheckIcon, ChevronRightIcon, TriangleAlertIcon } from "@/components/icons"
+import { warningText } from "@/lib/page-warnings"
 import { captureLabel } from "@/components/capture-controls"
 import { SiteIcon } from "@/components/site-icon"
 import { fileUrl } from "@/lib/api"
+import { enterSite, siteHref } from "@/lib/scope"
 import { cn } from "@/lib/utils"
 import { isVideoKey, type RefSummary, type SectionItem } from "../../../shared/types"
 import type { CanvasItem } from "@/components/canvas/types"
 
-/**
- * The website an item belongs to, as a link to that site in Snip. `from` is the item's page, marked when the site's
- * pages open. Uploaded images have no site.
- */
-export function siteHref(item: CanvasItem): string | null {
-  const href = (refId: string, from: string | null) => `/r/${refId}${from ? `?from=${from}` : ""}`
+/** The website an item belongs to. Uploaded images have none. */
+export function siteOf(item: CanvasItem): string | null {
   switch (item.kind) {
     case "page":
-      return href(item.page.referenceId, item.page.id)
+      return item.page.referenceId
     case "section":
-      return href(item.section.referenceId, item.section.pageId)
+      return item.section.referenceId
     case "animation":
-      return href(item.animation.referenceId, item.animation.pageId)
+      return item.animation.referenceId
     case "website":
-      return href(item.reference.id, null)
+      return item.reference.id
     case "image":
       return null
   }
 }
 
+/**
+ * A link into a website's scope on the canvas. A plain click enters the scope and remembers this place for Back; a
+ * modified click opens the scope in a new tab or window like any link. `onSame` handles a click while already in it.
+ */
+export function SiteLink({
+  id,
+  open,
+  onSame,
+  ref,
+  onClick,
+  ...props
+}: AnchorHTMLAttributes<HTMLAnchorElement> & { id: string; open?: string; onSame?: () => void; ref?: Ref<HTMLAnchorElement> }) {
+  return (
+    <a
+      ref={ref}
+      href={siteHref(id, open)}
+      onClick={(e) => {
+        onClick?.(e)
+        if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+        e.preventDefault()
+        if (onSame && new URLSearchParams(location.search).get("site") === id && location.pathname === "/") onSame()
+        else enterSite(id, open)
+      }}
+      {...props}
+    />
+  )
+}
+
 /** Where an item came from, for the hover chip. Uploaded images have none. */
-function source(item: CanvasItem): { domain: string; icon: string | null; path?: string; href: string } | null {
-  const href = siteHref(item)
-  if (!href) return null
-  const named = (ref: RefSummary, path?: string) => ({ domain: ref.domain, icon: ref.favicon, path: !path || path === "/" ? undefined : path.replace(/^\//, ""), href })
+function source(item: CanvasItem): { domain: string; icon: string | null; path?: string; site: string } | null {
+  const site = siteOf(item)
+  if (!site) return null
+  const named = (ref: RefSummary, path?: string) => ({ domain: ref.domain, icon: ref.favicon, path: !path || path === "/" ? undefined : path.replace(/^\//, ""), site })
   switch (item.kind) {
     case "page":
       return named(item.page.reference, item.page.path)
@@ -131,9 +156,15 @@ export const CanvasTile = memo(function CanvasTile({
   dimmed,
   tabIndex,
   faceStyle,
+  scoped,
+  checked,
 }: {
   item: CanvasItem
   onOpen: (item: CanvasItem) => void
+  /** Inside this item's site: the hover chip names the page instead of linking to the site. */
+  scoped?: boolean
+  /** Selecting for a prompt: whether this tile is picked. Undefined when not selectable. */
+  checked?: boolean
   /** Doesn't match the board's filter: faded, still usable. */
   dimmed?: boolean
   /** -1 when a wrapper takes focus instead (the board canvas's selectable items). */
@@ -144,6 +175,8 @@ export const CanvasTile = memo(function CanvasTile({
   const [live, setLive] = useState(false)
   const src = source(item)
   const name = tileLabel(item)
+  // A page the capture agent flagged (blank, cut off) says so on its tile, as the website's page used to under it.
+  const warning = item.kind === "page" && item.page.warnings?.length ? warningText(item.page) : ""
   // ink-3, not surface-top: a quiet placeholder until the image loads, and letterboxing that stays dark in dark mode.
   const face = "relative block size-full cursor-pointer overflow-hidden rounded-md bg-ink-3 shadow-card transition-[scale,opacity,box-shadow] duration-150 ease-out active:scale-[0.99] motion-reduce:active:scale-100"
   const inner = (
@@ -160,14 +193,16 @@ export const CanvasTile = memo(function CanvasTile({
       onFocus={() => setLive(true)}
       onBlur={() => setLive(false)}
     >
-      <button type="button" aria-label={name} tabIndex={tabIndex} onClick={() => onOpen(item)} className={cn(face, "text-left")} style={faceStyle}>
+      <button type="button" aria-label={name} aria-description={warning || undefined} aria-pressed={checked} tabIndex={tabIndex} onClick={() => onOpen(item)} className={cn(face, "text-left", checked && "ring-2 ring-ink-12 ring-offset-2 ring-offset-background")} style={faceStyle}>
         {inner}
+        {checked !== undefined && <SelectBadge on={checked} />}
+        {warning && <WarningBadge text={warning} />}
       </button>
       {/* Mounted only while hovered or focused: hundreds of tiles each carrying a hidden chip and favicon
           doubled the DOM and image requests when zoomed out. */}
-      {src && live && (
+      {src && live && checked === undefined && (
         <div className="pointer-events-none absolute inset-x-2 bottom-2 flex motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-bottom-1 motion-safe:duration-200">
-          <SourceChip src={src} />
+          <SourceChip src={src} scoped={scoped} />
         </div>
       )}
     </div>
@@ -178,15 +213,22 @@ export const CanvasTile = memo(function CanvasTile({
  * The chip on the hovered or focused tile: where an item came from, a link to that site in Snip. Shared by every kind of
  * tile. Out of the Tab order, so Tab walks tile to tile; from the keyboard the inspector's site link goes to the same place.
  */
-function SourceChip({ src, ref, onLeave }: { src: NonNullable<ReturnType<typeof source>>; ref?: Ref<HTMLAnchorElement>; onLeave?: (e: PointerEvent | FocusEvent) => void }) {
+function SourceChip({ src, scoped, ref, onLeave }: { src: NonNullable<ReturnType<typeof source>>; scoped?: boolean; ref?: Ref<HTMLAnchorElement>; onLeave?: (e: PointerEvent | FocusEvent) => void }) {
+  // Inside the site already: the chip just names the page.
+  if (scoped)
+    return (
+      <span className="tactile flex h-7 max-w-full items-center rounded-full px-2.5 text-2xs font-medium">
+        <span className="truncate">/{src.path ?? ""}</span>
+      </span>
+    )
   return (
-    <Link
+    <SiteLink
       ref={ref}
-      href={src.href}
+      id={src.site}
       tabIndex={-1}
       draggable={false}
-      aria-label={`Go to ${src.domain}`}
-      title={`Go to ${src.domain}`}
+      aria-label={`Show everything from ${src.domain}`}
+      title={`Show everything from ${src.domain}`}
       onPointerLeave={onLeave}
       onBlur={onLeave}
       className="tactile press pointer-events-auto flex h-7 max-w-full items-center gap-1.5 rounded-full pr-2 pl-1.5 text-2xs font-medium"
@@ -197,9 +239,29 @@ function SourceChip({ src, ref, onLeave }: { src: NonNullable<ReturnType<typeof 
         {src.path && <span className="text-ink-10"> / {src.path}</span>}
       </span>
       <ChevronRightIcon className="size-3 shrink-0 text-ink-10" />
-    </Link>
+    </SiteLink>
   )
 }
+
+/** The round check on a tile while selecting for a prompt. */
+/** A page the capture agent flagged (blank, cut off): the website's page used to say so under the tile. */
+const WarningBadge = ({ text }: { text: string }) => (
+  <span title={text} className="absolute top-2 right-2 z-10 grid size-6 place-items-center rounded-full bg-control/90 text-ink-11 shadow-button in-data-far:hidden">
+    <TriangleAlertIcon className="size-3.5" />
+  </span>
+)
+
+const SelectBadge = ({ on }: { on: boolean }) => (
+  <span
+    aria-hidden
+    className={cn(
+      "absolute top-2 left-2 z-10 grid size-6 place-items-center rounded-full shadow-button",
+      on ? "bg-primary text-primary-foreground shadow-primary" : "bg-control/90 ring-1 ring-ink-6",
+    )}
+  >
+    {on && <CheckIcon className="size-3.5" strokeWidth={3} />}
+  </span>
+)
 
 // The home tile's face. `in-data-far` is set on the canvas's world layer while zoomed far out (see FAR_ZOOM): there a
 // tile is a few dozen px wide, so its three blurred shadows, hover wash and transitions are paid for and unseen. Only
@@ -224,8 +286,17 @@ export const HomeTile = memo(function HomeTile({
   h,
   copy,
   onOpen,
+  scoped,
+  checked,
+  dim,
 }: {
   item: CanvasItem
+  /** Inside this item's site: the hover chip names the page instead of linking to the site. */
+  scoped?: boolean
+  /** Selecting for a prompt: whether this tile is picked. Undefined when not selectable. */
+  checked?: boolean
+  /** Selecting, and this kind can't go in a prompt. */
+  dim?: boolean
   /** Position and size in world px. */
   x: number
   y: number
@@ -240,6 +311,7 @@ export const HomeTile = memo(function HomeTile({
   const face = useRef<HTMLButtonElement>(null)
   const chip = useRef<HTMLAnchorElement>(null)
   const name = tileLabel(item)
+  const warning = item.kind === "page" && item.page.warnings?.length ? warningText(item.page) : ""
   // Pointer or focus moving between the tile and its chip (a sibling element) keeps the chip.
   const leave = (e: PointerEvent | FocusEvent) => {
     const to = e.relatedTarget as Node | null
@@ -247,10 +319,11 @@ export const HomeTile = memo(function HomeTile({
   }
   const shared = {
     "aria-label": name,
+    "aria-description": warning || undefined,
     "aria-hidden": copy || undefined,
     tabIndex: copy ? -1 : undefined,
     style: { left: x, top: y, width: w, height: h },
-    className: HOME_FACE,
+    className: cn(HOME_FACE, checked && "ring-2 ring-ink-12 ring-offset-2 ring-offset-background", dim && "opacity-35"),
     onPointerEnter: (e: PointerEvent) => e.pointerType === "mouse" && setLive(true),
     onPointerLeave: leave,
     onFocus: () => setLive(true),
@@ -259,18 +332,20 @@ export const HomeTile = memo(function HomeTile({
   // Called, not rendered as <Media />: one fewer element and fiber for each of hundreds of tiles.
   const media = Media({ item, live, home: true })
   const tile = (
-    <button ref={face} type="button" onClick={() => onOpen(item)} {...shared}>
+    <button ref={face} type="button" onClick={() => onOpen(item)} aria-pressed={checked} {...shared}>
       {media}
+      {checked !== undefined && <SelectBadge on={checked} />}
+      {warning && <WarningBadge text={warning} />}
     </button>
   )
-  const src = live ? source(item) : null
+  const src = live && checked === undefined && !dim ? source(item) : null
   if (!src) return tile
   return (
     <>
       {tile}
       <div className="pointer-events-none absolute in-data-far:hidden" style={{ left: x, top: y, width: w, height: h }}>
         <div className="absolute inset-x-2 bottom-2 flex motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-bottom-1 motion-safe:duration-200">
-          <SourceChip src={src} ref={chip} onLeave={leave} />
+          <SourceChip src={src} scoped={scoped} ref={chip} onLeave={leave} />
         </div>
       </div>
     </>
