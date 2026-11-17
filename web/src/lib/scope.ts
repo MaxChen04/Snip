@@ -29,15 +29,19 @@ window.addEventListener("popstate", () => {
 })
 export const landedByHistory = () => popped === location.href
 
-// The canvas on screen, if any, says where it is when the user leaves for another entry.
-let positionOf: (() => CanvasPosition) | null = null
-export function providePosition(fn: () => CanvasPosition) {
+// The canvas on screen, if any, says where it is when the user leaves for another entry. Grid view and the Tokens
+// panel have no canvas mounted: no position.
+let positionOf: (() => CanvasPosition | undefined) | null = null
+export function providePosition(fn: () => CanvasPosition | undefined) {
   positionOf = fn
   return () => {
     if (positionOf === fn) positionOf = null
   }
 }
-export const rememberPosition = () => positionOf && patchEntry({ view: positionOf() })
+export function rememberPosition() {
+  const view = positionOf?.()
+  if (view) patchEntry({ view })
+}
 
 /** A website's scope, optionally with one of its items open (`page:<id>`). */
 export const siteHref = (id: string, open?: string) => `/?site=${encodeURIComponent(id)}${open ? `&open=${encodeURIComponent(open)}` : ""}`

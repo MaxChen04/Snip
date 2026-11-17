@@ -418,8 +418,8 @@ export function CanvasHome({ login }: { login: string }) {
     const stop = () => clearTimeout(savePosition.current)
     window.addEventListener("popstate", stop)
     const release = providePosition(() => {
-      const { x, y, zoom } = canvas.current!.getView()
-      return { x, y, zoom }
+      const view = canvas.current?.getView()
+      return view && { x: view.x, y: view.y, zoom: view.zoom }
     })
     return () => {
       stop()

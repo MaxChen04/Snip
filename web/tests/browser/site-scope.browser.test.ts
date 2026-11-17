@@ -207,3 +207,17 @@ test("selecting inside a site picks pages for a prompt, and Escape ends the sele
   await page.keyboard.press("Escape")
   await until("left", () => !search(page.url()).site)
 })
+
+test("in Grid view, a tile's site link enters the scope (there is no canvas to remember a position from)", async () => {
+  const lib = library()
+  const t = await app.session({ viewport: { width: 1280, height: 800 } })
+  t.on("GET", /^\/api\//, mockLibrary(lib))
+  await t.page.addInitScript(() => localStorage.setItem("rs.view", "grid"))
+  await t.goto("/?filter=pages")
+  const { page } = t
+  await openTile(page, "Linear · pricing")
+  await page.getByRole("dialog").getByRole("link", { name: /^linear\.app/ }).click()
+  await until("the scope opens", () => search(page.url()).site === "linear")
+  await page.getByRole("button", { name: "Site details: Linear" }).waitFor()
+  assert.deepEqual(t.consoleErrors, [])
+})
