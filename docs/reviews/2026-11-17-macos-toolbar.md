@@ -48,3 +48,16 @@ This is an Electron/HTML toolbar, not an AppKit toolbar or Liquid Glass implemen
   Contrast, Reduce Transparency, hardware display changes and contrast measurement
   were not run. Automated DOM checks do not establish those capabilities.
 - No installed app, saved library, release, or original dirty checkout was changed.
+
+## Recorded test results
+- Typecheck: passed (web and capture).
+- Web/settings build: passed; existing bundle-size warning remains.
+- Core: 394/394 passed.
+- Desktop app: 298/298 passed.
+- Browser/settings: 148/148 passed.
+- After the final pointer-event refinement: rebuilt and reran all 6 new layout
+  tests plus 6 existing board-name/canvas-focus tests, all passed. The aggregate
+  browser run completed successfully and included the final layout test version;
+  earlier scenarios in that run preceded this three-line CSS refinement.
+- Dependencies reused from the existing local checkout: Node 25.9.0, React 19.3.1,
+  Vite 8.3.5, Playwright 1.64.1. A clean locked-dependency CI install was not run.
