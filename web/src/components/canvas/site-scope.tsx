@@ -19,7 +19,7 @@ import { diagnoseCaptureError, RetryCaptureButton } from "@/components/capture-r
 import { CollectionPicker } from "@/components/collection-picker"
 import { notify } from "@/components/notify"
 import { SiteIcon } from "@/components/site-icon"
-import { reloadCanvas } from "@/components/canvas/types"
+import { RELOAD_EVENT, reloadCanvas } from "@/components/canvas/types"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
@@ -52,15 +52,30 @@ export function useSite(id: string | null) {
   // the user moved on) is dropped before it can touch this site's state.
   const active = useRef(id)
   active.current = id
+  const shown = useRef<Reference | null>(null)
   const load = useCallback(() => {
     if (!id || active.current !== id) return Promise.resolve()
     const request = ++latest.current
     return api.reference(id).then(
-      (detail) => request === latest.current && setState({ id, detail, error: null }),
+      (detail) => {
+        if (request !== latest.current) return
+        // New pages or recordings: everything else holding a copy of this site (the inspector's) refreshes.
+        const before = shown.current
+        shown.current = detail.reference
+        const r = detail.reference
+        if (before?.id === id && (r.pageCount > before.pageCount || r.animationCount > before.animationCount || (r.status === "ready" && before.status !== "ready"))) reloadCanvas()
+        setState({ id, detail, error: null })
+      },
       (error: Error) => request === latest.current && setState((s) => ({ id, detail: s?.id === id && !(error instanceof NotFoundError) ? s.detail : null, error })),
     )
   }, [id])
   useEffect(() => void load(), [load])
+  // A change made elsewhere (the inspector's note, an upload, a capture) reloads the site too.
+  useEffect(() => {
+    const onReload = () => void load()
+    window.addEventListener(RELOAD_EVENT, onReload)
+    return () => window.removeEventListener(RELOAD_EVENT, onReload)
+  }, [load])
   const current = state?.id === id ? state : undefined
   const r = current?.detail?.reference
   usePoll(load, !!r && (r.status === "queued" || r.status === "capturing"), r?.status === "capturing" ? LIVE_POLL : undefined)
@@ -209,7 +224,13 @@ export function SitePill({ site, onChange }: { site: ReturnType<typeof useSite>;
               </>
             )}
           </p>
-          <NoteField r={r} onSaved={(notes) => site.update((d) => ({ ...d, reference: { ...d.reference, notes } }))} />
+          <NoteField
+            r={r}
+            onSaved={(notes) => {
+              site.update((d) => ({ ...d, reference: { ...d.reference, notes } }))
+              reloadCanvas()
+            }}
+          />
           <div className="flex flex-wrap items-center gap-2">
             <a href={r.url} target="_blank" rel="noreferrer" title="Opens in a new tab" className={action}>
               <ExternalLinkIcon />

@@ -902,6 +902,8 @@ function Notes({ reference, onChange }: { reference: Reference; onChange: (notes
     setStatus("saving")
     try {
       await api.setNotes(reference.id, next)
+      // The site's own copy (its details in a site scope) picks up the note.
+      reloadCanvas()
       if (mounted.current) setStatus("saved")
     } catch {
       saved.current = before

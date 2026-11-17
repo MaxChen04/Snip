@@ -360,3 +360,37 @@ test("an old link to a site's tab and page opens that page, even on Animations o
   await until("the missing page closes", () => search(page.url()).open === undefined)
   assert.equal(await page.getByRole("dialog").count(), 0)
 })
+
+test("a site's note saved in the inspector shows in Site details, and the other way round", async () => {
+  const t = await open("/?site=judgment")
+  const { page } = t
+  t.on("PATCH", "/api/references/judgment", (req) => {
+    t.lib.references.find((r) => r.id === "judgment")!.notes = req.body.notes
+    return { json: { ok: true } }
+  })
+  const inspectorNote = () => page.getByRole("dialog").getByPlaceholder("What to borrow from it")
+  // A save is done once the site has reloaded after it.
+  const saved = async (n: number) => {
+    const gets = t.count("GET", "/api/references/judgment")
+    await until(`note save #${n}`, () => t.count("PATCH", "/api/references/judgment") === n && t.count("GET", "/api/references/judgment") > gets)
+  }
+
+  // The inspector's copy of the site is loaded first, then the note changes in Site details.
+  await openTile(page, "Judgment Labs · pricing")
+  await inspectorNote().waitFor()
+  await page.keyboard.press("Escape")
+  await page.getByRole("button", { name: "Site details: Judgment Labs" }).click()
+  await page.getByRole("textbox", { name: "Note" }).fill("Borrow the pricing table")
+  await page.keyboard.press("Tab")
+  await saved(1)
+  await page.keyboard.press("Escape")
+  await openTile(page, "Judgment Labs · pricing")
+  await until("the inspector shows it", async () => (await inspectorNote().inputValue()) === "Borrow the pricing table")
+
+  await inspectorNote().fill("Borrow the footer")
+  await page.getByRole("dialog").getByRole("heading").first().click()
+  await saved(2)
+  await page.keyboard.press("Escape")
+  await page.getByRole("button", { name: "Site details: Judgment Labs" }).click()
+  await until("Site details shows it", async () => (await page.getByRole("textbox", { name: "Note" }).inputValue()) === "Borrow the footer")
+})
