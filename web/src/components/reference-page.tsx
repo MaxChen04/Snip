@@ -24,7 +24,6 @@ import { Button } from "@/components/ui/button"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { TokensPanel } from "@/components/tokens-panel"
-import { ImageGeneration } from "@/components/image-generation"
 import { PageViewer } from "@/components/page-viewer"
 import { ActionCircle, Segmented, TopBar } from "@/components/top-bar"
 import {
@@ -442,16 +441,10 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
                 </div>
               ))}
               {busy && !quiet && (
-                <ImageGeneration
-                  status={r.status === "queued" ? "queued" : "generating"}
-                  label={progressText}
-                  resolution={capturingPath ?? ""}
-                  aspectRatio="16 / 10"
-                  size="fluid"
-                  statusText={capturedPercent === null ? progressText : `${capturedPercent}%`}
-                  statusClassName="tabular-nums"
-                  className="[&_[role=img]]:rounded-lg [&_[role=img]]:shadow-card"
-                />
+                <Skeleton className="aspect-[16/10] rounded-lg">
+                  <span className="max-w-full truncate">{progressText}</span>
+                  {capturedPercent !== null && <span className="text-ink-10 tabular-nums">{capturedPercent}%</span>}
+                </Skeleton>
               )}
             </Masonry>
             {!pages.length && (!busy || quiet) && <p className="py-16 text-center text-sm text-muted-foreground">No pages captured yet.</p>}

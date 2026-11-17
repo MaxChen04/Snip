@@ -593,7 +593,7 @@ function PagePreview({
           src={fileUrl(src)}
           alt={page.title ?? page.path}
           onLoad={() => setLoadedSrc(src)}
-          className={cn("block w-full", !loaded && "animate-pulse bg-ink-3")}
+          className={cn("block w-full", !loaded && "skeleton")}
           style={!loaded && W && page.desktopHeight && page.desktopKey ? { aspectRatio: `${W} / ${page.desktopHeight}` } : undefined}
         />
         <LiveClips page={page} look={look} />
