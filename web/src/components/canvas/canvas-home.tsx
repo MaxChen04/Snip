@@ -19,6 +19,7 @@ import { CanvasTile, HomeTile } from "@/components/canvas/tiles"
 import { itemAspect, RELOAD_EVENT, reloadCanvas, type CanvasFilter, type CanvasItem, type SiteFilter } from "@/components/canvas/types"
 import { ZoomControls } from "@/components/canvas/zoom-controls"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Spinner } from "@/components/ui/spinner"
 import { api, type Filters, type LibraryTypeCounts, type Paged } from "@/lib/api"
 import { parseProgress } from "@/lib/capture-progress"
 import { useCollections } from "@/lib/collections"
@@ -414,7 +415,8 @@ export function CanvasHome({ login }: { login: string }) {
     const saved = landedByHistory() ? entry().view : undefined
     if (saved) canvas.current?.setView(saved)
     else canvas.current?.recenter({ animate: true })
-  }, [site, filter, q])
+    // A site's canvas mounts once its detail has loaded.
+  }, [site, filter, q, !site || !!detail])
   // Keep the entry's position current, so browser Back, ⌘[ and Forward all find it.
   const savePosition = useRef<ReturnType<typeof setTimeout>>(undefined)
   useEffect(() => {
@@ -485,15 +487,7 @@ export function CanvasHome({ login }: { login: string }) {
   }
   const messages = useMemo(
     () =>
-      site && siteData.missing ? (
-        <div className="flex flex-col items-center gap-2 text-center" role="alert">
-          <p className="text-sm text-foreground">This website doesn't exist</p>
-          <p className="text-xs text-ink-11">It may have been deleted.</p>
-          <button type="button" onClick={leaveSite} className="tactile press mt-1 h-8 rounded-full px-3.5 text-xs">
-            Back to {backTo}
-          </button>
-        </div>
-      ) : error ? (
+      error ? (
         <p className="flex items-center gap-2 text-xs text-ink-11" role="alert">
           Couldn't load your saves.
           <button type="button" onClick={reloadCanvas} className="tactile press h-7 rounded-full px-3 text-xs">
@@ -526,7 +520,7 @@ export function CanvasHome({ login }: { login: string }) {
           {emptyText[siteFilter]}
         </p>
       ) : null,
-    [site, siteData.missing, backTo, error, items, q, domain, setQuery, pending.length, detail, siteFilter],
+    [site, error, items, q, domain, setQuery, pending.length, detail, siteFilter],
   )
   const plaza = useMemo(
     () => (
@@ -637,7 +631,29 @@ export function CanvasHome({ login }: { login: string }) {
         </div>
       )}
 
-      {site && filter === "tokens" ? (
+      {site && !detail ? (
+        // Until the site itself has loaded, every view (canvas, grid, Tokens) shows its state: loading, failed or gone.
+        <div className="absolute inset-0 grid place-items-center px-4 text-center">
+          {siteData.error ? (
+            <div className="grid justify-items-center gap-3" role="alert">
+              <p className="text-sm text-ink-12">{siteData.missing ? "This website doesn't exist" : "Couldn't load this website"}</p>
+              <p className="text-xs text-ink-11">{siteData.missing ? "It may have been deleted." : "Check your connection and try again."}</p>
+              <div className="flex gap-2">
+                {!siteData.missing && (
+                  <button type="button" onClick={() => void siteData.reload()} className="tactile press h-8 rounded-full px-3.5 text-xs">
+                    Try again
+                  </button>
+                )}
+                <button type="button" onClick={leaveSite} className="tactile press h-8 rounded-full px-3.5 text-xs">
+                  Back to {backTo}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <Spinner className="size-5 text-muted-foreground" />
+          )}
+        </div>
+      ) : site && filter === "tokens" ? (
         <div className="absolute inset-0 overflow-y-auto overscroll-none px-4 pt-24 pb-32 sm:px-6">
           <section aria-label={`Design tokens of ${domain ?? "this site"}`} className="mx-auto flex max-w-5xl flex-col gap-6 rounded-3xl bg-card p-5 shadow-card sm:p-6">
             {tokens ? (
@@ -662,7 +678,7 @@ export function CanvasHome({ login }: { login: string }) {
               </>
             ) : (
               <p className="py-10 text-center text-sm text-ink-11" role="status">
-                {detail ? (busy ? "Design tokens appear when the first page is captured." : "No design tokens were captured for this site.") : "Loading…"}
+                {busy ? "Design tokens appear when the first page is captured." : "No design tokens were captured for this site."}
               </p>
             )}
           </section>

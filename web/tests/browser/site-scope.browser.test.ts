@@ -282,3 +282,22 @@ test("Back from a site entered on a board returns to the board's pan and zoom", 
   await sleep(500)
   assert.equal(await worldTransform(page), before)
 })
+
+test("a site that fails to load says so with Try again, and an old Tokens link to a deleted site says it is gone", async () => {
+  const t = await open("/?filter=pages")
+  const { page } = t
+  let failing = true
+  t.on("GET", /^\/api\/references\/linear$/, () => (failing ? { status: 500, json: { error: "Boom" } } : undefined))
+  await page.getByRole("textbox", { name: /Search your saves/ }).focus()
+  await page.getByRole("button", { name: "linear.app", exact: true }).click()
+  await page.getByText("Couldn't load this website").waitFor()
+  failing = false
+  await page.getByRole("button", { name: "Try again" }).click()
+  await page.getByRole("button", { name: "Site details: Linear" }).waitFor()
+
+  await t.goto("/r/gone?tab=tokens")
+  await page.getByText("This website doesn't exist").waitFor()
+  assert.equal(await page.getByText("Loading…").count(), 0)
+  await page.getByRole("alert").getByRole("button", { name: "Back to All saves" }).click()
+  await until("back in All saves", () => !search(page.url()).site)
+})
