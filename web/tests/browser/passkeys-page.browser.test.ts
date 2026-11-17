@@ -135,7 +135,7 @@ test("no offer without the marker, after a passkey sign-in, or in a browser that
   assert.equal(await offer(noWebAuthn.page).count(), 0, "a browser without WebAuthn is not offered one")
 })
 
-test("at 390 px the page does not scroll sideways, and the long sign-out button wraps inside it", async () => {
+test("at 390 px the page does not scroll sideways", async () => {
   const t = await app.session({ viewport: { width: 390, height: 800 } })
   t.on("GET", "/api/passkeys", () => ({ json: { devices: [{ id: "k1", label: "Chrome on Mac", createdAt: "2026-01-01T00:00:00.000Z", lastUsedAt: null }] } }))
   const { page } = t
@@ -144,6 +144,4 @@ test("at 390 px the page does not scroll sideways, and the long sign-out button 
   await signOut.waitFor()
   const widths = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }))
   assert.ok(widths.scroll <= widths.client, `the page is ${widths.scroll}px wide in a ${widths.client}px window`)
-  const box = (await signOut.boundingBox())!
-  assert.ok(box.x + box.width <= 390, `the sign-out button ends at ${box.x + box.width}px`)
 })

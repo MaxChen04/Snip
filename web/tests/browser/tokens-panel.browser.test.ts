@@ -30,7 +30,7 @@ test("an oklch colour is shown in full under its swatch, and a url() reference i
   assert.equal(await page.getByText("url(", { exact: false }).count(), 0)
 
   for (const value of ["oklch(0.2 0.01 250)", "oklch(0.92 0.02 90 / 0.5)"]) {
-    const label = swatches.filter({ hasText: value }).locator("div").last()
+    const label = swatches.getByText(value, { exact: true })
     // Wrapped, not cut off: its text is the whole value and it does not overflow its box or lose lines to an ellipsis.
     assert.equal((await label.innerText()).replace(/\s+/g, " "), value)
     const overflow = await label.evaluate((el) => ({ over: el.scrollWidth > el.clientWidth, ellipsis: getComputedStyle(el).textOverflow }))

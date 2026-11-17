@@ -379,7 +379,8 @@ test("a full-page shot doesn't send the page a resize, and paints content-visibi
     assert.deepEqual(await page.evaluate(() => [document.querySelectorAll("[data-snip-cv]").length, (document.querySelector(".far") as HTMLElement).style.cssText]), [0, ""], "the override is removed afterwards")
     assert.equal(await page.evaluate(() => (window as unknown as { __snipHoldResize: boolean }).__snipHoldResize), false)
     await page.setViewportSize({ width: 700, height: 600 })
-    await page.waitForTimeout(100)
+    // Waits for the event rather than a fixed 100 ms, which a loaded macOS runner missed on two nightlies in a row.
+    await page.waitForFunction(() => (window as unknown as { resizes: number }).resizes > 0, undefined, { timeout: 5_000 }).catch(() => {})
     assert.ok(await page.evaluate(() => (window as unknown as { resizes: number }).resizes) > 0, "real resizes still reach the page")
   } finally {
     await browser.close()
