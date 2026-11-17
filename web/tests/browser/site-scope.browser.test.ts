@@ -346,3 +346,17 @@ test("a Re-capture and a note save started on one site and finishing on another 
   await page.getByRole("button", { name: "Site details: Linear" }).click()
   assert.equal(await page.getByRole("textbox", { name: "Note" }).inputValue(), "", "Judgment's note landed on Linear")
 })
+
+test("an old link to a site's tab and page opens that page, even on Animations or Tokens; a page that's gone closes", async () => {
+  const t = await open("/")
+  const { page } = t
+  for (const tab of ["animations", "tokens"]) {
+    await t.goto(`/r/judgment?tab=${tab}&page=judgment-p4`)
+    await page.getByRole("dialog", { name: "Judgment Labs · docs" }).waitFor()
+    assert.deepEqual(search(page.url()), { site: "judgment", filter: tab, open: "page:judgment-p4" })
+  }
+  await t.goto("/?site=judgment&filter=animations&open=page:gone")
+  await page.getByRole("button", { name: "Site details: Judgment Labs" }).waitFor()
+  await until("the missing page closes", () => search(page.url()).open === undefined)
+  assert.equal(await page.getByRole("dialog").count(), 0)
+})

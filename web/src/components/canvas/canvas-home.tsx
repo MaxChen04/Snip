@@ -463,14 +463,20 @@ export function CanvasHome({ login }: { login: string }) {
     : list.length >= CAP && list.length < inFilter ? `Showing the newest ${list.length} of ${inFilter}. Search to find older saves.`
     : `${total} saved`
   const index = open ? list.findIndex((it) => keyOf(it) === open) : -1
-  const openItem = index >= 0 ? list[index] : undefined
+  // A page asked for by link (an old /r/:id?tab=…&page= link, or Tokens with a page open) may be outside this feed:
+  // the site's own pages have it.
+  const sitePage = index < 0 && detail ? detail.pages.find((p) => `page:${p.id}` === open) : undefined
+  const openItem: CanvasItem | undefined =
+    index >= 0 ? list[index]
+    : sitePage && detail ? { kind: "page", id: sitePage.id, page: { ...sitePage, reference: { id: detail.reference.id, title: detail.reference.title, domain: detail.reference.domain, favicon: detail.reference.favicon } } }
+    : undefined
   // The open item left the list (deleted from the inspector, or filtered away): close, so ?open= and the
-  // history entry don't outlive it.
+  // history entry don't outlive it. In a site, only once its pages are known.
   const closeRef = useRef(close)
   closeRef.current = close
   useEffect(() => {
-    if (open && items && !openItem) closeRef.current()
-  }, [open, items, openItem])
+    if (open && items && !openItem && (!site || detail)) closeRef.current()
+  }, [open, items, openItem, site, detail])
 
   const { collections } = useCollections()
   const historyState = useHistoryState() as Entry | null
@@ -734,9 +740,9 @@ export function CanvasHome({ login }: { login: string }) {
         <ItemInspector
           item={openItem}
           onClose={close}
-          position={{ index, total: list.length }}
+          position={index >= 0 ? { index, total: list.length } : undefined}
           onPrev={index > 0 ? () => setParams({ open: keyOf(list[index - 1]!) }) : undefined}
-          onNext={index < list.length - 1 ? () => setParams({ open: keyOf(list[index + 1]!) }) : undefined}
+          onNext={index >= 0 && index < list.length - 1 ? () => setParams({ open: keyOf(list[index + 1]!) }) : undefined}
           prompt={site ? prompt : undefined}
         />
       )}
