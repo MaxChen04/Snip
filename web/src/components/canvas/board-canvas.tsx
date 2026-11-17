@@ -28,6 +28,7 @@ import { useDesktopState } from "@/hooks/use-desktop-state"
 import { LIVE_POLL, usePoll } from "@/hooks/use-poll"
 import { api, type BoardGroup, type BoardItem, type BoardItemKind, type BoardItemPlacement, type Collection, type LibraryTypeCounts, type SavedImage } from "@/lib/api"
 import { useCollections } from "@/lib/collections"
+import { entry, landedByHistory, providePosition } from "@/lib/scope"
 import { cn } from "@/lib/utils"
 import { MAX_NAME, type BoardItemStyle } from "../../../shared/types"
 
@@ -1075,6 +1076,19 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
     const v = canvas.current?.getView()
     if (v) placeToolbar(v)
   })
+  // The board's place in its history entry: Back from a site's scope returns to this pan and zoom, as on All saves.
+  useEffect(
+    () =>
+      providePosition(() => {
+        const v = canvas.current?.getView()
+        return v && { x: v.x, y: v.y, zoom: v.zoom }
+      }),
+    [],
+  )
+  useEffect(() => {
+    const saved = status === "ready" && landedByHistory() ? entry().view : undefined
+    if (saved) canvas.current?.setView(saved)
+  }, [status])
   const onViewChange = useCallback(
     (v: CanvasView) => {
       zoomSink.current?.(v.zoom)

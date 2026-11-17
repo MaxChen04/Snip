@@ -3,7 +3,7 @@
 // every route back to exactly where the user was.
 import { after, before, test } from "node:test"
 import assert from "node:assert/strict"
-import { gate, startApp, sleep, until, type App } from "./harness.ts"
+import { boardOf, gate, noteItem, reference, startApp, sleep, until, websiteItem, type App } from "./harness.ts"
 import { library, mockLibrary } from "./site-library.ts"
 
 let app: App
@@ -256,4 +256,29 @@ test("a search typed in a site and not yet written stays in that site when the u
   await sleep(600)
   assert.equal(search(page.url()).q, undefined, "the site's draft was written into All saves")
   assert.equal(await page.getByRole("textbox", { name: /Search your saves/ }).inputValue(), "")
+})
+
+test("Back from a site entered on a board returns to the board's pan and zoom", async () => {
+  const r = reference({ id: "ref1", title: "Example", domain: "example.com", pageCount: 2 })
+  const t = await app.session({ state: { references: { ref1: r }, boards: { board1: boardOf([websiteItem(r, 0, 0), noteItem("n1", "far", 2400, 1600)]) } }, viewport: { width: 1280, height: 800 } })
+  const { page } = t
+  await t.goto("/b/board1")
+  const board = page.locator("[aria-label*='Drag or use the arrow keys']")
+  await board.waitFor()
+  await board.focus()
+  for (const key of ["ArrowRight", "ArrowRight", "ArrowDown", "Minus"]) await page.keyboard.press(key)
+  await sleep(400)
+  const before = await worldTransform(page)
+
+  // On a board a click selects the item and Enter opens it.
+  await page.locator("[data-key]", { has: page.getByRole("button", { name: "Example", exact: true }) }).click()
+  await page.keyboard.press("Enter")
+  await page.getByRole("dialog").getByRole("link", { name: /^example\.com/ }).click()
+  await until("in the site", () => search(page.url()).site === "ref1")
+  await page.getByRole("button", { name: "Back to Moodboard" }).click()
+  await until("on the board", () => new URL(page.url()).pathname === "/b/board1")
+  await page.getByRole("dialog").waitFor()
+  await page.keyboard.press("Escape")
+  await sleep(500)
+  assert.equal(await worldTransform(page), before)
 })
