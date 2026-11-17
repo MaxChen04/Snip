@@ -3,8 +3,8 @@
 // every route back to exactly where the user was.
 import { after, before, test } from "node:test"
 import assert from "node:assert/strict"
-import { boardOf, gate, noteItem, reference, startApp, sleep, until, websiteItem, type App } from "./harness.ts"
-import { crawlStep, library, mockLibrary } from "./site-library.ts"
+import { boardOf, gate, noteItem, reference, savedPage, startApp, sleep, until, websiteItem, type App } from "./harness.ts"
+import { crawlStep, library, mockLibrary, oneSite } from "./site-library.ts"
 
 let app: App
 before(async () => {
@@ -408,4 +408,14 @@ test("while a site loads, screen readers hear that it is loading", async () => {
   await t.page.getByRole("status", { name: "Loading" }).waitFor()
   hold.open()
   await t.page.getByRole("button", { name: "Site details: Linear" }).waitFor()
+})
+
+test("a site with more saves than the canvas holds says it shows only the newest", async () => {
+  const r = reference({ id: "big", title: "Big", domain: "big.example", pageCount: 1000 })
+  const pages = Array.from({ length: 400 }, (_, i) => savedPage({ id: `b${i}`, path: `/p${i}`, title: `Page ${i}` }))
+  const t = await app.session({ viewport: { width: 1440, height: 900 } })
+  t.on("GET", /^\/api\//, mockLibrary(oneSite(r, pages)))
+  t.on("GET", "/api/counts", () => ({ json: { websites: 1, pages: 1000, sections: 0, animations: 0, images: 0 } }))
+  await t.goto("/?site=big")
+  await t.page.getByText("Showing the newest 400 of 1000. Search to find older saves.").waitFor()
 })

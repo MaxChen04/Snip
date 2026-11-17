@@ -459,8 +459,9 @@ export function CanvasHome({ login }: { login: string }) {
   // Each feed stops at CAP items. Say so, or a big library looks like it lost its older saves.
   const inFilter = counts && feedFilter ? countOf(counts, feedFilter) : 0
   const caption =
-    site || firstRun || q || !total ? undefined
+    firstRun || q || !total ? undefined
     : list.length >= CAP && list.length < inFilter ? `Showing the newest ${list.length} of ${inFilter}. Search to find older saves.`
+    : site ? undefined
     : `${total} saved`
   const index = open ? list.findIndex((it) => keyOf(it) === open) : -1
   // A page asked for by link (an old /r/:id?tab=…&page= link, or Tokens with a page open) may be outside this feed:
@@ -622,7 +623,7 @@ export function CanvasHome({ login }: { login: string }) {
         <>
           {view === "canvas" && feedFilter && <Zoom canvas={canvas} sink={zoomSink} />}
           {view === "canvas" && caption && (
-            <p className="absolute bottom-6 left-6 z-50 flex h-10 max-w-[calc(50vw-320px)] items-center rounded-full bg-control px-4 text-2xs text-ink-11 shadow-button max-lg:hidden">{caption}</p>
+            <p className={cn("absolute left-6 z-50 flex h-10 max-w-[calc(50vw-320px)] items-center rounded-full bg-control px-4 text-2xs text-ink-11 shadow-button max-lg:hidden", site ? "bottom-[72px]" : "bottom-6")}>{caption}</p>
           )}
         </>
       )}
