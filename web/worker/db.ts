@@ -196,6 +196,10 @@ export function referenceWhere(f: ListFilter): Where {
     where.push(`r.domain = ?`)
     args.push(f.domain)
   }
+  if (f.referenceId) {
+    where.push(`r.id = ?`)
+    args.push(f.referenceId)
+  }
   if (f.status === "paused") where.push(`r.capture_control = 'paused'`)
   else if (f.status) {
     where.push(`r.status = ? AND coalesce(r.capture_control, '') != 'paused'`)
@@ -355,15 +359,18 @@ export async function getPageInCapture(db: D1Database, id: string) {
   return r ? { ...toPage(r), captureRun: (r.ref_capture_run as number) ?? 1, captureOptions: parse<CaptureOptions>(r.ref_capture_options) } : null
 }
 
-/** The pages or animations feed's q and collection filters. Alias the table as `t` and its refs row as `r`. */
+/**
+ * The pages or animations feed's q, collection and website filters. Alias the table as `t` and its refs row as `r`.
+ * Within one website, q matches only the item: its site's title and link would match every item.
+ */
 export function childWhere(table: "pages" | "animations", f: ListFilter): Where {
   const where: string[] = []
   const args: unknown[] = []
   if (f.q) {
-    where.push(`(r.title LIKE ? OR r.url LIKE ? ${table === "pages" ? "OR t.title LIKE ? OR t.path LIKE ?" : "OR t.label LIKE ?"})`)
-    const like = `%${f.q}%`
-    args.push(like, like, like)
-    if (table === "pages") args.push(like)
+    const own = table === "pages" ? ["t.title", "t.path"] : ["t.label"]
+    const fields = f.referenceId ? own : ["r.title", "r.url", ...own]
+    where.push(`(${fields.map((x) => `${x} LIKE ?`).join(" OR ")})`)
+    args.push(...fields.map(() => `%${f.q}%`))
   }
   if (f.collectionId) {
     // In a collection: everything from websites saved whole, plus pages saved on their own
