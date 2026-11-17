@@ -25,7 +25,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { cn } from "@/lib/utils"
 import { useGridSize, useHomeView, type GridSize, type HomeView } from "@/lib/prefs"
 
-// Cosmos-style chrome: three floating pills (brand + board switcher, search, actions).
+// Balanced toolbar lanes keep search centered on the window, not between unequal controls.
 
 // Raised white pills: a fine ring and a crisp drop instead of a border.
 const pill = "flex h-10 items-center rounded-full bg-control/90 shadow-button backdrop-blur-md"
@@ -51,20 +51,20 @@ export function TopBar({
   return (
     <header
       className={cn(
-        "flex items-center gap-3 px-4 py-3 sm:px-6",
+        "snip-top-bar grid items-center gap-3 px-4 py-3 sm:px-6",
         floating ? "pointer-events-none absolute inset-x-0 top-0 z-50 *:pointer-events-auto" : "sticky top-0 z-30",
         solid && "bg-background",
       )}
     >
-      <BoardSwitcher boardId={boardId} />
+      <div className="snip-toolbar-leading min-w-0"><BoardSwitcher boardId={boardId} /></div>
 
       {onQuery ? (
         <SearchField query={query ?? ""} onQuery={onQuery} />
       ) : (
-        <div className="flex-1" />
+        <div />
       )}
 
-      <div className={cn(pill, "shrink-0 gap-1.5 p-1")}>
+      <div className={cn(pill, "snip-toolbar-actions justify-self-end shrink-0 gap-1.5 p-1")}>
         <McpButton />
         <AccountMenu login={login} />
       </div>
@@ -73,18 +73,18 @@ export function TopBar({
 }
 
 /**
- * Compact until it's in use: it widens while focused or holding a query, so the canvas doesn't feel crowded. While
+ * Stable width preserves orientation while typing. While
  * focused and empty, a panel says what search matches and offers saved sites as one-click filters.
  */
 function SearchField({ query, onQuery }: { query: string; onQuery: (q: string) => void }) {
   const [sites, setSites] = useState<Reference[] | null>(null)
   const loadSites = () => api.references({ status: "ready" }, null, 8).then((p) => setSites(p.items.filter((r, i, a) => a.findIndex((x) => x.domain === r.domain) === i)), () => setSites([]))
   return (
-    <div className="group/search relative mx-auto min-w-0">
+    <div className="snip-toolbar-search group/search relative w-full min-w-0">
       <label
         className={cn(
           pill,
-          "w-60 max-w-full min-w-0 gap-2 px-3 transition-[width] duration-200 ease-out focus-within:w-96 has-[input:not(:placeholder-shown)]:w-96 motion-reduce:transition-none has-focus-visible:outline-2 has-focus-visible:outline-offset-2 max-sm:focus-within:w-full max-sm:has-[input:not(:placeholder-shown)]:w-full",
+          "w-full min-w-0 gap-2 px-3 has-focus-visible:outline-2 has-focus-visible:outline-offset-2",
         )}
       >
         <SearchIcon className="size-3.5 shrink-0 text-ink-9" />
@@ -94,7 +94,7 @@ function SearchField({ query, onQuery }: { query: string; onQuery: (q: string) =
           onFocus={() => void loadSites()}
           onChange={(e) => onQuery(e.target.value)}
           onKeyDown={(e) => e.key === "Escape" && e.currentTarget.blur()}
-          placeholder="Search sites, pages, sections…"
+          placeholder="Search saves"
           aria-label="Search your saves by site, page title, path or section"
           aria-keyshortcuts="/"
           className="peer h-full min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-ink-10 pointer-coarse:text-base"
@@ -146,14 +146,14 @@ function BoardSwitcher({ boardId }: { boardId?: string }) {
   const [open, setOpen] = useState(false)
   const name = boardId ? (collections.find((c) => c.id === boardId)?.name ?? "Board") : "All saves"
   return (
-    <div className={cn(pill, "shrink-0 gap-0.5 p-1")}>
-      <Link href="/" className="press grid size-8 place-items-center rounded-full hover:bg-ink-2 active:scale-[0.92]" aria-label="Snip home">
+    <div className={cn(pill, "snip-board-switcher w-fit max-w-full gap-0.5 p-1")}>
+      <Link href="/" className="snip-home-link press grid size-8 shrink-0 place-items-center rounded-full hover:bg-ink-2 active:scale-[0.92]" aria-label="Snip home">
         <Logo className="size-7" />
       </Link>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger
           aria-label={`${name}, switch board`}
-          className="press group/board flex h-8 max-w-[40vw] items-center gap-1 rounded-full pr-2.5 pl-1.5 text-xs font-medium hover:bg-ink-2 data-popup-open:bg-ink-3 sm:max-w-56"
+          className="press group/board flex h-8 min-w-0 max-w-full items-center gap-1 rounded-full pr-2.5 pl-1.5 text-xs font-medium hover:bg-ink-2 data-popup-open:bg-ink-3 sm:max-w-56"
         >
           <span className="truncate">{name}</span>
           <ChevronDownIcon className="size-3.5 shrink-0 text-ink-10 transition-transform duration-150 ease-out group-data-popup-open/board:rotate-180" />
