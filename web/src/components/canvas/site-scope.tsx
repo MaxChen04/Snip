@@ -24,6 +24,7 @@ import { Button } from "@/components/ui/button"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { Progress } from "@/components/ui/progress"
 import { Spinner } from "@/components/ui/spinner"
 import { LIVE_POLL, usePoll } from "@/hooks/use-poll"
 import { api, NotFoundError, type Animation, type Page, type Reference } from "@/lib/api"
@@ -355,12 +356,7 @@ export function CapturePill({ r, onChange }: { r: Reference; onChange: () => voi
       <span role="status" className={cn("min-w-0 truncate tabular-nums", r.quietSince && "whitespace-normal text-ink-11")}>
         {label}
       </span>
-      {/* ponytail: swap for the shared <Progress> from ui/progress once the loading consolidation (#82) lands. */}
-      {share !== null && (
-        <span role="progressbar" aria-label="Pages captured" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(share * 100)} className="h-1 w-14 shrink-0 overflow-hidden rounded-full bg-ink-4 max-sm:hidden">
-          <span className={cn("block h-full rounded-full transition-[width] duration-300 ease-out motion-reduce:transition-none", r.status === "paused" ? "bg-ink-9" : "bg-ink-12")} style={{ width: `${Math.max(4, share * 100)}%` }} />
-        </span>
-      )}
+      <Progress value={share} paused={r.status === "paused"} label="Pages captured" className="w-14 shrink-0 max-sm:hidden" />
       <CaptureControls r={r} onChange={onChange} className="gap-1" />
       {/* Room at the right end when there are no buttons to end the pill. */}
       {!captureActions(r).length && <span className="w-2" />}

@@ -18,7 +18,6 @@ import { CanvasTile, HomeTile } from "@/components/canvas/tiles"
 import { itemAspect, RELOAD_EVENT, reloadCanvas, type CanvasFilter, type CanvasItem, type SiteFilter } from "@/components/canvas/types"
 import { ZoomControls } from "@/components/canvas/zoom-controls"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Spinner } from "@/components/ui/spinner"
 import { api, type Filters, type LibraryTypeCounts, type Paged } from "@/lib/api"
 import { parseProgress } from "@/lib/capture-progress"
 import { useCollections } from "@/lib/collections"
@@ -137,22 +136,13 @@ function useCounts(q: string, site: string | null, version: string) {
 const pickable = (it: CanvasItem) => it.kind === "page" || it.kind === "animation"
 const isPicked = (s: Selection, it: CanvasItem) => (it.kind === "page" ? s.pages.includes(it.id) : it.kind === "animation" ? s.animations.includes(it.id) : false)
 
-/** A page a running capture hasn't saved yet: the one being captured, or a dashed slot for one still to come. */
-type Pending = { label?: string; active?: boolean }
+/** A page a running capture hasn't saved yet. The one being captured and those behind it look the same, as on the capture card. */
+type Pending = { label?: string }
 const PENDING_KEY = "pending:"
 const PendingTile = ({ p, style }: { p: Pending; style: CSSProperties }) => (
-  <div
-    aria-hidden
-    className={cn("pointer-events-none absolute grid place-items-center rounded-md text-center text-2xs text-ink-10", p.active ? "bg-ink-2 shadow-[0_0_0_1px_var(--ink-5)]" : "border border-dashed border-ink-6")}
-    style={style}
-  >
-    {p.label && (
-      <span className="flex max-w-[85%] flex-col items-center gap-2">
-        {p.active && <Spinner className="size-4 motion-reduce:animate-none" aria-hidden role={undefined} />}
-        <span className="truncate">{p.label}</span>
-      </span>
-    )}
-  </div>
+  <Skeleton aria-hidden className="pointer-events-none absolute rounded-md" style={style}>
+    {p.label && <span className="max-w-full truncate">{p.label}</span>}
+  </Skeleton>
 )
 
 /** What's still to come in a site that is capturing, up to a dozen slots, so the field doesn't jump as pages arrive. */
@@ -166,7 +156,7 @@ function pendingOf(d: SiteDetail | null): Pending[] {
   const first: Pending =
     r.status === "paused" ? { label: "Paused" }
     : r.status === "queued" ? { label: "Queued" }
-    : { label: progress ? `Capturing ${progress.path}` : "Capturing", active: true }
+    : { label: progress?.path ?? "Starting…" }
   return [first, ...Array.from({ length: left - 1 }, () => ({}))]
 }
 
