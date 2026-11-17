@@ -144,6 +144,9 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
   const [recapturing, setRecapturing] = useState(false)
   const tab = search.get("tab") ?? "pages"
   const openPage = search.get("page")
+  // The page of the item the user came from (the inspector's site link and a tile's site chip): marked and brought into view.
+  const from = search.get("from")
+  const showFrom = useCallback((el: HTMLElement | null) => el?.scrollIntoView({ block: "nearest" }), [])
   const setView = (key: "tab" | "page", value: string | null) => {
     navigate(referenceViewUrl(location, query, key, value), { replace: true })
   }
@@ -422,7 +425,12 @@ export function ReferencePage({ id, login }: { id: string; login: string }) {
                 <div key={p.id} className="group relative">
                 <SelectCheck on={sel.pages.includes(p.id)} active={selecting} label={`Select ${p.path}`} onToggle={() => setSel((x) => togglePage(x, p.id))} />
                 <button
-                  className={cn("group relative block w-full overflow-hidden rounded-lg bg-surface-top text-left shadow-card transition-[scale,box-shadow] duration-150 ease-out active:scale-[0.99]", sel.pages.includes(p.id) && "ring-2 ring-ink-12 ring-offset-2 ring-offset-background")}
+                  ref={p.id === from ? showFrom : undefined}
+                  aria-current={p.id === from || undefined}
+                  className={cn(
+                    "group relative block w-full overflow-hidden rounded-lg bg-surface-top text-left shadow-card transition-[scale,box-shadow] duration-150 ease-out active:scale-[0.99]",
+                    sel.pages.includes(p.id) ? "ring-2 ring-ink-12 ring-offset-2 ring-offset-background" : p.id === from && "ring-2 ring-note ring-offset-2 ring-offset-background",
+                  )}
                   onClick={() => (selecting ? setSel((x) => togglePage(x, p.id)) : setOpenPage(p.id))}
                 >                  <img src={fileUrl(p.desktopThumbKey)} alt={p.title ?? p.path} loading="lazy" className="aspect-[16/10] w-full object-cover object-top" />
                   {p.mobileThumbKey && (
