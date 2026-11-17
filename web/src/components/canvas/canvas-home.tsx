@@ -137,27 +137,26 @@ const pickable = (it: CanvasItem) => it.kind === "page" || it.kind === "animatio
 const isPicked = (s: Selection, it: CanvasItem) => (it.kind === "page" ? s.pages.includes(it.id) : it.kind === "animation" ? s.animations.includes(it.id) : false)
 
 /** A page a running capture hasn't saved yet. The one being captured and those behind it look the same, as on the capture card. */
-type Pending = { label?: string }
+type Pending = { label: string }
 const PENDING_KEY = "pending:"
 const PendingTile = ({ p, style }: { p: Pending; style: CSSProperties }) => (
   <Skeleton aria-hidden className="pointer-events-none absolute rounded-md" style={style}>
-    {p.label && <span className="max-w-full truncate">{p.label}</span>}
+    <span className="max-w-full truncate">{p.label}</span>
   </Skeleton>
 )
 
-/** What's still to come in a site that is capturing, up to a dozen slots, so the field doesn't jump as pages arrive. */
+/** What's still to come in a site that is capturing, as on the capture card: the page being captured, and how many are queued behind it when the total is known. */
 function pendingOf(d: SiteDetail | null): Pending[] {
   const r = d?.reference
   // A capture whose agent went quiet is not working on a page: nothing to hold a place for.
   if (!r || !isBusy(r) || r.quietSince) return []
   const progress = parseProgress(r)
-  const total = r.mode === "crawl" ? (progress?.total ?? r.maxPages) : 1
-  const left = Math.min(12, Math.max(1, total - r.pageCount))
   const first: Pending =
     r.status === "paused" ? { label: "Paused" }
     : r.status === "queued" ? { label: "Queued" }
     : { label: progress?.path ?? "Starting…" }
-  return [first, ...Array.from({ length: left - 1 }, () => ({}))]
+  const queued = progress?.total ? progress.total - progress.n : 0
+  return queued > 0 ? [first, { label: `${queued} more queued` }] : [first]
 }
 
 const at = (t: Pick<Placement, "x" | "y" | "w" | "h">) => ({ left: t.x, top: t.y, width: t.w, height: t.h })
@@ -215,7 +214,7 @@ const Field = memo(function Field({
           dim={!!pick && !pickable(item)}
         />
       ) : (
-        <PendingTile key={t.key} p={pending?.[t.index - items.length] ?? {}} style={at(t)} />
+        <PendingTile key={t.key} p={pending![t.index - items.length]!} style={at(t)} />
       )
     }
     kept.set(t.key, el)
