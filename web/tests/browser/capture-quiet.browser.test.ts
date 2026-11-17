@@ -33,9 +33,9 @@ test("on the card, a quiet single-page capture says so, shows no spinner or bar,
   assert.equal(await card.getByText("Capturing example.com").count(), 0)
   assert.equal(await card.getByRole("progressbar").count(), 0)
   assert.equal(await card.locator("[style*='width']").count(), 0)
-  assert.equal(await card.locator(".animate-spin").count(), 0, "something still spins")
+  assert.equal(await card.locator("[data-slot=spinner]").count(), 0, "something still spins")
   // Nothing on the canvas below the card spins for it either.
-  assert.equal(await page.locator("main .animate-spin, [aria-hidden] .animate-spin").count(), 0)
+  assert.equal(await page.locator("main [data-slot=spinner], [aria-hidden] [data-slot=spinner], [aria-hidden] [data-slot=skeleton]").count(), 0)
 
   await card.getByRole("button", { name: "Stop" }).click()
   await card.getByText("You stopped this capture before any pages were saved.").waitFor()

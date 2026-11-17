@@ -4,6 +4,8 @@ import { navigate } from "wouter/use-browser-location"
 import { CheckIcon, KeyRound, LaptopIcon, LogOutIcon, PlusIcon, ShieldCheckIcon, SmartphoneIcon, Trash2Icon } from "@/components/icons"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Skeleton } from "@/components/ui/skeleton"
+import { Spinner } from "@/components/ui/spinner"
 import {
   Dialog,
   DialogClose,
@@ -102,7 +104,7 @@ export function PasskeysPage({ me }: { me: Me | null }) {
           }}
         />
         <Button size="lg" disabled={adding} onClick={add} className="shrink-0">
-          {adding ? <span className="size-3.5 animate-spin rounded-full border-[1.5px] border-current border-t-transparent" /> : <PlusIcon className="size-4" />}
+          {adding ? <Spinner className="size-3.5" /> : <PlusIcon className="size-4" />}
           {adding ? "Waiting…" : "Add passkey"}
         </Button>
       </div>
@@ -163,7 +165,7 @@ export function PasskeysPage({ me }: { me: Me | null }) {
         </div>
 
         {devices === null ? (
-          <div className="mt-2 h-14 animate-pulse rounded-xl bg-fill-2" />
+          <Skeleton className="mt-2 h-14 rounded-xl" />
         ) : devices.length === 0 ? (
           <div className="mt-2 flex flex-col items-center gap-2 rounded-xl bg-fill-1 px-4 py-7 text-center">
             <span className="grid size-8 place-items-center rounded-lg bg-fill-2 text-muted-foreground">

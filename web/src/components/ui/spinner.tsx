@@ -1,40 +1,9 @@
 import { cn } from "cn"
 import { Loader2Icon } from "@/components/icons"
 
-function Spinner({
-  className,
-  variant = "default",
-  ...props
-}: Omit<React.ComponentProps<"svg">, "strokeWidth"> & {
-  /** `gradient`: a closed ring whose line fades around it, 1.5px at every size. */
-  variant?: "default" | "gradient"
-}) {
-  if (variant === "gradient") {
-    return (
-      <svg
-        data-slot="spinner"
-        data-variant="gradient"
-        role="status"
-        aria-label="Loading"
-        viewBox="0 0 24 24"
-        className={cn(
-          "size-4 shrink-0 animate-spin rounded-full bg-[conic-gradient(color-mix(in_oklab,currentColor_5%,transparent),color-mix(in_oklab,currentColor_50%,transparent))] mask-[radial-gradient(closest-side,transparent_calc(75%-1.25px),#000_calc(75%-0.5px),#000_calc(75%+0.5px),transparent_calc(75%+1.25px))]",
-          className
-        )}
-        {...props}
-      />
-    )
-  }
-
-  return (
-    <Loader2Icon
-      data-slot="spinner"
-      role="status"
-      aria-label="Loading"
-      className={cn("size-4 animate-spin", className)}
-      {...props}
-    />
-  )
+/** Activity: an action is running. The one spinner in the app; see the loading notes in index.css. */
+function Spinner({ className, ...props }: Omit<React.ComponentProps<"svg">, "strokeWidth">) {
+  return <Loader2Icon data-slot="spinner" role="status" aria-label="Loading" className={cn("spinner size-4 shrink-0", className)} {...props} />
 }
 
 export { Spinner }
