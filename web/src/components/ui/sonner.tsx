@@ -30,7 +30,7 @@ const Toaster = ({
         info: <InfoIcon className="size-4 text-muted-foreground" />,
         warning: <TriangleAlertIcon className="size-4 text-(--note-ink)" />,
         error: <OctagonXIcon className="size-4 text-(--red-11)" />,
-        loading: <Spinner className="text-muted-foreground" />,
+        loading: <Spinner aria-hidden className="text-muted-foreground" />,
         ...icons,
       }}
       style={

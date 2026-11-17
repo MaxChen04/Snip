@@ -380,7 +380,7 @@ export function CapturePill({ r, onChange }: { r: Reference; onChange: () => voi
   const label = captureLabel(r) ?? r.progress ?? WAITING
   return (
     <div className="flex max-w-full items-center gap-2 rounded-full bg-control/90 p-1 pl-3 text-xs shadow-button backdrop-blur-md">
-      {r.status === "paused" ? <PauseIcon className="size-3.5 shrink-0 text-ink-10" /> : !r.quietSince && <Spinner className="size-3.5 shrink-0 text-ink-10" />}
+      {r.status === "paused" ? <PauseIcon className="size-3.5 shrink-0 text-ink-10" /> : !r.quietSince && <Spinner aria-hidden className="size-3.5 shrink-0 text-ink-10" />}
       <span role="status" className={cn("min-w-0 truncate tabular-nums", r.quietSince && "whitespace-normal text-ink-11")}>
         {label}
       </span>

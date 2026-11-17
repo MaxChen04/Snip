@@ -372,7 +372,7 @@ export function AddReferenceDialog({
               disabled={!links.length || submitting}
               className="press flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-primary px-3.5 text-sm font-medium tracking-[-0.01em] text-primary-foreground shadow-primary hover:bg-(--primary-hover) disabled:opacity-60 disabled:active:scale-100 dark:disabled:bg-ink-4 dark:disabled:text-ink-8 dark:disabled:opacity-100 dark:disabled:shadow-none"
             >
-              {submitting ? <Spinner className="size-3.5" /> : null}
+              {submitting ? <Spinner aria-hidden className="size-3.5" /> : null}
               {submitting ? "Saving…" : links.length > 1 ? `Save ${links.length} websites` : mode === "crawl" ? "Crawl and save" : "Save reference"}
               {!submitting && (
                 <kbd className="grid size-[18px] place-items-center rounded-xs bg-primary-foreground/15">

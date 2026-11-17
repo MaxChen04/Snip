@@ -215,7 +215,7 @@ export function CaptureForm({ boardId, onDone }: { boardId?: string; onDone?: ()
           className="press flex h-8 shrink-0 items-center gap-1.5 rounded-md bg-primary px-3 text-xs tracking-[-0.01em] text-primary-foreground shadow-primary hover:bg-(--primary-hover) disabled:opacity-60"
         >
           Snip
-          {submitting ? <Spinner className="size-3.5" /> : <ArrowRight className="size-3.5" />}
+          {submitting ? <Spinner aria-hidden className="size-3.5" /> : <ArrowRight className="size-3.5" />}
         </button>
       </label>
 
@@ -287,7 +287,7 @@ export function CaptureForm({ boardId, onDone }: { boardId?: string; onDone?: ()
         <span aria-live="polite" className="ml-auto flex min-w-0 items-center gap-1.5 pr-1 text-2xs text-ink-10">
           {uploading ? (
             <>
-              <Spinner className="size-3" />
+              <Spinner aria-hidden className="size-3" />
               Uploading {Math.min(uploading.done + 1, uploading.total)} of {uploading.total}…
             </>
           ) : board ? (
@@ -439,7 +439,7 @@ function Status({
   if (!r) {
     return (
       <div className="flex h-9 items-center gap-2 px-1.5 text-xs text-ink-10">
-        <Spinner className="size-3.5" />
+        <Spinner aria-hidden className="size-3.5" />
         Starting…
       </div>
     )
