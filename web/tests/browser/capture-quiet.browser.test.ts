@@ -64,6 +64,7 @@ test("in the website's scope, a quiet capture says so in words, shows no spinner
   await page.getByText(QUIET).waitFor()
   assert.equal(await page.getByRole("status", { name: "Loading" }).count(), 0, "a spinner is showing")
   assert.equal(await page.locator("[data-slot=skeleton]").count(), 0, "a pending tile says it is working")
+  assert.equal(await page.getByRole("progressbar").count(), 0, "a progress bar says it is moving")
 
   await page.getByRole("button", { name: "Stop" }).click()
   await page.getByText("You stopped this capture before any pages were saved.").waitFor()

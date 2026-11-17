@@ -384,7 +384,8 @@ export function CapturePill({ r, onChange }: { r: Reference; onChange: () => voi
       <span role="status" className={cn("min-w-0 truncate tabular-nums", r.quietSince && "whitespace-normal text-ink-11")}>
         {label}
       </span>
-      <Progress value={share} paused={r.status === "paused"} label="Pages captured" className="w-14 shrink-0 max-sm:hidden" />
+      {/* A quiet capture isn't moving: no bar, as on the capture card. */}
+      {!r.quietSince && <Progress value={share} paused={r.status === "paused"} label="Pages captured" className="w-14 shrink-0 max-sm:hidden" />}
       <CaptureControls r={r} onChange={onChange} className="gap-1" />
       {/* Room at the right end when there are no buttons to end the pill. */}
       {!captureActions(r).length && <span className="w-2" />}
