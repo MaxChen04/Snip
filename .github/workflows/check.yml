@@ -5,8 +5,39 @@ on:
     branches: [main]
 permissions:
   contents: read
+concurrency:
+  # A new push to a pull request supersedes the run in flight; main keeps every run.
+  group: checks-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+      web: ${{ steps.diff.outputs.web }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+      # On a pull request HEAD is the merge commit, so HEAD^1 is the base it merges into.
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [[ "$EVENT" != pull_request ]]; then
+            echo 'code=true' >> "$GITHUB_OUTPUT"; echo 'web=true' >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          files="$(git diff --name-only HEAD^1 HEAD)"
+          printf '%s\n' "$files"
+          code=false; web=false
+          grep -qvE '^(docs/|qa/)|\.md$|^LICENSE$|^NOTICE$|^\.github/(ISSUE_TEMPLATE/|pull_request_template\.md$|dependabot\.yml$)' <<< "$files" && code=true
+          grep -qE '^(web/|desktop/provision/|package(-lock)?\.json$|\.github/workflows/check\.yml$)' <<< "$files" && web=true
+          echo "code=$code" >> "$GITHUB_OUTPUT"; echo "web=$web" >> "$GITHUB_OUTPUT"
+  # core is the required check. When it is skipped (a documentation-only change) GitHub counts it as passed.
   core:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -21,7 +52,10 @@ jobs:
       - run: npx --no-install playwright install --with-deps chromium
       # The UI browser suite has its own job and budget; do not run it twice.
       - run: npm run test:core && npm run test:app
+  # The UI suite drives web/ (and the engine's loopback in desktop/provision/), so a change elsewhere cannot break it.
   browser:
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

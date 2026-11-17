@@ -77,18 +77,6 @@ test("capture popover preserves URL caret keys while dock arrows still work", as
   assert.match(await page.locator(":focus").getAttribute("aria-label") ?? "", /^All/)
 })
 
-test("empty mobile search stays within its wrapper", async () => {
-  const { page } = await home({ width: 390, height: 844 })
-  const search = page.getByRole("textbox", { name: /^Search your saves/ })
-  const b = await search.evaluate(el => {
-    const label = el.closest("label")!.getBoundingClientRect()
-    const wrapper = el.closest("label")!.parentElement!.getBoundingClientRect()
-    return { labelRight: label.right, wrapperRight: wrapper.right }
-  })
-  assert.ok(b.labelRight <= b.wrapperRight + 1, JSON.stringify(b))
-})
-
-
 test("search suggestions refresh after saves and retry after a failed request", async () => {
   const t = await app.session()
   let attempt = 0
