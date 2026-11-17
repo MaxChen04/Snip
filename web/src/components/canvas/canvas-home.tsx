@@ -4,6 +4,7 @@ import { navigate as go, useHistoryState } from "wouter/use-browser-location"
 import { AgentBanner } from "@/components/agent-banner"
 import { SparklesIcon } from "@/components/icons"
 import { EMPTY_SELECTION, pruneSelection, SelectionBar, selectionSize, toggleIn, togglePage, withPageView, type Selection } from "@/components/prompt-selection"
+import { useDesktopState } from "@/hooks/use-desktop-state"
 import { SavePagesButton } from "@/components/save-pages"
 import { TokensPanel } from "@/components/tokens-panel"
 import { TopBar } from "@/components/top-bar"
@@ -360,12 +361,9 @@ export function CanvasHome({ login }: { login: string }) {
   const pending = useMemo(() => (site && !q && (filter === "pages" || filter === "all") ? pendingOf(detail) : []), [site, q, filter, detail])
 
   // ---- Selecting for a prompt, inside a site ----
-  const [selecting, setSelecting] = useState(false)
-  const [sel, setSel] = useState<Selection>(EMPTY_SELECTION)
-  useEffect(() => {
-    setSelecting(false)
-    setSel(EMPTY_SELECTION)
-  }, [site])
+  // Kept per site in the desktop app, as the website page did, so it survives the idle window being released.
+  const [selecting, setSelecting] = useDesktopState(`snip:${site}:selecting`, false)
+  const [sel, setSel] = useDesktopState<Selection>(`snip:${site}:selection`, EMPTY_SELECTION)
   useEffect(() => {
     if (detail) setSel((x) => pruneSelection(x, detail.pages, detail.animations))
   }, [detail])

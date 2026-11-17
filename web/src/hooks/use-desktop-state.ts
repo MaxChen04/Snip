@@ -1,4 +1,4 @@
-import { useEffect, useState, type Dispatch, type SetStateAction } from "react"
+import { useCallback, useEffect, useState, type Dispatch, type SetStateAction } from "react"
 
 declare global {
   interface Window {
@@ -10,21 +10,30 @@ declare global {
   }
 }
 
+function stored<T>(key: string, initial: T): T {
+  if (window.snipDesktop) {
+    try {
+      const current = sessionStorage.getItem(key)
+      if (current !== null) return JSON.parse(current) as T
+    } catch {}
+  }
+  const saved = window.snipDesktop?.initialState[key]
+  return saved === undefined ? initial : saved as T
+}
+
 // Only the desktop window stores this transient view state. It stays in the
 // launcher while an idle renderer is released, and in its private restart cache.
+// A new key (another website's selection) reads that key's own stored value.
 export function useDesktopState<T>(key: string, initial: T): [T, Dispatch<SetStateAction<T>>] {
-  const [value, setValue] = useState<T>(() => {
-    if (window.snipDesktop) {
-      try {
-        const current = sessionStorage.getItem(key)
-        if (current !== null) return JSON.parse(current) as T
-      } catch {}
-    }
-    const saved = window.snipDesktop?.initialState[key]
-    return saved === undefined ? initial : saved as T
-  })
+  const [state, setState] = useState(() => ({ key, value: stored(key, initial) }))
+  if (state.key !== key) setState({ key, value: stored(key, initial) })
+  const value = state.key === key ? state.value : stored(key, initial)
+  const setValue = useCallback<Dispatch<SetStateAction<T>>>(
+    (next) => setState((s) => ({ key: s.key, value: typeof next === "function" ? (next as (prev: T) => T)(s.value) : next })),
+    [],
+  )
   useEffect(() => {
-    if (!window.snipDesktop) return
+    if (!window.snipDesktop || state.key !== key) return
     try {
       const serialized = JSON.stringify(value)
       const bytes = (text: string) => new TextEncoder().encode(text).length
@@ -40,6 +49,6 @@ export function useDesktopState<T>(key: string, initial: T): [T, Dispatch<SetSta
       }
     } catch {}
     window.snipDesktop.remember(key, value)
-  }, [key, value])
+  }, [key, state.key, value])
   return [value, setValue]
 }
