@@ -248,7 +248,7 @@ const Ghosts = memo(function Ghosts({ loading, plaza }: { loading: boolean; plaz
   const ghosts = useMemo(() => layoutHome(GHOST_ITEMS, plaza).tiles, [plaza])
   return ghosts.map((t) =>
     loading ? (
-      <Skeleton key={t.key} className="pointer-events-none absolute rounded-md motion-reduce:animate-none" style={at(t)} />
+      <Skeleton key={t.key} className="pointer-events-none absolute rounded-md" style={at(t)} />
     ) : (
       <div key={t.key} aria-hidden className="pointer-events-none absolute rounded-md border border-dashed border-ink-6" style={at(t)} />
     ),
@@ -688,7 +688,7 @@ export function CanvasHome({ login }: { login: string }) {
               {!items ? (
                 <div className={cn(masonryCols[gridSize], "gap-4 [&>*]:mb-4")}>
                   {GHOST_ITEMS.map((g) => (
-                    <Skeleton key={g.key} className="rounded-md motion-reduce:animate-none" style={{ aspectRatio: g.aspect }} />
+                    <Skeleton key={g.key} className="rounded-md" style={{ aspectRatio: g.aspect }} />
                   ))}
                 </div>
               ) : (

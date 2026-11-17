@@ -2,6 +2,7 @@ import { useEffect, useState } from "react"
 import { Link } from "wouter"
 import { KeyRound, Lock } from "@/components/icons"
 import { Button } from "@/components/ui/button"
+import { Skeleton } from "@/components/ui/skeleton"
 import { AuthError, AuthShell } from "@/components/auth/auth-shell"
 import { api, type Me } from "@/lib/api"
 import { signInWithPasskey } from "@/lib/passkeys"
@@ -66,7 +67,7 @@ export function SignInPage() {
   if (state === "checking") {
     return (
       <AuthShell title="Sign in">
-        <div className="h-9 animate-pulse rounded-lg bg-fill-2" />
+        <Skeleton className="h-9 rounded-lg" />
       </AuthShell>
     )
   }

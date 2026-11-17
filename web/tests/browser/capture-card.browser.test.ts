@@ -70,7 +70,8 @@ test("a single page shows an indeterminate bar, never a percentage, and holds st
   const t = await withRunning(reference({ status: "capturing", mode: "single", progress: "Capturing 1/1: /" }))
   await card(t).getByText("Capturing example.com").waitFor()
   await bar(t).waitFor()
-  const animation = () => bar(t).evaluate((el) => getComputedStyle(el).animationName)
+  assert.equal(await bar(t).getAttribute("aria-valuenow"), null, "a single page claims no share done")
+  const animation = () => bar(t).locator("[data-slot=progress-sweep]").evaluate((el) => getComputedStyle(el).animationName)
   assert.equal(await animation(), "indeterminate")
   // No filled share of the track anywhere in the card.
   assert.equal(await card(t).locator("[style*='width']").count(), 0)
@@ -82,7 +83,8 @@ test("a single page shows an indeterminate bar, never a percentage, and holds st
 test("a crawl keeps its real fraction, and a queued capture shows no bar at all", async () => {
   const crawl = await withRunning(reference({ status: "capturing", mode: "crawl", maxPages: 10, progress: "Capturing 5/10: /pricing" }))
   await card(crawl).getByText("Crawling example.com").waitFor()
-  assert.equal(await bar(crawl).count(), 0)
+  assert.equal(await bar(crawl).getAttribute("aria-valuenow"), "40")
+  assert.equal(await bar(crawl).locator("[data-slot=progress-sweep]").count(), 0)
   const fill = card(crawl).locator("[style*='width']")
   assert.equal(await fill.count(), 1)
   assert.match((await fill.getAttribute("style"))!, /width: 40%/)
@@ -206,15 +208,39 @@ test("a crawl with a known total shows N of M pages and a real fraction, and one
   const known = await withRunning(reference({ status: "capturing", mode: "crawl", maxPages: 25, progress: "Capturing 5/10: /pricing" }))
   await card(known).getByText("5 of 10 pages").waitFor()
   assert.match((await card(known).locator("[style*='width']").getAttribute("style"))!, /width: 40%/)
-  assert.equal(await card(known).getByRole("progressbar").count(), 0)
+  assert.equal(await bar(known).getAttribute("aria-valuenow"), "40")
 
   const unknown = await withRunning(reference({ status: "capturing", mode: "crawl", maxPages: 25, progress: "Capturing page 1: /" }))
   await card(unknown).getByText("Page 1", { exact: true }).waitFor()
   assert.equal(await card(unknown).getByText(/ of \d+ pages/).count(), 0, "a total that is not known is not shown")
-  await bar(unknown).waitFor()
+  await bar(unknown).locator("[data-slot=progress-sweep]").waitFor()
+  assert.equal(await bar(unknown).getAttribute("aria-valuenow"), null)
   assert.equal(await card(unknown).locator("[style*='width']").count(), 0)
   // Nothing is claimed to be queued behind it either.
   assert.equal(await unknown.page.getByText(/more queued/).count(), 0)
+})
+
+test("a crawl's page being captured and the pages queued behind it are one pending tile, and nothing on them spins", async () => {
+  const t = await withRunning(reference({ status: "capturing", mode: "crawl", maxPages: 10, progress: "Capturing 4/10: /pricing" }))
+  const pending = t.page.locator("[data-slot=skeleton]").filter({ hasText: /^(\/pricing|6 more queued)$/ })
+  await t.page.getByText("6 more queued").waitFor()
+  assert.equal(await pending.count(), 2)
+  const looks = await pending.evaluateAll((els) => els.map((el) => { const s = getComputedStyle(el); return [el.className, s.animationName, s.borderStyle].join("|") }))
+  assert.equal(looks[0], looks[1], "the two pending tiles look different")
+  assert.match(looks[0]!, /skeleton-breathe/)
+  assert.equal(await pending.locator("[data-slot=spinner], svg").count(), 0)
+
+  // The card's own spinner (the Snip button, Starting…) breathes instead of turning under reduced motion.
+  await t.page.emulateMedia({ reducedMotion: "reduce" })
+  const breathing = await t.page.evaluate(() => {
+    const el = document.createElement("div")
+    el.className = "spinner"
+    document.body.append(el)
+    const name = getComputedStyle(el).animationName
+    el.remove()
+    return name
+  })
+  assert.equal(breathing, "spinner-breathe")
 })
 
 test("in the site, the capture pill shows how far it has got only when the crawl's total is known", async () => {

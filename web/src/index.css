@@ -347,7 +347,6 @@ body:has([data-selection-bar]) {
   --toast-bottom: 140px;
 }
 
-/* A bar with no fraction to show: a segment sweeping along its track (40% of the track wide, so 250% of its own width carries it across). */
 /* The dock's + button on an empty library: a soft grey ring breathing out from its tinted fill. */
 @keyframes plus-glow {
   0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--ink-9) 40%, transparent); }
@@ -355,10 +354,54 @@ body:has([data-selection-bar]) {
 }
 
 
+/*
+ * Loading: one treatment per meaning, all on one 1.2s clock.
+ * - Progress (a known share done): <Progress>, an ink-12 fill on a 4px ink-4 track. A run with no share to report
+ *   sweeps a segment along the same track (40% of it wide, so 250% of its own width carries it across).
+ * - Pending (content that will appear in place): <Skeleton>, ink-3 breathing to ink-4. Labels inside it hold still.
+ * - Activity (an action is running): <Spinner>, a ring turning once per beat.
+ * Reduced motion: nothing turns or travels. The spinner breathes instead, the skeleton keeps its colour breath, and
+ * the sweep holds as a still, full track.
+ */
+:root {
+  --loading-beat: 1.2s;
+}
 
 @keyframes indeterminate {
   from { translate: -100% 0; }
   to { translate: 250% 0; }
+}
+@keyframes skeleton-breathe {
+  to { background-color: var(--ink-4); }
+}
+@keyframes spinner-turn {
+  to { rotate: 360deg; }
+}
+@keyframes spinner-breathe {
+  to { opacity: 0.35; }
+}
+
+.skeleton {
+  background-color: var(--ink-3);
+  animation: skeleton-breathe var(--loading-beat) ease-in-out infinite alternate;
+}
+.spinner {
+  animation: spinner-turn var(--loading-beat) linear infinite;
+}
+.progress-sweep {
+  width: 40%;
+  background-color: var(--ink-12);
+  animation: indeterminate var(--loading-beat) ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: spinner-breathe var(--loading-beat) ease-in-out infinite alternate;
+  }
+  .progress-sweep {
+    width: 100%;
+    background-color: var(--ink-7);
+    animation: none;
+  }
 }
 
 /* Landing page motion. Everything here is off for visitors who prefer reduced motion. */

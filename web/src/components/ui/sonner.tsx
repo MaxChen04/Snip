@@ -8,8 +8,8 @@ import {
   InfoIcon,
   TriangleAlertIcon,
   OctagonXIcon,
-  Loader2Icon,
 } from "@/components/icons"
+import { Spinner } from "@/components/ui/spinner"
 
 const Toaster = ({
   className,
@@ -30,9 +30,7 @@ const Toaster = ({
         info: <InfoIcon className="size-4 text-muted-foreground" />,
         warning: <TriangleAlertIcon className="size-4 text-(--note-ink)" />,
         error: <OctagonXIcon className="size-4 text-(--red-11)" />,
-        loading: (
-          <Loader2Icon className="size-4 animate-spin text-muted-foreground" />
-        ),
+        loading: <Spinner className="text-muted-foreground" />,
         ...icons,
       }}
       style={
