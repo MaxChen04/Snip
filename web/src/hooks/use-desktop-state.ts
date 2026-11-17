@@ -43,13 +43,3 @@ export function useDesktopState<T>(key: string, initial: T): [T, Dispatch<SetSta
   }, [key, value])
   return [value, setValue]
 }
-
-// Keep the current reference view in the URL so fresh links and desktop
-// renderer restoration both resolve to the same user-visible state.
-export function referenceViewUrl(path: string, query: string, key: "tab" | "page", value: string | null) {
-  const params = new URLSearchParams(query)
-  if (value === null || (key === "tab" && value === "pages")) params.delete(key)
-  else params.set(key, value)
-  const next = params.toString()
-  return `${path}${next ? `?${next}` : ""}`
-}
