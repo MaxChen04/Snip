@@ -1,6 +1,6 @@
 import { memo, useRef, useState, type CSSProperties, type FocusEvent, type PointerEvent, type Ref } from "react"
 import { Link } from "wouter"
-import { ArrowUpRightIcon } from "@/components/icons"
+import { ChevronRightIcon } from "@/components/icons"
 import { captureLabel } from "@/components/capture-controls"
 import { SiteIcon } from "@/components/site-icon"
 import { fileUrl } from "@/lib/api"
@@ -8,18 +8,40 @@ import { cn } from "@/lib/utils"
 import { isVideoKey, type RefSummary, type SectionItem } from "../../../shared/types"
 import type { CanvasItem } from "@/components/canvas/types"
 
-/** Where an item came from, for the hover chip. Uploaded images have none. */
-function source(item: CanvasItem): { domain: string; icon: string | null; path?: string; href: string } | null {
-  const named = (ref: RefSummary, path: string, href: string) => ({ domain: ref.domain, icon: ref.favicon, path: path === "/" ? undefined : path.replace(/^\//, ""), href })
+/**
+ * The website an item belongs to, as a link to that site in Snip. `from` is the item's page, marked when the site's
+ * pages open. Uploaded images have no site.
+ */
+export function siteHref(item: CanvasItem): string | null {
+  const href = (refId: string, from: string | null) => `/r/${refId}${from ? `?from=${from}` : ""}`
   switch (item.kind) {
     case "page":
-      return named(item.page.reference, item.page.path, item.page.url)
+      return href(item.page.referenceId, item.page.id)
     case "section":
-      return named(item.section.reference, item.section.path, item.section.url)
+      return href(item.section.referenceId, item.section.pageId)
     case "animation":
-      return { domain: item.animation.reference.domain, icon: item.animation.reference.favicon, path: item.animation.label ?? undefined, href: `https://${item.animation.reference.domain}` }
+      return href(item.animation.referenceId, item.animation.pageId)
     case "website":
-      return { domain: item.reference.domain, icon: item.reference.favicon, href: item.reference.url }
+      return href(item.reference.id, null)
+    case "image":
+      return null
+  }
+}
+
+/** Where an item came from, for the hover chip. Uploaded images have none. */
+function source(item: CanvasItem): { domain: string; icon: string | null; path?: string; href: string } | null {
+  const href = siteHref(item)
+  if (!href) return null
+  const named = (ref: RefSummary, path?: string) => ({ domain: ref.domain, icon: ref.favicon, path: !path || path === "/" ? undefined : path.replace(/^\//, ""), href })
+  switch (item.kind) {
+    case "page":
+      return named(item.page.reference, item.page.path)
+    case "section":
+      return named(item.section.reference, item.section.path)
+    case "animation":
+      return named(item.animation.reference, item.animation.label ?? undefined)
+    case "website":
+      return named(item.reference)
     case "image":
       return null
   }
@@ -102,10 +124,7 @@ function Media({ item, live, home }: { item: CanvasItem; live: boolean; home?: b
   }
 }
 
-/**
- * One saved item as a canvas tile. It fills its parent; the caller positions and sizes it.
- * Click opens it (onOpen), except websites, which go to their page unless onOpen is given.
- */
+/** One saved item as a canvas tile. It fills its parent; the caller positions and sizes it. Click opens it (onOpen). */
 export const CanvasTile = memo(function CanvasTile({
   item,
   onOpen,
@@ -114,7 +133,7 @@ export const CanvasTile = memo(function CanvasTile({
   faceStyle,
 }: {
   item: CanvasItem
-  onOpen?: (item: CanvasItem) => void
+  onOpen: (item: CanvasItem) => void
   /** Doesn't match the board's filter: faded, still usable. */
   dimmed?: boolean
   /** -1 when a wrapper takes focus instead (the board canvas's selectable items). */
@@ -141,15 +160,9 @@ export const CanvasTile = memo(function CanvasTile({
       onFocus={() => setLive(true)}
       onBlur={() => setLive(false)}
     >
-      {item.kind === "website" && !onOpen ? (
-        <Link href={`/r/${item.id}`} aria-label={name} draggable={false} tabIndex={tabIndex} className={face} style={faceStyle}>
-          {inner}
-        </Link>
-      ) : (
-        <button type="button" aria-label={name} tabIndex={tabIndex} onClick={() => onOpen?.(item)} className={cn(face, "text-left")} style={faceStyle}>
-          {inner}
-        </button>
-      )}
+      <button type="button" aria-label={name} tabIndex={tabIndex} onClick={() => onOpen(item)} className={cn(face, "text-left")} style={faceStyle}>
+        {inner}
+      </button>
       {/* Mounted only while hovered or focused: hundreds of tiles each carrying a hidden chip and favicon
           doubled the DOM and image requests when zoomed out. */}
       {src && live && (
@@ -161,28 +174,30 @@ export const CanvasTile = memo(function CanvasTile({
   )
 })
 
-/** The hover chip: where an item came from, with a link to it. Shared by every kind of tile. */
+/**
+ * The chip on the hovered or focused tile: where an item came from, a link to that site in Snip. Shared by every kind of
+ * tile. Out of the Tab order, so Tab walks tile to tile; from the keyboard the inspector's site link goes to the same place.
+ */
 function SourceChip({ src, ref, onLeave }: { src: NonNullable<ReturnType<typeof source>>; ref?: Ref<HTMLAnchorElement>; onLeave?: (e: PointerEvent | FocusEvent) => void }) {
   return (
-    <a
+    <Link
       ref={ref}
       href={src.href}
-      target="_blank"
-      rel="noreferrer"
       tabIndex={-1}
       draggable={false}
-      title={`Open ${src.domain}`}
+      aria-label={`Go to ${src.domain}`}
+      title={`Go to ${src.domain}`}
       onPointerLeave={onLeave}
       onBlur={onLeave}
-      className="tactile press pointer-events-auto flex h-7 max-w-full items-center gap-1.5 rounded-full pr-2.5 pl-1.5 text-2xs font-medium"
+      className="tactile press pointer-events-auto flex h-7 max-w-full items-center gap-1.5 rounded-full pr-2 pl-1.5 text-2xs font-medium"
     >
       <SiteIcon domain={src.domain} icon={src.icon} />
       <span className="truncate">
         {src.domain}
         {src.path && <span className="text-ink-10"> / {src.path}</span>}
       </span>
-      <ArrowUpRightIcon className="size-3 shrink-0 text-ink-10" />
-    </a>
+      <ChevronRightIcon className="size-3 shrink-0 text-ink-10" />
+    </Link>
   )
 }
 
@@ -218,11 +233,11 @@ export const HomeTile = memo(function HomeTile({
   h: number
   /** A repeat of the block, not the origin copy. */
   copy: boolean
-  /** Click opens it (onOpen), except websites, which go to their page unless onOpen is given. */
-  onOpen?: (item: CanvasItem) => void
+  /** Click opens it. */
+  onOpen: (item: CanvasItem) => void
 }) {
   const [live, setLive] = useState(false)
-  const face = useRef<HTMLElement>(null)
+  const face = useRef<HTMLButtonElement>(null)
   const chip = useRef<HTMLAnchorElement>(null)
   const name = tileLabel(item)
   // Pointer or focus moving between the tile and its chip (a sibling element) keeps the chip.
@@ -243,16 +258,11 @@ export const HomeTile = memo(function HomeTile({
   }
   // Called, not rendered as <Media />: one fewer element and fiber for each of hundreds of tiles.
   const media = Media({ item, live, home: true })
-  const tile =
-    item.kind === "website" && !onOpen ? (
-      <Link ref={face as Ref<HTMLAnchorElement>} href={`/r/${item.id}`} draggable={false} {...shared}>
-        {media}
-      </Link>
-    ) : (
-      <button ref={face as Ref<HTMLButtonElement>} type="button" onClick={() => onOpen?.(item)} {...shared}>
-        {media}
-      </button>
-    )
+  const tile = (
+    <button ref={face} type="button" onClick={() => onOpen(item)} {...shared}>
+      {media}
+    </button>
+  )
   const src = live ? source(item) : null
   if (!src) return tile
   return (

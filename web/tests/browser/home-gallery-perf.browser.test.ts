@@ -33,7 +33,7 @@ import { after, before, test } from "node:test"
 import type { Page } from "playwright"
 import type { PageWithRef, SavedImage, SectionItem } from "../../shared/types.ts"
 import { MOUNT_PER_FRAME } from "../../src/components/canvas/home-layout.ts"
-import { reference, sleep, startApp, until, type App, type Req } from "./harness.ts"
+import { reference, savedPage, sleep, startApp, until, type App, type Req } from "./harness.ts"
 
 let app: App
 let thumbs: Thumbs
@@ -601,7 +601,7 @@ test("a home tile shows its source on hover and focus, opens on click, and tabs 
   await page.getByRole("button", { name: /^Zoom \d+%/ }).waitFor()
   await until("tiles are on the canvas", async () => (await counts(page)).images > 5)
   await sleep(500)
-  const chip = page.locator('a[title^="Open "]')
+  const chip = page.locator('a[title^="Go to "]')
   const tile = page.getByRole("button", { name: "Page 0", exact: true })
 
   await tile.hover()
@@ -624,7 +624,9 @@ test("a home tile shows its source on hover and focus, opens on click, and tabs 
   }
   assert.deepEqual(next, ["Section 1 · beta.test", "Section 2 · gamma.test", "Section 3 · delta.test"], "Tab goes to the next newest tile")
   // Page 0 is from alpha.test, Section 3 from delta.test: the chip moved with focus.
-  await until("the chip follows focus", async () => (await chip.count()) === 1 && (await chip.getAttribute("title")) === "Open delta.test")
+  await until("the chip follows focus", async () => (await chip.count()) === 1 && (await chip.getAttribute("title")) === "Go to delta.test")
+  assert.equal(await chip.getAttribute("href"), "/r/r3?from=p3", "the chip goes to the site in Snip, marking the item's page")
+  assert.equal(await chip.getAttribute("target"), null, "and stays in the app")
 
   // Focus panned the canvas to Section 3.
   await page.getByRole("button", { name: "Section 3 · delta.test", exact: true }).click()
@@ -654,16 +656,51 @@ test("a home tile draws a section's thumbnail where there is one, the full crop 
   assert.deepEqual(t.consoleErrors, [])
 })
 
-test("on the Websites filter a tile is a link to its page", { timeout: 60_000 }, async () => {
-  const refs = Array.from({ length: 12 }, (_, i) => reference({ id: `w${i}`, url: `https://w${i}.test/`, domain: `w${i}.test`, title: `Site ${i}`, coverKey: `covers/w${i}.png`, createdAt: created(i) }))
+test("on the Websites filter a tile opens the inspector like every other tile, and its site link goes to the site", { timeout: 60_000 }, async () => {
+  const refs = Array.from({ length: 12 }, (_, i) => reference({ id: `w${i}`, url: `https://w${i}.test/`, domain: `w${i}.test`, title: `Site ${i}`, coverKey: `covers/w${i}.png`, pageCount: 3, createdAt: created(i) }))
   const t = await gallery(0)
   const { page } = t
   t.on("GET", "/api/references", () => ({ json: { items: refs, nextCursor: null } }))
   t.on("GET", "/api/counts", () => ({ json: { websites: refs.length, pages: 0, sections: 0, animations: 0, images: 0 } }))
+  t.on("GET", /^\/api\/references\/w0$/, () => ({ json: { reference: refs[0], pages: [], animations: [] } }))
   await t.goto("/?filter=websites")
-  const link = page.locator('a[href="/r/w0"]').first()
-  await link.waitFor()
-  assert.equal(await link.getAttribute("aria-label"), "Site 0")
-  assert.equal(await link.evaluate((el) => el.children.length), 1, "a link tile holds only its image")
+  const tile = page.getByRole("button", { name: "Site 0", exact: true })
+  await tile.waitFor()
+  assert.equal(await tile.evaluate((el) => el.children.length), 1, "a tile holds only its image")
+  await tile.click()
+  await until("the inspector opens", async () => new URL(page.url()).searchParams.get("open") === "website:w0")
+  assert.equal(new URL(page.url()).pathname, "/", "the canvas stays")
+
+  const visit = page.getByRole("link", { name: "Visit", exact: true })
+  assert.equal(await visit.getAttribute("target"), "_blank", "the live site is the external action")
+  const site = page.getByRole("link", { name: /^w0\.test · 3 pages/ })
+  assert.equal(await site.getAttribute("href"), "/r/w0")
+  await site.click()
+  await until("the site's view opens", async () => new URL(page.url()).pathname === "/r/w0")
+  assert.deepEqual(t.consoleErrors, [])
+})
+
+test("from an open page, its site link opens the site's pages with that page marked", { timeout: 60_000 }, async () => {
+  const t = await gallery(40)
+  const { page } = t
+  const r0 = reference({ id: "r0", url: "https://alpha.test/", domain: "alpha.test", title: "Site 0", pageCount: 3 })
+  // p0 is the seed's alpha.test page; the site has two more pages that aren't on the canvas.
+  const sitePages = ["about", "p0", "pricing"].map((id, ord) => savedPage({ id, referenceId: "r0", url: `https://alpha.test/${id}`, path: `/${id}`, title: id === "p0" ? "Page 0" : id, ord }))
+  t.on("GET", /^\/api\/references\/r0$/, () => ({ json: { reference: r0, pages: sitePages, animations: [] } }))
+  await t.goto("/?open=page:p0")
+  const site = page.getByRole("link", { name: "alpha.test · 3 pages" })
+  await site.waitFor()
+  assert.equal(await site.getAttribute("href"), "/r/r0?from=p0")
+  assert.equal(await page.getByRole("menuitem", { name: "Open in website view" }).count(), 0)
+
+  await site.click()
+  await until("one click lands on the site's pages", async () => new URL(page.url()).pathname === "/r/r0")
+  const current = page.locator('button[aria-current="true"]')
+  await current.waitFor()
+  assert.equal(await current.locator("img").first().getAttribute("alt"), "Page 0", "the page the user came from is marked")
+  assert.equal(await page.getByRole("dialog").count(), 0, "no viewer on top: the site's pages are what shows")
+
+  await page.goBack()
+  await until("Back reopens the page in the inspector", async () => new URL(page.url()).searchParams.get("open") === "page:p0")
   assert.deepEqual(t.consoleErrors, [])
 })
