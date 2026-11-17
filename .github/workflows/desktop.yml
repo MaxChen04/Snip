@@ -26,12 +26,30 @@ on:
       - '.github/workflows/beta.yml'
 permissions:
   contents: read
+concurrency:
+  # A new push to a pull request supersedes the run in flight; main keeps every run.
+  group: desktop-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   apple-silicon:
     runs-on: macos-15
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+      # The Snip Dev and beta builds differ from stable only in desktop/ and the release workflows. A pull request that
+      # touches neither (most web/ and capture/ work) builds and smoke-tests stable only; main builds every channel.
+      - name: Decide which channels to build
+        id: channels
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [[ "$EVENT" != pull_request ]] || git diff --name-only HEAD^1 HEAD | grep -qE '^(desktop/|package(-lock)?\.json$|\.github/workflows/)'; then
+            echo 'all=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'all=false' >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
@@ -49,20 +67,25 @@ jobs:
       - run: npm run test:desktop
       - run: npm run build --prefix desktop -- --no-install
       - run: codesign --verify --deep --strict desktop/dist/Snip-darwin-arm64/Snip.app
-      - run: npm run build --prefix desktop -- --nightly --no-install
-      - run: codesign --verify --deep --strict 'desktop/dist/Snip Dev-darwin-arm64/Snip Dev.app'
-      - run: node desktop/scripts/dev-smoke.cjs
+      - if: steps.channels.outputs.all == 'true'
+        run: npm run build --prefix desktop -- --nightly --no-install
+      - if: steps.channels.outputs.all == 'true'
+        run: codesign --verify --deep --strict 'desktop/dist/Snip Dev-darwin-arm64/Snip Dev.app'
+      - if: steps.channels.outputs.all == 'true'
+        run: node desktop/scripts/dev-smoke.cjs
       - name: Build standalone release runtime (unsigned)
         run: |
           export SNIP_NODE_DISTRIBUTION="$(dirname "$(dirname "$(command -v node)")")"
           node desktop/release.mjs --standalone
       - run: node desktop/scripts/release-smoke.cjs
       - name: Build and verify isolated Snip Dev runtime
+        if: steps.channels.outputs.all == 'true'
         run: |
           export SNIP_NODE_DISTRIBUTION="$(dirname "$(dirname "$(command -v node)")")"
           SNIP_NIGHTLY_BUILD=1 node desktop/release.mjs --standalone --nightly
           node desktop/scripts/release-smoke.cjs 'desktop/dist/Snip Dev-darwin-arm64/Snip Dev.app'
       - name: Build and verify versioned manual-install beta
+        if: steps.channels.outputs.all == 'true'
         run: |
           export SNIP_NODE_DISTRIBUTION="$(dirname "$(dirname "$(command -v node)")")"
           node desktop/release.mjs --standalone --beta
