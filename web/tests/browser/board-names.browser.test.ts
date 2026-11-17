@@ -15,8 +15,8 @@ test("every place that names a board stops at 120 characters", async () => {
   const { page } = t
   await t.goto("/b/board1")
 
-  // The boards list in the top bar.
-  await page.getByRole("button", { name: /switch board/ }).click()
+  // The boards list in the filter dock.
+  await page.getByRole("button", { name: /^Boards, in / }).click()
   await page.getByRole("button", { name: "New board" }).click()
   const inList = page.getByRole("textbox", { name: "Board name" })
   await inList.fill("x".repeat(130))
