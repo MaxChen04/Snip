@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react"
 import { ArrowRight, Check, Link2 } from "@/components/icons"
 import { cn } from "@/lib/utils"
 import { Logo } from "@/components/brand"
+import { Progress } from "@/components/ui/progress"
 import { PUBLIC_SITE, REPO_URL, signInHref } from "@/lib/site"
 
 // Self-hosted instances sign in; the public site points to the source.
@@ -160,9 +161,7 @@ function HeroArtwork() {
         <div className="flex items-center gap-2 px-2 pb-1">
           <span className="size-1.5 rounded-full bg-primary" />
           <span className="text-2xs text-muted-foreground tabular-nums">{status}</span>
-          <span className="flex h-1 flex-1 overflow-clip rounded-full bg-fill-3">
-            <span className="h-full rounded-full bg-primary transition-[width] duration-300" style={{ width: `${(pages / DEMO_PAGES) * 100}%` }} />
-          </span>
+          <Progress value={pages / DEMO_PAGES} label="Capturing" className="flex-1" />
         </div>
       </div>
     </div>

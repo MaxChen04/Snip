@@ -28,7 +28,7 @@ function CoverStack({ keys }: { keys: (string | null | undefined)[] }) {
 /**
  * Popover content listing boards: search, "All saves", each board with stacked covers and a count,
  * a check on the active one, and "New board" (inline name, then navigates to /b/:id).
- * The caller supplies the Popover and trigger (filter dock Boards button, top bar board switcher);
+ * The caller supplies the Popover and trigger (the filter dock's Boards button);
  * this sets its own 360 px width, so give the PopoverContent `className="w-auto p-1.5"`.
  */
 export function BoardsList({

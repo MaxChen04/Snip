@@ -9,7 +9,6 @@ import {
   CheckIcon,
   ChevronRightIcon,
   FolderPlusIcon,
-  GlobeIcon,
   ImageIcon,
   Link2,
   MonitorIcon,
@@ -31,6 +30,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { siteHref } from "@/components/canvas/tiles"
 import { RELOAD_EVENT, reloadCanvas, type CanvasItem } from "@/components/canvas/types"
 import { api, fileUrl, type Animation, type Page, type Reference, type SavedImage, type SectionItem } from "@/lib/api"
 import { useCollections } from "@/lib/collections"
@@ -175,7 +175,7 @@ function Body({
   tab: Tab
   onTab: (t: Tab) => void
 }) {
-  const [location, navigate] = useLocation()
+  const [location] = useLocation()
   const { collections, refresh } = useCollections()
   const refId =
     item.kind === "image" ? null
@@ -218,9 +218,10 @@ function Body({
     : { domain: undefined, icon: null, title: item.image.title || "Untitled image", path: undefined, url: fileUrl(item.image.key), at: item.image.createdAt }
   const meta =
     item.kind === "image" ? `${item.image.width} × ${item.image.height} · ${savedOn(info.at)}`
-    : item.kind === "website" ? `${info.domain} · ${plural(item.reference.pageCount, "page")} · ${savedOn(info.at)}`
+    : item.kind === "website" ? `Website · ${savedOn(info.at)}`
     : `${info.domain}${info.path && info.path !== "/" ? info.path : ""} · ${savedOn(info.at)}`
-  const websiteHref = refId && `/r/${refId}${pageId ? `?page=${pageId}` : ""}`
+  const site = siteHref(item)
+  const pageCount = item.kind === "website" ? item.reference.pageCount : detail?.reference.pageCount
 
   // ---- Boards: pages (sections and recordings save their page), websites and images ----
   const target =
@@ -349,8 +350,23 @@ function Body({
       <aside className="flex flex-col border-t border-line lg:w-[392px] lg:shrink-0 lg:overflow-hidden lg:border-t-0 lg:border-l">
         <div className="flex shrink-0 flex-col gap-3 px-5 pt-5 pb-4">
           <div className="flex min-h-8 items-center gap-2">
-            {info.domain ? <SiteIcon domain={info.domain} icon={info.icon} className="size-5 rounded-md" /> : <ImageIcon className="size-4 text-ink-10" />}
-            <span className="truncate text-xs text-ink-11">{info.domain ?? "Uploaded image"}</span>
+            {site && info.domain ? (
+              <Link
+                href={site}
+                title={`Go to ${info.domain}`}
+                className="tactile press flex h-7 min-w-0 items-center gap-1.5 rounded-full pr-2 pl-1.5 text-xs text-ink-11 transition-colors duration-150 ease-out hover:text-ink-12"
+              >
+                <SiteIcon domain={info.domain} icon={info.icon} className="size-4 rounded-sm" />
+                <span className="truncate">{info.domain}</span>
+                {pageCount !== undefined && <span className="shrink-0 text-ink-10">· {plural(pageCount, "page")}</span>}
+                <ChevronRightIcon className="size-3.5 shrink-0 text-ink-10" />
+              </Link>
+            ) : (
+              <>
+                <ImageIcon className="size-4 text-ink-10" />
+                <span className="truncate text-xs text-ink-11">Uploaded image</span>
+              </>
+            )}
             <CloseButton className="ml-auto hidden bg-ink-3 hover:bg-ink-4 hover:text-ink-12 lg:grid" />
           </div>
           <div className="grid gap-1">
@@ -371,8 +387,8 @@ function Body({
               </PopoverContent>
             </Popover>
             {info.url && (
-              <a href={info.url} target="_blank" rel="noreferrer" className={cn(pressable, "tactile px-3.5")}>
-                Open
+              <a href={info.url} target="_blank" rel="noreferrer" title="Opens in a new tab" className={cn(pressable, "tactile px-3.5")}>
+                {item.kind === "image" ? "Open" : "Visit"}
                 <ArrowUpRightIcon className="size-3.5 text-ink-10" />
               </a>
             )}
@@ -384,11 +400,6 @@ function Body({
                 <MoreHorizontalIcon className="size-4 text-ink-11" />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-52">
-                {websiteHref && (
-                  <DropdownMenuItem onClick={() => navigate(websiteHref)}>
-                    <GlobeIcon /> Open in website view
-                  </DropdownMenuItem>
-                )}
                 <DropdownMenuItem onClick={copyLink}>
                   <Link2 /> Copy link
                 </DropdownMenuItem>
@@ -593,7 +604,7 @@ function PagePreview({
           src={fileUrl(src)}
           alt={page.title ?? page.path}
           onLoad={() => setLoadedSrc(src)}
-          className={cn("block w-full", !loaded && "animate-pulse bg-ink-3")}
+          className={cn("block w-full", !loaded && "skeleton")}
           style={!loaded && W && page.desktopHeight && page.desktopKey ? { aspectRatio: `${W} / ${page.desktopHeight}` } : undefined}
         />
         <LiveClips page={page} look={look} />

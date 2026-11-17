@@ -103,7 +103,7 @@ const at = (t: Pick<Placement, "x" | "y" | "w" | "h">) => ({ left: t.x, top: t.y
  * every tile that stays in view: a new rect then costs React the tiles that came into view, not all of them. A step of
  * a zoom that brings in hundreds mounts them over a few frames (see stageTiles).
  */
-const Field = memo(function Field({ layout, items, rect, onOpen }: { layout: HomeLayout; items: CanvasItem[]; rect: WorldRect; onOpen?: (item: CanvasItem) => void }) {
+const Field = memo(function Field({ layout, items, rect, onOpen }: { layout: HomeLayout; items: CanvasItem[]; rect: WorldRect; onOpen: (item: CanvasItem) => void }) {
   // `mounted` is the set of keys the last commit put on the canvas.
   const cache = useMemo(() => ({ elements: new Map<string, ReactElement>(), mounted: new Set<string>() }), [layout, items, onOpen])
   const [, nextFrame] = useState(0)
@@ -138,7 +138,7 @@ const Ghosts = memo(function Ghosts({ loading, plaza }: { loading: boolean; plaz
   const ghosts = useMemo(() => layoutHome(GHOST_ITEMS, plaza).tiles, [plaza])
   return ghosts.map((t) =>
     loading ? (
-      <Skeleton key={t.key} className="pointer-events-none absolute rounded-md motion-reduce:animate-none" style={at(t)} />
+      <Skeleton key={t.key} className="pointer-events-none absolute rounded-md" style={at(t)} />
     ) : (
       <div key={t.key} aria-hidden className="pointer-events-none absolute rounded-md border border-dashed border-ink-6" style={at(t)} />
     ),
@@ -259,7 +259,7 @@ export function CanvasHome({ login }: { login: string }) {
     : list.length >= CAP && list.length < inFilter ? `Showing the newest ${list.length} of ${inFilter}. Search to find older saves.`
     : `${total} saved`
   const index = open ? list.findIndex((it) => keyOf(it) === open) : -1
-  const openItem = index >= 0 && list[index]!.kind !== "website" ? list[index] : undefined
+  const openItem = index >= 0 ? list[index] : undefined
   // The open item left the list (deleted from the inspector, or filtered away): close, so ?open= and the
   // history entry don't outlive it.
   const closeRef = useRef(close)
@@ -301,17 +301,16 @@ export function CanvasHome({ login }: { login: string }) {
     [firstRun, messages, measurePlaza],
   )
   const ghosts = useMemo(() => (!items || (items.length === 0 && !q) ? <Ghosts loading={!items && !error} plaza={plazaRect} /> : null), [items, q, error, plazaRect])
-  const tileOpen = filter === "websites" ? undefined : onOpen
   const renderWorld = useCallback(
     // The plaza comes first so the capture card is the first stop when tabbing into the canvas.
     (rect: WorldRect) => (
       <>
         {plaza}
-        {items && <Field layout={layout} items={items} rect={rect} onOpen={tileOpen} />}
+        {items && <Field layout={layout} items={items} rect={rect} onOpen={onOpen} />}
         {ghosts}
       </>
     ),
-    [items, layout, tileOpen, ghosts, plaza],
+    [items, layout, onOpen, ghosts, plaza],
   )
 
   return (
@@ -352,14 +351,14 @@ export function CanvasHome({ login }: { login: string }) {
               {!items ? (
                 <div className={cn(masonryCols[gridSize], "gap-4 [&>*]:mb-4")}>
                   {GHOST_ITEMS.map((g) => (
-                    <Skeleton key={g.key} className="rounded-md motion-reduce:animate-none" style={{ aspectRatio: g.aspect }} />
+                    <Skeleton key={g.key} className="rounded-md" style={{ aspectRatio: g.aspect }} />
                   ))}
                 </div>
               ) : (
                 <div className={cn(masonryCols[gridSize], "gap-4 [&>*]:mb-4 [&>*]:break-inside-avoid")}>
                   {items.map((it) => (
                     <div key={keyOf(it)} style={{ aspectRatio: itemAspect(it) }}>
-                      <CanvasTile item={it} onOpen={tileOpen} />
+                      <CanvasTile item={it} onOpen={onOpen} />
                     </div>
                   ))}
                 </div>

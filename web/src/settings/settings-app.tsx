@@ -6,6 +6,8 @@ import logo from "../../public/logo.png"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Progress } from "@/components/ui/progress"
+import { Spinner } from "@/components/ui/spinner"
 import {
   ArrowUpRightIcon,
   CheckIcon,
@@ -16,7 +18,6 @@ import {
   HardDrive,
   InfoIcon,
   LaptopIcon,
-  Loader2Icon,
   MinusIcon,
   MoonIcon,
   RefreshCwIcon,
@@ -649,7 +650,6 @@ function ProgressView({
     const status = cloud.steps[id]?.status
     return status === "done" || status === "skipped"
   }).length
-  const percent = ids.length ? Math.round((doneCount / ids.length) * 100) : 0
   const copy = {
     setup: { title: "Setting up your cloud library", body: "Keep this window open. Cloudflare asks for two approvals: your account, and R2 if it's off." },
     deploy: { title: "Updating your cloud library", body: "Snip finishes the current capture, installs this app’s cloud update, and verifies it before captures resume. Keep this window open." },
@@ -670,9 +670,7 @@ function ProgressView({
       </div>
 
       <div className="flex items-center gap-3">
-        <div className="h-1 flex-1 overflow-hidden rounded-full bg-ink-4">
-          <div className="h-full rounded-full bg-ink-12 transition-[width] duration-500 ease-out" style={{ width: `${Math.max(percent, doneCount ? 4 : 0)}%` }} />
-        </div>
+        <Progress value={ids.length ? doneCount / ids.length : 0} label={copy.title} className="flex-1" />
         <span className="text-2xs tabular-nums text-muted-foreground">
           {doneCount} of {ids.length}
         </span>
@@ -753,7 +751,7 @@ function StepMark({ status }: { status: LiveStep["status"] }) {
     )
   }
   if (status === "running") {
-    return <Loader2Icon className="size-4 shrink-0 animate-spin text-ink-10" />
+    return <Spinner className="text-ink-10" />
   }
   if (status === "waiting") {
     return <Clock className="size-4 shrink-0 text-ink-10" />

@@ -6,6 +6,7 @@ import type { CanvasFilter } from "@/components/canvas/types"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import type { LibraryTypeCounts } from "@/lib/api"
+import { useCollections } from "@/lib/collections"
 import { cn } from "@/lib/utils"
 
 const FILTERS: { value: CanvasFilter; label: string; icon: Icon }[] = [
@@ -59,6 +60,8 @@ export function FilterDock({
 }) {
   const [boards, setBoards] = useState(false)
   const [adding, setAdding] = useState(false)
+  const { collections } = useCollections()
+  const place = boardId ? (collections.find((c) => c.id === boardId)?.name ?? "Board") : "All saves"
   return (
     <div role="toolbar" aria-label="Filter saves" onKeyDown={rove} className={cn("flex h-[52px] items-center gap-1 rounded-full bg-control p-1.5 shadow-menu", className)}>
       {canAdd && (
@@ -126,11 +129,12 @@ export function FilterDock({
       <span aria-hidden className="mx-1 h-5 w-px bg-ink-5" />
       <Popover open={boards} onOpenChange={setBoards}>
         <Tooltip>
-          <TooltipTrigger render={<PopoverTrigger render={<button type="button" aria-label="Boards" tabIndex={-1} className={cn(button, "data-popup-open:bg-ink-3 data-popup-open:text-foreground")} />} />}>
+          <TooltipTrigger render={<PopoverTrigger render={<button type="button" aria-label={`Boards, in ${place}`} tabIndex={-1} className={cn(button, "data-popup-open:bg-ink-3 data-popup-open:text-foreground")} />} />}>
             <LayersIcon />
           </TooltipTrigger>
           <TooltipContent sideOffset={10} className={tip}>
-            Boards
+            <span>Boards</span>
+            <span className="max-w-48 truncate text-ink-9">{place}</span>
           </TooltipContent>
         </Tooltip>
         <PopoverContent side="top" sideOffset={12} className="w-auto p-1.5">

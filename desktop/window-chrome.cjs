@@ -14,12 +14,27 @@ function installWindowChrome(window, platform = process.platform) {
   // Apply on each document, including the loading and connection-error pages.
   window.webContents.on("dom-ready", () => {
     void window.webContents.insertCSS(`
-      header {
+      header:not(.snip-top-bar) {
         padding-left: max(24px, calc(env(titlebar-area-x, 0px) + 8px));
         -webkit-app-region: drag;
       }
+      .snip-top-bar {
+        -webkit-app-region: drag;
+      }
+      .snip-toolbar-leading {
+        /* Separate navigation from native window controls without offsetting
+           the whole toolbar (which would shift its search center). */
+        padding-left: max(0px, calc(env(titlebar-area-x, 0px) - 8px));
+      }
+      .snip-top-bar .snip-home-link { display: none; }
       header > *, [role="dialog"], [role="menu"],
       [data-slot="popover-content"], [data-slot="dialog-overlay"] {
+        -webkit-app-region: no-drag;
+      }
+      .snip-top-bar > .snip-toolbar-leading {
+        -webkit-app-region: drag;
+      }
+      .snip-toolbar-leading > * {
         -webkit-app-region: no-drag;
       }
       /* A narrow grab area remains on pages without a header. No painted bar. */
