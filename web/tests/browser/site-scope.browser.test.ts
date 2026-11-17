@@ -247,3 +247,13 @@ test("a late answer for the site just left does not replace the site entered aft
   assert.equal(await page.getByRole("button", { name: "Site details: Linear" }).isVisible(), true, "Linear's details were replaced")
   assert.equal(await page.getByRole("button", { name: /^Site details: Judgment/ }).count(), 0)
 })
+
+test("a search typed in a site and not yet written stays in that site when the user leaves at once", async () => {
+  const { page } = await open("/?site=linear")
+  await page.getByRole("textbox", { name: /Search in linear\.app/ }).fill("pricing")
+  await page.getByRole("button", { name: "Leave linear.app" }).click()
+  await until("left", () => !search(page.url()).site)
+  await sleep(600)
+  assert.equal(search(page.url()).q, undefined, "the site's draft was written into All saves")
+  assert.equal(await page.getByRole("textbox", { name: /Search your saves/ }).inputValue(), "")
+})

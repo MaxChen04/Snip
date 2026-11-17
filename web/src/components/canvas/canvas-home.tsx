@@ -333,9 +333,12 @@ export function CanvasHome({ login }: { login: string }) {
   const [query, setQueryState] = useState(q)
   // The query this field last wrote or was given: a URL change from elsewhere (Back, a new scope) replaces the field.
   const [written, setWritten] = useState(q)
-  if (q !== written) {
+  // A draft still waiting to be written belongs to the scope it was typed in: entering or leaving a site drops it.
+  const [draftSite, setDraftSite] = useState(site)
+  if (q !== written || site !== draftSite) {
     setWritten(q)
     setQueryState(q)
+    setDraftSite(site)
   }
   useEffect(() => {
     const t = setTimeout(() => {
