@@ -34,10 +34,11 @@ jobs:
           grep -qvE '^(docs/|qa/)|\.md$|^LICENSE$|^NOTICE$|^\.github/(ISSUE_TEMPLATE/|pull_request_template\.md$|dependabot\.yml$)' <<< "$files" && code=true
           grep -qE '^(web/|desktop/provision/|package(-lock)?\.json$|\.github/workflows/check\.yml$)' <<< "$files" && web=true
           echo "code=$code" >> "$GITHUB_OUTPUT"; echo "web=$web" >> "$GITHUB_OUTPUT"
-  # core is the required check. When it is skipped (a documentation-only change) GitHub counts it as passed.
+  # core and browser are required checks, so both report on every pull request: a skipped job counts as passed.
+  # If changes itself fails, both run rather than skip, so a broken diff cannot pass the gate silently.
   core:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -55,7 +56,7 @@ jobs:
   # The UI suite drives web/ (and the engine's loopback in desktop/provision/), so a change elsewhere cannot break it.
   browser:
     needs: changes
-    if: needs.changes.outputs.web == 'true'
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.web == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
