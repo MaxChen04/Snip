@@ -310,3 +310,36 @@ test("the capture pill's progress is a status region, so each new page is announ
   crawlStep(t.lib, "next")
   await until("the next page is announced", async () => (await status.innerText()) === "Capturing 5/6: /about", 10_000)
 })
+
+test("a Re-capture and a note save started on one site and finishing on another leave the second site alone", async () => {
+  const t = await open("/")
+  const { page } = t
+  const hold = gate()
+  const held = async () => {
+    await hold.opened
+    return { json: { ok: true } }
+  }
+  t.on("POST", "/api/references/judgment/recapture", held)
+  t.on("PATCH", "/api/references/judgment", held)
+  const enter = async (domain: string) => {
+    await page.getByRole("textbox", { name: /Search your saves/ }).focus()
+    await page.getByRole("button", { name: domain, exact: true }).click()
+  }
+  await enter("judgmentlabs.ai")
+  await page.getByRole("button", { name: "Site details: Judgment Labs" }).click()
+  await page.getByRole("textbox", { name: "Note" }).fill("Borrow the pricing table")
+  await page.getByRole("button", { name: "More" }).click()
+  await page.getByRole("menuitem", { name: "Re-capture" }).click()
+  await page.getByRole("dialog", { name: "Re-capture judgmentlabs.ai?" }).getByRole("button", { name: "Re-capture" }).click()
+  await until("both requests in flight", () => t.count("POST", "/api/references/judgment/recapture") === 1 && t.count("PATCH", "/api/references/judgment") === 1)
+
+  await page.getByRole("button", { name: "Back to All saves" }).click()
+  await until("left", () => !search(page.url()).site)
+  await enter("linear.app")
+  await page.getByRole("button", { name: "Site details: Linear" }).waitFor()
+  hold.open()
+  await sleep(800)
+  assert.equal(await page.getByRole("button", { name: "Site details: Linear" }).isVisible(), true, "Linear's details were replaced")
+  await page.getByRole("button", { name: "Site details: Linear" }).click()
+  assert.equal(await page.getByRole("textbox", { name: "Note" }).inputValue(), "", "Judgment's note landed on Linear")
+})

@@ -48,9 +48,13 @@ export function useSite(id: string | null) {
   const [state, setState] = useState<{ id: string; detail: SiteDetail | null; error: Error | null }>()
   // Only the newest request counts: a late answer for the site the user just left must not replace this one's.
   const latest = useRef(0)
+  // The site on screen. A reload or update made for another one (a Re-capture, note or Organize that finished after
+  // the user moved on) is dropped before it can touch this site's state.
+  const active = useRef(id)
+  active.current = id
   const load = useCallback(() => {
+    if (!id || active.current !== id) return Promise.resolve()
     const request = ++latest.current
-    if (!id) return Promise.resolve()
     return api.reference(id).then(
       (detail) => request === latest.current && setState({ id, detail, error: null }),
       (error: Error) => request === latest.current && setState((s) => ({ id, detail: s?.id === id && !(error instanceof NotFoundError) ? s.detail : null, error })),
@@ -60,7 +64,7 @@ export function useSite(id: string | null) {
   const current = state?.id === id ? state : undefined
   const r = current?.detail?.reference
   usePoll(load, !!r && (r.status === "queued" || r.status === "capturing"), r?.status === "capturing" ? LIVE_POLL : undefined)
-  const update = (fn: (d: SiteDetail) => SiteDetail) => setState((s) => (s?.detail ? { ...s, detail: fn(s.detail) } : s))
+  const update = (fn: (d: SiteDetail) => SiteDetail) => setState((s) => (s?.id === id && s.detail ? { ...s, detail: fn(s.detail) } : s))
   return { detail: current?.detail ?? null, error: current?.error ?? null, missing: current?.error instanceof NotFoundError, reload: load, update }
 }
 
