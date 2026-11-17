@@ -417,6 +417,9 @@ body:has([role="toolbar"][aria-label="Filter saves"]) {
 .snip-top-bar {
   grid-template-columns: minmax(0, 1fr) minmax(160px, min(384px, calc(100% - 480px))) minmax(0, 1fr);
 }
+/* Only the navigation itself intercepts canvas input, not its balancing lane. */
+.snip-top-bar .snip-toolbar-leading { pointer-events: none; }
+.snip-top-bar .snip-toolbar-leading > * { pointer-events: auto; }
 @media (max-width: 639px) {
   .snip-top-bar { grid-template-columns: minmax(0, 1fr) auto; }
   .snip-toolbar-search { grid-column: 1 / -1; grid-row: 2; }
