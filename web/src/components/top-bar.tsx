@@ -1,14 +1,12 @@
 import { useId, useState } from "react"
 import { Link } from "wouter"
 import { motion, useReducedMotion } from "motion/react"
-import { BookmarkIcon, ChevronDownIcon, KeyRound, LogOutIcon, McpServerIcon, MonitorIcon, MoonIcon, SearchIcon, SunIcon, XIcon } from "@/components/icons"
+import { BookmarkIcon, KeyRound, LogOutIcon, McpServerIcon, MonitorIcon, MoonIcon, SearchIcon, SunIcon, XIcon } from "@/components/icons"
 import { BookmarkletDialog } from "@/components/bookmarklet-dialog"
 import { api, type Reference, type StorageUsage } from "@/lib/api"
 import { SiteIcon } from "@/components/site-icon"
 import { useAddFlow } from "@/components/add-flow"
-import { BoardsList } from "@/components/canvas/boards-list"
 import { isLocalOrigin } from "@/lib/mcp"
-import { useCollections } from "@/lib/collections"
 import { useTheme } from "@/components/theme-provider"
 import { Logo } from "@/components/brand"
 import {
@@ -20,7 +18,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import { useGridSize, useHomeView, type GridSize, type HomeView } from "@/lib/prefs"
@@ -34,15 +31,12 @@ export function TopBar({
   login,
   query,
   onQuery,
-  boardId,
   solid,
   floating,
 }: {
   login: string
   query?: string
   onQuery?: (q: string) => void
-  /** The board in view, named in the switcher. Undefined is All saves. */
-  boardId?: string
   /** Opaque background, for pages with their own sticky bar underneath so content can't show through. */
   solid?: boolean
   /** Over a canvas: laid on top of it, and only the pills take the pointer so the gaps between them still pan. */
@@ -56,7 +50,12 @@ export function TopBar({
         solid && "bg-background",
       )}
     >
-      <div className="snip-toolbar-leading min-w-0"><BoardSwitcher boardId={boardId} /></div>
+      {/* Boards live in the filter dock. On macOS this lane only reserves room for the traffic lights. */}
+      <div className="snip-toolbar-leading min-w-0">
+        <Link href="/" className={cn(pill, "snip-home-link press w-10 justify-center active:scale-[0.92]")} aria-label="Snip home">
+          <Logo className="size-7" />
+        </Link>
+      </div>
 
       {onQuery ? (
         <SearchField query={query ?? ""} onQuery={onQuery} />
@@ -136,32 +135,6 @@ function SearchField({ query, onQuery }: { query: string; onQuery: (q: string) =
           )}
         </div>
       )}
-    </div>
-  )
-}
-
-/** The logo goes home; the board name opens the boards popover. */
-function BoardSwitcher({ boardId }: { boardId?: string }) {
-  const { collections } = useCollections()
-  const [open, setOpen] = useState(false)
-  const name = boardId ? (collections.find((c) => c.id === boardId)?.name ?? "Board") : "All saves"
-  return (
-    <div className={cn(pill, "snip-board-switcher w-fit max-w-full gap-0.5 p-1")}>
-      <Link href="/" className="snip-home-link press grid size-8 shrink-0 place-items-center rounded-full hover:bg-ink-2 active:scale-[0.92]" aria-label="Snip home">
-        <Logo className="size-7" />
-      </Link>
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger
-          aria-label={`${name}, switch board`}
-          className="press group/board flex h-8 min-w-0 max-w-full items-center gap-1 rounded-full pr-2.5 pl-1.5 text-xs font-medium hover:bg-ink-2 data-popup-open:bg-ink-3 sm:max-w-56"
-        >
-          <span className="truncate">{name}</span>
-          <ChevronDownIcon className="size-3.5 shrink-0 text-ink-10 transition-transform duration-150 ease-out group-data-popup-open/board:rotate-180" />
-        </PopoverTrigger>
-        <PopoverContent align="start" sideOffset={8} className="w-auto p-1.5">
-          <BoardsList activeId={boardId} onNavigate={() => setOpen(false)} />
-        </PopoverContent>
-      </Popover>
     </div>
   )
 }

@@ -12,8 +12,8 @@ also competed in the leading region.
 - Search retains its position and width on focus and input, with concise placeholder
   text and the existing detailed accessible name/help.
 - The macOS shell reserves native-control space within the leading lane only.
-- In macOS, remove the redundant logo and board-container shadow/background. The
-  board menu retains the All saves navigation route. Web branding is unchanged.
+- In macOS, remove the redundant logo. Boards, including All saves, are reached
+  from the filter dock's Boards button. Web branding is unchanged.
 - Preserve the native traffic lights, transparent titlebar, drag regions, keyboard
   labels and menu controls.
 - At narrow web widths, search gets its own row instead of squeezing neighboring

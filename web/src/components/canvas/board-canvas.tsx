@@ -1150,7 +1150,7 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
         e.stopPropagation()
       }}
     >
-      <TopBar floating login={login} query={query} onQuery={setQuery} boardId={id} />
+      <TopBar floating login={login} query={query} onQuery={setQuery} />
       <div className="pointer-events-none absolute inset-x-0 top-16 z-50 flex justify-center">
         <div className="pointer-events-auto w-full max-w-xl">
           <AgentBanner />
@@ -1159,12 +1159,10 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
       {status === "ready" && collection && (
         <BoardHeader board={collection} onRename={(n) => void renameBoard(n)} onAddNote={() => void addNote()} onAddWebsite={() => addReference(id)} onDelete={() => void deleteBoard()} />
       )}
-      {status === "ready" && !empty && (
-        <>
-          <FilterDock className="absolute bottom-6 left-1/2 z-50 -translate-x-1/2" value={filter} onChange={(f) => setParams({ filter: f === "all" ? null : f, open: null })} counts={counts} boardId={id} />
-          <Zoom canvas={canvas} sink={zoomSink} />
-        </>
+      {status === "ready" && (
+        <FilterDock className="absolute bottom-6 left-1/2 z-50 -translate-x-1/2" value={filter} onChange={(f) => setParams({ filter: f === "all" ? null : f, open: null })} counts={counts} boardId={id} />
       )}
+      {status === "ready" && !empty && <Zoom canvas={canvas} sink={zoomSink} />}
       {showToolbar && (
         <SelectionToolbar
           ref={toolbar}
@@ -1268,15 +1266,16 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
             <div className="grid justify-items-center gap-3" role="alert">
               <p className="text-sm text-ink-12">{status === "missing" ? "This board doesn't exist" : "Couldn't load this board"}</p>
               <p className="text-xs text-ink-11">{status === "missing" ? "It may have been deleted." : "Check your connection and try again."}</p>
-              {status === "missing" ? (
+              <div className="flex gap-2">
+                {status !== "missing" && (
+                  <button type="button" onClick={() => void load()} className="tactile press h-8 rounded-full px-3.5 text-xs">
+                    Try again
+                  </button>
+                )}
                 <Link href="/" className="tactile press flex h-8 items-center rounded-full px-3.5 text-xs">
                   Go to All saves
                 </Link>
-              ) : (
-                <button type="button" onClick={() => void load()} className="tactile press h-8 rounded-full px-3.5 text-xs">
-                  Try again
-                </button>
-              )}
+              </div>
             </div>
           )}
         </div>

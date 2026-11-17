@@ -27,11 +27,6 @@ function installWindowChrome(window, platform = process.platform) {
         padding-left: max(0px, calc(env(titlebar-area-x, 0px) - 8px));
       }
       .snip-top-bar .snip-home-link { display: none; }
-      .snip-top-bar .snip-board-switcher {
-        background: transparent;
-        box-shadow: none;
-        backdrop-filter: none;
-      }
       header > *, [role="dialog"], [role="menu"],
       [data-slot="popover-content"], [data-slot="dialog-overlay"] {
         -webkit-app-region: no-drag;

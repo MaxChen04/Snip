@@ -154,7 +154,7 @@ if (want("j4")) await S.J("J4 canvas: pan, zoom, filters, search, select, layer 
 })
 if (want("j5")) await S.J("J5 boards: create, add, note, group, restyle, reload, delete", async ({ note, fail, shot }) => {
   await S.goto("/")
-  await page.getByRole("button", { name: /switch board/ }).click(); await sleep(500)
+  await page.getByRole("button", { name: /^Boards, in / }).click(); await sleep(500)
   await page.getByRole("button", { name: /New board/ }).click(); await page.getByLabel("Board name").fill("QA board"); await page.getByRole("button", { name: /^Create/ }).click(); await sleep(2000)
   note("url after create: " + page.url().replace(S.origin, "")); const bid = page.url().split("/b/")[1]?.split(/[?#]/)[0]; ids.board = bid
   if (!bid) return fail("no board route")
