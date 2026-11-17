@@ -16,7 +16,6 @@ import {
   MoreHorizontalIcon,
   SmartphoneIcon,
   Trash2Icon,
-  TriangleAlertIcon,
   XIcon,
 } from "@/components/icons"
 import { CollectionPicker } from "@/components/collection-picker"
@@ -386,7 +385,7 @@ function Body({
           <div className="grid gap-1">
             <DialogTitle className="line-clamp-2 text-xl leading-7 tracking-tight text-balance text-ink-12">{info.title}</DialogTitle>
             <DialogDescription className="truncate text-xs text-ink-10">{meta}</DialogDescription>
-            {item.kind === "page" && !!item.page.warnings?.length && <p className="flex items-start gap-1.5 text-xs text-pretty text-ink-11"><TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" />{warningText(item.page)}</p>}
+            {item.kind === "page" && !!item.page.warnings?.length && <p className="text-xs text-pretty text-ink-11">{warningText(item.page)}</p>}
           </div>
           <div className="flex items-center gap-2 pt-1">
             <Popover>
