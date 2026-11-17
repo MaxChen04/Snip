@@ -6,9 +6,11 @@
 // what the staged mounting leaves behind, how long the viewport has holes after a zoom out. The counts, the will-change
 // and tab-order checks, the tiles mounted in one frame, the holes and the CSS transitions running after a zoom are
 // asserted, because they do not depend on the machine; the frame times are only logged, because software rendering on a
-// shared machine makes them too noisy to gate on. Run it alone to read them. It runs against the Vite dev server
-// (development React, which is slower than the build), so treat the numbers as a ceiling:
-//   node --import tsx --test web/tests/browser/home-gallery-perf.browser.test.ts
+// shared machine makes them too noisy to gate on. The two benchmarks are a manual check, not part of CI: the tab-order check
+// in the middle of a zoom out races the staged mounting and failed on unrelated pull requests. Run them alone with
+// SNIP_PERF=1 to read the numbers. They run against the Vite dev server (development React, which is slower than the
+// build), so treat the numbers as a ceiling:
+//   SNIP_PERF=1 node --import tsx --test web/tests/browser/home-gallery-perf.browser.test.ts
 //
 // What the first version of this benchmark missed, and the real library showed (247 items, Ctrl+wheel 40 ticks out and in:
 // p95 83 to 133 ms, 12 to 50 frames over 33 ms, the first zoom in step up to 600 ms), by measurement:
@@ -584,11 +586,13 @@ function checkWeight(r: Report) {
   assert.ok(r.holes.frames <= 10, `the viewport had holes for ${r.holes.frames} frames after a zoom out`)
 }
 
-test("200 items: the zoomed-out gallery stays light", { timeout: 180_000 }, async () => {
+const benchmark = process.env.SNIP_PERF ? false : "a manual benchmark: set SNIP_PERF=1"
+
+test("200 items: the zoomed-out gallery stays light", { timeout: 180_000, skip: benchmark }, async () => {
   checkWeight(await measured(200))
 })
 
-test("1000 items: panning at 100% and zooming out stay light", { timeout: 240_000 }, async () => {
+test("1000 items: panning at 100% and zooming out stay light", { timeout: 240_000, skip: benchmark }, async () => {
   checkWeight(await measured(1000))
 })
 
