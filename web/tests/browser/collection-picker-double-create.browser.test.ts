@@ -10,7 +10,7 @@ before(async () => void (app = await startApp()))
 after(async () => app?.stop())
 
 test("pressing Create twice while the POST is pending creates one board", async () => {
-  // The picker lives in the reference page's Organize popover (inside the Add dialog it sits in a nested <form>, where
+  // The picker lives in the site details' Organize popover (inside the Add dialog it sits in a nested <form>, where
   // Create does not reach the handler at all: see the report).
   const t = await app.session({ state: { references: { ref1: reference({ id: "ref1", status: "ready" }) } } })
   const { page } = t
@@ -19,9 +19,12 @@ test("pressing Create twice while the POST is pending creates one board", async 
     await hold.opened
     return undefined
   })
-  await t.goto("/r/ref1")
+  await t.goto("/?site=ref1")
+  await page.getByRole("button", { name: /^Site details:/ }).click()
   await page.getByRole("button", { name: "Organize" }).click()
-  const popover = page.getByRole("dialog")
+  // Organize opens over the site's details.
+  await page.getByRole("dialog").nth(1).waitFor()
+  const popover = page.getByRole("dialog").last()
   await popover.getByRole("button", { name: /New board/ }).click()
   await popover.getByRole("textbox", { name: "Board name" }).fill("Fresh board")
   const create = popover.getByRole("button", { name: "Create", exact: true })

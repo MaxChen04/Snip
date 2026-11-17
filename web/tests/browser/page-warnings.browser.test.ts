@@ -1,7 +1,9 @@
-// A page the capture agent flagged ("blank" or "truncated") says so: on the capture card's result, and under the page on the website's page.
+// A page the capture agent flagged ("blank" or "truncated") says so: on the capture card's result, on the page's tile in
+// its site, in its inspector and in the page viewer.
 import assert from "node:assert/strict"
 import { after, before, test } from "node:test"
 import { reference, savedPage, startApp, type App } from "./harness.ts"
+import { mockLibrary, oneSite } from "./site-library.ts"
 
 let app: App
 before(async () => void (app = await startApp()))
@@ -10,11 +12,11 @@ after(async () => app?.stop())
 const BLANK = "It looks blank: the site may not have loaded."
 const TRUNCATED = "The page was taller than Snip captures and was cut off."
 
-/** The website's page, with the pages the Worker returns for it. */
+/** A website, with the pages the Worker returns for it. */
 const website = async (pages: ReturnType<typeof savedPage>[]) => {
   const r = reference({ id: "ref1", pageCount: pages.length })
   const t = await app.session({ state: { references: { ref1: r } } })
-  t.on("GET", /^\/api\/references\/ref1$/, () => ({ json: { reference: r, pages, animations: [] } }))
+  t.on("GET", /^\/api\//, mockLibrary(oneSite(r, pages)))
   return t
 }
 
@@ -47,18 +49,22 @@ test("a crawl with several flagged pages points at the website, and a clean one 
   assert.equal(await clean.getByText("blank").count(), 0)
 })
 
-test("the website's page puts the notice under the page it is about, and only that page", async () => {
+test("in the site, a flagged page's tile carries its notice, and only that page's", async () => {
   const t = await website([
     savedPage({ id: "a", path: "/", title: "Home", warnings: ["blank"] }),
     savedPage({ id: "b", path: "/pricing", title: "Pricing" }),
     savedPage({ id: "c", path: "/long", title: "Long read", warnings: ["truncated"] }),
   ])
-  await t.goto("/r/ref1")
-  const tile = (title: string) => t.page.locator("div.group", { has: t.page.getByRole("button", { name: title }) })
-  await tile("Home").getByText(BLANK).waitFor()
-  await tile("Long read").getByText(TRUNCATED).waitFor()
-  assert.equal(await tile("Pricing").locator("p").count(), 0)
-  assert.equal(await tile("Home").getByText(TRUNCATED).count(), 0)
+  await t.goto("/?site=ref1")
+  const tile = (name: RegExp) => t.page.getByRole("button", { name })
+  await tile(/^Home/).waitFor()
+  assert.equal(await tile(/^Home/).getAttribute("aria-description"), BLANK)
+  assert.equal(await tile(/^Long read/).getAttribute("aria-description"), TRUNCATED)
+  assert.equal(await tile(/^Pricing/).getAttribute("aria-description"), null)
+  assert.equal(await t.page.locator(`[title="${BLANK}"]`).count(), 1, "one badge for the blank page")
+
+  await tile(/^Home/).click()
+  await t.page.getByRole("dialog").getByText(BLANK).waitFor()
 })
 
 test("the page viewer carries the same notice for the page it shows, and nothing for a clean one", async () => {
@@ -66,11 +72,14 @@ test("the page viewer carries the same notice for the page it shows, and nothing
     savedPage({ id: "a", path: "/", title: "Home", warnings: ["blank", "truncated"] }),
     savedPage({ id: "b", path: "/pricing", title: "Pricing" }),
   ])
-  await t.goto("/r/ref1?page=a")
-  const viewer = t.page.getByRole("dialog").filter({ has: t.page.getByLabel("Close") })
+  // The viewer opens over the page's inspector.
+  const viewer = t.page.getByRole("dialog").nth(1)
+  await t.goto("/?site=ref1&open=page:a")
+  await t.page.getByRole("button", { name: "Full page" }).click()
   await viewer.getByText(`${BLANK} ${TRUNCATED}`).waitFor()
 
-  await t.goto("/r/ref1?page=b")
+  await t.goto("/?site=ref1&open=page:b")
+  await t.page.getByRole("button", { name: "Full page" }).click()
   await viewer.getByText("Pricing").first().waitFor()
   assert.equal(await viewer.getByText(BLANK).count(), 0)
   assert.equal(await viewer.getByText(TRUNCATED).count(), 0)

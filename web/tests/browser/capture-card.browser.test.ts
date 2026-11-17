@@ -217,14 +217,14 @@ test("a crawl with a known total shows N of M pages and a real fraction, and one
   assert.equal(await unknown.page.getByText(/more queued/).count(), 0)
 })
 
-test("the website's page shows a percentage only when the crawl's total is known", async () => {
-  const percent = async (progress: string) => {
+test("in the site, the capture pill shows how far it has got only when the crawl's total is known", async () => {
+  const bars = async (progress: string) => {
     const r = reference({ id: "ref1", status: "capturing", mode: "crawl", maxPages: 25, progress })
     const t = await app.session({ state: { references: { ref1: r } } })
-    await t.goto("/r/ref1")
-    await t.page.getByRole("img", { name: /^Capturing \// }).waitFor()
-    return t.page.getByText(/^\d+%$/).count()
+    await t.goto("/?site=ref1")
+    await t.page.getByRole("button", { name: "Pause" }).waitFor()
+    return t.page.getByRole("progressbar", { name: "Pages captured" }).count()
   }
-  assert.equal(await percent("Capturing 5/10: /pricing"), 1)
-  assert.equal(await percent("Capturing page 1: /"), 0)
+  assert.equal(await bars("Capturing 5/10: /pricing"), 1)
+  assert.equal(await bars("Capturing page 1: /"), 0)
 })
