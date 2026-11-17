@@ -1173,9 +1173,8 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
       {status === "ready" && collection && (
         <BoardHeader board={collection} onRename={(n) => void renameBoard(n)} onAddNote={() => void addNote()} onAddWebsite={() => addReference(id)} onDelete={() => void deleteBoard()} />
       )}
-      {status === "ready" && (
-        <FilterDock className="absolute bottom-6 left-1/2 z-50 -translate-x-1/2" value={filter} onChange={(f) => setParams({ filter: f === "all" ? null : f, open: null })} counts={counts} boardId={id} />
-      )}
+      {/* The dock is how you leave for another board: it shows while this one loads or fails, without counts. */}
+      <FilterDock className="absolute bottom-6 left-1/2 z-50 -translate-x-1/2" value={filter} onChange={(f) => setParams({ filter: f === "all" ? null : f, open: null })} counts={status === "ready" ? counts : null} boardId={id} />
       {status === "ready" && !empty && <Zoom canvas={canvas} sink={zoomSink} />}
       {showToolbar && (
         <SelectionToolbar

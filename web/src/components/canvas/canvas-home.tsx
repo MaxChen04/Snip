@@ -359,7 +359,7 @@ export function CanvasHome({ login }: { login: string }) {
   const counts = useCounts(q, site, version)
   const total = counts ? countOf(counts, "all") : null
   const firstRun = !site && !q && !!counts && counts.websites + total! === 0
-  // The dock and zoom wait for the counts, so the page doesn't flash them. A first run gets the dock too: its + is how you add.
+  // Zoom and the caption wait for the counts, so the page doesn't flash them.
   const chrome = counts !== undefined
   const { items, error } = useFeed(feedFilter, q, site, version)
   const pending = useMemo(() => (site && !q && (filter === "pages" || filter === "all") ? pendingOf(detail) : []), [site, q, filter, detail])
@@ -592,27 +592,28 @@ export function CanvasHome({ login }: { login: string }) {
           <AgentBanner />
         </div>
       </div>
+      {/* The dock is the way to every board and filter: it never waits on the counts, which fill in when they arrive. */}
+      {site ? (
+        <FilterDock<SiteFilter>
+          className="absolute bottom-6 left-1/2 z-50 -translate-x-1/2"
+          value={siteFilter}
+          onChange={(f) => setParams({ filter: f === "pages" ? null : f, open: null })}
+          counts={counts ?? null}
+          site={domain ?? "this site"}
+          canAdd
+        />
+      ) : (
+        <FilterDock<CanvasFilter>
+          className="absolute bottom-6 left-1/2 z-50 -translate-x-1/2"
+          value={libraryFilter}
+          onChange={(f) => setParams({ filter: f === "all" ? null : f, open: null })}
+          counts={counts ?? null}
+          canAdd
+          glow={firstRun}
+        />
+      )}
       {chrome && (
         <>
-          {site ? (
-            <FilterDock<SiteFilter>
-              className="absolute bottom-6 left-1/2 z-50 -translate-x-1/2"
-              value={siteFilter}
-              onChange={(f) => setParams({ filter: f === "pages" ? null : f, open: null })}
-              counts={counts}
-              site={domain ?? "this site"}
-              canAdd
-            />
-          ) : (
-            <FilterDock<CanvasFilter>
-              className="absolute bottom-6 left-1/2 z-50 -translate-x-1/2"
-              value={libraryFilter}
-              onChange={(f) => setParams({ filter: f === "all" ? null : f, open: null })}
-              counts={counts}
-              canAdd
-              glow={firstRun}
-            />
-          )}
           {view === "canvas" && feedFilter && <Zoom canvas={canvas} sink={zoomSink} />}
           {view === "canvas" && caption && (
             <p className="absolute bottom-6 left-6 z-50 flex h-10 max-w-[calc(50vw-320px)] items-center rounded-full bg-control px-4 text-2xs text-ink-11 shadow-button max-lg:hidden">{caption}</p>
