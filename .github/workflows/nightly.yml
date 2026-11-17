@@ -109,7 +109,9 @@ jobs:
           } > "$RUNNER_TEMP/nightly-notes.md"
           # Immutable per-run tags: never move a tag or overwrite a published ZIP.
           gh release create "$TAG" "$ARCHIVE" --target "$COMMIT" --draft --prerelease --latest=false --title "Snip Dev $VERSION" --notes-file "$RUNNER_TEMP/nightly-notes.md"
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq '.assets[] | select(.name == "Snip-Dev-'"$VERSION"'-darwin-arm64.zip") | .digest' | grep -Eq '^sha256:[a-f0-9]{64}$'
+          # The releases/tags API cannot see a draft (HTTP 404); gh release view can. Check the uploaded digest before publishing.
+          DIGEST="sha256:$(shasum -a 256 "$ARCHIVE" | cut -d ' ' -f 1)"
+          test "$(gh release view "$TAG" --json assets --jq ".assets[] | select(.name == \"Snip-Dev-$VERSION-darwin-arm64.zip\") | .digest")" = "$DIGEST"
           gh release edit "$TAG" --draft=false --prerelease --latest=false
       - name: Remove temporary signing keychain
         if: always() && steps.signing.outputs.signed == 'true'
