@@ -258,7 +258,7 @@ test("a search typed in a site and not yet written stays in that site when the u
   assert.equal(await page.getByRole("textbox", { name: /Search your saves/ }).inputValue(), "")
 })
 
-test("Back from a site entered on a board returns to the board's pan and zoom", async () => {
+test("Back from a site entered on a board returns to the board's pan, zoom and search", async () => {
   const r = reference({ id: "ref1", title: "Example", domain: "example.com", pageCount: 2 })
   const t = await app.session({ state: { references: { ref1: r }, boards: { board1: boardOf([websiteItem(r, 0, 0), noteItem("n1", "far", 2400, 1600)]) } }, viewport: { width: 1280, height: 800 } })
   const { page } = t
@@ -269,6 +269,8 @@ test("Back from a site entered on a board returns to the board's pan and zoom", 
   for (const key of ["ArrowRight", "ArrowRight", "ArrowDown", "Minus"]) await page.keyboard.press(key)
   await sleep(400)
   const before = await worldTransform(page)
+  await page.getByRole("textbox", { name: /^Search/ }).fill("example")
+  await until("the search is in the board's URL", () => search(page.url()).q === "example")
 
   // On a board a click selects the item and Enter opens it.
   await page.locator("[data-key]", { has: page.getByRole("button", { name: "Example", exact: true }) }).click()
@@ -281,6 +283,7 @@ test("Back from a site entered on a board returns to the board's pan and zoom", 
   await page.keyboard.press("Escape")
   await sleep(500)
   assert.equal(await worldTransform(page), before)
+  assert.equal(await page.getByRole("textbox", { name: /^Search/ }).inputValue(), "example")
 })
 
 test("a site that fails to load says so with Try again, and an old Tokens link to a deleted site says it is gone", async () => {

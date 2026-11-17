@@ -24,7 +24,6 @@ import { Button } from "@/components/ui/button"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Spinner } from "@/components/ui/spinner"
-import { useDesktopState } from "@/hooks/use-desktop-state"
 import { LIVE_POLL, usePoll } from "@/hooks/use-poll"
 import { api, type BoardGroup, type BoardItem, type BoardItemKind, type BoardItemPlacement, type Collection, type LibraryTypeCounts, type SavedImage } from "@/lib/api"
 import { useCollections } from "@/lib/collections"
@@ -287,8 +286,6 @@ function BoardHeader({ board, onRename, onAddNote, onAddWebsite, onDelete }: { b
  * save shortly after), Shift-drag to marquee-select, group into titled frames, filter to dim what doesn't match.
  */
 export function BoardCanvas({ login, id }: { login: string; id: string }) {
-  const [query, setQuery] = useDesktopState("snip:gallery:query", "")
-  const q = useDeferredValue(query.trim().toLowerCase())
   const { collections, refresh } = useCollections()
   const { addReference } = useAddFlow()
 
@@ -445,7 +442,11 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
   usePoll(load, capturing || statuses.includes("queued") || statuses.includes("paused"), capturing ? LIVE_POLL : undefined)
   const collection = collections.find((c) => c.id === id) ?? board?.collection
   const title = collection?.name ?? "Board"
-  const { filter, open, navigate, setParams, onOpen, close } = useCanvasRoute(title)
+  const { filter, open, params, navigate, setParams, onOpen, close } = useCanvasRoute(title)
+  // The board's search is in its URL, as on All saves: Back to the board brings it back, and each board has its own.
+  const query = params.get("q") ?? ""
+  const setQuery = useCallback((v: string) => setParams({ q: v || null }), [setParams])
+  const q = useDeferredValue(query.trim().toLowerCase())
 
   // ---- Moving ----
   /** Move items and frames by dx, dy (world px), regroup, save. `front` brings the moved items to the top. */
