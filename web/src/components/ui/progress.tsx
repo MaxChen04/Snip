@@ -6,7 +6,8 @@ import { cn } from "cn"
  * loading notes in index.css.
  */
 function Progress({ value, paused, label, className }: { value: number | null; paused?: boolean; label: string; className?: string }) {
-  const percent = value === null ? null : Math.round(Math.min(1, Math.max(0, value)) * 100)
+  // Rounded down to a tenth, never up: 199 of 200 pages is 99.5, and only a finished run reads 100.
+  const percent = value === null ? null : Math.floor(Math.min(1, Math.max(0, value)) * 1000) / 10
   return (
     <div
       data-slot="progress"
