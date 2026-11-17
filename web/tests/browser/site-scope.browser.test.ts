@@ -394,3 +394,18 @@ test("a site's note saved in the inspector shows in Site details, and the other 
   await page.getByRole("button", { name: "Site details: Judgment Labs" }).click()
   await until("Site details shows it", async () => (await page.getByRole("textbox", { name: "Note" }).inputValue()) === "Borrow the footer")
 })
+
+test("while a site loads, screen readers hear that it is loading", async () => {
+  const lib = library()
+  const t = await app.session({ viewport: { width: 1280, height: 800 } })
+  t.on("GET", /^\/api\//, mockLibrary(lib))
+  const hold = gate()
+  t.on("GET", /^\/api\/references\/linear$/, async () => {
+    await hold.opened
+    return undefined
+  })
+  await t.goto("/?site=linear")
+  await t.page.getByRole("status", { name: "Loading" }).waitFor()
+  hold.open()
+  await t.page.getByRole("button", { name: "Site details: Linear" }).waitFor()
+})
