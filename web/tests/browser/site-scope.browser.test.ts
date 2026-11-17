@@ -4,7 +4,7 @@
 import { after, before, test } from "node:test"
 import assert from "node:assert/strict"
 import { boardOf, gate, noteItem, reference, startApp, sleep, until, websiteItem, type App } from "./harness.ts"
-import { library, mockLibrary } from "./site-library.ts"
+import { crawlStep, library, mockLibrary } from "./site-library.ts"
 
 let app: App
 before(async () => {
@@ -300,4 +300,13 @@ test("a site that fails to load says so with Try again, and an old Tokens link t
   assert.equal(await page.getByText("Loading…").count(), 0)
   await page.getByRole("alert").getByRole("button", { name: "Back to All saves" }).click()
   await until("back in All saves", () => !search(page.url()).site)
+})
+
+test("the capture pill's progress is a status region, so each new page is announced as it is captured", async () => {
+  const t = await open("/?site=hone")
+  const { page } = t
+  const status = page.getByRole("status").filter({ hasText: /^Capturing \d+\/6: / })
+  assert.equal(await status.innerText(), "Capturing 4/6: /customers")
+  crawlStep(t.lib, "next")
+  await until("the next page is announced", async () => (await status.innerText()) === "Capturing 5/6: /about", 10_000)
 })
