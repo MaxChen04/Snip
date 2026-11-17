@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactElement } from "react"
-import { navigate } from "wouter/use-browser-location"
 import { toast } from "sonner"
 import { AlertCircleIcon, ArrowRight, CheckIcon, Clock, FileIcon, GlobeIcon, ImageIcon, Link2, Loader2Icon, MoreHorizontalIcon, StopIcon, XIcon } from "@/components/icons"
 import { useAddFlow } from "@/components/add-flow"
@@ -17,6 +16,7 @@ import { useCollections } from "@/lib/collections"
 import { cn } from "@/lib/utils"
 import { warningText } from "@/lib/page-warnings"
 import { WAITING } from "../../../shared/capture-errors"
+import { enterSite } from "@/lib/scope"
 
 // ---------- Captures the card follows (one shows at a time; a dropped link joins them) ----------
 
@@ -82,7 +82,7 @@ export async function captureLink(url: URL, opts: CaptureOpts): Promise<Referenc
     toast("Already saved", {
       id: `saved-${existing.id}`,
       description: existing.title ?? existing.domain,
-      action: { label: "Open", onClick: () => navigate(`/r/${existing.id}`) },
+      action: { label: "Open", onClick: () => enterSite(existing.id) },
       cancel: {
         label: "Capture again",
         onClick: () => void captureLink(url, { ...opts, allowDuplicate: true }).catch((e) => toast.error((e as Error).message)),
@@ -346,7 +346,7 @@ export function CaptureCard({
     if (ref.status === "failed" && !isStopped(ref))
       toast.error(`Couldn't capture ${ref.domain}`, {
         description: diagnoseCaptureError(ref.error)?.summary ?? ref.error ?? undefined,
-        action: { label: "Open", onClick: () => navigate(`/r/${ref.id}`) },
+        action: { label: "Open", onClick: () => enterSite(ref.id) },
       })
   }
 
@@ -398,7 +398,7 @@ export function CaptureCard({
 
       {cur && (
         <div data-capture-status className="surface-raised w-[520px] max-w-[calc(100vw-2rem)] rounded-3xl bg-card p-2 shadow-modal">
-          <Status r={r} pages={view?.pages ?? []} more={more} onChange={() => void poll().catch(() => {})} onOpen={(id) => navigate(`/r/${id}`)} />
+          <Status r={r} pages={view?.pages ?? []} more={more} onChange={() => void poll().catch(() => {})} onOpen={(id) => enterSite(id)} />
         </div>
       )}
 

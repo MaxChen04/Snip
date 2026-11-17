@@ -7,7 +7,6 @@ import { signInHref } from "@/lib/site"
 import { CollectionsProvider } from "@/lib/collections"
 import { CanvasHome } from "@/components/canvas/canvas-home"
 import { BoardCanvas } from "@/components/canvas/board-canvas"
-import { ReferencePage } from "@/components/reference-page"
 import { AddFlowProvider } from "@/components/add-flow"
 
 // Signed-out and account pages are split out so the canvas bundle doesn't carry them.
@@ -21,6 +20,20 @@ const Loading = () => (
     <Spinner className="size-5 text-muted-foreground" />
   </div>
 )
+
+/**
+ * A website's old address: its scope on the canvas. The tab becomes the dock's filter, and a page (?page=, or the item a
+ * link came from, ?from=) opens in the inspector.
+ */
+function SiteRedirect({ id }: { id: string }) {
+  const params = new URLSearchParams(useSearch())
+  const tab = params.get("tab")
+  const page = params.get("page") ?? params.get("from")
+  const next = new URLSearchParams({ site: id })
+  if (tab === "animations" || tab === "tokens") next.set("filter", tab)
+  if (page) next.set("open", `page:${page}`)
+  return <Redirect to={`/?${next}`} replace />
+}
 
 /** All saves. Links from before the canvas (?collection=, ?view=) go to their new homes. */
 function Home({ login }: { login: string }) {
@@ -121,7 +134,7 @@ export function App() {
             <PasskeysPage me={state} />
           </Suspense>
         </Route>
-        <Route path="/r/:id">{(p) => <ReferencePage key={p.id} id={p.id} login={state.login} />}</Route>
+        <Route path="/r/:id">{(p) => <SiteRedirect id={p.id} />}</Route>
         <Route path="/b/:id">{(p) => <BoardCanvas key={p.id} login={state.login} id={p.id} />}</Route>
         <Route>
           <Home login={state.login} />
