@@ -46,11 +46,14 @@ export const isBusy = (r: Reference) => r.status === "queued" || r.status === "c
  */
 export function useSite(id: string | null) {
   const [state, setState] = useState<{ id: string; detail: SiteDetail | null; error: Error | null }>()
+  // Only the newest request counts: a late answer for the site the user just left must not replace this one's.
+  const latest = useRef(0)
   const load = useCallback(() => {
+    const request = ++latest.current
     if (!id) return Promise.resolve()
     return api.reference(id).then(
-      (detail) => setState({ id, detail, error: null }),
-      (error: Error) => setState((s) => ({ id, detail: s?.id === id && !(error instanceof NotFoundError) ? s.detail : null, error })),
+      (detail) => request === latest.current && setState({ id, detail, error: null }),
+      (error: Error) => request === latest.current && setState((s) => ({ id, detail: s?.id === id && !(error instanceof NotFoundError) ? s.detail : null, error })),
     )
   }, [id])
   useEffect(() => void load(), [load])

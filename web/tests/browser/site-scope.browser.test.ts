@@ -3,7 +3,7 @@
 // every route back to exactly where the user was.
 import { after, before, test } from "node:test"
 import assert from "node:assert/strict"
-import { startApp, sleep, until, type App } from "./harness.ts"
+import { gate, startApp, sleep, until, type App } from "./harness.ts"
 import { library, mockLibrary } from "./site-library.ts"
 
 let app: App
@@ -220,4 +220,30 @@ test("in Grid view, a tile's site link enters the scope (there is no canvas to r
   await until("the scope opens", () => search(page.url()).site === "linear")
   await page.getByRole("button", { name: "Site details: Linear" }).waitFor()
   assert.deepEqual(t.consoleErrors, [])
+})
+
+test("a late answer for the site just left does not replace the site entered after it", async () => {
+  const t = await open("/")
+  const { page } = t
+  const hold = gate()
+  t.on("GET", /^\/api\/references\/judgment$/, async () => {
+    await hold.opened
+    return undefined
+  })
+  const enter = async (domain: string) => {
+    await page.getByRole("textbox", { name: /Search your saves/ }).focus()
+    await page.getByRole("button", { name: domain, exact: true }).click()
+  }
+  await enter("judgmentlabs.ai")
+  await until("in Judgment's scope", () => search(page.url()).site === "judgment")
+  await page.getByRole("button", { name: "Back to All saves" }).click()
+  await until("left", () => !search(page.url()).site)
+  await enter("linear.app")
+  await page.getByRole("button", { name: "Site details: Linear" }).waitFor()
+
+  hold.open()
+  await until("Judgment's answer arrives", () => t.count("GET", /^\/api\/references\/judgment$/) > 0)
+  await sleep(500)
+  assert.equal(await page.getByRole("button", { name: "Site details: Linear" }).isVisible(), true, "Linear's details were replaced")
+  assert.equal(await page.getByRole("button", { name: /^Site details: Judgment/ }).count(), 0)
 })
