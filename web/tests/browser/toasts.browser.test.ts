@@ -24,9 +24,12 @@ test("removing several items from a board says how many", async () => {
 test("creating a board in the Organize popover says so", async () => {
   const t = await app.session({ state: { references: { ref1: reference({ id: "ref1", status: "ready" }) } } })
   const { page } = t
-  await t.goto("/r/ref1")
+  await t.goto("/?site=ref1")
+  await page.getByRole("button", { name: /^Site details:/ }).click()
   await page.getByRole("button", { name: "Organize" }).click()
-  const popover = page.getByRole("dialog")
+  // Organize opens over the site's details.
+  await page.getByRole("dialog").nth(1).waitFor()
+  const popover = page.getByRole("dialog").last()
   await popover.getByRole("button", { name: /New board/ }).click()
   await popover.getByRole("textbox", { name: "Board name" }).fill("Fresh board")
   await popover.getByRole("button", { name: "Create", exact: true }).click()

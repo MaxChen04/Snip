@@ -77,6 +77,8 @@ export type Sort = "newest" | "oldest" | "name"
 export interface Filters {
   q?: string
   collection?: string
+  /** One website's material: its pages, sections and recordings (images belong to none). */
+  reference?: string
   sort?: Sort
   status?: Reference["status"]
 }
@@ -108,7 +110,7 @@ export const api = {
   /** Uploaded images, newest first. q matches the title; collection narrows to a board. */
   images: (f: Filters, cursor?: string | null, limit = 60) => request<Paged<SavedImage>>(`/api/images?${qs({ ...f, cursor, limit })}`),
   /** Counts per kind for the filter dock, for the whole library or one board, matching q. */
-  counts: (f: Pick<Filters, "q" | "collection"> = {}) => request<LibraryTypeCounts>(`/api/counts?${qs({ ...f })}`),
+  counts: (f: Pick<Filters, "q" | "collection" | "reference"> = {}) => request<LibraryTypeCounts>(`/api/counts?${qs({ ...f })}`),
   /**
    * Upload one image (multipart). The browser makes the thumbnail and palette; see lib/images.ts.
    * With collectionId it is also put on that board.

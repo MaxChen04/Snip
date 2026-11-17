@@ -76,7 +76,7 @@ async function main() {
     assert.equal(detail.reference.status, 'ready')
     const key = detail.pages[0].desktopKey
     assert.equal(await page.evaluate(key => fetch(`/files/${key}`).then(r => r.status), key), 200)
-    await page.goto(`${origin}/r/${ref.id}`)
+    await page.goto(`${origin}/?site=${ref.id}`)
     const closed = application.waitForEvent('close')
     await application.evaluate(({ app }) => app.quit())
     await closed
@@ -86,13 +86,13 @@ async function main() {
     await fs.rename(bundle, movedBundle); moved = true
     application = await launch(movedBundle)
     page = await application.firstWindow()
-    await page.waitForURL(`${origin}/r/${ref.id}`, { timeout: 120000 })
+    await page.waitForURL(`${origin}/?site=${ref.id}`, { timeout: 120000 })
     assert.equal((await page.evaluate(id => fetch(`/api/references/${id}`).then(r => r.json()), ref.id)).pages[0].desktopKey, key)
     assert.equal(await page.evaluate(key => fetch(`/files/${key}`).then(r => r.status), key), 200)
     assert.equal(await fs.readFile(layout.webEnvPath, 'utf8'), originalSettings)
     assert.equal(await fs.readFile(identityPath, 'utf8'), identities)
     assert.equal(JSON.parse(await fs.readFile(path.join(profile, 'library-location.json'), 'utf8')).path, layout.dataRoot)
-    console.log('PASS bundled Node/Chromium captures into custom external storage; moving/restarting the bundle preserves library, identities, credentials and reference route')
+    console.log('PASS bundled Node/Chromium captures into custom external storage; moving/restarting the bundle preserves library, identities, credentials and the website route')
     console.log(`Evidence profile: ${profile}`)
   } catch (error) {
     if (application) for (const page of application.windows()) console.error('WINDOW', page.url(), await page.locator('body').innerText().catch(() => 'unavailable'))

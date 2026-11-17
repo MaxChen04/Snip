@@ -32,7 +32,7 @@ test("every place that names a board stops at 120 characters", async () => {
   assert.equal((await inPicker.inputValue()).length, 120)
 })
 
-test("on a phone a long board name stays on one line in the board's pill and in a website's breadcrumb", async () => {
+test("on a phone a long board name stays on one line in the board's pill and in a website's Back pill", async () => {
   const board = collection({ id: "board1", name: LONG })
   const r = reference({ id: "ref1", title: "Example Domain", collectionIds: ["board1"] })
   const t = await app.session({ state: { collections: [board], boards: { board1: boardOf([], [], board) }, references: { ref1: r } }, viewport: { width: 390, height: 800 } })
@@ -45,11 +45,13 @@ test("on a phone a long board name stays on one line in the board's pill and in 
   assert.ok((await pill.boundingBox())!.height <= 44, "the pill grew past one line")
   assert.equal(await name.evaluate((el) => el.scrollWidth > el.clientWidth && getComputedStyle(el).textOverflow), "ellipsis")
 
-  await t.goto("/r/ref1")
-  const crumb = page.getByRole("link", { name: "All saves" }).locator("xpath=..")
-  await crumb.waitFor()
-  assert.ok((await crumb.boundingBox())!.height <= 20, `the breadcrumb is ${(await crumb.boundingBox())!.height}px tall`)
-  assert.equal(await crumb.evaluate((el) => getComputedStyle(el).textOverflow), "ellipsis")
+  // Into the website from the board, through search's Your sites: its Back pill is named for the board.
+  t.on("GET", "/api/references", () => ({ json: { items: [r], nextCursor: null } }))
+  await page.getByRole("searchbox").or(page.getByRole("textbox", { name: /^Search your saves/ })).first().focus()
+  await page.getByRole("button", { name: "example.com" }).click()
+  const back = page.getByRole("button", { name: `Back to ${LONG}` })
+  await back.waitFor()
+  assert.ok((await back.boundingBox())!.height <= 44, `the Back pill is ${(await back.boundingBox())!.height}px tall`)
   const widths = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }))
   assert.ok(widths.scroll <= widths.client, `the page is ${widths.scroll}px wide in a ${widths.client}px window`)
 })

@@ -342,6 +342,13 @@
 body:has([role="toolbar"][aria-label="Filter saves"]) {
   --toast-bottom: 88px;
 }
+/* Selecting inside a site: the selection bar sits above the dock, and toasts above it. */
+body:has([role="toolbar"][aria-label="Filter saves"]):has([data-selection-bar]) {
+  --toast-bottom: 140px;
+  @media (width < 40rem) {
+    --toast-bottom: 200px;
+  }
+}
 
 /* The dock's + button on an empty library: a soft grey ring breathing out from its tinted fill. */
 @keyframes plus-glow {

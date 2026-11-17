@@ -17,6 +17,8 @@ export interface InfiniteCanvasHandle {
   setZoom(zoom: number, around?: Around, opts?: Animate): void
   /** Back to the home view (the `home` prop). */
   recenter(opts?: Animate): void
+  /** Jump to a view getView() returned: its world centre and zoom. */
+  setView(view: { x: number; y: number; zoom: number }): void
   screenToWorld(clientX: number, clientY: number): { x: number; y: number }
   getView(): CanvasView
 }
@@ -217,6 +219,7 @@ export function InfiniteCanvas({
       zoomBy: (factor, around, opts) => zoomTo((targetK ?? view.current.k) * factor, around, opts),
       setZoom: zoomTo,
       recenter: (opts) => go(homeRef.current.x, homeRef.current.y, homeRef.current.zoom ?? 1, opts?.animate),
+      setView: (v) => go(v.x, v.y, v.zoom, false),
       screenToWorld: (clientX, clientY) => {
         const p = local({ clientX, clientY })
         const { tx, ty, k } = view.current

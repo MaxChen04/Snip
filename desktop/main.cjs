@@ -899,11 +899,30 @@ function serviceItems(key) {
   if (key === "capture" && s.proc && !s.stopping) items.push({ label: "Check queue now", enabled: !quitting, click: () => s.send({ type: "snip:retry" }) })
   return items
 }
+/** History in the focused gallery window. The Settings window has no history to walk. */
+function goHistory(direction) {
+  const focused = BrowserWindow.getFocusedWindow()
+  if (!focused || focused === settingsWin || focused.isDestroyed()) return
+  const history = focused.webContents.navigationHistory
+  const step = direction === "back" ? -1 : 1
+  const target = history.getEntryAtIndex(history.getActiveIndex() + step)
+  // Stay inside the library: the loading and connection pages before it are not places to go back to.
+  const origin = (url) => { try { return new URL(url).origin } catch { return null } }
+  if (!target || origin(target.url) !== origin(focused.webContents.getURL())) return
+  step < 0 ? history.goBack() : history.goForward()
+}
+
 function refresh() {
   if (!tray) return
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     { label: identity.name, submenu: [{ role: "about" }, { id: "snip-settings", label: "Settings…", accelerator: "Cmd+,", enabled: !quitting, click: openSettings }, ...updateItems(), { type: "separator" }, { role: "hide" }, { role: "hideOthers" }, { role: "unhide" }, { type: "separator" }, { label: `Quit ${identity.name}`, enabled: !quitting, accelerator: "Cmd+Q", click: () => app.quit() }] },
-    { role: "editMenu" }, { role: "windowMenu" },
+    { role: "editMenu" },
+    // Back and Forward through the gallery's places (a site scope, a filter, an open item). Trackpad swipes stay off: the canvas pans with them.
+    { label: "Go", submenu: [
+      { label: "Back", accelerator: "Cmd+[", click: () => goHistory("back") },
+      { label: "Forward", accelerator: "Cmd+]", click: () => goHistory("forward") },
+    ] },
+    { role: "windowMenu" },
   ]))
   tray.setToolTip(quitting ? `${identity.name}: finishing capture before quitting` : `${identity.name}: ${STATUS[services.capture.status]}`)
   tray.setContextMenu(Menu.buildFromTemplate([

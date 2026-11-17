@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactElement } from "react"
-import { navigate } from "wouter/use-browser-location"
 import { toast } from "sonner"
 import { AlertCircleIcon, ArrowRight, CheckIcon, FileIcon, GlobeIcon, ImageIcon, Link2, MoreHorizontalIcon, StopIcon, XIcon } from "@/components/icons"
 import { useAddFlow } from "@/components/add-flow"
@@ -20,6 +19,7 @@ import { useCollections } from "@/lib/collections"
 import { cn } from "@/lib/utils"
 import { warningText } from "@/lib/page-warnings"
 import { WAITING } from "../../../shared/capture-errors"
+import { enterSite } from "@/lib/scope"
 
 // ---------- Captures the card follows (one shows at a time; a dropped link joins them) ----------
 
@@ -85,7 +85,7 @@ export async function captureLink(url: URL, opts: CaptureOpts): Promise<Referenc
     toast("Already saved", {
       id: `saved-${existing.id}`,
       description: existing.title ?? existing.domain,
-      action: { label: "Open", onClick: () => navigate(`/r/${existing.id}`) },
+      action: { label: "Open", onClick: () => enterSite(existing.id) },
       cancel: {
         label: "Capture again",
         onClick: () => void captureLink(url, { ...opts, allowDuplicate: true }).catch((e) => toast.error((e as Error).message)),
@@ -215,7 +215,7 @@ export function CaptureForm({ boardId, onDone }: { boardId?: string; onDone?: ()
           className="press flex h-8 shrink-0 items-center gap-1.5 rounded-md bg-primary px-3 text-xs tracking-[-0.01em] text-primary-foreground shadow-primary hover:bg-(--primary-hover) disabled:opacity-60"
         >
           Snip
-          {submitting ? <Spinner className="size-3.5" /> : <ArrowRight className="size-3.5" />}
+          {submitting ? <Spinner aria-hidden className="size-3.5" /> : <ArrowRight className="size-3.5" />}
         </button>
       </label>
 
@@ -287,7 +287,7 @@ export function CaptureForm({ boardId, onDone }: { boardId?: string; onDone?: ()
         <span aria-live="polite" className="ml-auto flex min-w-0 items-center gap-1.5 pr-1 text-2xs text-ink-10">
           {uploading ? (
             <>
-              <Spinner className="size-3" />
+              <Spinner aria-hidden className="size-3" />
               Uploading {Math.min(uploading.done + 1, uploading.total)} of {uploading.total}…
             </>
           ) : board ? (
@@ -349,7 +349,7 @@ export function CaptureCard({
     if (ref.status === "failed" && !isStopped(ref))
       toast.error(`Couldn't capture ${ref.domain}`, {
         description: diagnoseCaptureError(ref.error)?.summary ?? ref.error ?? undefined,
-        action: { label: "Open", onClick: () => navigate(`/r/${ref.id}`) },
+        action: { label: "Open", onClick: () => enterSite(ref.id) },
       })
   }
 
@@ -401,7 +401,7 @@ export function CaptureCard({
 
       {cur && (
         <div data-capture-status className="surface-raised w-[520px] max-w-[calc(100vw-2rem)] rounded-3xl bg-card p-2 shadow-modal">
-          <Status r={r} pages={view?.pages ?? []} more={more} onChange={() => void poll().catch(() => {})} onOpen={(id) => navigate(`/r/${id}`)} />
+          <Status r={r} pages={view?.pages ?? []} more={more} onChange={() => void poll().catch(() => {})} onOpen={(id) => enterSite(id)} />
         </div>
       )}
 
@@ -439,7 +439,7 @@ function Status({
   if (!r) {
     return (
       <div className="flex h-9 items-center gap-2 px-1.5 text-xs text-ink-10">
-        <Spinner className="size-3.5" />
+        <Spinner aria-hidden className="size-3.5" />
         Starting…
       </div>
     )

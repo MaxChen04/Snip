@@ -1,5 +1,5 @@
 // A capture whose agent has gone quiet (Reference.quietSince): no spinner, no progress, plain words, and Stop,
-// on the capture card, the website tile and the reference page. A stop settles it, and the agent coming back clears it.
+// on the capture card, the website tile and the website's scope. A stop settles it, and the agent coming back clears it.
 import assert from "node:assert/strict"
 import { after, before, test } from "node:test"
 import { STOPPED_EMPTY } from "../../shared/capture-errors.ts"
@@ -52,7 +52,7 @@ test("a quiet crawl that was already told to stop still offers Stop, and not Pau
   assert.equal(await card.getByText("Stopping…").count(), 0)
 })
 
-test("on the reference page, a quiet capture says so in words, shows no spinner, and Stop settles it", async () => {
+test("in the website's scope, a quiet capture says so in words, shows no spinner, and Stop settles it", async () => {
   const r = quiet({ id: "ref1", mode: "single" })
   const t = await app.session({ state: { references: { ref1: r } }, clock: true })
   const { page } = t
@@ -60,10 +60,11 @@ test("on the reference page, a quiet capture says so in words, shows no spinner,
     t.state.references.ref1 = reference({ ...r, status: "failed", error: STOPPED_EMPTY, progress: null, quietSince: null })
     return { json: t.state.references.ref1 }
   })
-  await t.goto("/r/ref1")
+  await t.goto("/?site=ref1")
   await page.getByText(QUIET).waitFor()
   assert.equal(await page.getByRole("status", { name: "Loading" }).count(), 0, "a spinner is showing")
-  assert.equal(await page.getByText("Capturing /").count(), 0, "the placeholder tile says it is working")
+  assert.equal(await page.locator("[data-slot=skeleton]").count(), 0, "a pending tile says it is working")
+  assert.equal(await page.getByRole("progressbar").count(), 0, "a progress bar says it is moving")
 
   await page.getByRole("button", { name: "Stop" }).click()
   await page.getByText("You stopped this capture before any pages were saved.").waitFor()
@@ -74,7 +75,7 @@ test("when the agent comes back the quiet copy goes and the capture reads as run
   const t = await app.session({ state: { references: { ref1: quiet({ id: "ref1", mode: "single" }) } }, clock: true })
   const { page } = t
   const url = /^\/api\/references\/ref1$/
-  await t.goto("/r/ref1")
+  await t.goto("/?site=ref1")
   await page.getByText(QUIET).waitFor()
 
   t.state.references.ref1 = reference({ id: "ref1", status: "capturing", progress: "Capturing 1/1: /", quietSince: null })
@@ -82,7 +83,7 @@ test("when the agent comes back the quiet copy goes and the capture reads as run
   await page.clock.fastForward(4500)
   await until("the next poll", () => t.count("GET", url) > polls)
   await page.getByText(QUIET).waitFor({ state: "detached" })
-  await page.getByText("Capturing /").first().waitFor()
+  await page.locator("[data-slot=skeleton]").first().waitFor()
 })
 
 test("a website tile on a board says Not responding for a quiet capture", async () => {

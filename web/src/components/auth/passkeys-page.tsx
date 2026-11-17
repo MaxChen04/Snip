@@ -104,7 +104,7 @@ export function PasskeysPage({ me }: { me: Me | null }) {
           }}
         />
         <Button size="lg" disabled={adding} onClick={add} className="shrink-0">
-          {adding ? <Spinner className="size-3.5" /> : <PlusIcon className="size-4" />}
+          {adding ? <Spinner aria-hidden className="size-3.5" /> : <PlusIcon className="size-4" />}
           {adding ? "Waiting…" : "Add passkey"}
         </Button>
       </div>

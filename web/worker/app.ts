@@ -235,6 +235,7 @@ api.get("/cloud-status", async (c) => {
 const listFilter = (q: Record<string, string>): db.ListFilter => ({
   q: q.q || undefined,
   collectionId: q.collection || undefined,
+  referenceId: q.reference || undefined,
   domain: q.domain || undefined,
   status: q.status || undefined,
   sort: (q.sort as db.SortOrder) || "newest",

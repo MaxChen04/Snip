@@ -2,6 +2,8 @@ import type { AnimationWithRef, PageWithRef, Reference, SavedImage, SectionItem 
 
 /** What the canvas filter dock can show. "all" is pages, sections and images (websites repeat pages; animations have their own filter). */
 export type CanvasFilter = "all" | "websites" | "pages" | "sections" | "animations" | "images"
+/** What the dock shows inside one website's scope. "all" is its pages and sections. */
+export type SiteFilter = "all" | "pages" | "sections" | "animations" | "tokens"
 
 /** One piece of saved material as the canvas, the inspector and boards pass it around. */
 export type CanvasItem =

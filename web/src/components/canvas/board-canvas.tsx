@@ -24,10 +24,10 @@ import { Button } from "@/components/ui/button"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Spinner } from "@/components/ui/spinner"
-import { useDesktopState } from "@/hooks/use-desktop-state"
 import { LIVE_POLL, usePoll } from "@/hooks/use-poll"
 import { api, type BoardGroup, type BoardItem, type BoardItemKind, type BoardItemPlacement, type Collection, type LibraryTypeCounts, type SavedImage } from "@/lib/api"
 import { useCollections } from "@/lib/collections"
+import { entry, landedByHistory, providePosition } from "@/lib/scope"
 import { cn } from "@/lib/utils"
 import { MAX_NAME, type BoardItemStyle } from "../../../shared/types"
 
@@ -286,8 +286,6 @@ function BoardHeader({ board, onRename, onAddNote, onAddWebsite, onDelete }: { b
  * save shortly after), Shift-drag to marquee-select, group into titled frames, filter to dim what doesn't match.
  */
 export function BoardCanvas({ login, id }: { login: string; id: string }) {
-  const [query, setQuery] = useDesktopState("snip:gallery:query", "")
-  const q = useDeferredValue(query.trim().toLowerCase())
   const { collections, refresh } = useCollections()
   const { addReference } = useAddFlow()
 
@@ -444,7 +442,11 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
   usePoll(load, capturing || statuses.includes("queued") || statuses.includes("paused"), capturing ? LIVE_POLL : undefined)
   const collection = collections.find((c) => c.id === id) ?? board?.collection
   const title = collection?.name ?? "Board"
-  const { filter, open, navigate, setParams, onOpen, close } = useCanvasRoute(title)
+  const { filter, open, params, navigate, setParams, onOpen, close } = useCanvasRoute(title)
+  // The board's search is in its URL, as on All saves: Back to the board brings it back, and each board has its own.
+  const query = params.get("q") ?? ""
+  const setQuery = useCallback((v: string) => setParams({ q: v || null }), [setParams])
+  const q = useDeferredValue(query.trim().toLowerCase())
 
   // ---- Moving ----
   /** Move items and frames by dx, dy (world px), regroup, save. `front` brings the moved items to the top. */
@@ -1075,6 +1077,19 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
     const v = canvas.current?.getView()
     if (v) placeToolbar(v)
   })
+  // The board's place in its history entry: Back from a site's scope returns to this pan and zoom, as on All saves.
+  useEffect(
+    () =>
+      providePosition(() => {
+        const v = canvas.current?.getView()
+        return v && { x: v.x, y: v.y, zoom: v.zoom }
+      }),
+    [],
+  )
+  useEffect(() => {
+    const saved = status === "ready" && landedByHistory() ? entry().view : undefined
+    if (saved) canvas.current?.setView(saved)
+  }, [status])
   const onViewChange = useCallback(
     (v: CanvasView) => {
       zoomSink.current?.(v.zoom)
@@ -1159,9 +1174,8 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
       {status === "ready" && collection && (
         <BoardHeader board={collection} onRename={(n) => void renameBoard(n)} onAddNote={() => void addNote()} onAddWebsite={() => addReference(id)} onDelete={() => void deleteBoard()} />
       )}
-      {status === "ready" && (
-        <FilterDock className="absolute bottom-6 left-1/2 z-50 -translate-x-1/2" value={filter} onChange={(f) => setParams({ filter: f === "all" ? null : f, open: null })} counts={counts} boardId={id} />
-      )}
+      {/* The dock is how you leave for another board: it shows while this one loads or fails, without counts. */}
+      <FilterDock className="absolute bottom-6 left-1/2 z-50 -translate-x-1/2" value={filter} onChange={(f) => setParams({ filter: f === "all" ? null : f, open: null })} counts={status === "ready" ? counts : null} boardId={id} />
       {status === "ready" && !empty && <Zoom canvas={canvas} sink={zoomSink} />}
       {showToolbar && (
         <SelectionToolbar

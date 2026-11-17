@@ -96,15 +96,20 @@ test("Re-capture on a website with pages asks first, and Cancel sends nothing", 
   let native = 0
   page.on("dialog", (d) => void (native++, d.dismiss()))
   t.on("GET", "/api/references/ref1", () => ({ json: { reference: t.state.references.ref1, pages: [savedPage({ id: "p1" }), savedPage({ id: "p2", path: "/pricing" })], animations: [] } }))
-  await t.goto("/r/ref1")
-  await page.getByRole("button", { name: "Re-capture" }).click()
+  const recapture = async () => {
+    await page.getByRole("button", { name: "Site details: Example" }).click()
+    await page.getByRole("button", { name: "More" }).click()
+    await page.getByRole("menuitem", { name: "Re-capture" }).click()
+  }
+  await t.goto("/?site=ref1")
+  await recapture()
   const dialog = page.getByRole("dialog", { name: "Re-capture example.com?" })
   await dialog.getByText("Its 2 captured pages will be replaced.").waitFor()
   await dialog.getByRole("button", { name: "Cancel" }).click()
   await dialog.waitFor({ state: "detached" })
   assert.equal(t.count("POST", "/api/references/ref1/recapture"), 0)
 
-  await page.getByRole("button", { name: "Re-capture" }).click()
+  await recapture()
   await page.getByRole("dialog", { name: "Re-capture example.com?" }).getByRole("button", { name: "Re-capture" }).click()
   await page.getByText("Re-capture queued").waitFor()
   assert.equal(t.count("POST", "/api/references/ref1/recapture"), 1)

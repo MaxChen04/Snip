@@ -243,14 +243,14 @@ test("a crawl's page being captured and the pages queued behind it are one pendi
   assert.equal(breathing, "spinner-breathe")
 })
 
-test("the website's page shows a percentage only when the crawl's total is known", async () => {
-  const percent = async (progress: string) => {
+test("in the site, the capture pill shows how far it has got only when the crawl's total is known", async () => {
+  const share = async (progress: string) => {
     const r = reference({ id: "ref1", status: "capturing", mode: "crawl", maxPages: 25, progress })
     const t = await app.session({ state: { references: { ref1: r } } })
-    await t.goto("/r/ref1")
-    await t.page.locator("[data-slot=skeleton]").getByText(/^Capturing \//).waitFor()
-    return t.page.getByText(/^\d+%$/).count()
+    await t.goto("/?site=ref1")
+    await t.page.getByRole("button", { name: "Pause" }).waitFor()
+    return t.page.getByRole("progressbar", { name: "Pages captured" }).getAttribute("aria-valuenow")
   }
-  assert.equal(await percent("Capturing 5/10: /pricing"), 1)
-  assert.equal(await percent("Capturing page 1: /"), 0)
+  assert.equal(await share("Capturing 5/10: /pricing"), "40")
+  assert.equal(await share("Capturing page 1: /"), null, "without a total the bar sweeps")
 })

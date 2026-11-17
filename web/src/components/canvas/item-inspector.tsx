@@ -11,6 +11,7 @@ import {
   FolderPlusIcon,
   ImageIcon,
   Link2,
+  MaximizeIcon,
   MonitorIcon,
   MoreHorizontalIcon,
   SmartphoneIcon,
@@ -20,7 +21,9 @@ import {
 import { CollectionPicker } from "@/components/collection-picker"
 import { notify } from "@/components/notify"
 import { LiveClips, LiveTag, LookToggles, usePageLook, type PageLook } from "@/components/page-look"
-import { RecordingTile } from "@/components/reference-page"
+import { PageViewer } from "@/components/page-viewer"
+import { warningText } from "@/lib/page-warnings"
+import { RecordingTile } from "@/components/recording-tile"
 import { SiteIcon } from "@/components/site-icon"
 import { TokensPanel } from "@/components/tokens-panel"
 import { Segmented } from "@/components/top-bar"
@@ -30,14 +33,16 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { siteHref } from "@/components/canvas/tiles"
+import { SiteLink, siteOf } from "@/components/canvas/tiles"
 import { RELOAD_EVENT, reloadCanvas, type CanvasItem } from "@/components/canvas/types"
 import { api, fileUrl, type Animation, type Page, type Reference, type SavedImage, type SectionItem } from "@/lib/api"
 import { useCollections } from "@/lib/collections"
 import { cn } from "@/lib/utils"
+import type { PageView } from "../../../shared/selection"
 import { isVideoKey } from "../../../shared/types"
 
 type Detail = Awaited<ReturnType<typeof api.reference>>
+export type PagePrompt = { views: Record<string, PageView>; onView: (pageId: string, view: PageView | null) => void }
 type Tab = "sections" | "palette" | "tokens" | "motion"
 type Device = "desktop" | "mobile"
 
@@ -106,6 +111,7 @@ export function ItemInspector({
   onPrev,
   onNext,
   position,
+  prompt,
 }: {
   item: CanvasItem
   onClose: () => void
@@ -114,6 +120,8 @@ export function ItemInspector({
   onNext?: () => void
   /** 0-based index in the current list and its length, for "38 of 142". */
   position?: { index: number; total: number }
+  /** The prompt being picked inside a site: the full page view can add its page to it. */
+  prompt?: PagePrompt
 }) {
   // Opens on the next frame so the enter transition runs; onClose waits for the exit transition.
   const [open, setOpen] = useState(false)
@@ -151,6 +159,7 @@ export function ItemInspector({
             position={position}
             tab={tab}
             onTab={setTab}
+            prompt={prompt}
           />
         </DialogPrimitive.Popup>
       </DialogPortal>
@@ -166,6 +175,7 @@ function Body({
   position,
   tab: tabPref,
   onTab,
+  prompt,
 }: {
   item: CanvasItem
   close: () => void
@@ -174,6 +184,7 @@ function Body({
   position?: { index: number; total: number }
   tab: Tab
   onTab: (t: Tab) => void
+  prompt?: PagePrompt
 }) {
   const [location] = useLocation()
   const { collections, refresh } = useCollections()
@@ -220,7 +231,8 @@ function Body({
     item.kind === "image" ? `${item.image.width} × ${item.image.height} · ${savedOn(info.at)}`
     : item.kind === "website" ? `Website · ${savedOn(info.at)}`
     : `${info.domain}${info.path && info.path !== "/" ? info.path : ""} · ${savedOn(info.at)}`
-  const site = siteHref(item)
+  const site = siteOf(item)
+  const [viewing, setViewing] = useState(false)
   const pageCount = item.kind === "website" ? item.reference.pageCount : detail?.reference.pageCount
 
   // ---- Boards: pages (sections and recordings save their page), websites and images ----
@@ -351,16 +363,17 @@ function Body({
         <div className="flex shrink-0 flex-col gap-3 px-5 pt-5 pb-4">
           <div className="flex min-h-8 items-center gap-2">
             {site && info.domain ? (
-              <Link
-                href={site}
-                title={`Go to ${info.domain}`}
+              <SiteLink
+                id={site}
+                onSame={close}
+                title={`Show everything from ${info.domain}`}
                 className="tactile press flex h-7 min-w-0 items-center gap-1.5 rounded-full pr-2 pl-1.5 text-xs text-ink-11 transition-colors duration-150 ease-out hover:text-ink-12"
               >
                 <SiteIcon domain={info.domain} icon={info.icon} className="size-4 rounded-sm" />
                 <span className="truncate">{info.domain}</span>
                 {pageCount !== undefined && <span className="shrink-0 text-ink-10">· {plural(pageCount, "page")}</span>}
                 <ChevronRightIcon className="size-3.5 shrink-0 text-ink-10" />
-              </Link>
+              </SiteLink>
             ) : (
               <>
                 <ImageIcon className="size-4 text-ink-10" />
@@ -372,6 +385,7 @@ function Body({
           <div className="grid gap-1">
             <DialogTitle className="line-clamp-2 text-xl leading-7 tracking-tight text-balance text-ink-12">{info.title}</DialogTitle>
             <DialogDescription className="truncate text-xs text-ink-10">{meta}</DialogDescription>
+            {item.kind === "page" && !!item.page.warnings?.length && <p className="text-xs text-pretty text-ink-11">{warningText(item.page)}</p>}
           </div>
           <div className="flex items-center gap-2 pt-1">
             <Popover>
@@ -391,6 +405,11 @@ function Body({
                 {item.kind === "image" ? "Open" : "Visit"}
                 <ArrowUpRightIcon className="size-3.5 text-ink-10" />
               </a>
+            )}
+            {showsPage && page?.desktopKey && (
+              <button type="button" onClick={() => setViewing(true)} title="Full page: live view, HTML and CSS" aria-label="Full page" className={cn(pressable, "tactile w-9 shrink-0 justify-center pointer-coarse:w-11")}>
+                <MaximizeIcon className="size-4 text-ink-11" />
+              </button>
             )}
             <DropdownMenu>
               <DropdownMenuTrigger
@@ -510,6 +529,17 @@ function Body({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {viewing && page && (
+        <PageViewer
+          page={page}
+          onClose={() => setViewing(false)}
+          onCollectionsChange={(ids, cid, member) =>
+            update((d) => ({ ...d, pages: d.pages.map((p) => (ids.includes(p.id) ? { ...p, collectionIds: member ? [...new Set([...p.collectionIds, cid])] : p.collectionIds.filter((x) => x !== cid) } : p)) }))
+          }
+          promptView={prompt ? (prompt.views[page.id] ?? null) : undefined}
+          onPromptView={prompt ? (view) => prompt.onView(page.id, view) : undefined}
+        />
+      )}
     </>
   )
 }
@@ -708,7 +738,7 @@ function WebsitePreview({ reference, pages, failed }: { reference: Reference; pa
         <div className="-mx-3 flex shrink-0 gap-3 overflow-x-auto px-3 pb-1 sm:-mx-5 sm:px-5">
           {pages
             ? pages.map((p) => (
-                <Link key={p.id} href={`/r/${reference.id}?page=${p.id}`} className="group w-36 shrink-0 rounded-md">
+                <SiteLink key={p.id} id={reference.id} open={`page:${p.id}`} className="group w-36 shrink-0 rounded-md">
                   <img
                     src={fileUrl(p.desktopThumbKey ?? p.mobileThumbKey)}
                     alt=""
@@ -716,7 +746,7 @@ function WebsitePreview({ reference, pages, failed }: { reference: Reference; pa
                     className="aspect-[16/10] w-full rounded-md bg-ink-4 object-cover object-top shadow-card transition-[scale] duration-150 ease-out group-active:scale-[0.98]"
                   />
                   <span className="mt-1 block truncate text-2xs text-ink-11 group-hover:text-ink-12">{p.title || p.path}</span>
-                </Link>
+                </SiteLink>
               ))
             : [0, 1, 2, 3].map((i) => <Skeleton key={i} className="aspect-[16/10] w-36 shrink-0 rounded-md" />)}
         </div>
@@ -872,6 +902,8 @@ function Notes({ reference, onChange }: { reference: Reference; onChange: (notes
     setStatus("saving")
     try {
       await api.setNotes(reference.id, next)
+      // The site's own copy (its details in a site scope) picks up the note.
+      reloadCanvas()
       if (mounted.current) setStatus("saved")
     } catch {
       saved.current = before
