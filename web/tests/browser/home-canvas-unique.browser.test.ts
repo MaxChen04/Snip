@@ -122,3 +122,24 @@ test("a save that arrives on a refresh is on the screen after Recenter", { timeo
   assert.deepEqual(t.consoleErrors, [])
   await page.context().close()
 })
+
+test("with nothing saved, the welcome stays reachable however far the canvas is pulled", { timeout: 60_000 }, async () => {
+  const t = await app.session({ viewport: VIEW })
+  const { page } = t
+  await t.goto("/")
+  await page.locator("[aria-roledescription=canvas]").getByRole("button", { name: "stripe.com" }).waitFor()
+  await sleep(300)
+  // The plaza holding the welcome card is the world's first child.
+  const shown = () =>
+    page.evaluate<number>(`(() => {
+      const r = document.querySelector("[aria-roledescription=canvas] > div").firstElementChild.getBoundingClientRect()
+      return Math.max(0, Math.min(r.right, innerWidth) - Math.max(r.left, 0)) * Math.max(0, Math.min(r.bottom, innerHeight) - Math.max(r.top, 0))
+    })()`)
+  for (const [dx, dy] of [[60_000, 0], [-120_000, 40_000], [60_000, -80_000]] as const) {
+    await wheelPan(page, dx, dy, 30)
+    await sleep(300)
+    assert.ok((await shown()) > 100 * 100, `the welcome is on the screen after a pan of ${dx}, ${dy}`)
+  }
+  assert.deepEqual(t.consoleErrors, [])
+  await page.context().close()
+})
