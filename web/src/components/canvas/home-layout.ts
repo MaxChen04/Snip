@@ -1,5 +1,5 @@
-// Home canvas layout: masonry columns around a clear plaza at the world origin, newest items nearest the centre.
-// With enough items one block repeats in every direction (a torus); only the origin copy keeps the plaza clear.
+// Home canvas layout: masonry columns around a clear plaza at the world origin, newest items nearest the centre. Every
+// item has exactly one tile; the space around the content is empty.
 // Pure and free of `@/` imports: web/tests/canvas-layout.test.ts runs it under node.
 
 export const COLUMN = 240
@@ -12,201 +12,113 @@ const PITCH = COLUMN + GAP
  */
 export const PLAZA = { w: 528, h: 260 }
 export type Plaza = { w: number; h: number }
-/** From this many items the block repeats in every direction; below it the items form one cluster. */
-export const REPEAT_FROM = 16
 /** Rings grow wider than tall, like a screen. */
 const X_STRETCH = 1.5
-/** Columns either side of the origin the finite cluster may use (15 items never reach it). */
-const CLUSTER_COLS = 12
 
 export type Rect = { x: number; y: number; w: number; h: number }
-/** A tile in world px. `index` points into the items passed to layoutHome; `key` is unique per copy. */
+/** A tile in world px. `index` points into the items passed to layoutHome; `key` is the item's. */
 export type Placement = { key: string; index: number; x: number; y: number; w: number; h: number }
+/** Where an item went: its column, and whether below the plaza's row (down) or above it. */
+export type Slot = { c: number; down: boolean }
 export type HomeLayout = {
   tiles: Placement[]
-  /** Tiles that fill the plaza in every copy but the origin one. */
-  fill: Placement[]
-  /** Size of the repeating block, or null for one finite cluster. */
-  period: { w: number; h: number } | null
+  /** Each item's slot, to pass back to the next layout of the same place so the items keep their places. */
+  slots: Map<string, Slot>
 }
 
-type Column = { c: number; hole: boolean; top: number; bottom: number; used: number; up: number[]; down: number[] }
+type Column = { c: number; hole: boolean; top: number; bottom: number; up: number[]; down: number[] }
 
 /** Centre x of column c. */
 const cx = (c: number) => (c + 0.5) * PITCH
 
-/** Columns c in [from, to); those under the plaza start beyond it. */
-function columns(from: number, to: number, plaza: Plaza): Column[] {
-  const out: Column[] = []
-  for (let c = from; c < to; c++) {
-    const hole = Math.abs(cx(c)) - COLUMN / 2 < plaza.w / 2
-    out.push({ c, hole, top: hole ? -plaza.h / 2 - GAP : -GAP / 2, bottom: hole ? plaza.h / 2 + GAP : GAP / 2, used: 0, up: [], down: [] })
-  }
-  return out
-}
-
 /**
- * Greedy ring fill: each item goes to the column end (above or below) whose tile centre would sit nearest the origin.
- * With caps, a column takes no more than its cap while another has room.
+ * Each item goes to the column end (above or below the plaza's row) whose tile centre would sit nearest the origin, so
+ * the field grows outward in rings and the newest items, laid out first, sit nearest the plaza. Within a column the
+ * newest is nearest the plaza.
+ *
+ * `keep` is the last layout's slots for this place. Items in it stay in their column; only new ones are placed. An item
+ * saved since goes into the inner end of one of the middle columns, so it is beside the plaza, and moves that column's
+ * older tiles out by one; older items
+ * (another page of the feed) go to the outer ends, which moves nothing. Without `keep` the layout depends only on the
+ * items, in order.
  */
-function fill(heights: number[], cols: Column[], cap?: (col: Column) => number) {
-  heights.forEach((h, i) => {
-    let best: { col: Column; down: boolean; d: number } | null = null
-    for (const col of cols) {
-      if (cap && col.used + h + GAP > cap(col)) continue
-      const x = cx(col.c) / X_STRETCH
-      for (const down of [false, true]) {
-        const d = Math.hypot(x, down ? col.bottom + h / 2 : col.top - h / 2)
-        if (!best || d < best.d) best = { col, down, d }
-      }
+export function layoutHome(items: { key: string; aspect: number }[], plaza: Plaza = PLAZA, keep?: ReadonlyMap<string, Slot>): HomeLayout {
+  const heights = items.map((it) => COLUMN / it.aspect)
+  const cols = new Map<number, Column>()
+  const column = (c: number) => {
+    let col = cols.get(c)
+    if (!col) {
+      const hole = Math.abs(cx(c)) - COLUMN / 2 < plaza.w / 2
+      col = { c, hole, top: hole ? -plaza.h / 2 - GAP : -GAP / 2, bottom: hole ? plaza.h / 2 + GAP : GAP / 2, up: [], down: [] }
+      cols.set(c, col)
     }
-    if (!best) {
-      // Nothing has room: the roomiest column takes it, and the block grows to fit.
-      const col = cols.reduce((a, b) => (cap!(b) - b.used > cap!(a) - a.used ? b : a))
-      const x = cx(col.c) / X_STRETCH
-      best = { col, down: Math.hypot(x, col.bottom + h / 2) < Math.hypot(x, col.top - h / 2), d: 0 }
-    }
-    const { col, down } = best
+    return col
+  }
+  const put = (i: number, col: Column, down: boolean) => {
+    const h = heights[i]! + GAP
     if (down) {
       col.down.push(i)
-      col.bottom += h + GAP
+      col.bottom += h
     } else {
       col.up.push(i)
-      col.top -= h + GAP
+      col.top -= h
     }
-    col.used += h + GAP
+  }
+
+  const fresh: number[] = []
+  let oldestKept = -1
+  items.forEach((it, i) => {
+    const slot = keep?.get(it.key)
+    if (!slot) return fresh.push(i)
+    put(i, column(slot.c), slot.down)
+    oldestKept = i
   })
-}
+  // The nearest end is never further out than the columns the field already uses plus one either side.
+  let reach = Math.max(1, ...[...cols.keys()].map((c) => Math.abs(c) + 2))
+  for (const i of fresh) {
+    const h = heights[i]!
+    // An item newer than ones already placed lands at the inner end of its column, next to the plaza: it goes where
+    // that spot is nearest the centre (the middle columns), the shortest such column first. Older items land at the
+    // outer ends, where that end is nearest the centre.
+    const inner = i < oldestKept
+    let best: { col: Column; down: boolean; d: number; len: number } | null = null
+    for (let c = -reach; c < reach; c++) {
+      const col = column(c)
+      const x = cx(c) / X_STRETCH
+      for (const down of [false, true]) {
+        const start = col.hole ? plaza.h / 2 + GAP : GAP / 2
+        const end = down ? col.bottom : -col.top
+        const d = Math.round(Math.hypot(x, inner ? start + h / 2 : end + h / 2))
+        if (!best || d < best.d || (d === best.d && end < best.len)) best = { col, down, d, len: end }
+      }
+    }
+    put(i, best!.col, best!.down)
+    reach = Math.max(reach, Math.abs(best!.col.c) + 2)
+  }
 
-/** Placements for filled columns, each column's tile heights multiplied by scale(col). */
-function place(keys: string[], heights: number[], cols: Column[], plaza: Plaza, scale: (col: Column) => number): Placement[] {
-  const out: Placement[] = []
-  for (const col of cols) {
-    const f = scale(col)
+  const tiles: Placement[] = []
+  const slots = new Map<string, Slot>()
+  for (const col of cols.values()) {
     const x = cx(col.c) - COLUMN / 2
-    let y = col.hole ? plaza.h / 2 + GAP : GAP / 2
-    for (const index of col.down) {
-      const h = heights[index]! * f
-      out.push({ key: keys[index]!, index, x, y, w: COLUMN, h })
-      y += h + GAP
-    }
-    y = col.hole ? -plaza.h / 2 - GAP : -GAP / 2
-    for (const index of col.up) {
-      const h = heights[index]! * f
-      y -= h
-      out.push({ key: keys[index]!, index, x, y, w: COLUMN, h })
-      y -= GAP
-    }
-  }
-  return out.sort((a, b) => a.index - b.index)
-}
-
-export function layoutHome(items: { key: string; aspect: number }[], plaza: Plaza = PLAZA): HomeLayout {
-  const keys = items.map((it) => it.key)
-  const heights = items.map((it) => COLUMN / it.aspect)
-  // The plaza sits in its columns like one more item: its height plus the gap below it.
-  const HOLE = plaza.h + GAP
-
-  if (items.length < REPEAT_FROM) {
-    const cols = columns(-CLUSTER_COLS, CLUSTER_COLS, plaza)
-    fill(heights, cols)
-    return { tiles: place(keys, heights, cols, plaza, () => 1), fill: [], period: null }
-  }
-
-  // A block about 1.6:1, an even number of columns so it is symmetric about the origin, at least four so the plaza
-  // has columns beside it.
-  const plazaCols = columns(-CLUSTER_COLS, CLUSTER_COLS, plaza).filter((col) => col.hole).length
-  const total = heights.reduce((s, h) => s + h + GAP, 0) + plazaCols * HOLE
-  const raw = Math.max(4, Math.round(Math.sqrt((total * 1.6) / PITCH)))
-  const n = raw + (raw % 2)
-  const cols = columns(-n / 2, n / 2, plaza)
-  const target = Math.max(Math.ceil(total / n), HOLE + Math.max(...heights) + GAP)
-  const fixed = (col: Column) => (col.hole ? HOLE : 0)
-  fill(heights, cols, (col) => target - fixed(col))
-
-  // Every column must wrap at the same height. Shorter columns stretch their tiles (tiles crop with object-cover)
-  // rather than their gaps, so the gaps stay even.
-  // ponytail: a column left with one short tile stretches it a lot; rebalance columns if that shows up in practice.
-  const H = Math.max(...cols.map((col) => col.used + fixed(col)))
-  const scale = (col: Column) => {
-    const count = col.up.length + col.down.length
-    const natural = col.used - count * GAP
-    return natural > 0 ? (H - fixed(col) - count * GAP) / natural : 1
-  }
-  const tiles = place(keys, heights, cols, plaza, scale)
-
-  // Other copies fill the plaza: in each of its columns, the oldest items stretched to exactly its height.
-  const holeFill: Placement[] = []
-  let next = 0
-  for (const col of cols.filter((col) => col.hole)) {
-    const pick = (k: number) => items.length - 1 - ((next + k) % items.length)
-    let k = 0
-    let sum = 0
-    while (k === 0 || sum + (k - 1) * GAP < plaza.h) sum += heights[pick(k++)]!
-    // One fewer may land closer to the plaza height than one more.
-    const fewer = sum - heights[pick(k - 1)]!
-    if (k > 1 && plaza.h - (fewer + (k - 2) * GAP) < sum + (k - 1) * GAP - plaza.h) {
-      k--
-      sum = fewer
-    }
-    const f = (plaza.h - (k - 1) * GAP) / sum
-    let y = -plaza.h / 2
-    for (let m = 0; m < k; m++) {
-      const index = pick(m)
-      const h = heights[index]! * f
-      holeFill.push({ key: `fill${col.c}:${keys[index]}`, index, x: cx(col.c) - COLUMN / 2, y, w: COLUMN, h })
-      y += h + GAP
-    }
-    next += k
-  }
-
-  return { tiles, fill: holeFill, period: { w: n * PITCH, h: H } }
-}
-
-const intersects = (a: Rect, x: number, y: number, w: number, h: number) => x < a.x + a.w && x + w > a.x && y < a.y + a.h && y + h > a.y
-
-type Bounds = { minX: number; minY: number; maxX: number; maxY: number }
-// A layout never changes once made, and visibleTiles runs on every visible-rect change (every frame of a zoom).
-const boundsOf = new WeakMap<HomeLayout, Bounds>()
-function bounds(layout: HomeLayout): Bounds {
-  let b = boundsOf.get(layout)
-  if (!b) {
-    b = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity }
-    for (const list of [layout.tiles, layout.fill])
-      for (const t of list) {
-        b.minX = Math.min(b.minX, t.x)
-        b.minY = Math.min(b.minY, t.y)
-        b.maxX = Math.max(b.maxX, t.x + t.w)
-        b.maxY = Math.max(b.maxY, t.y + t.h)
+    for (const down of [true, false]) {
+      let y = col.hole ? (down ? plaza.h / 2 + GAP : -plaza.h / 2 - GAP) : down ? GAP / 2 : -GAP / 2
+      for (const index of (down ? col.down : col.up).sort((a, b) => a - b)) {
+        const h = heights[index]!
+        if (!down) y -= h
+        tiles.push({ key: items[index]!.key, index, x, y, w: COLUMN, h })
+        y += down ? h + GAP : -GAP
+        slots.set(items[index]!.key, { c: col.c, down })
       }
-    boundsOf.set(layout, b)
+    }
   }
-  return b
+  tiles.sort((a, b) => a.index - b.index)
+
+  return { tiles, slots }
 }
 
-/** Tiles (with copies of a repeating block) that intersect a world rect, origin copy first, newest first within a copy. */
+/** The tiles that intersect a world rect, newest first. */
 export function visibleTiles(layout: HomeLayout, r: Rect): Placement[] {
-  const { tiles, fill, period } = layout
-  if (!period) return tiles.filter((t) => intersects(r, t.x, t.y, t.w, t.h))
-
-  const { minX, minY, maxX, maxY } = bounds(layout)
-  const copies: [number, number][] = []
-  for (let i = Math.floor((r.x - maxX) / period.w); i <= Math.ceil((r.x + r.w - minX) / period.w); i++)
-    for (let j = Math.floor((r.y - maxY) / period.h); j <= Math.ceil((r.y + r.h - minY) / period.h); j++) copies.push([i, j])
-  copies.sort((a, b) => Math.abs(a[0]) + Math.abs(a[1]) - Math.abs(b[0]) - Math.abs(b[1]))
-
-  const out: Placement[] = []
-  for (const [i, j] of copies) {
-    const dx = i * period.w
-    const dy = j * period.h
-    // The origin copy keeps the plaza clear; the others fill it.
-    for (const list of i === 0 && j === 0 ? [tiles] : [tiles, fill]) {
-      for (const t of list) {
-        if (intersects(r, t.x + dx, t.y + dy, t.w, t.h)) out.push({ ...t, key: `${t.key}@${i},${j}`, x: t.x + dx, y: t.y + dy })
-      }
-    }
-  }
-  return out
+  return layout.tiles.filter((t) => t.x < r.x + r.w && t.x + t.w > r.x && t.y < r.y + r.h && t.y + t.h > r.y)
 }
 
 /** The most tiles a render mounts that were not mounted before (see stageTiles). */

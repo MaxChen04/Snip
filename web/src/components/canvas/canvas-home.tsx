@@ -11,7 +11,7 @@ import { TopBar } from "@/components/top-bar"
 import { CaptureCard } from "@/components/canvas/capture-card"
 import { DropOverlay } from "@/components/canvas/drop-overlay"
 import { countOf, FilterDock } from "@/components/canvas/filter-dock"
-import { GAP, layoutHome, PLAZA, stageTiles, visibleTiles, type HomeLayout, type Placement, type Plaza } from "@/components/canvas/home-layout"
+import { GAP, layoutHome, PLAZA, stageTiles, visibleTiles, type HomeLayout, type Placement, type Plaza, type Slot } from "@/components/canvas/home-layout"
 import { InfiniteCanvas, type CanvasView, type InfiniteCanvasHandle, type WorldRect } from "@/components/canvas/infinite-canvas"
 import { ItemInspector, type PagePrompt } from "@/components/canvas/item-inspector"
 import { CapturePill, isBusy, SitePill, useSite, type SiteDetail } from "@/components/canvas/site-scope"
@@ -31,8 +31,8 @@ const FILTERS: CanvasFilter[] = ["all", "websites", "pages", "sections", "animat
 const SITE_FILTERS: SiteFilter[] = ["all", "pages", "sections", "animations", "tokens"]
 export const keyOf = (it: CanvasItem) => `${it.kind}:${it.id}`
 
-// ponytail: each feed loads up to CAP items up front and is laid out once. Loading more as the user pans would
-// reshuffle the repeating block under them; add it with a layout that appends instead of re-flowing.
+// ponytail: each feed loads up to CAP items up front. The layout keeps every item's place and puts older items at the
+// outer edge (see layoutHome), so loading the next page as a pan nears the edge would move nothing already on screen.
 const PAGE = 100
 const CAP = 400
 
@@ -64,8 +64,10 @@ const FEEDS: Record<CanvasFilter, (f: Filters) => Promise<CanvasItem[]>> = {
     Promise.all([FEEDS.pages(f), FEEDS.sections(f), FEEDS.images(f)]).then((lists) => lists.flat().sort((a, b) => createdAt(b).localeCompare(createdAt(a)))),
 }
 
-// The last few feeds and counts, so Back to a place shows it at once while it refreshes.
+// The last few feeds and counts, so Back to a place shows it at once while it refreshes, and each place's slots, so its
+// items stay where they were when it refreshes or Back returns to it.
 const feedCache = new Map<string, CanvasItem[]>()
+const slotCache = new Map<string, Map<string, Slot>>()
 const countCache = new Map<string, LibraryTypeCounts>()
 function cache<T>(map: Map<string, T>, key: string, value: T) {
   map.delete(key)
@@ -198,8 +200,6 @@ const Field = memo(function Field({
   const tiles = staged.map((t) => {
     let el = cache.elements.get(t.key)
     if (!el) {
-      // Repeated copies of the block are not tabbable or announced (see HomeTile).
-      const copy = t.key.includes("@") && !t.key.endsWith("@0,0")
       const item = items[t.index]
       el = item ? (
         <HomeTile
@@ -209,7 +209,6 @@ const Field = memo(function Field({
           y={t.y}
           w={t.w}
           h={t.h}
-          copy={copy}
           onOpen={onOpen}
           scoped={scoped}
           checked={pick && pickable(item) ? isPicked(pick, item) : undefined}
@@ -400,14 +399,25 @@ export function CanvasHome({ login }: { login: string }) {
     return () => ro.disconnect()
   }, [])
   const plazaRect = useMemo(() => (plazaH ? { w: PLAZA.w, h: plazaH } : { w: 0, h: 0 }), [plazaH])
-  const layout = useMemo(
-    () =>
-      layoutHome(
-        [...(items ?? []).map((it) => ({ key: keyOf(it), aspect: itemAspect(it) })), ...pending.map((_, i) => ({ key: `${PENDING_KEY}${i}`, aspect: 16 / 10 }))],
-        plazaRect,
-      ),
-    [items, pending, plazaRect],
-  )
+  const place = `${site ?? ""}|${feedFilter}|${q}`
+  const layout = useMemo(() => {
+    const next = layoutHome(
+      [...(items ?? []).map((it) => ({ key: keyOf(it), aspect: itemAspect(it) })), ...pending.map((_, i) => ({ key: `${PENDING_KEY}${i}`, aspect: 16 / 10 }))],
+      plazaRect,
+      slotCache.get(place),
+    )
+    if (items) cache(slotCache, place, next.slots)
+    return next
+  }, [items, pending, plazaRect, place])
+
+  // What a pan must keep on the screen: the tiles (saved and still capturing), and the plaza while it holds something
+  // (the capture card, a welcome, no results, a retry). Nothing while the feed first loads, so a saved view isn't moved
+  // before its tiles are there.
+  const content = useMemo(() => {
+    if (!items && !error) return undefined
+    const rects: WorldRect[] = plazaH ? [...layout.tiles, { x: -PLAZA.w / 2, y: -plazaH / 2, w: PLAZA.w, h: plazaH }] : layout.tiles
+    return rects.length ? rects : undefined
+  }, [items, error, layout, plazaH])
 
   const canvas = useRef<InfiniteCanvasHandle>(null)
   // A new place (scope, filter, search) lays the field out again around the plaza: bring the plaza back. Back or
@@ -730,6 +740,7 @@ export function CanvasHome({ login }: { login: string }) {
         className="absolute inset-0"
         aria-label={`${title}. Drag or use the arrow keys to move, plus and minus to zoom, 0 to recenter.`}
         onViewChange={onViewChange}
+        content={content}
       >
         {renderWorld}
       </InfiniteCanvas>

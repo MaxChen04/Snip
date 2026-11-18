@@ -24,6 +24,8 @@ export interface InfiniteCanvasHandle {
 }
 
 export const MIN_ZOOM = 0.25
+/** The share of the screen the content still covers at the far end of a pan (see `content`). */
+const KEEP_IN_VIEW = 0.25
 export const MAX_ZOOM = 2
 
 const clampZoom = (k: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, k))
@@ -47,6 +49,7 @@ export function InfiniteCanvas({
   children,
   home = { x: 0, y: 0, zoom: 1 },
   onViewChange,
+  content,
   tiled = false,
   className,
   "aria-label": label,
@@ -57,6 +60,12 @@ export function InfiniteCanvas({
   home?: { x: number; y: number; zoom?: number }
   /** Called once per frame while the view changes. */
   onViewChange?: (view: CanvasView) => void
+  /**
+   * Where there is something to see. However far a pan, a fling, a zoom or a saved view goes, the view stops where one
+   * of these rects still covers a quarter of the screen's width or height (KEEP_IN_VIEW), so the user is never lost in
+   * empty space.
+   */
+  content?: readonly WorldRect[]
   /**
    * The children are many light tiles that mount and unmount as the view moves (the home gallery), not a few hundred
    * heavy items that stay mounted (a board). The canvas then differs in three ways, all measured with 200 to 1,000
@@ -87,6 +96,8 @@ export function InfiniteCanvas({
   tiledRef.current = tiled
   const onViewRef = useRef(onViewChange)
   onViewRef.current = onViewChange
+  const contentRef = useRef(content)
+  contentRef.current = content
 
   // One object of imperative helpers, created once; they read only refs.
   const api = useRef<ReturnType<typeof makeApi> | null>(null)
@@ -106,6 +117,25 @@ export function InfiniteCanvas({
     const flush = () => {
       cancelAnimationFrame(frame)
       frame = 0
+      const rects = contentRef.current
+      if (rects?.length) {
+        // The nearest centre from which some rect still reaches KEEP_IN_VIEW into the screen: that rect, grown by the rest.
+        const v = view.current
+        const x = (v.w / 2 - v.tx) / v.k
+        const y = (v.h / 2 - v.ty) / v.k
+        const mx = (v.w * (0.5 - KEEP_IN_VIEW)) / v.k
+        const my = (v.h * (0.5 - KEEP_IN_VIEW)) / v.k
+        let best = { x, y, d: Infinity }
+        for (const r of rects) {
+          const px = Math.min(r.x + r.w + mx, Math.max(r.x - mx, x))
+          const py = Math.min(r.y + r.h + my, Math.max(r.y - my, y))
+          const d = (px - x) ** 2 + (py - y) ** 2
+          if (d < best.d) best = { x: px, y: py, d }
+          if (!d) break
+        }
+        v.tx = v.w / 2 - best.x * v.k
+        v.ty = v.h / 2 - best.y * v.k
+      }
       const { tx, ty, k } = view.current
       if (world.current) world.current.style.transform = `translate3d(${tx}px, ${ty}px, 0) scale(${k})`
       if (tiledRef.current) world.current?.toggleAttribute("data-far", k < FAR_ZOOM)
@@ -255,6 +285,11 @@ export function InfiniteCanvas({
       a.cancel()
     }
   }, [a])
+
+  // New content (the feed loaded or changed) brings a view left outside it back to its edge.
+  useLayoutEffect(() => {
+    if (content?.length) a.flush()
+  }, [a, content])
 
   // Wheel and Safari's gesture events need non-passive listeners to stop the page zooming or swiping back.
   useEffect(() => {
