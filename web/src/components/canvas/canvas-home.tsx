@@ -358,10 +358,11 @@ export function CanvasHome({ login }: { login: string }) {
   const version = reference ? `${reference.status}|${reference.pageCount}|${reference.animationCount}|${reference.captureRun}` : ""
   const counts = useCounts(q, site, version)
   const total = counts ? countOf(counts, "all") : null
-  const firstRun = !site && !q && !!counts && counts.websites + total! === 0
   // Zoom and the caption wait for the counts, so the page doesn't flash them.
   const chrome = counts !== undefined
   const { items, error } = useFeed(feedFilter, q, site, version)
+  // Only once the saves themselves have loaded: counts that answer first must not call a loading library empty.
+  const firstRun = !site && !q && !!counts && counts.websites + total! === 0 && items?.length === 0
   const pending = useMemo(() => (site && !q && (filter === "pages" || filter === "all") ? pendingOf(detail) : []), [site, q, filter, detail])
 
   // ---- Selecting for a prompt, inside a site ----

@@ -78,7 +78,8 @@ export function useSite(id: string | null) {
   }, [load])
   const current = state?.id === id ? state : undefined
   const r = current?.detail?.reference
-  usePoll(load, !!r && (r.status === "queued" || r.status === "capturing"), r?.status === "capturing" ? LIVE_POLL : undefined)
+  // Paused too, at the default backoff: a resume from another window or the Mac app must reach this one.
+  usePoll(load, !!r && isBusy(r), r?.status === "capturing" ? LIVE_POLL : undefined)
   const update = (fn: (d: SiteDetail) => SiteDetail) => setState((s) => (s?.id === id && s.detail ? { ...s, detail: fn(s.detail) } : s))
   return { detail: current?.detail ?? null, error: current?.error ?? null, missing: current?.error instanceof NotFoundError, reload: load, update }
 }
