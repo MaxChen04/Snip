@@ -370,6 +370,10 @@ body:has([role="toolbar"][aria-label="Filter saves"]):has([data-selection-bar]) 
   --loading-beat: 1.2s;
 }
 
+/* The canvas spring: zoom, a pan settling after a release, the edge's rubber band, a dropped board item. Its bounce and
+ * duration are set once, in web/src/lib/spring.ts, which writes the same spring here as --spring-ease (a linear() curve)
+ * and --spring-duration for CSS transitions. */
+
 @keyframes indeterminate {
   from { translate: -100% 0; }
   to { translate: 250% 0; }
