@@ -419,3 +419,25 @@ test("a site with more saves than the canvas holds says it shows only the newest
   await t.goto("/?site=big")
   await t.page.getByText("Showing the newest 400 of 1000. Search to find older saves.").waitFor()
 })
+
+test("a paused site notices a resume from another window and shows the pages saved after it", async () => {
+  const lib = library()
+  crawlStep(lib, "pause")
+  const t = await app.session({ clock: true })
+  t.on("GET", /^\/api\//, mockLibrary(lib))
+  t.on("POST", /^\/api\/references\/[^/]+\/(pause|resume|stop)$/, mockLibrary(lib))
+  await t.goto("/?site=hone")
+  const { page } = t
+  await page.getByText("Paused after 3 of 6 pages").waitFor()
+
+  // Resumed elsewhere (another browser window or the Mac app), and the crawl saves its next page.
+  crawlStep(lib, "resume")
+  crawlStep(lib, "next")
+  const detail = "/api/references/hone"
+  const polls = t.count("GET", detail)
+  await page.clock.fastForward(4500)
+  await until("the next poll", () => t.count("GET", detail) > polls)
+  await page.getByText("Capturing 5/6: /about").waitFor()
+  await page.getByRole("button", { name: "Hone · customers", exact: true }).first().waitFor({ state: "attached" })
+  assert.equal(t.count("POST", "/api/references/hone/resume"), 0)
+})

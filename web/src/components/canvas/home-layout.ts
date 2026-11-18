@@ -37,7 +37,8 @@ const cx = (c: number) => (c + 0.5) * PITCH
  * newest is nearest the plaza.
  *
  * `keep` is the last layout's slots for this place. Items in it stay in their column; only new ones are placed. An item
- * saved since goes into the inner end of one column, which moves that column's older tiles out by one; older items
+ * saved since goes into the inner end of one of the middle columns, so it is beside the plaza, and moves that column's
+ * older tiles out by one; older items
  * (another page of the feed) go to the outer ends, which moves nothing. Without `keep` the layout depends only on the
  * items, in order.
  */
@@ -65,22 +66,30 @@ export function layoutHome(items: { key: string; aspect: number }[], plaza: Plaz
   }
 
   const fresh: number[] = []
+  let oldestKept = -1
   items.forEach((it, i) => {
     const slot = keep?.get(it.key)
-    if (slot) put(i, column(slot.c), slot.down)
-    else fresh.push(i)
+    if (!slot) return fresh.push(i)
+    put(i, column(slot.c), slot.down)
+    oldestKept = i
   })
   // The nearest end is never further out than the columns the field already uses plus one either side.
   let reach = Math.max(1, ...[...cols.keys()].map((c) => Math.abs(c) + 2))
   for (const i of fresh) {
     const h = heights[i]!
-    let best: { col: Column; down: boolean; d: number } | null = null
+    // An item newer than ones already placed lands at the inner end of its column, next to the plaza: it goes where
+    // that spot is nearest the centre (the middle columns), the shortest such column first. Older items land at the
+    // outer ends, where that end is nearest the centre.
+    const inner = i < oldestKept
+    let best: { col: Column; down: boolean; d: number; len: number } | null = null
     for (let c = -reach; c < reach; c++) {
       const col = column(c)
       const x = cx(c) / X_STRETCH
       for (const down of [false, true]) {
-        const d = Math.hypot(x, down ? col.bottom + h / 2 : col.top - h / 2)
-        if (!best || d < best.d) best = { col, down, d }
+        const start = col.hole ? plaza.h / 2 + GAP : GAP / 2
+        const end = down ? col.bottom : -col.top
+        const d = Math.round(Math.hypot(x, inner ? start + h / 2 : end + h / 2))
+        if (!best || d < best.d || (d === best.d && end < best.len)) best = { col, down, d, len: end }
       }
     }
     put(i, best!.col, best!.down)

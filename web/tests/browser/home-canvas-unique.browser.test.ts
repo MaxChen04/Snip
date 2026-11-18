@@ -29,7 +29,7 @@ async function home(n: number) {
   await t.goto("/")
   await t.page.getByRole("button", { name: "Page 0", exact: true }).waitFor()
   await sleep(300)
-  return t
+  return Object.assign(t, { pages })
 }
 
 /** The labels of the tiles mounted on the canvas, and how many of them are on the screen. */
@@ -107,6 +107,42 @@ test("a saved view outside the content (from before each item was drawn once) la
   const { labels, onScreen } = await tiles(page)
   assert.ok(onScreen > 0, "tiles are on the screen")
   assert.equal(new Set(labels).size, labels.length)
+  assert.deepEqual(t.consoleErrors, [])
+  await page.context().close()
+})
+
+test("a save that arrives on a refresh is on the screen after Recenter", { timeout: 60_000 }, async () => {
+  const t = await home(100)
+  const { page } = t
+  t.pages.unshift({ ...t.pages[0]!, id: "fresh", title: "Fresh save", path: "/fresh", createdAt: new Date(Date.UTC(2026, 0, 2)).toISOString() })
+  await page.evaluate(`window.dispatchEvent(new Event("rs:reload"))`)
+  const fresh = page.getByRole("button", { name: "Fresh save", exact: true })
+  await page.getByRole("button", { name: "Recenter" }).click()
+  await until("the new save is on the screen", async () => {
+    const b = (await fresh.count()) ? await fresh.boundingBox() : null
+    return !!b && b.x >= 0 && b.y >= 0 && b.x + b.width <= VIEW.width && b.y + b.height <= VIEW.height
+  })
+  assert.deepEqual(t.consoleErrors, [])
+  await page.context().close()
+})
+
+test("with nothing saved, the welcome stays reachable however far the canvas is pulled", { timeout: 60_000 }, async () => {
+  const t = await app.session({ viewport: VIEW })
+  const { page } = t
+  await t.goto("/")
+  await page.locator("[aria-roledescription=canvas]").getByRole("button", { name: "stripe.com" }).waitFor()
+  await sleep(300)
+  // The plaza holding the welcome card is the world's first child.
+  const shown = () =>
+    page.evaluate<number>(`(() => {
+      const r = document.querySelector("[aria-roledescription=canvas] > div").firstElementChild.getBoundingClientRect()
+      return Math.max(0, Math.min(r.right, innerWidth) - Math.max(r.left, 0)) * Math.max(0, Math.min(r.bottom, innerHeight) - Math.max(r.top, 0))
+    })()`)
+  for (const [dx, dy] of [[60_000, 0], [-120_000, 40_000], [60_000, -80_000]] as const) {
+    await wheelPan(page, dx, dy, 30)
+    await sleep(300)
+    assert.ok((await shown()) > 100 * 100, `the welcome is on the screen after a pan of ${dx}, ${dy}`)
+  }
   assert.deepEqual(t.consoleErrors, [])
   await page.context().close()
 })

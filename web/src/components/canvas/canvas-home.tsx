@@ -357,10 +357,11 @@ export function CanvasHome({ login }: { login: string }) {
   const version = reference ? `${reference.status}|${reference.pageCount}|${reference.animationCount}|${reference.captureRun}` : ""
   const counts = useCounts(q, site, version)
   const total = counts ? countOf(counts, "all") : null
-  const firstRun = !site && !q && !!counts && counts.websites + total! === 0
   // Zoom and the caption wait for the counts, so the page doesn't flash them.
   const chrome = counts !== undefined
   const { items, error } = useFeed(feedFilter, q, site, version)
+  // Only once the saves themselves have loaded: counts that answer first must not call a loading library empty.
+  const firstRun = !site && !q && !!counts && counts.websites + total! === 0 && items?.length === 0
   const pending = useMemo(() => (site && !q && (filter === "pages" || filter === "all") ? pendingOf(detail) : []), [site, q, filter, detail])
 
   // ---- Selecting for a prompt, inside a site ----
@@ -409,11 +410,14 @@ export function CanvasHome({ login }: { login: string }) {
     return next
   }, [items, pending, plazaRect, place])
 
-  // What a pan must keep on the screen: the tiles, and the plaza while it holds something.
-  const content = useMemo(
-    () => (items?.length ? (plazaH ? [...layout.tiles, { x: -PLAZA.w / 2, y: -plazaH / 2, w: PLAZA.w, h: plazaH }] : layout.tiles) : undefined),
-    [items, layout, plazaH],
-  )
+  // What a pan must keep on the screen: the tiles (saved and still capturing), and the plaza while it holds something
+  // (the capture card, a welcome, no results, a retry). Nothing while the feed first loads, so a saved view isn't moved
+  // before its tiles are there.
+  const content = useMemo(() => {
+    if (!items && !error) return undefined
+    const rects: WorldRect[] = plazaH ? [...layout.tiles, { x: -PLAZA.w / 2, y: -plazaH / 2, w: PLAZA.w, h: plazaH }] : layout.tiles
+    return rects.length ? rects : undefined
+  }, [items, error, layout, plazaH])
 
   const canvas = useRef<InfiniteCanvasHandle>(null)
   // A new place (scope, filter, search) lays the field out again around the plaza: bring the plaza back. Back or
