@@ -217,8 +217,8 @@ const counts = (page: Page) =>
   })()`)
 
 /**
- * Keyboard and screen-reader view of the tiles: the ones a screen reader meets are the origin copy's, in tab order
- * (newest first); every repeated copy is hidden from both. Returns the labels in DOM order and any violation.
+ * Keyboard and screen-reader view of the tiles: every tile is announced and in tab order (newest first), and none is
+ * hidden from either. Returns the labels in DOM order and any violation.
  */
 async function audit(page: Page) {
   return page.evaluate<{ tabbable: number[]; announced: number; copies: number; leaks: number }>(`(() => {
@@ -401,7 +401,7 @@ const zoomPct = async (page: Page) => Number(((await page.getByRole("button", { 
 
 function checkTabOrder(a: Awaited<ReturnType<typeof audit>>, at: string) {
   assert.ok(a.tabbable.length > 0, `tiles are in the tab order at ${at}`)
-  assert.equal(a.leaks, 0, `at ${at}: announced tiles are focusable and repeated copies are not`)
+  assert.equal(a.leaks, 0, `at ${at}: every tile is announced and focusable`)
   assert.deepEqual(a.tabbable, [...a.tabbable].sort((x, y) => x - y), `at ${at}: tab order is newest first`)
   assert.equal(new Set(a.tabbable).size, a.tabbable.length, `at ${at}: each item is announced once`)
 }
@@ -582,7 +582,8 @@ function checkWeight(r: Report) {
   // A notch brings hundreds of tiles into view in one step (549 mounted in one 59 ms frame in a build, before the field
   // staged them). A frame mounts no more than MOUNT_PER_FRAME, and the viewport fills within a few frames.
   assert.ok(r.mountedInOneFrame <= MOUNT_PER_FRAME, `${r.mountedInOneFrame} tiles mounted in one frame`)
-  assert.ok(r.holes.cover > 0.7, `a zoomed-out viewport is ${Math.round(r.holes.cover * 100)}% covered by tiles`)
+  // Each item is drawn once, so a zoomed-out view is only as covered as the library is big (the feed's newest 400 a
+  // kind fill about a quarter of it at 25%): the holes that matter are the frames it takes to fill what it will.
   assert.ok(r.holes.frames <= 10, `the viewport had holes for ${r.holes.frames} frames after a zoom out`)
 }
 

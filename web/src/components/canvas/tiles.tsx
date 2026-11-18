@@ -275,8 +275,7 @@ const HOME_FACE =
 /**
  * A tile of the home field. It positions itself and is a link or button holding just its image: two DOM elements
  * (the hover chip is mounted only for the tile under the pointer or focus), so a zoomed-out field of a thousand tiles
- * stays light. Repeated copies of the block are clickable but neither focusable nor announced: otherwise Tab never
- * ends (each focus pans to the next copy) and screen readers read every item many times.
+ * stays light.
  */
 export const HomeTile = memo(function HomeTile({
   item,
@@ -284,7 +283,6 @@ export const HomeTile = memo(function HomeTile({
   y,
   w,
   h,
-  copy,
   onOpen,
   scoped,
   checked,
@@ -302,8 +300,6 @@ export const HomeTile = memo(function HomeTile({
   y: number
   w: number
   h: number
-  /** A repeat of the block, not the origin copy. */
-  copy: boolean
   /** Click opens it. */
   onOpen: (item: CanvasItem) => void
 }) {
@@ -320,8 +316,6 @@ export const HomeTile = memo(function HomeTile({
   const shared = {
     "aria-label": name,
     "aria-description": warning || undefined,
-    "aria-hidden": copy || undefined,
-    tabIndex: copy ? -1 : undefined,
     style: { left: x, top: y, width: w, height: h },
     className: cn(HOME_FACE, checked && "ring-2 ring-ink-12 ring-offset-2 ring-offset-background", dim && "opacity-35"),
     onPointerEnter: (e: PointerEvent) => e.pointerType === "mouse" && setLive(true),
