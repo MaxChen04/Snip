@@ -29,7 +29,7 @@ async function home(n: number) {
   await t.goto("/")
   await t.page.getByRole("button", { name: "Page 0", exact: true }).waitFor()
   await sleep(300)
-  return t
+  return Object.assign(t, { pages })
 }
 
 /** The labels of the tiles mounted on the canvas, and how many of them are on the screen. */
@@ -104,6 +104,21 @@ test("a saved view outside the content (from before each item was drawn once) la
   const { labels, onScreen } = await tiles(page)
   assert.ok(onScreen > 0, "tiles are on the screen")
   assert.equal(new Set(labels).size, labels.length)
+  assert.deepEqual(t.consoleErrors, [])
+  await page.context().close()
+})
+
+test("a save that arrives on a refresh is on the screen after Recenter", { timeout: 60_000 }, async () => {
+  const t = await home(100)
+  const { page } = t
+  t.pages.unshift({ ...t.pages[0]!, id: "fresh", title: "Fresh save", path: "/fresh", createdAt: new Date(Date.UTC(2026, 0, 2)).toISOString() })
+  await page.evaluate(`window.dispatchEvent(new Event("rs:reload"))`)
+  const fresh = page.getByRole("button", { name: "Fresh save", exact: true })
+  await page.getByRole("button", { name: "Recenter" }).click()
+  await until("the new save is on the screen", async () => {
+    const b = (await fresh.count()) ? await fresh.boundingBox() : null
+    return !!b && b.x >= 0 && b.y >= 0 && b.x + b.width <= VIEW.width && b.y + b.height <= VIEW.height
+  })
   assert.deepEqual(t.consoleErrors, [])
   await page.context().close()
 })

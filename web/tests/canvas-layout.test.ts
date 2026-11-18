@@ -84,6 +84,26 @@ test("a new save moves only the tiles of the column it joins", () => {
   }
 })
 
+test("a new save lands beside the plaza, in view of the opening screen, however big the library", () => {
+  const screen: Rect = { x: -640, y: -400, w: 1280, h: 800 }
+  const inside = (t: Placement) => t.x >= screen.x && t.y >= screen.y && t.x + t.w <= screen.x + screen.w && t.y + t.h <= screen.y + screen.h
+  const tall = (n: number) => Array.from({ length: n }, (_, i) => ({ key: `item${i}`, aspect: 1.6 }))
+  for (const plazaSize of [PLAZA, { w: 0, h: 0 }]) {
+    for (const n of [10, 100, 400]) {
+      let items = tall(n)
+      let layout = layoutHome(items, plazaSize)
+      // Five saves in a row, each laid out on the last.
+      for (let s = 0; s < 5; s++) {
+        items = [{ key: `new${s}`, aspect: [1.6, 0.8, 1.3, 2.4, 1][s]! }, ...items]
+        layout = layoutHome(items, plazaSize, layout.slots)
+        const added = layout.tiles.find((t) => t.key === `new${s}`)!
+        assert.ok(inside(added), `${n} items, save ${s + 1}: at ${added.x}, ${added.y}`)
+      }
+      assertNoOverlaps(layout.tiles)
+    }
+  }
+})
+
 test("older items loaded later go to the edge and move nothing", () => {
   const before = layoutHome(make(100))
   const after = layoutHome(make(160), PLAZA, before.slots)
