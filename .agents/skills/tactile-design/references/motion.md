@@ -88,7 +88,7 @@ Always written as `{ type: "spring", bounce, duration }`, never as stiffness and
 
 | Bounce / duration | Use |
 |---|---|
-| 0 / 0.5s | camera pans. No bounce on a camera. |
+| 0 / 0.5s | camera pans. No bounce on a camera, except the gallery canvas (SKILL.md, Motion: Canvas camera). |
 | 0.12 / 0.4s | every segmented toggle's pill: a control's (Live / All, 7 / 30 days) and a page-level one (theme Light / Dark) |
 | 0.2 / 0.35–0.5s | height reveals, a page-entrance rise, progress fills |
 | 0.28 / 0.4s | a celebratory modal (rare) |

@@ -48,7 +48,8 @@ const within = (target: EventTarget | null, selector: string) => target instance
  *
  * Drags, wheel pans and pinches follow the input 1:1, with a rubber band past the content's edge or the zoom range. On
  * release a pan glides on, and anything left past the limits springs back. Zoom controls, recenter and a mouse wheel's
- * notch move on the same spring (see lib/spring). Reduced motion: no glide, no rubber band, no spring.
+ * notch move on the same spring (see lib/spring); the keyboard's pans and zooms are instant. Reduced motion: no glide,
+ * no rubber band, no spring.
  */
 export function InfiniteCanvas({
   children,
@@ -588,9 +589,10 @@ export function InfiniteCanvas({
     const step = e.shiftKey ? 320 : 80
     const pans: Record<string, [number, number]> = { ArrowLeft: [step, 0], ArrowRight: [-step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] }
     if (pans[e.key]) a.nudge(...pans[e.key]!)
-    else if (e.key === "+" || e.key === "=") a.handle.zoomBy(1.25, undefined, { animate: true })
-    else if (e.key === "-" || e.key === "_") a.handle.zoomBy(1 / 1.25, undefined, { animate: true })
-    else if (e.key === "0") a.handle.recenter({ animate: true })
+    // Keyboard camera moves are instant, like every keyboard action (tactile-design's motion rules).
+    else if (e.key === "+" || e.key === "=") a.handle.zoomBy(1.25)
+    else if (e.key === "-" || e.key === "_") a.handle.zoomBy(1 / 1.25)
+    else if (e.key === "0") a.handle.recenter()
     else return
     e.preventDefault()
   }

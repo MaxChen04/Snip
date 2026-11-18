@@ -56,7 +56,7 @@ const onScreen = (page: Page) =>
     return r.right > 0 && r.left < innerWidth && r.bottom > 0 && r.top < innerHeight
   }).length`)
 
-test("the zoom buttons end at the zoom asked for, and clicks in a row compound", { timeout: 60_000 }, async () => {
+test("the zoom buttons end at the zoom asked for, clicks in a row compound, and the keyboard zooms at once", { timeout: 60_000 }, async () => {
   const t = await home(40)
   const { page } = t
   const zoomIn = page.getByRole("button", { name: "Zoom in" })
@@ -68,10 +68,14 @@ test("the zoom buttons end at the zoom asked for, and clicks in a row compound",
   assert.ok(Math.abs(three.k - 1.25 ** 3) < 1e-4, `${three.k}`)
   await page.getByRole("button", { name: /^Zoom \d+%, reset/ }).click()
   assert.ok(Math.abs((await rest(page)).k - 1) < 1e-4)
-  // The keyboard's zoom goes the same way.
+  // The keyboard's zoom is instant: the next frame is the final one.
   await page.getByRole("region", { name: /^All saves/ }).focus()
   await page.keyboard.press("-")
-  assert.ok(Math.abs((await rest(page)).k - 0.8) < 1e-4)
+  await page.evaluate(`new Promise((r) => requestAnimationFrame(r))`)
+  const key = await view(page)
+  assert.ok(Math.abs(key.k - 0.8) < 1e-4, `${key.k}`)
+  await sleep(300)
+  assert.deepEqual(await view(page), key, "and nothing moves after it")
   assert.deepEqual(t.consoleErrors, [])
   await page.context().close()
 })
