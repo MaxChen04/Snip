@@ -74,6 +74,9 @@ for (const n of [3, 40, 400, 1000]) {
         await wheelPan(page, dx / 6, dy / 6, 10)
         await check(`panning ${name}`)
       }
+      // Pulled past the edge, the view springs back inside once the wheel stops.
+      await sleep(800)
+      await check(`after panning ${name}`)
     }
     for (let i = 0; i < 8; i++) await page.getByRole("button", { name: "Zoom out" }).click()
     await sleep(600)

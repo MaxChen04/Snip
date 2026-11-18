@@ -187,7 +187,7 @@ const BoardNode = memo(function BoardNode({ node, selected, handles, dimmed, edi
       aria-label={`${node.item ? tileLabel(node.item) : `Note: ${node.text?.slice(0, 80) || "empty"}`}${s.locked ? " (locked)" : ""}`}
       aria-keyshortcuts="Shift+F10"
       tabIndex={0}
-      className="absolute rounded-md outline-none transition-[rotate,opacity] duration-[450ms,300ms] ease-[cubic-bezier(.3,.7,.2,1)] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-focus-ring in-data-dragging:transition-none motion-reduce:transition-none"
+      className="absolute rounded-md outline-none [transition:rotate_450ms_cubic-bezier(.3,.7,.2,1),opacity_300ms_cubic-bezier(.3,.7,.2,1),scale_var(--spring-duration)_var(--spring-ease)] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-focus-ring in-data-dragging:[transition:scale_var(--spring-duration)_var(--spring-ease)] motion-reduce:transition-none"
       style={{ left: node.x, top: node.y, width: node.w, height: node.h, rotate: s.rot ? `${s.rot}deg` : undefined, opacity: s.hidden ? 0.12 : s.op }}
     >
       {node.item ? (
@@ -480,7 +480,12 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
         if (!keys.length && !frameIds.length) blocked?.()
         const selectors = [...keys.map((k) => `[data-key="${CSS.escape(k)}"]`), ...frameIds.map((g) => `[data-frame="${CSS.escape(g)}"]`)]
         moving = selectors.length ? [...el.querySelectorAll<HTMLElement>(selectors.join(","))] : []
-        for (const m of moving) if (m.dataset.key) m.style.zIndex = "1"
+        // Items lift as they leave their place, and settle back on the canvas spring when dropped.
+        for (const m of moving) {
+          if (!m.dataset.key) continue
+          m.style.zIndex = "1"
+          if (!reducedMotion()) m.style.scale = "1.03"
+        }
         el.dataset.dragging = ""
         window.getSelection()?.removeAllRanges()
       }
@@ -503,6 +508,7 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
       for (const m of moving) {
         m.style.translate = ""
         m.style.zIndex = ""
+        m.style.scale = ""
       }
       delete el.dataset.dragging
     }

@@ -267,7 +267,7 @@ test("Back from a site entered on a board returns to the board's pan, zoom and s
   await board.waitFor()
   await board.focus()
   for (const key of ["ArrowRight", "ArrowRight", "ArrowDown", "Minus"]) await page.keyboard.press(key)
-  await sleep(400)
+  await sleep(900) // the zoom settles on the canvas spring
   const before = await worldTransform(page)
   await page.getByRole("textbox", { name: /^Search/ }).fill("example")
   await until("the search is in the board's URL", () => search(page.url()).q === "example")
