@@ -1,4 +1,4 @@
-import type { Browser, Page } from "playwright"
+import type { Browser, BrowserContext, Page } from "playwright"
 import type { AnimationFrame, AnimationMeta } from "../../web/shared/types"
 import type { SnipApi } from "./api"
 import { imageSize, type Frame } from "./gif"
@@ -27,21 +27,50 @@ export function pickStills(frames: Frame[]) {
 // is a secure context, which WebCodecs needs.
 const HELPER_URL = "http://localhost/snip-helper"
 let rendererPage: Page | null = null
-export async function renderer(browser: Browser) {
-  if (rendererPage && !rendererPage.isClosed() && rendererPage.context().browser() === browser && browser.isConnected()) return rendererPage
-  const ctx = await browser.newContext({ viewport: { width: 800, height: 600 }, deviceScaleFactor: 1 })
-  const page = await ctx.newPage()
-  await page.route(HELPER_URL, (route) => route.fulfill({ contentType: "text/html", body: "<!doctype html><title>snip</title>" }))
-  await page.goto(HELPER_URL)
-  rendererPage = page
-  return page
+/** The helper's context while it opens: until its page has loaded, nothing else can reach it to close it. */
+let openingContext: BrowserContext | null = null
+/** The capture the helper works for. Once it is cancelled no helper opens, so nothing can wait in one until the page deadline. */
+let fence: AbortSignal | null = null
+
+/** Tie the helper to a capture's cancellation until the returned release is called. */
+export function fenceRenderer(signal: AbortSignal) {
+  fence = signal
+  return () => {
+    if (fence === signal) fence = null
+  }
 }
 
-/** Close the helper page once a page's stills are done, so its process doesn't idle through the next capture. */
+export async function renderer(browser: Browser) {
+  const signal = fence
+  signal?.throwIfAborted()
+  if (rendererPage && !rendererPage.isClosed() && rendererPage.context().browser() === browser && browser.isConnected()) return rendererPage
+  const ctx = await browser.newContext({ viewport: { width: 800, height: 600 }, deviceScaleFactor: 1 })
+  openingContext = ctx
+  try {
+    signal?.throwIfAborted()
+    const page = await ctx.newPage()
+    await page.route(HELPER_URL, (route) => route.fulfill({ contentType: "text/html", body: "<!doctype html><title>snip</title>" }))
+    await page.goto(HELPER_URL)
+    signal?.throwIfAborted()
+    rendererPage = page
+    return page
+  } catch (error) {
+    await ctx.close().catch(() => {})
+    throw error
+  } finally {
+    if (openingContext === ctx) openingContext = null
+  }
+}
+
+/**
+ * Close the helper page once a page's stills are done, so its process doesn't idle through the next capture.
+ * After a cancellation it also closes a helper that is still opening.
+ */
 export async function closeRenderer() {
   const page = rendererPage
+  const opening = fence?.aborted ? openingContext : null
   rendererPage = null
-  await page?.context().close().catch(() => {})
+  await Promise.allSettled([page?.context().close(), opening?.close()])
 }
 
 const dataUrl = (image: Buffer) => `data:image/${image[0] === 0xff ? "jpeg" : "png"};base64,${image.toString("base64")}`

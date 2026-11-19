@@ -8,7 +8,7 @@ import type { CapturedStyles } from "./style-parts"
 import { imageSize, type Frame } from "./gif"
 import { allowPrivateUrls, assertPublicUrl, createCaptureNetwork, PrivateAddressError } from "./network-guard"
 import { buildMotionProfile, mergeMotionProfiles, type MotionTech } from "./motion-profile"
-import { buildStills, closeRenderer, cropBands, sampleIndexes } from "./sheet"
+import { buildStills, closeRenderer, cropBands, fenceRenderer, sampleIndexes } from "./sheet"
 import { pageText, TEXT_LIMITS, type TextBlock } from "./text"
 import { encodeRecording, recordingWriter, type Recording } from "./video"
 
@@ -1344,6 +1344,7 @@ export async function captureJob(browser: Browser, api: SnipApi, job: Job, signa
   const polling = new AbortController()
   let checking = false
   let closing: Promise<unknown> | undefined
+  const unfence = fenceRenderer(cancelled.signal)
   // A hung navigation cannot reach a page boundary. Check the lease independently
   // without renewing it or counting a control response as capture progress.
   const timer = setInterval(async () => {
@@ -1356,7 +1357,8 @@ export async function captureJob(browser: Browser, api: SnipApi, job: Job, signa
         cancelled.abort(error)
         clearInterval(timer)
         // The shared stills/video helper is separate from the site's contexts and
-        // can itself be stuck encoding. Closing it also ends its pending calls.
+        // can itself be stuck opening or encoding. Closing it also ends its pending calls,
+        // and the fence keeps a new one from opening for this capture.
         closing = Promise.allSettled([closeRenderer(), ...contexts.map((context) => context.close())])
         await closing
       }
@@ -1409,6 +1411,7 @@ export async function captureJob(browser: Browser, api: SnipApi, job: Job, signa
     clearInterval(timer)
     polling.abort()
     await Promise.allSettled([closing, ...contexts.map(context => context.close())])
+    unfence()
     await Promise.all([network?.close(), sidecarNetwork?.close()])
   }
 }

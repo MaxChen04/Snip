@@ -3,7 +3,7 @@ import { test } from "node:test"
 import { readdir, readFile } from "node:fs/promises"
 import http from "node:http"
 import { setTimeout as delay } from "node:timers/promises"
-import { chromium } from "playwright"
+import { chromium, type BrowserContextOptions } from "playwright"
 import { Miniflare, convertV4MiniflareOptions } from "miniflare"
 import { app } from "../../web/worker/app"
 import * as db from "../../web/worker/db"
@@ -13,8 +13,8 @@ import { captureJob } from "../src/capture"
 import { renderer } from "../src/sheet"
 
 // Real HTTP -> Worker/D1 -> lease polling -> Chromium. The fixture site never
-// finishes its response, or the separate video encoder deliberately never resolves.
-for (const [mode, stall] of [["single", "navigation"], ["crawl", "navigation"], ["single", "encoding"]] as const) test(`Cancel interrupts ${mode} capture during stuck ${stall} and releases only its browser contexts`, { timeout: 30_000 }, async () => {
+// finishes its response, the separate video helper never finishes opening, or its encoder deliberately never resolves.
+for (const [mode, stall] of [["single", "navigation"], ["crawl", "navigation"], ["single", "helper startup"], ["single", "encoding"]] as const) test(`Cancel interrupts ${mode} capture during stuck ${stall} and releases only its browser contexts`, { timeout: 30_000 }, async () => {
   const previous = process.env.ALLOW_PRIVATE_URLS
   process.env.ALLOW_PRIVATE_URLS = "true"
   const mf = new Miniflare(convertV4MiniflareOptions({ modules: true, script: 'export default {fetch(){return new Response("ok")}}', d1Databases: ["DB"], r2Buckets: ["FILES"] }))
@@ -38,7 +38,7 @@ for (const [mode, stall] of [["single", "navigation"], ["crawl", "navigation"], 
       connections++
       res.on("close", () => connections--)
       res.writeHead(200, { "content-type": "text/html" })
-      if (stall === "encoding") { res.end('<!doctype html><title>Encoder fixture</title><body style="height:3000px">Scroll this page</body>'); return }
+      if (stall !== "navigation") { res.end('<!doctype html><title>Encoder fixture</title><body style="height:3000px">Scroll this page</body>'); return }
       res.write("<!doctype html><title>Unfinished page</title><body>Loading")
       entered.resolve()
       return
@@ -74,6 +74,22 @@ for (const [mode, stall] of [["single", "navigation"], ["crawl", "navigation"], 
           add: async () => { await window.captureEncoding(); return new Promise(() => {}) },
           finish: async () => { throw new Error("The stuck encoder cannot finish") },
         }`)
+    }
+    if (stall === "helper startup") {
+      // The helper is the only 800x600 context; its document is never answered, so it is still opening when Cancel lands.
+      const newContext = browser.newContext.bind(browser)
+      browser.newContext = async (options?: BrowserContextOptions) => {
+        const ctx = await newContext(options)
+        if (options?.viewport?.width !== 800 || options.viewport.height !== 600) return ctx
+        const newPage = ctx.newPage.bind(ctx)
+        ctx.newPage = async () => {
+          const page = await newPage()
+          const route = page.route.bind(page)
+          page.route = (async (url: string) => route(url, () => entered.resolve())) as typeof page.route
+          return page
+        }
+        return ctx
+      }
     }
     const ref = await db.createReference(database, { url: `${base}/site`, mode, maxPages: 5 })
     const api = new SnipApi(base, "test-token")
