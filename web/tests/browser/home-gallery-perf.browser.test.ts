@@ -289,7 +289,7 @@ async function wheelZoom(page: Page, deltaY: number, ticks: number) {
 }
 
 /**
- * The end-to-end gesture: `out` Ctrl+wheel ticks of 40 (a notch, which zooms by 49%) and then `back` ticks the other way,
+ * The end-to-end gesture: `out` Ctrl+wheel ticks of 40 (a notch, which zooms by about 18%) and then `back` ticks the other way,
  * 16 ms apart, around the middle of the canvas. They are dispatched from the page: through the browser's input pipeline
  * (wheelZoom) a tick takes about 60 ms here, which spreads the work out; this is the harder gesture of a free-spinning
  * wheel or a trackpad.
@@ -316,8 +316,8 @@ const watch = (page: Page) =>
     window.__transitions = 0
     const world = document.querySelector("[aria-roledescription=canvas] > div")
     new MutationObserver((records) => {
-      for (const r of records) for (const n of r.addedNodes) if (n.nodeName === "BUTTON" || n.nodeName === "A") window.__added++
-    }).observe(world, { childList: true })
+      for (const r of records) for (const n of r.addedNodes) if (n instanceof HTMLElement && n.hasAttribute("data-gallery-tile")) window.__added++
+    }).observe(world, { childList: true, subtree: true })
     const tick = () => {
       window.__peak = Math.max(window.__peak, window.__added)
       window.__added = 0
@@ -340,8 +340,7 @@ const cover = (page: Page) =>
       const m = new DOMMatrix(world.style.transform)
       const view = { x: -m.e / m.a, y: -m.f / m.a, w: el.clientWidth / m.a, h: el.clientHeight / m.a }
       let area = 0
-      for (const c of world.children) {
-        if (c.nodeName !== "BUTTON" && c.nodeName !== "A") continue
+      for (const c of world.querySelectorAll("[data-gallery-tile]")) {
         const x = parseFloat(c.style.left), y = parseFloat(c.style.top), w = parseFloat(c.style.width), h = parseFloat(c.style.height)
         area += Math.max(0, Math.min(x + w, view.x + view.w) - Math.max(x, view.x)) * Math.max(0, Math.min(y + h, view.y + view.h) - Math.max(y, view.y))
       }
@@ -470,7 +469,7 @@ async function run(n: number): Promise<Report> {
 
   const pan100 = await frames(page, () => pan(page))
 
-  // The first zoom of a page that has never zoomed, as a mouse wheel does it: each notch zooms by half, so 4 of them cross
+  // The first zoom of a page that has never zoomed, as a mouse wheel does it: each notch zooms by about 18%, so 8 cross
   // the whole range and the field changes by hundreds of tiles in a frame. The tile nearest the anchor stays mounted all
   // the way out and back: its image must be the same element throughout (crossing the far threshold changes its look with
   // CSS, not its DOM, and staging mounts only tiles that are new).
@@ -502,7 +501,7 @@ async function run(n: number): Promise<Report> {
   // within a few frames.
   await reset()
   await cover(page)
-  await notches(page, 6, 0)
+  await notches(page, 8, 0)
   checkTabOrder(await audit(page), "the middle of a zoom out")
   await until("zoomed all the way out", async () => (await zoomPct(page)) === 25, 30_000)
   await sleep(1500)
@@ -583,6 +582,7 @@ function checkWeight(r: Report) {
   // A notch brings hundreds of tiles into view in one step (549 mounted in one 59 ms frame in a build, before the field
   // staged them). A frame mounts no more than MOUNT_PER_FRAME, and the viewport fills within a few frames.
   assert.ok(r.mountedInOneFrame <= MOUNT_PER_FRAME, `${r.mountedInOneFrame} tiles mounted in one frame`)
+  assert.ok(r.holes.cover > 0, "the coverage observer found visible gallery tiles")
   // Each item is drawn once, so a zoomed-out view is only as covered as the library is big (the feed's newest 400 a
   // kind fill about a quarter of it at 25%): the holes that matter are the frames it takes to fill what it will.
   assert.ok(r.holes.frames <= 10, `the viewport had holes for ${r.holes.frames} frames after a zoom out`)

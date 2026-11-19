@@ -337,7 +337,7 @@ export function InfiniteCanvas({
       const wx = (from.x - v.tx) / v.k
       const wy = (from.y - v.ty) / v.k
       raw!.k *= factor
-      if (galleryInput.current?.carrying()) raw!.k = clampZoom(raw!.k)
+      if (galleryRef.current) raw!.k = clampZoom(raw!.k)
       const k = softZoom(raw!.k)
       raw!.x = wx - (to.x - v.w / 2) / k
       raw!.y = wy - (to.y - v.h / 2) / k

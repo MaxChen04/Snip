@@ -170,6 +170,22 @@ test("wheel locks to pan or Ctrl pinch; either moves the camera while an edge ca
   await page.context().close()
 })
 
+test("a continuous pinch reverses immediately at the gallery's zoom limit", async () => {
+  const t = await gallery()
+  const { page } = t
+  await page.emulateMedia({ reducedMotion: "no-preference" })
+  await page.locator(selector).evaluate((el) => {
+    for (const deltaY of [...Array(20).fill(80), -40]) {
+      el.dispatchEvent(new WheelEvent("wheel", { ctrlKey: true, deltaY, clientX: 640, clientY: 400, cancelable: true }))
+    }
+  })
+  await frame(page)
+  const { k } = await camera(page)
+  assert.ok(k > 0.29 && k < 0.32, `reverse pinch increased zoom right away (got ${k})`)
+  assert.deepEqual(t.consoleErrors, [])
+  await page.context().close()
+})
+
 test("compact Arrow selects with a marquee but its tile edges cannot lift or move", { timeout: 30_000 }, async () => {
   const t = await gallery(true)
   const { page } = t
