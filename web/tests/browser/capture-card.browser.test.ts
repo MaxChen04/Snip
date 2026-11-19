@@ -40,6 +40,104 @@ const withRunning = async (r: Reference, opts: { viewport?: { width: number; hei
 }
 const card = (t: Awaited<ReturnType<typeof withRunning>>) => t.page.locator("[data-capture-status]")
 
+test("a suggestion capture has a Hugeicons Cancel control while queued, with one pending request and a neutral stopped state", async () => {
+  const t = await app.session()
+  const ref = reference({ id: "suggested", domain: "stripe.com", url: "https://stripe.com/", status: "queued", mode: "single", progress: WAITING, pageCount: 0 })
+  t.on("POST", "/api/references", () => {
+    t.state.references[ref.id] = ref
+    return { json: ref }
+  })
+  const release = Promise.withResolvers<void>()
+  t.on("POST", "/api/references/suggested/cancel", async () => {
+    await release.promise
+    t.state.references[ref.id] = { ...ref, status: "failed", error: STOPPED_EMPTY, progress: null }
+    return { json: t.state.references[ref.id] }
+  })
+  await t.goto("/")
+  await t.page.getByRole("button", { name: "stripe.com", exact: true }).click()
+  const cancel = card(t).getByRole("button", { name: "Cancel", exact: true })
+  await cancel.waitFor()
+  assert.equal(t.list("POST", "/api/references")[0]!.body.mode, "single")
+  assert.equal(await cancel.locator("svg").count(), 1)
+  assert.equal(await card(t).getByRole("button", { name: "Pause" }).count(), 0)
+  try {
+    await cancel.click()
+    await until("cancel pending", () => t.count("POST", "/api/references/suggested/cancel") === 1)
+    assert.equal(await cancel.isDisabled(), true)
+    assert.equal(await cancel.getAttribute("aria-busy"), "true")
+    await cancel.evaluate((el) => { (el as HTMLButtonElement).click(); (el as HTMLButtonElement).click() })
+    assert.equal(t.count("POST", "/api/references/suggested/cancel"), 1)
+  } finally { release.resolve() }
+  await card(t).getByText("You stopped this capture before any pages were saved.").waitFor()
+  assert.equal(await t.page.getByRole("alert").count(), 0)
+  assert.equal(await card(t).getByRole("progressbar").count(), 0)
+  assert.equal(await cancel.count(), 0)
+  assert.deepEqual(t.consoleErrors, [])
+})
+
+test("a running single capture can retry a failed cancellation without pretending it stopped", async () => {
+  const ref = reference({ status: "capturing", mode: "single", progress: "Capturing 1/1: /", pageCount: 0 })
+  const t = await withRunning(ref)
+  t.on("POST", "/api/references/ref1/cancel", () => ({ status: 503, json: { error: "Temporarily unavailable" } }))
+  const cancel = card(t).getByRole("button", { name: "Cancel", exact: true })
+  await cancel.click()
+  await t.page.getByText("Couldn't cancel: Temporarily unavailable").waitFor()
+  await until("cancel enabled again", () => cancel.isEnabled())
+  assert.equal(await card(t).getByRole("progressbar").count(), 1)
+  t.on("POST", "/api/references/ref1/cancel", () => {
+    t.state.references.ref1 = { ...ref, status: "failed", error: STOPPED_EMPTY, progress: null }
+    return { json: t.state.references.ref1 }
+  })
+  await cancel.focus()
+  await t.page.keyboard.press("Enter")
+  await card(t).getByText("You stopped this capture before any pages were saved.").waitFor()
+  assert.equal(t.count("POST", "/api/references/ref1/cancel"), 2)
+})
+
+test("crawls offer Cancel beside Pause or Resume and retain completed pages in the website scope", async () => {
+  for (const status of ["capturing", "paused"] as const) {
+    const ref = reference({ status: "capturing", mode: "crawl", maxPages: 10, pageCount: 2, progress: "Capturing 3/10: /pricing" })
+    const t = await withRunning(ref)
+    if (status === "paused") {
+      t.on("POST", "/api/references/ref1/pause", () => {
+        t.state.references.ref1 = { ...ref, status: "paused", progress: "Paused" }
+        return { json: t.state.references.ref1 }
+      })
+      await card(t).getByRole("button", { name: "Pause" }).click()
+    }
+    await card(t).getByRole("button", { name: status === "paused" ? "Resume" : "Pause" }).waitFor()
+    await card(t).getByRole("button", { name: "Cancel", exact: true }).waitFor()
+    t.on("POST", "/api/references/ref1/cancel", () => {
+      t.state.references.ref1 = { ...ref, status: "ready", progress: null }
+      return { json: t.state.references.ref1 }
+    })
+    await t.goto("/?site=ref1")
+    await t.page.getByRole("button", { name: "Cancel", exact: true }).click()
+    await t.page.getByText("Stopped with 2 pages", { exact: true }).waitFor()
+    assert.equal(await t.page.getByRole("button", { name: "Cancel", exact: true }).count(), 0)
+    assert.equal(t.state.references.ref1!.pageCount, 2)
+  }
+})
+
+test("Cancel stays inside narrow capture cards in light and dark themes", async () => {
+  for (const colorScheme of ["light", "dark"] as const) for (const mode of ["single", "crawl"] as const) {
+    const t = await withRunning(reference({ domain: "a-very-long-domain.example.com", status: "capturing", mode, maxPages: 10, progress: "Capturing 4/10: /a-very-long-path" }), { viewport: { width: 320, height: 720 } })
+    await t.page.emulateMedia({ colorScheme, reducedMotion: "reduce" })
+    const cdp = await t.page.context().newCDPSession(t.page)
+    await cdp.send("Emulation.setTouchEmulationEnabled", { enabled: true })
+    const cancel = card(t).getByRole("button", { name: "Cancel", exact: true })
+    await cancel.waitFor()
+    const container = (await card(t).boundingBox())!
+    const button = (await cancel.boundingBox())!
+    const label = (await card(t).locator("p[aria-live]").boundingBox())!
+    assert.ok(button.x >= container.x && button.x + button.width <= container.x + container.width + 1)
+    assert.ok(button.x + button.width <= 320 && button.y + button.height <= 720)
+    assert.ok(button.height >= 44, "touch controls have a 44px target")
+    assert.ok(label.y + label.height <= button.y, "the capture label has its own row above the controls")
+    assert.deepEqual(t.consoleErrors, [])
+  }
+})
+
 test("the + popover offers the landing page, the whole site and image upload while a capture runs", async () => {
   const t = await withRunning(reference({ status: "capturing", progress: "Capturing 1/1: /" }))
   await card(t).getByText("Capturing example.com").waitFor()
@@ -54,7 +152,7 @@ test("a queued capture reads the Worker's progress text on the card and the refe
     const t = await withRunning(reference({ status: "queued", progress: WAITING }), { agent })
     await card(t).getByText(WAITING).waitFor()
     assert.equal(await card(t).getByText("Waiting to capture").count(), 0, `a client wording of its own while the agent is ${agent}`)
-    await t.goto("/r/ref1")
+    await t.goto("/?site=ref1")
     await t.page.getByText(WAITING).first().waitFor()
   }
   // Whatever the Worker says is what shows: nothing on the card rewrites it.

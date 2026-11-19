@@ -7,9 +7,9 @@ export class CaptureAuthenticationError extends Error {
   constructor() { super("Snip rejected the capture token (401)") }
 }
 
-/** The reference was deleted or recaptured, or another agent claimed the job, while this capture ran; stop the job. */
+/** The capture was cancelled, deleted, recaptured or claimed by another agent; stop the job. */
 export class JobGoneError extends Error {
-  constructor() { super("The reference was deleted or recaptured during capture") }
+  constructor() { super("The capture was cancelled or its lease is no longer active") }
 }
 
 // Copies of web/shared/capture-protocol.ts: released apps ship capture/src without web/shared, and web/tests/capture-protocol-copies.test.ts keeps them equal.
@@ -55,7 +55,7 @@ export class SnipApi {
   private async call(path: string, init: RequestInit = {}, { read = path === "/agent/jobs/claim", conflict = false } = {}) {
     const res = await fetch(`${this.base}${path}`, {
       ...init,
-      signal: init.signal ?? AbortSignal.timeout(path === "/agent/jobs/claim" ? this.claimTimeoutMs : this.requestTimeoutMs),
+      signal: AbortSignal.any([...(init.signal ? [init.signal] : []), AbortSignal.timeout(path === "/agent/jobs/claim" ? this.claimTimeoutMs : this.requestTimeoutMs)]),
       headers: { authorization: `Bearer ${this.token}`, [CAPTURE_PROTOCOL_HEADER]: String(CAPTURE_PROTOCOL), ...(this.lease ? { "x-snip-capture-lease": this.lease } : {}), ...(init.headers ?? {}) },
     })
     if (res.status === 401) {
@@ -85,30 +85,30 @@ export class SnipApi {
     return job
   }
 
-  async progress(jobId: string, message: string) {
-    await this.call(`/agent/jobs/${jobId}/progress`, json({ message })).catch((error: unknown) => { if (error instanceof JobGoneError) throw error })
+  async progress(jobId: string, message: string, signal?: AbortSignal) {
+    await this.call(`/agent/jobs/${jobId}/progress`, { ...json({ message }), signal }).catch((error: unknown) => { if (error instanceof JobGoneError) throw error })
   }
 
   async heartbeat(jobId: string | null) {
     await this.call("/agent/heartbeat", json({ jobId })).catch((error: unknown) => { if (error instanceof JobGoneError) throw error })
   }
 
-  async upload(key: string, body: Buffer | string, contentType: string) {
-    await this.call(`/agent/files/${key}`, { method: "PUT", body: typeof body === "string" ? body : new Uint8Array(body), headers: { "content-type": contentType } })
+  async upload(key: string, body: Buffer | string, contentType: string, signal?: AbortSignal) {
+    await this.call(`/agent/files/${key}`, { method: "PUT", body: typeof body === "string" ? body : new Uint8Array(body), headers: { "content-type": contentType }, signal })
     return key
   }
 
-  async addPage(jobId: string, page: PageUpload) {
-    await this.call(`/agent/jobs/${jobId}/pages`, json(page))
+  async addPage(jobId: string, page: PageUpload, signal?: AbortSignal) {
+    await this.call(`/agent/jobs/${jobId}/pages`, { ...json(page), signal })
   }
 
-  async complete(jobId: string, c: JobComplete) {
-    await this.call(`/agent/jobs/${jobId}/complete`, json(c))
+  async complete(jobId: string, c: JobComplete, signal?: AbortSignal) {
+    await this.call(`/agent/jobs/${jobId}/complete`, { ...json(c), signal })
   }
 
-  /** A pause or stop the user asked for, checked between pages. */
-  async control(jobId: string): Promise<CaptureControl | null> {
-    const res = await this.call(`/agent/jobs/${jobId}/control`, {}, { read: true })
+  /** Pause/Stop are honoured between pages; a revoked lease throws even during a page. */
+  async control(jobId: string, signal?: AbortSignal): Promise<CaptureControl | null> {
+    const res = await this.call(`/agent/jobs/${jobId}/control`, { signal }, { read: true })
     return ((await res!.json()) as { control: CaptureControl | null }).control
   }
 
@@ -116,8 +116,8 @@ export class SnipApi {
    * Hand back the crawl position and release the job. False when the pause was cancelled or replaced by a stop meanwhile.
    * `release` is a stopping worker handing the crawl back unasked; a Worker that predates it answers false.
    */
-  async pause(jobId: string, state: CrawlState, release = false) {
-    return (await this.call(`/agent/jobs/${jobId}/pause${release ? "?release" : ""}`, json(state), { conflict: true })) !== null
+  async pause(jobId: string, state: CrawlState, release = false, signal?: AbortSignal) {
+    return (await this.call(`/agent/jobs/${jobId}/pause${release ? "?release" : ""}`, { ...json(state), signal }, { conflict: true })) !== null
   }
 
   async fail(jobId: string, error: string) {
