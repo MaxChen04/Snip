@@ -9,6 +9,9 @@ import type {
   CaptureMode,
   CaptureOptions,
   Collection,
+  LibraryPosition,
+  LibraryPositionKind,
+  LibraryPositionsSnapshot,
   LibraryTypeCounts,
   Page,
   Paged,
@@ -30,6 +33,9 @@ export type {
   CaptureMode,
   CaptureOptions,
   Collection,
+  LibraryPosition,
+  LibraryPositionKind,
+  LibraryPositionsSnapshot,
   LibraryTypeCounts,
   Page,
   Paged,
@@ -48,6 +54,11 @@ export const SIGNED_OUT = "snip:signed-out"
 function signedOut() {
   window.dispatchEvent(new Event(SIGNED_OUT))
   return new UnauthorizedError("Not signed in")
+}
+export class ApiError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message)
+  }
 }
 export class NotFoundError extends Error {}
 
@@ -68,7 +79,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const body = (await res.json().catch(() => ({}))) as { error?: string; existing?: Reference }
     if (res.status === 409 && body.existing) throw new DuplicateError(body.existing)
     const message = body.error ?? `Request failed (${res.status})`
-    throw res.status === 404 ? new NotFoundError(message) : new Error(message)
+    throw res.status === 404 ? new NotFoundError(message) : new ApiError(res.status, message)
   }
   return res.json() as Promise<T>
 }
@@ -111,6 +122,9 @@ export const api = {
   images: (f: Filters, cursor?: string | null, limit = 60) => request<Paged<SavedImage>>(`/api/images?${qs({ ...f, cursor, limit })}`),
   /** Counts per kind for the filter dock, for the whole library or one board, matching q. */
   counts: (f: Pick<Filters, "q" | "collection" | "reference"> = {}) => request<LibraryTypeCounts>(`/api/counts?${qs({ ...f })}`),
+  libraryPositions: () => request<LibraryPositionsSnapshot>("/api/library-positions"),
+  seedLibraryPositions: (positions: LibraryPosition[]) => request<LibraryPositionsSnapshot>("/api/library-positions/seed", { method: "POST", body: JSON.stringify({ positions }) }),
+  moveLibraryPositions: (version: number, positions: LibraryPosition[]) => request<LibraryPositionsSnapshot>("/api/library-positions", { method: "PUT", body: JSON.stringify({ version, positions }) }),
   /**
    * Upload one image (multipart). The browser makes the thumbnail and palette; see lib/images.ts.
    * With collectionId it is also put on that board.

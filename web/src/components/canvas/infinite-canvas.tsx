@@ -1,5 +1,6 @@
 import { useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type ReactNode, type Ref } from "react"
 import { cullRect, FAR_ZOOM } from "@/components/canvas/cull"
+import { attachGalleryGestures, type GalleryGestures } from "@/components/canvas/gallery-gestures"
 import { settled, springStep } from "@/lib/spring"
 import { cn } from "@/lib/utils"
 
@@ -19,7 +20,7 @@ export interface InfiniteCanvasHandle {
   /** Back to the home view (the `home` prop). */
   recenter(opts?: Animate): void
   /** Jump to a view getView() returned: its world centre and zoom. */
-  setView(view: { x: number; y: number; zoom: number }): void
+  setView(view: { x: number; y: number; zoom: number }, opts?: Animate): void
   screenToWorld(clientX: number, clientY: number): { x: number; y: number }
   getView(): CanvasView
 }
@@ -57,6 +58,7 @@ export function InfiniteCanvas({
   onViewChange,
   content,
   tiled = false,
+  gallery,
   className,
   "aria-label": label,
   ref,
@@ -87,12 +89,18 @@ export function InfiniteCanvas({
    *   without re-rendering.
    */
   tiled?: boolean
+  gallery?: GalleryGestures
   className?: string
   "aria-label"?: string
   ref?: Ref<InfiniteCanvasHandle>
 }) {
   const viewport = useRef<HTMLDivElement>(null)
   const world = useRef<HTMLDivElement>(null)
+  const marquee = useRef<HTMLDivElement>(null)
+  const galleryRef = useRef(gallery)
+  galleryRef.current = gallery
+  const hasGallery = !!gallery
+  const galleryInput = useRef<ReturnType<typeof attachGalleryGestures>>(null)
   // Screen = world * k + t, in px relative to the viewport's top left.
   const view = useRef({ tx: 0, ty: 0, k: home.zoom ?? 1, w: 0, h: 0 })
   const [visible, setVisible] = useState<WorldRect>(() => ({ x: home.x - 1200, y: home.y - 800, w: 2400, h: 1600 }))
@@ -164,11 +172,15 @@ export function InfiniteCanvas({
         place(p.x, p.y, k)
       }
       const { tx, ty, k } = view.current
-      if (world.current) world.current.style.transform = `translate3d(${tx}px, ${ty}px, 0) scale(${k})`
+      if (world.current) {
+        world.current.style.transform = `translate3d(${tx}px, ${ty}px, 0) scale(${k})`
+        if (galleryRef.current) world.current.style.setProperty("--gallery-zoom", String(k))
+      }
       if (tiledRef.current) world.current?.toggleAttribute("data-far", k < FAR_ZOOM)
       const next = cullRect(view.current, tiledRef.current)
       setVisible((r) => (r.x === next.x && r.y === next.y && r.w === next.w && r.h === next.h ? r : next))
       onViewRef.current?.(getView())
+      galleryInput.current?.refresh()
     }
     const schedule = () => {
       if (!frame) frame = requestAnimationFrame(flush)
@@ -289,10 +301,15 @@ export function InfiniteCanvas({
         const c = getView()
         raw = { x: c.x, y: c.y, k: c.zoom }
       }
-      free = !reducedMotion()
+      free = !!galleryInput.current?.carrying() || !reducedMotion()
     }
     const show = () => {
       const r = raw!
+      if (galleryInput.current?.carrying()) {
+        place(r.x, r.y, r.k)
+        schedule()
+        return
+      }
       if (!free) {
         // Reduced motion: no rubber band, the view stops at the limits.
         r.k = clampZoom(r.k)
@@ -320,6 +337,7 @@ export function InfiniteCanvas({
       const wx = (from.x - v.tx) / v.k
       const wy = (from.y - v.ty) / v.k
       raw!.k *= factor
+      if (galleryInput.current?.carrying()) raw!.k = clampZoom(raw!.k)
       const k = softZoom(raw!.k)
       raw!.x = wx - (to.x - v.w / 2) / k
       raw!.y = wy - (to.y - v.h / 2) / k
@@ -337,6 +355,10 @@ export function InfiniteCanvas({
       clearTimeout(idle)
       cancelAnimationFrame(frame)
       frame = 0
+      if (galleryInput.current?.carrying()) {
+        free = true
+        return flush()
+      }
       if (reducedMotion()) {
         free = false
         return flush()
@@ -399,12 +421,13 @@ export function InfiniteCanvas({
       schedule()
     }
 
+    const owns = () => galleryInput.current?.owns()
     const handle: InfiniteCanvasHandle = {
-      panTo: (x, y, opts) => go(x, y, view.current.k, opts?.animate),
-      zoomBy: (factor, around, opts) => zoomTo((targetK ?? view.current.k) * factor, around, opts),
-      setZoom: zoomTo,
-      recenter: (opts) => go(homeRef.current.x, homeRef.current.y, homeRef.current.zoom ?? 1, opts?.animate),
-      setView: (v) => go(v.x, v.y, v.zoom, false),
+      panTo: (x, y, opts) => { if (!owns()) go(x, y, view.current.k, opts?.animate) },
+      zoomBy: (factor, around, opts) => { if (!owns()) zoomTo((targetK ?? view.current.k) * factor, around, opts) },
+      setZoom: (zoom, around, opts) => { if (!owns()) zoomTo(zoom, around, opts) },
+      recenter: (opts) => { if (!owns()) go(homeRef.current.x, homeRef.current.y, homeRef.current.zoom ?? 1, opts?.animate) },
+      setView: (v, opts) => { if (!owns()) go(v.x, v.y, v.zoom, opts?.animate) },
       screenToWorld: (clientX, clientY) => {
         const p = local({ clientX, clientY })
         const { tx, ty, k } = view.current
@@ -412,12 +435,37 @@ export function InfiniteCanvas({
       },
       getView,
     }
-    return { handle, flush, stop, local, drag, pinch, release, releaseSoon, nudge, cancel: () => cancelAnimationFrame(frame) }
+    const galleryCamera = {
+      getView,
+      stop: () => { stop(); raw = anchor = null },
+      release,
+      restore: (v: CanvasView) => { raw = anchor = null; go(v.x, v.y, v.zoom) },
+      drag,
+      pinch,
+      screenToWorld: handle.screenToWorld,
+    }
+    return { handle, flush, stop, local, drag, pinch, release, releaseSoon, nudge, galleryCamera, cancel: () => cancelAnimationFrame(frame) }
   }
   api.current ??= makeApi()
   const a = api.current
 
   useImperativeHandle(ref, () => a.handle, [a])
+
+  useLayoutEffect(() => {
+    if (!hasGallery) return
+    const input = attachGalleryGestures(viewport.current!, marquee.current!, () => galleryRef.current!, a.galleryCamera, NO_PAN, OWN_KEYS)
+    galleryInput.current = input
+    return () => {
+      input.dispose()
+      galleryInput.current = null
+    }
+  }, [a, hasGallery])
+
+  const previousGallery = useRef(gallery)
+  useLayoutEffect(() => {
+    if (previousGallery.current && gallery) galleryInput.current?.reconfigure(previousGallery.current, gallery)
+    previousGallery.current = gallery
+  }, [gallery])
 
   // Size: centre the home point on the first measure, then keep the centre point still on resize.
   useLayoutEffect(() => {
@@ -448,6 +496,7 @@ export function InfiniteCanvas({
 
   // Wheel and Safari's gesture events need non-passive listeners to stop the page zooming or swiping back.
   useEffect(() => {
+    if (hasGallery) return
     const el = viewport.current!
     let gesturing = false
     const onWheel = (e: WheelEvent) => {
@@ -492,7 +541,7 @@ export function InfiniteCanvas({
       el.removeEventListener("gesturechange", onGestureChange)
       el.removeEventListener("gestureend", onGestureEnd)
     }
-  }, [a])
+  }, [a, hasGallery])
 
   // Pointer gestures: one pointer pans once it moves past the threshold, two pinch.
   const pointers = useRef(new Map<number, { x: number; y: number }>())
@@ -585,7 +634,7 @@ export function InfiniteCanvas({
   }
 
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (!inside(e) || e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || within(e.target, OWN_KEYS)) return
+    if (!inside(e) || e.defaultPrevented || galleryInput.current?.owns() || e.metaKey || e.ctrlKey || e.altKey || within(e.target, OWN_KEYS)) return
     const step = e.shiftKey ? 320 : 80
     const pans: Record<string, [number, number]> = { ArrowLeft: [step, 0], ArrowRight: [-step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] }
     if (pans[e.key]) a.nudge(...pans[e.key]!)
@@ -621,15 +670,16 @@ export function InfiniteCanvas({
       role="region"
       aria-roledescription="canvas"
       aria-label={label}
-      aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight + - 0"
+      aria-keyshortcuts={hasGallery ? "ArrowUp ArrowDown ArrowLeft ArrowRight + - 0 V H Space" : "ArrowUp ArrowDown ArrowLeft ArrowRight + - 0"}
       className={cn(
         "relative cursor-grab touch-none overflow-clip overscroll-none outline-none focus-visible:shadow-[inset_0_0_0_2px_var(--focus-ring)] data-panning:cursor-grabbing data-panning:select-none",
+        hasGallery && "data-gallery-pressed:select-none data-[gallery-cursor=arrow]:cursor-default data-[gallery-cursor=grab]:cursor-grab data-[gallery-cursor=grabbing]:cursor-grabbing [&_[data-gallery-tile]]:cursor-inherit!",
         className,
       )}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onPointerCancel={onPointerUp}
+      onPointerDown={hasGallery ? undefined : onPointerDown}
+      onPointerMove={hasGallery ? undefined : onPointerMove}
+      onPointerUp={hasGallery ? undefined : onPointerUp}
+      onPointerCancel={hasGallery ? undefined : onPointerUp}
       onClickCapture={(e) => {
         if (!swallowClick.current) return
         swallowClick.current = false
@@ -644,6 +694,7 @@ export function InfiniteCanvas({
       <div ref={world} className={cn("absolute top-0 left-0 origin-top-left", !tiled && "will-change-transform")}>
         {children(visible)}
       </div>
+      {hasGallery && <div ref={marquee} hidden aria-hidden className="pointer-events-none absolute border border-ink-8" />}
     </div>
   )
 }

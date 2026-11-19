@@ -595,3 +595,7 @@ export interface BoardItemPlacement {
   /** Omitted: keep the stored style. null: back to the plain look. */
   style?: BoardItemStyle | null
 }
+
+export type LibraryPositionKind = "page" | "section" | "animation" | "image" | "website"
+export type LibraryPosition = { kind: LibraryPositionKind; id: string; x: number; y: number }
+export type LibraryPositionsSnapshot = { version: number; positions: LibraryPosition[] }

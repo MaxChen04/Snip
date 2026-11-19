@@ -83,6 +83,7 @@ test("the zoom buttons end at the zoom asked for, clicks in a row compound, and 
 test("a drag released past the content's edge springs back inside, and a quick one glides on", { timeout: 60_000 }, async () => {
   const t = await home(40)
   const { page } = t
+  await page.getByRole("button", { name: "Hand", exact: true }).click()
   // Far to the right of the content, in one drag: the edge resists, then lets go.
   await page.mouse.move(1100, 400)
   await page.mouse.down()
@@ -98,10 +99,10 @@ test("a drag released past the content's edge springs back inside, and a quick o
   // Back at the middle, a quick flick: the view keeps going after the pointer stops.
   await page.getByRole("button", { name: "Recenter" }).click()
   const start = await rest(page)
-  await page.mouse.move(500, 400)
+  await page.mouse.move(840, 400)
   await page.mouse.down()
   for (let i = 1; i <= 6; i++) {
-    await page.mouse.move(500 + i * 20, 400)
+    await page.mouse.move(840 + i * 20, 400)
     await sleep(8)
   }
   await page.mouse.up()
@@ -119,6 +120,7 @@ test("with reduced motion, zoom is immediate and a pull past the edge stops at i
   await page.evaluate(`new Promise((r) => requestAnimationFrame(r))`)
   assert.ok(Math.abs((await view(page)).k - 1.25) < 1e-4)
 
+  await page.getByRole("button", { name: "Hand", exact: true }).click()
   await page.mouse.move(1100, 400)
   await page.mouse.down()
   for (let i = 1; i <= 40; i++) await page.mouse.move(1100 - i * 60, 400)

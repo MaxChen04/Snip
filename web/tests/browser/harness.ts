@@ -11,7 +11,7 @@ import net from "node:net"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { chromium, type Browser, type Page } from "playwright"
-import type { BoardCanvas, BoardGroup, BoardItem, Collection, Page as SavedPage, Reference, SavedImage } from "../../shared/types.ts"
+import type { BoardCanvas, BoardGroup, BoardItem, Collection, LibraryPosition, LibraryPositionsSnapshot, Page as SavedPage, Reference, SavedImage } from "../../shared/types.ts"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const webDir = path.resolve(here, "../..")
@@ -116,6 +116,7 @@ export type State = {
   /** GET /api/references/:id returns { reference, pages: [], animations: [] } for these. */
   references: Record<string, Reference>
   boards: Record<string, BoardCanvas>
+  libraryPositions: LibraryPositionsSnapshot
 }
 
 // ---------------------------------------------------------------- tools for tests
@@ -224,6 +225,7 @@ export async function startApp() {
       collections: [collection()],
       references: {},
       boards: {},
+      libraryPositions: { version: 0, positions: [] },
       ...opts.state,
     }
     const requests: { method: string; path: string; body: any; at: number }[] = []
@@ -252,6 +254,19 @@ export async function startApp() {
         method === "GET" && path === "/api/counts" ? { json: { websites: 0, pages: 0, sections: 0, animations: 0, images: 0 } } : undefined,
       ({ method, path }) => (method === "GET" && path === "/api/storage" ? { json: { bytes: 0, objects: 0, partial: false, freeBytes: 1e10 } } : undefined),
       ({ method, path }) => (method === "GET" && /^\/api\/(pages|animations|sections|images)$/.test(path) ? { json: { items: [], nextCursor: null } } : undefined),
+      ({ method, path, body }) => {
+        if (method === "GET" && path === "/api/library-positions") return { json: state.libraryPositions }
+        const seed = method === "POST" && path === "/api/library-positions/seed"
+        if (!seed && !(method === "PUT" && path === "/api/library-positions")) return
+        if (!seed && body.version !== state.libraryPositions.version) return { status: 409, json: { error: "The library layout changed" } }
+        const key = ({ kind, id }: LibraryPosition) => `${kind}:${id}`
+        const positions = new Map(state.libraryPositions.positions.map((p) => [key(p), p]))
+        for (const p of body.positions as LibraryPosition[]) if (!seed || !positions.has(key(p))) positions.set(key(p), p)
+        if (!seed || positions.size !== state.libraryPositions.positions.length) {
+          state.libraryPositions = { version: state.libraryPositions.version + 1, positions: [...positions.values()] }
+        }
+        return { json: state.libraryPositions }
+      },
       // Writes succeed by default; tests override the ones they care about.
       ({ method, path }) => (method === "POST" && path === "/api/collections" ? { json: { id: "newboard" } } : undefined),
       ({ method, path, body }) => (method === "POST" && path === "/api/references" ? { json: reference({ id: `new-${Date.now()}`, url: body.url, domain: new URL(body.url).hostname, status: "queued" }) } : undefined),

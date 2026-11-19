@@ -270,6 +270,7 @@ async function drag(page: Page, from: [number, number], to: [number, number], st
 }
 
 async function pan(page: Page, bounce = 3) {
+  await page.getByRole("button", { name: "Hand", exact: true }).click()
   for (let r = 0; r < bounce; r++) {
     const dir = r % 2 ? -1 : 1
     await drag(page, [dir > 0 ? 200 : 900, 520], [dir > 0 ? 900 : 200, 300])
@@ -599,7 +600,7 @@ test("1000 items: panning at 100% and zooming out stay light", { timeout: 240_00
 
 // The tile is two elements now, with its hover chip a sibling: the chip must still follow hover and focus, survive the
 // pointer moving onto it, and the tile must still open, in tab order.
-test("a home tile shows its source on hover and focus, opens on click, and tabs newest first", { timeout: 60_000 }, async () => {
+test("a home tile shows its source on hover and focus, opens on double-click, and tabs newest first", { timeout: 60_000 }, async () => {
   const t = await gallery(40)
   const { page } = t
   await t.goto("/")
@@ -634,7 +635,11 @@ test("a home tile shows its source on hover and focus, opens on click, and tabs 
   assert.equal(await chip.getAttribute("target"), null, "and stays in the app")
 
   // Focus panned the canvas to Section 3.
-  await page.getByRole("button", { name: "Section 3 · delta.test", exact: true }).click()
+  const section = page.getByRole("button", { name: "Section 3 · delta.test", exact: true })
+  await section.click()
+  assert.equal(await section.getAttribute("aria-pressed"), "true", "a single click selects")
+  assert.equal(new URL(page.url()).searchParams.get("open"), null)
+  await section.dblclick()
   await until("the inspector opens", async () => new URL(page.url()).searchParams.get("open") === "section:p3:0")
   assert.deepEqual(t.consoleErrors, [])
 })
@@ -653,7 +658,7 @@ test("a home tile draws a section's thumbnail where there is one, the full crop 
   assert.equal(await src("Section 1 · beta.test"), "/files/pages/p1/section-0-thumb.jpg", "a stored thumbnail is what the tile draws")
   assert.equal(await src("Section 2 · gamma.test"), "/files/pages/p2/section-0.jpg", "without one, the crop")
 
-  await page.getByRole("button", { name: "Section 1 · beta.test", exact: true }).click()
+  await page.getByRole("button", { name: "Section 1 · beta.test", exact: true }).dblclick()
   await until("the inspector opens", async () => new URL(page.url()).searchParams.get("open") === "section:p1:0")
   const still = page.getByRole("img", { name: "Section 1", exact: true })
   await still.waitFor()
@@ -672,7 +677,7 @@ test("on the Websites filter a tile opens the inspector like every other tile, a
   const tile = page.getByRole("button", { name: "Site 0", exact: true })
   await tile.waitFor()
   assert.equal(await tile.evaluate((el) => el.children.length), 1, "a tile holds only its image")
-  await tile.click()
+  await tile.dblclick()
   await until("the inspector opens", async () => new URL(page.url()).searchParams.get("open") === "website:w0")
   assert.equal(new URL(page.url()).pathname, "/", "the canvas stays")
 

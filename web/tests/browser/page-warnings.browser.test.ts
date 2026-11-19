@@ -63,7 +63,7 @@ test("in the site, a flagged page's tile carries its notice, and only that page'
   assert.equal(await tile(/^Pricing/).getAttribute("aria-description"), null)
   assert.equal(await t.page.locator(`[title="${BLANK}"]`).count(), 1, "one badge for the blank page")
 
-  await tile(/^Home/).click()
+  await tile(/^Home/).dblclick()
   await t.page.getByRole("dialog").getByText(BLANK).waitFor()
 })
 
