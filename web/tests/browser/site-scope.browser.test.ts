@@ -38,9 +38,11 @@ test("the seed journey takes two actions: the inspector's site link enters the s
   const t = await open("/?filter=pages")
   const { page } = t
   // Move the canvas, so the restore has something to prove.
+  await page.getByRole("button", { name: "Judgment Labs · pricing", exact: true }).waitFor()
   await page.locator("[aria-label^='All saves. Drag']").focus()
-  for (let i = 0; i < 6; i++) await page.keyboard.press("ArrowRight")
-  await sleep(500)
+  const origin = await worldTransform(page)
+  await page.keyboard.press("ArrowRight")
+  await until("canvas pans from its starting position", async () => (await worldTransform(page)) !== origin)
   await openTile(page, "Judgment Labs · pricing")
   const before = page.url()
   const position = await worldTransform(page)
