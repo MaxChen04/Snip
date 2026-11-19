@@ -11,7 +11,15 @@ type Action = "pause" | "resume" | "cancel"
 const ACTIONS: Record<Action, { label: string; title: string; done: string; icon: typeof PauseIcon }> = {
   pause: { label: "Pause", title: "Pause after the page being captured. Resume picks up where it left off.", done: "Pausing after this page", icon: PauseIcon },
   resume: { label: "Resume", title: "Continue capturing from where it paused", done: "Resuming capture", icon: PlayIcon },
-  cancel: { label: "Cancel", title: "Cancel this capture now and keep completed pages", done: "Capture cancelled", icon: XIcon },
+  cancel: { label: "Cancel", title: "", done: "Capture cancelled", icon: XIcon },
+}
+
+const pages = (n: number) => `${n} ${n === 1 ? "page" : "pages"}`
+
+/** What Cancel keeps and what it throws away, for the capture as it stands. */
+export function cancelTitle(r: Reference) {
+  if (!r.pageCount) return "Stop now. Nothing has been saved yet, so nothing is kept."
+  return r.status === "paused" ? `Stop now and keep the ${pages(r.pageCount)} saved so far.` : `Stop now. Keeps the ${pages(r.pageCount)} saved so far and discards the page in progress.`
 }
 
 /**
@@ -52,8 +60,10 @@ export function CaptureControls({ r, onChange, className }: { r: Reference; onCh
       const next = await api.captureControl(r, action)
       // What the response says happened: a capture with no page in flight pauses at once.
       notify(
-        next?.status === "ready"
-          ? `Stopped with ${next.pageCount} ${next.pageCount === 1 ? "page" : "pages"}`
+        action === "cancel" && (next?.status === "ready" || next?.status === "failed")
+          ? next.status === "ready" ? `Cancelled. Kept ${pages(next.pageCount)}` : "Cancelled. Nothing was saved"
+          : next?.status === "ready"
+          ? `Stopped with ${pages(next.pageCount)}`
           : next?.status === "failed"
             ? "Capture stopped"
             : next?.status === "paused"
@@ -72,7 +82,7 @@ export function CaptureControls({ r, onChange, className }: { r: Reference; onCh
     <span className={cn("inline-flex items-center", "gap-2", className)}>
       {actions.map((action) => {
         const { label, icon: Icon } = ACTIONS[action]
-        const title = ACTIONS[action].title
+        const title = action === "cancel" ? cancelTitle(r) : ACTIONS[action].title
         return (
           <button
             key={action}

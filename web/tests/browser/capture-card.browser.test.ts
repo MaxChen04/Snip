@@ -113,8 +113,9 @@ test("crawls offer Cancel beside Pause or Resume and retain completed pages in t
       return { json: t.state.references.ref1 }
     })
     await t.goto("/?site=ref1")
+    assert.equal(await t.page.getByRole("button", { name: "Cancel", exact: true }).getAttribute("title"), status === "paused" ? "Stop now and keep the 2 pages saved so far." : "Stop now. Keeps the 2 pages saved so far and discards the page in progress.")
     await t.page.getByRole("button", { name: "Cancel", exact: true }).click()
-    await t.page.getByText("Stopped with 2 pages", { exact: true }).waitFor()
+    await t.page.getByText("Cancelled. Kept 2 pages", { exact: true }).waitFor()
     assert.equal(await t.page.getByRole("button", { name: "Cancel", exact: true }).count(), 0)
     assert.equal(t.state.references.ref1!.pageCount, 2)
   }
