@@ -289,7 +289,7 @@ test("a capture whose job another agent took stops at the first refused call: no
         const seen = { uploads: 0, pages: [] as string[], controls: 0, completed: 0, paused: 0 }
         const gone = () => { throw new JobGoneError() }
         const api = {
-          control: async () => { if (refused === "control" && ++seen.controls === 2) gone(); return null },
+          control: async () => { seen.controls++; if (refused === "control" && seen.pages.length) gone(); return null },
           progress: async () => {},
           upload: async (key: string) => { if (refused === "upload") gone(); seen.uploads++; return key },
           addPage: async (_id: string, page: PageUpload) => { if (refused === "addPage") gone(); seen.pages.push(page.path) },
@@ -322,12 +322,13 @@ test("a crawl's first page is reported without a total until its links are known
     try {
       const run = async (job: Partial<Job>, control: (n: number) => "pause" | null, signal?: AbortSignal, afterPage = () => {}) => {
         const messages: string[] = []
-        let calls = 0
+        let pages = 0
         const api = {
-          control: async () => control(calls++),
+          // Controls persist on the server; background lease checks must not consume them.
+          control: async () => control(pages),
           progress: async (_id: string, message: string) => { messages.push(message) },
           upload: async (key: string) => key,
-          addPage: async () => { afterPage() },
+          addPage: async () => { pages++; afterPage() },
           pause: async () => true,
           complete: async () => {},
         }

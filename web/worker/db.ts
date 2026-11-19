@@ -534,11 +534,12 @@ export async function deleteReference(db: D1Database, id: string) {
   ])
 }
 
-export async function deletePrefix(files: R2Bucket, prefix: string) {
+export async function deletePrefix(files: R2Bucket, prefix: string, keep: (key: string) => boolean = () => false) {
   let cursor: string | undefined
   do {
     const list = await files.list({ prefix, cursor })
-    if (list.objects.length) await files.delete(list.objects.map((o) => o.key))
+    const keys = list.objects.map((o) => o.key).filter((key) => !keep(key))
+    if (keys.length) await files.delete(keys)
     cursor = list.truncated ? list.cursor : undefined
   } while (cursor)
 }
@@ -682,12 +683,23 @@ export async function cleanupRetiredFiles(db: D1Database, files: R2Bucket) {
     .bind(now()).all<{ prefix: string; attempts: number }>()
   for (const { prefix, attempts } of tasks.results) {
     try {
+      // Cancellation retires only unfinished files in the current attempt. Completed pages
+      // (including their clips, snapshots and fonts) and their shared icon must survive.
+      const [, id, attempt] = prefix.match(/^refs\/([^/]+)\/([^/]+)\/$/) ?? []
+      const savedPages = `SELECT p.ord, r.favicon FROM refs r JOIN pages p ON p.reference_id = r.id
+        WHERE r.id = ? AND r.capture_attempt = ?`
+      const saved = await db.prepare(savedPages).bind(id ?? null, attempt ?? null).all<{ ord: number; favicon: string | null }>()
+      const pagePrefixes = saved.results.map(({ ord }) => `${prefix}p${ord}/`)
+      const icon = saved.results[0]?.favicon
       // Sweep even with unresolved writers, but never discard the tombstone while
       // one may still put an object after this listing.
-      await deletePrefix(files, prefix)
+      await deletePrefix(files, prefix, (key) => key === icon || pagePrefixes.some((p) => key.startsWith(p)))
       const deleted = await db.prepare(`DELETE FROM capture_cleanup WHERE prefix = ? AND NOT EXISTS
-        (SELECT 1 FROM capture_uploads WHERE substr(object_key, 1, length(?)) = ?)`)
-        .bind(prefix, prefix, prefix).run()
+        (SELECT 1 FROM capture_uploads WHERE substr(object_key, 1, length(?)) = ?)
+        AND (SELECT count(*) FROM (${savedPages})) = ?`)
+        // If a recapture/deletion removed the saved pages during the sweep, retry so
+        // files we just retained are also removed. New attempts have distinct prefixes.
+        .bind(prefix, prefix, prefix, id ?? null, attempt ?? null, saved.results.length).run()
       if (deleted.meta.changes) continue
     } catch (error) {
       console.error("capture cleanup failed", error)
@@ -934,6 +946,20 @@ export async function requestStop(db: D1Database, id: string) {
     ...settleAbandoned(db, ts, id),
   ])
   return results.some((r) => r.meta.changes > 0)
+}
+
+/**
+ * Cancel immediately: revoke the lease, retain committed pages and retire unfinished uploads. Only the capture run the caller saw
+ * is cancelled: a stale `run` changes nothing, so it retires no files and leaves a newer run's lease alone.
+ */
+export async function cancelReference(db: D1Database, id: string, run: number) {
+  const active = `id = ? AND capture_run = ? AND status IN ('queued', 'capturing')`
+  const results = await db.batch([
+    db.prepare(`INSERT OR IGNORE INTO capture_cleanup (prefix)
+      SELECT 'refs/' || id || '/' || capture_attempt || '/' FROM refs WHERE ${active} AND capture_attempt IS NOT NULL`).bind(id, run),
+    ...settleStopped(db, active, [id, run], now()),
+  ])
+  return results.slice(1).some((r) => r.meta.changes > 0)
 }
 
 /** What the agent should do before its next page. Null means the job is gone. */

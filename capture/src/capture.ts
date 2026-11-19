@@ -1,14 +1,14 @@
 import { existsSync, readFileSync } from "node:fs"
 import sharp from "sharp"
 import type { Browser, BrowserContext, BrowserContextOptions, CDPSession, Page as PwPage } from "playwright"
-import type { CrawlState, DesignTokens, Job, MotionEntry, PageSection, PageUpload, PageWarning } from "../../web/shared/types"
+import type { CrawlState, DesignTokens, Job, JobComplete, MotionEntry, PageSection, PageUpload, PageWarning } from "../../web/shared/types"
 import { JobGoneError, uploadStyleParts, uploadText, type SnipApi } from "./api"
 import { PAGE_STALL_MS, pageDeadline, within } from "./deadline"
 import type { CapturedStyles } from "./style-parts"
 import { imageSize, type Frame } from "./gif"
 import { allowPrivateUrls, assertPublicUrl, createCaptureNetwork, PrivateAddressError } from "./network-guard"
 import { buildMotionProfile, mergeMotionProfiles, type MotionTech } from "./motion-profile"
-import { buildStills, closeRenderer, cropBands, sampleIndexes } from "./sheet"
+import { buildStills, closeRenderer, cropBands, fenceRenderer, sampleIndexes } from "./sheet"
 import { pageText, TEXT_LIMITS, type TextBlock } from "./text"
 import { encodeRecording, recordingWriter, type Recording } from "./video"
 
@@ -1329,10 +1329,18 @@ export function signedInState(env = process.env): string {
 }
 
 /**
+ * How often a running capture asks whether it was cancelled: one Worker request and one indexed D1 row read each time. The user
+ * sees a Cancel at once either way (the Worker settles it and refuses later writes); this is how soon the agent lets go of the
+ * browser and can start the next capture. Measured against a local Worker: released within 2 s, 0.9 s on average, at half the
+ * requests of a 1 s check.
+ */
+export const LEASE_CHECK_MS = 2000
+
+/**
  * `signal` asks the crawl to wind down at its next page boundary; `progress` tells the runtime the capture is still moving.
  * A page that finishes no step for `pageStallMs` (see PAGE_STALL_MS) is given up on like any page that fails.
  */
-export async function captureJob(browser: Browser, api: SnipApi, job: Job, signal = new AbortController().signal, progress = () => {}, { pageStallMs = PAGE_STALL_MS }: { pageStallMs?: number } = {}) {
+export async function captureJob(browser: Browser, api: SnipApi, job: Job, signal = new AbortController().signal, progress = () => {}, { pageStallMs = PAGE_STALL_MS, leaseCheckMs = LEASE_CHECK_MS }: { pageStallMs?: number; leaseCheckMs?: number } = {}) {
   await assertPublicUrl(job.url)
   const options = job.options ?? {}
   const colorScheme = options.colorScheme === "dark" ? "dark" : "light"
@@ -1340,12 +1348,42 @@ export async function captureJob(browser: Browser, api: SnipApi, job: Job, signa
   const network = allowPrivateUrls() ? null : await createCaptureNetwork()
   const contexts: BrowserContext[] = []
   let sidecarNetwork: CaptureNetwork = null
+  const cancelled = new AbortController()
+  const polling = new AbortController()
+  let checking = false
+  let closing: Promise<unknown> | undefined
+  const unfence = fenceRenderer(cancelled.signal)
+  // A hung navigation cannot reach a page boundary. Check the lease independently
+  // without renewing it or counting a control response as capture progress.
+  const timer = setInterval(async () => {
+    if (checking) return
+    checking = true
+    try {
+      await api.control(job.id, AbortSignal.any([polling.signal, AbortSignal.timeout(5000)]))
+    } catch (error) {
+      if (error instanceof JobGoneError && !polling.signal.aborted) {
+        cancelled.abort(error)
+        clearInterval(timer)
+        // The shared stills/video helper is separate from the site's contexts and
+        // can itself be stuck opening or encoding. Closing it also ends its pending calls,
+        // and the fence keeps a new one from opening for this capture.
+        closing = Promise.allSettled([closeRenderer(), ...contexts.map((context) => context.close())])
+        await closing
+      }
+      // A transient control outage is not cancellation. Retry on the next tick.
+    } finally { checking = false }
+  }, leaseCheckMs)
+  const newContext = async (options: BrowserContextOptions) => {
+    cancelled.signal.throwIfAborted()
+    const context = await browser.newContext(options)
+    contexts.push(context)
+    cancelled.signal.throwIfAborted()
+    return context
+  }
   try {
     const common: BrowserContextOptions = { colorScheme, storageState, locale: "en-US", proxy: network?.proxy, serviceWorkers: "block" as const }
-    const desktop = await browser.newContext({ ...common, viewport: { ...DESKTOP, width: options.desktopWidth ?? DESKTOP.width }, deviceScaleFactor: 1 })
-    contexts.push(desktop)
-    const mobile = await browser.newContext({ ...common, viewport: MOBILE, deviceScaleFactor: MOBILE_DPR, isMobile: true, hasTouch: true, userAgent: MOBILE_UA })
-    contexts.push(mobile)
+    const desktop = await newContext({ ...common, viewport: { ...DESKTOP, width: options.desktopWidth ?? DESKTOP.width }, deviceScaleFactor: 1 })
+    const mobile = await newContext({ ...common, viewport: MOBILE, deviceScaleFactor: MOBILE_DPR, isMobile: true, hasTouch: true, userAgent: MOBILE_UA })
     await Promise.all(contexts.flatMap((context) => [context.addInitScript(HOLD_RESIZE_JS), context.addInitScript(OBSERVED_JS)]))
     // Motion is logged on desktop only, from before the page's scripts run, so entrance animations are seen.
     await desktop.addInitScript(`(${MOTION_JS})({ "op": "install" })`)
@@ -1354,17 +1392,34 @@ export async function captureJob(browser: Browser, api: SnipApi, job: Job, signa
     let sidecar = desktop
     if (network) {
       sidecarNetwork = await createCaptureNetwork()
-      sidecar = await browser.newContext({ ...common, proxy: sidecarNetwork.proxy })
-      contexts.push(sidecar)
+      sidecar = await newContext({ ...common, proxy: sidecarNetwork.proxy })
     }
     // Every upload and page save counts as progress, at its start and again when it ends, so a slow connection is not taken for a hung step.
     const reporting: SnipApi = Object.create(api, {
-      upload: { value: (...file: Parameters<SnipApi["upload"]>) => { progress(); return api.upload(...file).finally(progress) } },
-      addPage: { value: (...page: Parameters<SnipApi["addPage"]>) => { progress(); return api.addPage(...page).finally(progress) } },
+      upload: { value: (key: string, body: Buffer | string, type: string) => { progress(); return api.upload(key, body, type, cancelled.signal).finally(progress) } },
+      addPage: { value: (id: string, page: PageUpload) => { progress(); return api.addPage(id, page, cancelled.signal).finally(progress) } },
+      progress: { value: (id: string, message: string) => api.progress(id, message, cancelled.signal) },
+      control: { value: (id: string) => api.control(id, cancelled.signal) },
+      pause: { value: (id: string, state: CrawlState, release = false) => {
+        cancelled.signal.throwIfAborted()
+        return api.pause(id, state, release, cancelled.signal)
+      } },
+      complete: { value: (id: string, result: JobComplete) => {
+        clearInterval(timer)
+        polling.abort()
+        return api.complete(id, result, cancelled.signal)
+      } },
     })
-    await capturePages(browser, reporting, job, desktop, mobile, sidecar, network, signal, progress, pageStallMs)
+    await capturePages(browser, reporting, job, desktop, mobile, sidecar, network, AbortSignal.any([signal, cancelled.signal]), progress, pageStallMs)
+    cancelled.signal.throwIfAborted()
+  } catch (error) {
+    cancelled.signal.throwIfAborted()
+    throw error
   } finally {
-    await Promise.allSettled(contexts.map(context => context.close()))
+    clearInterval(timer)
+    polling.abort()
+    await Promise.allSettled([closing, ...contexts.map(context => context.close())])
+    unfence()
     await Promise.all([network?.close(), sidecarNetwork?.close()])
   }
 }

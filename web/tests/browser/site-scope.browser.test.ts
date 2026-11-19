@@ -18,7 +18,7 @@ async function open(start = "/", opts: { width?: number } = {}) {
   const lib = library()
   const t = await app.session({ viewport: { width: opts.width ?? 1280, height: 800 } })
   t.on("GET", /^\/api\//, mockLibrary(lib))
-  t.on("POST", /^\/api\/references\/[^/]+\/(pause|resume|stop)$/, mockLibrary(lib))
+  t.on("POST", /^\/api\/references\/[^/]+\/(pause|resume|stop|cancel)$/, mockLibrary(lib))
   await t.goto(start)
   await t.page.getByRole("toolbar", { name: "Filter saves" }).waitFor()
   return { ...t, lib }
@@ -133,7 +133,7 @@ test("inside a site, the dock and search ask for that site's material only", asy
   await until("back in the site", () => search(page.url()).site === "judgment" && search(page.url()).q === "zzz")
 })
 
-test("a capture in progress shows under search with Pause and Stop, and pending pages hold their place", async () => {
+test("a capture in progress shows under search with Pause and Cancel, and pending pages hold their place", async () => {
   const t = await open("/?site=hone")
   const { page } = t
   await page.getByText("Capturing 4/6: /customers").waitFor()
@@ -141,10 +141,10 @@ test("a capture in progress shows under search with Pause and Stop, and pending 
   await page.getByRole("button", { name: "Pause" }).click()
   await page.getByText("Paused after 3 of 6 pages").waitFor()
   await page.getByRole("button", { name: "Resume" }).waitFor()
-  await page.getByRole("button", { name: "Stop" }).click()
-  await until("stopped", async () => (await page.getByRole("button", { name: "Stop" }).count()) === 0)
+  await page.getByRole("button", { name: "Cancel", exact: true }).click()
+  await until("stopped", async () => (await page.getByRole("button", { name: "Cancel", exact: true }).count()) === 0)
   assert.equal(t.count("POST", "/api/references/hone/pause"), 1)
-  assert.equal(t.count("POST", "/api/references/hone/stop"), 1)
+  assert.equal(t.count("POST", "/api/references/hone/cancel"), 1)
 })
 
 test("site details hold the note, Visit, Organize and More, and deleting the site leaves its scope", async () => {
@@ -425,7 +425,7 @@ test("a paused site notices a resume from another window and shows the pages sav
   crawlStep(lib, "pause")
   const t = await app.session({ clock: true })
   t.on("GET", /^\/api\//, mockLibrary(lib))
-  t.on("POST", /^\/api\/references\/[^/]+\/(pause|resume|stop)$/, mockLibrary(lib))
+  t.on("POST", /^\/api\/references\/[^/]+\/(pause|resume|stop|cancel)$/, mockLibrary(lib))
   await t.goto("/?site=hone")
   const { page } = t
   await page.getByText("Paused after 3 of 6 pages").waitFor()

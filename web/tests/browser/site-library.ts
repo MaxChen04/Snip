@@ -79,13 +79,13 @@ export function oneSite(r: Reference, pages: Page[], animations: Animation[] = [
   }
 }
 
-/** Advance the crawl one page, or pause, resume or stop it. */
-export function crawlStep(lib: Library, action: "next" | "pause" | "resume" | "stop") {
+/** Advance the crawl one page, or pause, resume, stop or cancel it. */
+export function crawlStep(lib: Library, action: "next" | "pause" | "resume" | "stop" | "cancel") {
   const c = lib.crawl
   if (action === "next" && c.status === "capturing") c.done = Math.min(c.total, c.done + 1)
   if (action === "pause") c.status = "paused"
   if (action === "resume") c.status = "capturing"
-  if (action === "stop" || c.done >= c.total) {
+  if (action === "stop" || action === "cancel" || c.done >= c.total) {
     c.status = "ready"
     c.total = c.done
   }
@@ -126,9 +126,9 @@ export function sectionsOf(pages: Page[], refs: Reference[]): SectionItem[] {
 export function mockLibrary(lib: Library) {
   return (req: Req): Reply | undefined => {
     if (req.method === "POST") {
-      const m = req.path.match(/^\/api\/references\/([^/]+)\/(pause|resume|stop)$/)
+      const m = req.path.match(/^\/api\/references\/([^/]+)\/(pause|resume|stop|cancel)$/)
       if (m) {
-        crawlStep(lib, m[2] as "pause" | "resume" | "stop")
+        crawlStep(lib, m[2] as "pause" | "resume" | "stop" | "cancel")
         return { json: view(lib).references.find((r) => r.id === m[1]) }
       }
       return
