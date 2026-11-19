@@ -26,8 +26,8 @@ function nearestTop(blocked: [number, number][], target: number): number {
   let top = -Infinity
   for (const [lo, hi] of blocked) {
     if (lo >= bottom) {
-      if (target >= bottom && target <= lo) return target
-      if (lo >= target) return lo - target < target - bottom ? lo : bottom
+      if (target < bottom) return bottom - target <= target - top ? bottom : top
+      if (target <= lo) return target
       top = lo
     }
     bottom = Math.max(bottom, hi)

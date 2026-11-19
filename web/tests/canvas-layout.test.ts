@@ -123,6 +123,15 @@ test("loading a page of older tiles leaves existing coordinates unchanged", () =
   assertNoOverlaps(after.tiles)
 })
 
+test("a tile that grows uses the closer clear edge without moving existing tiles", () => {
+  const items = ["growing", "near", "far"].map((key) => ({ key, site: "alpha", aspect: 4 }))
+  const previous = new Map(items.map((item, i) => [item.key, { site: item.site, x: -120, y: [10, 116, 316][i]!, w: 240, h: 60 }]))
+  const after = layoutHome([{ ...items[0]!, aspect: 2.4 }, ...items.slice(1)], closed, previous)
+  assert.deepEqual(after.slots.get("growing"), { ...previous.get("growing")!, y: 0, h: 100 })
+  for (const key of ["near", "far"]) assert.deepEqual(after.slots.get(key), previous.get(key))
+  assertNoOverlaps(after.tiles)
+})
+
 test("removing a tile leaves its neighbours stable and available space can be reused", () => {
   const before = layoutHome(make(60))
   const items = make(60).filter((_, i) => i !== 5)
