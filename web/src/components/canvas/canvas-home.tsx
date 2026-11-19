@@ -15,7 +15,7 @@ import { GAP, layoutHome, PLAZA, stageTiles, visibleTiles, type HomeItem, type H
 import { boundsOf, useGalleryEditing } from "@/components/canvas/gallery-editing"
 import { tilePosition, useGalleryPositions } from "@/components/canvas/gallery-positions"
 import { useGalleryReflow } from "@/components/canvas/gallery-reflow"
-import { frameGallery, GallerySiteLabels, gallerySitePins, SITE_LABEL_ZOOM } from "@/components/canvas/gallery-site-labels"
+import { frameGallery, GallerySiteLabels, gallerySitePins, placeSiteLabels, SITE_LABEL_ZOOM } from "@/components/canvas/gallery-site-labels"
 import { InfiniteCanvas, type CanvasView, type InfiniteCanvasHandle, type WorldRect } from "@/components/canvas/infinite-canvas"
 import type { GalleryTool } from "@/components/canvas/gallery-gestures"
 import { ItemInspector, type PagePrompt } from "@/components/canvas/item-inspector"
@@ -520,13 +520,15 @@ export function CanvasHome({ login }: { login: string }) {
     }
   }, [])
   const zoomSink = useRef<((zoom: number) => void) | null>(null)
-  const [far, setFar] = useState(false)
-  const farRef = useRef(false)
+  const [labelView, setLabelView] = useState({ zoom: 0, height: 28 })
+  const labelViewRef = useRef(labelView)
   const onViewChange = useCallback((v: CanvasView) => {
     zoomSink.current?.(v.zoom)
-    if ((v.zoom < SITE_LABEL_ZOOM) !== farRef.current) {
-      farRef.current = v.zoom < SITE_LABEL_ZOOM
-      setFar(farRef.current)
+    const zoom = v.zoom < SITE_LABEL_ZOOM ? Math.round(v.zoom * 200) / 200 : 0
+    const height = v.width < 640 ? 44 : 28
+    if (zoom !== labelViewRef.current.zoom || height !== labelViewRef.current.height) {
+      labelViewRef.current = { zoom, height }
+      setLabelView(labelViewRef.current)
     }
     clearTimeout(savePosition.current)
     savePosition.current = setTimeout(() => patchEntry({ view: { x: v.x, y: v.y, zoom: v.zoom } }), 300)
@@ -650,7 +652,11 @@ export function CanvasHome({ login }: { login: string }) {
   const pickState = picking ? sel : null
   const { field, selected, moving } = edit
   useGalleryReflow(place, items && showingTiles ? galleryTiles : null, field)
+  const far = labelView.zoom > 0
   const sitePins = useMemo(() => far && items ? gallerySitePins(galleryTiles, items) : [], [far, items, galleryTiles])
+  const siteLabels = useMemo(() => sitePins.length && !moving.length
+    ? placeSiteLabels(sitePins, plazaBounds ? [...layout.tiles, plazaBounds] : layout.tiles, labelView.zoom, labelView.height)
+    : [], [sitePins, layout.tiles, labelView, plazaBounds, moving.length])
   const frameSite = useCallback((area: WorldRect) => {
     if (canvas.current) frameGallery(canvas.current, area, true)
   }, [])
@@ -662,7 +668,7 @@ export function CanvasHome({ login }: { login: string }) {
     (rect: WorldRect) => (
       <>
         {plaza}
-        <div ref={field} className="group/field">
+        <div ref={field} className="peer group/field">
           <div>
             {items && showingTiles && <Field layout={layout} items={items} rect={rect} onOpen={tileOpen} scoped={!!site} pick={pickState} pending={pending} selected={selected} moving={moving} onGallerySelect={keyboardSelect} />}
           </div>
@@ -670,11 +676,11 @@ export function CanvasHome({ login }: { login: string }) {
             <div key={t.key} aria-hidden style={at(t)} className="pointer-events-none absolute hidden [translate:var(--landing-at)] rounded-md bg-ink-8/30 group-data-collision/field:block" />
           ))}
         </div>
-        {sitePins.length > 0 && <GallerySiteLabels pins={sitePins} visible={rect} onFrame={frameSite} />}
+        {siteLabels.length > 0 && <GallerySiteLabels labels={siteLabels} zoom={labelView.zoom} height={labelView.height} visible={rect} onFrame={frameSite} />}
         {ghosts}
       </>
     ),
-    [items, layout, tileOpen, site, pickState, pending, ghosts, plaza, field, selected, moving, keyboardSelect, showingTiles, sitePins, frameSite],
+    [items, layout, tileOpen, site, pickState, pending, ghosts, plaza, field, selected, moving, keyboardSelect, showingTiles, siteLabels, labelView, frameSite],
   )
 
   const tokens = reference?.tokens ?? null

@@ -1,7 +1,7 @@
 import { memo } from "react"
 import { SiteIcon } from "@/components/site-icon"
 import { boundsOf } from "./gallery-editing"
-import { MAX_ZOOM, MIN_ZOOM, type InfiniteCanvasHandle, type WorldRect } from "./infinite-canvas"
+import { MAX_ZOOM, type InfiniteCanvasHandle, type WorldRect } from "./infinite-canvas"
 import { SITE_GAP, type Placement } from "./home-layout"
 import type { CanvasItem } from "./types"
 
@@ -20,8 +20,7 @@ type SitePin = {
   domain: string
   icon: string | null
   count: number
-  x: number
-  y: number
+  anchorX: number
   width: number
   area: WorldRect
 }
@@ -60,24 +59,92 @@ export function gallerySitePins(tiles: readonly Placement[], items: readonly Can
     }
     const top = main.reduce((a, b) => b.y < a.y ? b : a)
     const area = boundsOf(main)!
-    pins.push({ key, name, domain, icon, count: main.length, x: top.x + top.w / 2, y: top.y, width: Math.min(164, Math.max(64, 44 + name.length * 7)), area })
+    pins.push({ key, name, domain, icon, count: main.length, anchorX: top.x + top.w / 2, width: Math.min(164, Math.max(64, 44 + name.length * 7)), area })
   }
-  const shown: SitePin[] = []
-  for (const pin of pins.sort((a, b) => b.count - a.count || a.key.localeCompare(b.key))) {
-    const covers = (other: SitePin) => Math.abs(pin.y - other.y) * MIN_ZOOM < 40
-      && Math.abs(pin.x - other.x) * MIN_ZOOM < (pin.width + other.width) / 2 + 6
-    if (!shown.some(covers)) shown.push(pin)
-  }
-  return shown
+  return pins.sort((a, b) => b.count - a.count || a.key.localeCompare(b.key))
 }
 
-export const GallerySiteLabels = memo(function GallerySiteLabels({ pins, visible, onFrame }: {
-  pins: readonly SitePin[]
+type Label = SitePin & { box: WorldRect }
+const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n))
+const intersects = (a: WorldRect, b: WorldRect) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
+
+function clearOffset(lo: number, hi: number, preferred: number, blocked: [number, number][]) {
+  if (blocked.every(([a, b]) => preferred <= a || preferred >= b)) return preferred
+  let best: number | undefined
+  let start = lo
+  const check = (end: number) => {
+    const candidate = clamp(preferred, start, end)
+    if (best === undefined || Math.abs(candidate - preferred) < Math.abs(best - preferred)) best = candidate
+  }
+  for (const [a, b] of blocked.sort(([x], [y]) => x - y)) {
+    if (b <= start) continue
+    if (a >= start) check(Math.min(a, hi))
+    start = b
+    if (start > hi) return best
+  }
+  check(hi)
+  return best
+}
+
+export function placeSiteLabels(pins: readonly SitePin[], tiles: readonly WorldRect[], zoom: number, height: number): Label[] {
+  const obstacles = [...tiles]
+  const labels: Label[] = []
+  const gap = 5 / zoom
+  for (const pin of pins) {
+    const { area, anchorX } = pin
+    const w = pin.width / zoom, h = height / zoom
+    const rails = [
+      { axis: "x", fixed: area.y - h - gap, desired: anchorX - w / 2 },
+      { axis: "y", fixed: area.x - w - gap, desired: area.y },
+      { axis: "y", fixed: area.x + area.w + gap, desired: area.y },
+      { axis: "x", fixed: area.y + area.h + gap, desired: anchorX - w / 2 },
+    ] as const
+    let best: WorldRect | undefined
+    let distance = Infinity
+    for (const { axis, fixed, desired } of rails) {
+      const horizontal = axis === "x"
+      const side = horizontal ? "y" : "x"
+      const length = horizontal ? w : h
+      const depth = horizontal ? h : w
+      const lo = area[axis] - length / 2
+      const hi = lo + (horizontal ? area.w : area.h)
+      const preferred = clamp(desired, lo, hi)
+      const blocked: [number, number][] = []
+      for (const other of obstacles) {
+        if (fixed >= other[side] + (horizontal ? other.h : other.w) + gap || fixed + depth <= other[side] - gap) continue
+        const a = other[axis] - length - gap
+        const b = other[axis] + (horizontal ? other.w : other.h) + gap
+        if (a < hi && b > lo) blocked.push([a, b])
+      }
+      const offset = clearOffset(lo, hi, preferred, blocked)
+      if (offset === undefined) continue
+      const box = horizontal ? { x: offset, y: fixed, w, h } : { x: fixed, y: offset, w, h }
+      if (fixed === rails[0].fixed && horizontal && offset === preferred) {
+        best = box
+        break
+      }
+      const score = Math.hypot(box.x + w / 2 - anchorX, box.y + h / 2 - area.y)
+      if (score < distance) {
+        best = box
+        distance = score
+      }
+    }
+    if (best) {
+      obstacles.push(best)
+      labels.push({ ...pin, box: best })
+    }
+  }
+  return labels
+}
+
+export const GallerySiteLabels = memo(function GallerySiteLabels({ labels, zoom, height, visible, onFrame }: {
+  labels: readonly Label[]
+  zoom: number
+  height: number
   visible: WorldRect
   onFrame: (area: WorldRect) => void
 }) {
-  return pins.filter(({ x, y, width }) => x + width / MIN_ZOOM >= visible.x && x - width / MIN_ZOOM <= visible.x + visible.w
-    && y >= visible.y && y - 40 / MIN_ZOOM <= visible.y + visible.h).map(({ key, name, domain, icon, x, y, width, area }) => (
+  return labels.filter(({ box }) => intersects(box, visible)).map(({ key, name, domain, icon, box, width, area }) => (
     <button
       key={key}
       type="button"
@@ -85,13 +152,14 @@ export const GallerySiteLabels = memo(function GallerySiteLabels({ pins, visible
       aria-label={`Frame ${name} cluster`}
       title={domain && domain !== name ? `${name} · ${domain}` : name}
       onClick={() => onFrame(area)}
-      className="tactile press absolute z-20 flex h-7 items-center gap-1.5 rounded-full px-2 text-xs text-foreground max-sm:h-9"
+      className="tactile press absolute z-20 flex items-center gap-1.5 rounded-full px-2 text-xs text-foreground peer-data-reflowing:hidden peer-data-settling:hidden"
       style={{
-        left: x,
-        top: y,
+        left: box.x,
+        top: box.y,
         width,
-        transformOrigin: "bottom center",
-        transform: "translate(-50%, calc(-100% - 16px)) scale(calc(1 / var(--gallery-zoom, 1)))",
+        height,
+        transformOrigin: "top left",
+        transform: `scale(${1 / zoom})`,
       }}
     >
       <SiteIcon domain={domain} icon={icon} className="size-3.5 shrink-0" />
