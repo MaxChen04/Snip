@@ -11,10 +11,10 @@ import { TopBar } from "@/components/top-bar"
 import { CaptureCard } from "@/components/canvas/capture-card"
 import { DropOverlay } from "@/components/canvas/drop-overlay"
 import { countOf, FilterDock } from "@/components/canvas/filter-dock"
-import { GAP, layoutHome, PLAZA, stageTiles, visibleTiles, type HomeLayout, type Placement, type Plaza, type Slot } from "@/components/canvas/home-layout"
+import { GAP, layoutHome, PLAZA, stageTiles, visibleTiles, type HomeItem, type HomeLayout, type Placement, type Plaza, type Slot } from "@/components/canvas/home-layout"
 import { InfiniteCanvas, type CanvasView, type InfiniteCanvasHandle, type WorldRect } from "@/components/canvas/infinite-canvas"
 import { ItemInspector, type PagePrompt } from "@/components/canvas/item-inspector"
-import { CapturePill, isBusy, SitePill, useSite, type SiteDetail } from "@/components/canvas/site-scope"
+import { CapturePill, isBusy, SiteScopeDetails, useSite, type SiteDetail } from "@/components/canvas/site-scope"
 import { CanvasTile, HomeTile } from "@/components/canvas/tiles"
 import { itemAspect, RELOAD_EVENT, reloadCanvas, type CanvasFilter, type CanvasItem, type SiteFilter } from "@/components/canvas/types"
 import { ZoomControls } from "@/components/canvas/zoom-controls"
@@ -31,8 +31,7 @@ const FILTERS: CanvasFilter[] = ["all", "websites", "pages", "sections", "animat
 const SITE_FILTERS: SiteFilter[] = ["all", "pages", "sections", "animations", "tokens"]
 export const keyOf = (it: CanvasItem) => `${it.kind}:${it.id}`
 
-// ponytail: each feed loads up to CAP items up front. The layout keeps every item's place and puts older items at the
-// outer edge (see layoutHome), so loading the next page as a pan nears the edge would move nothing already on screen.
+// Each feed loads up to CAP items up front; the layout keeps placements when the feed refreshes.
 const PAGE = 100
 const CAP = 400
 
@@ -143,6 +142,17 @@ const isPicked = (s: Selection, it: CanvasItem) => (it.kind === "page" ? s.pages
 /** A page a running capture hasn't saved yet. The one being captured and those behind it look the same, as on the capture card. */
 type Pending = { label: string }
 const PENDING_KEY = "pending:"
+const siteKey = ({ domain, id }: { domain: string; id: string }) => domain ? `domain:${domain}` : `reference:${id}`
+function homeItem(item: CanvasItem): HomeItem {
+  const base = { key: keyOf(item), aspect: itemAspect(item) }
+  switch (item.kind) {
+    case "page": return { ...base, site: siteKey(item.page.reference) }
+    case "section": return { ...base, site: siteKey(item.section.reference), parent: `page:${item.section.pageId}` }
+    case "animation": return { ...base, site: siteKey(item.animation.reference), parent: item.animation.pageId ? `page:${item.animation.pageId}` : undefined }
+    case "website": return { ...base, site: siteKey(item.reference) }
+    case "image": return base
+  }
+}
 const PendingTile = ({ p, style }: { p: Pending; style: CSSProperties }) => (
   <Skeleton aria-hidden className="pointer-events-none absolute rounded-md" style={style}>
     <span className="max-w-full truncate">{p.label}</span>
@@ -311,7 +321,7 @@ export function useCanvasRoute(title: string) {
 /**
  * Home: an infinite canvas around the capture card, scoped to All saves or to one website (?site=). Inside a site the
  * same canvas shows that site's pages, sections or recordings, search searches the site, and the chrome names it: a
- * chip in search, a Back pill, and the site pill with its details. Every place is a URL plus the canvas position kept in
+ * chip in search with its details, and a Back pill. Every place is a URL plus the canvas position kept in
  * its history entry, so leaving a site lands exactly where it was entered from.
  */
 export function CanvasHome({ login }: { login: string }) {
@@ -400,15 +410,20 @@ export function CanvasHome({ login }: { login: string }) {
   }, [])
   const plazaRect = useMemo(() => (plazaH ? { w: PLAZA.w, h: plazaH } : { w: 0, h: 0 }), [plazaH])
   const place = `${site ?? ""}|${feedFilter}|${q}`
+  const pendingSite = reference ? siteKey(reference) : undefined
   const layout = useMemo(() => {
     const next = layoutHome(
-      [...(items ?? []).map((it) => ({ key: keyOf(it), aspect: itemAspect(it) })), ...pending.map((_, i) => ({ key: `${PENDING_KEY}${i}`, aspect: 16 / 10 }))],
+      [...(items ?? []).map(homeItem), ...pending.map((_, i) => ({ key: `${PENDING_KEY}${i}`, aspect: 16 / 10, site: pendingSite }))],
       plazaRect,
       slotCache.get(place),
     )
-    if (items) cache(slotCache, place, next.slots)
+    if (items) cache(slotCache, place, new Map([...next.slots].filter(([key]) => !key.startsWith(PENDING_KEY))))
     return next
-  }, [items, pending, plazaRect, place])
+  }, [items, pending, plazaRect, place, pendingSite])
+  const newest = layout.tiles[0]
+  const home = newest && !newest.key.startsWith(PENDING_KEY) && (Math.abs(newest.x + newest.w / 2) > 256 || Math.abs(newest.y + newest.h / 2) > 240)
+    ? { x: newest.x + newest.w / 2, y: newest.y + newest.h / 2 }
+    : undefined
 
   // What a pan must keep on the screen: the tiles (saved and still capturing), and the plaza while it holds something
   // (the capture card, a welcome, no results, a retry). Nothing while the feed first loads, so a saved view isn't moved
@@ -583,7 +598,12 @@ export function CanvasHome({ login }: { login: string }) {
         login={login}
         query={query}
         onQuery={setQuery}
-        scope={site ? { domain: domain ?? "Website", icon: reference?.favicon ?? null, onLeave: leaveSite } : undefined}
+        scope={site ? {
+          domain: domain ?? "Website",
+          icon: reference?.favicon ?? null,
+          details: reference ? <SiteScopeDetails key={site} site={siteData} onChange={reloadCanvas} /> : undefined,
+          onLeave: leaveSite,
+        } : undefined}
         back={back}
         actions={
           detail ? (
@@ -637,11 +657,6 @@ export function CanvasHome({ login }: { login: string }) {
             <p className={cn("absolute left-6 z-50 flex h-10 max-w-[calc(50vw-320px)] items-center rounded-full bg-control px-4 text-2xs text-ink-11 shadow-button max-lg:hidden", site ? "bottom-[72px]" : "bottom-6")}>{caption}</p>
           )}
         </>
-      )}
-      {site && (
-        <div className="absolute bottom-6 left-6 z-50 max-sm:bottom-[88px] max-sm:left-4">
-          <SitePill site={siteData} onChange={reloadCanvas} />
-        </div>
       )}
       {picking && detail && (
         <div data-selection-bar className="absolute bottom-[88px] left-1/2 z-50 flex max-w-[calc(100vw-32px)] -translate-x-1/2 items-center gap-2 max-sm:bottom-[148px]">
@@ -739,6 +754,7 @@ export function CanvasHome({ login }: { login: string }) {
         tiled
         className="absolute inset-0"
         aria-label={`${title}. Drag or use the arrow keys to move, plus and minus to zoom, 0 to recenter.`}
+        home={home}
         onViewChange={onViewChange}
         content={content}
       >

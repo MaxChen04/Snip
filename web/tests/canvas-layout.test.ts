@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { GAP, layoutHome, MOUNT_PER_FRAME, PLAZA, stageTiles, visibleTiles, type Placement, type Rect } from "../src/components/canvas/home-layout"
+import { GAP, layoutHome, MOUNT_PER_FRAME, PLAZA, SITE_GAP, stageTiles, visibleTiles, type HomeItem, type Placement, type Rect } from "../src/components/canvas/home-layout"
 
 const ASPECTS = [1.6, 1.6, 0.8, 1.3, 1, 2.4, 1.6, 0.6, 1.6, 1.2, 0.45, 3]
 const make = (n: number) => Array.from({ length: n }, (_, i) => ({ key: `item${i}`, aspect: ASPECTS[i % ASPECTS.length]! }))
@@ -51,60 +51,69 @@ test("panning far in any direction shows no item twice, and past the content sho
   }
 })
 
-test("newest items sit nearest the centre, and the field grows wider than tall", () => {
-  for (const n of [12, 80, 1000]) {
-    const { tiles } = layoutHome(make(n))
-    const dist = (t: Placement) => Math.hypot(t.x + t.w / 2, t.y + t.h / 2)
-    assert.ok(dist(tiles[0]!) < dist(tiles[n - 1]!))
-    const mean = (list: Placement[]) => list.reduce((s, t) => s + dist(t), 0) / list.length
-    assert.ok(mean(tiles.slice(0, n / 4)) < mean(tiles.slice(-n / 4)), `${n} items: the newest quarter is nearer than the oldest`)
-    if (n >= 80) {
-      const w = Math.max(...tiles.map((t) => t.x + t.w)) - Math.min(...tiles.map((t) => t.x))
-      const h = Math.max(...tiles.map((t) => t.y + t.h)) - Math.min(...tiles.map((t) => t.y))
-      assert.ok(w > h, `${n} items: ${w} x ${h}`)
-    }
+const closed = { w: 0, h: 0 }
+const distance = (a: Rect, b: Rect) => Math.hypot(a.x + a.w / 2 - b.x - b.w / 2, a.y + a.h / 2 - b.y - b.h / 2)
+const page = (key: string, site: string): HomeItem => ({ key, site, aspect: 1.6 })
+
+test("interleaved feed entries form compact site groups with wider whitespace between them", () => {
+  const items = ["a", "b", "c", "d"].flatMap((suffix) => ["alpha", "beta", "gamma"].map((site) => page(`${site}:${suffix}`, site)))
+  const { slots, tiles } = layoutHome(items, closed)
+  assert.deepEqual(tiles.map((t) => t.key), items.map((i) => i.key), "paint and keyboard order still follow the feed")
+  for (const a of slots.values()) for (const b of slots.values()) {
+    if (a.site !== b.site) assert.equal(overlap({ x: a.x - SITE_GAP, y: a.y - SITE_GAP, w: a.w + 2 * SITE_GAP, h: a.h + 2 * SITE_GAP }, b), 0)
+    else assert.ok(distance(a, b) <= 512, "a four-page group stays within two tile pitches")
   }
 })
 
-test("a new save moves only the tiles of the column it joins", () => {
-  for (const n of [40, 400]) {
-    const before = layoutHome(make(n))
-    const items = [{ key: "new", aspect: 1.4 }, ...make(n)]
-    const after = layoutHome(items, PLAZA, before.slots)
-    assert.equal(after.tiles.length, n + 1)
-    const added = after.tiles.find((t) => t.key === "new")!
-    const was = new Map(before.tiles.map((t) => [t.key, t]))
-    const moved = after.tiles.filter((t) => t.key !== "new" && (was.get(t.key)!.x !== t.x || was.get(t.key)!.y !== t.y))
-    assert.ok(moved.every((t) => t.x === added.x), `${n} items: only the new tile's column moves`)
-    assert.ok(moved.length < n / 4, `${n} items: ${moved.length} tiles moved`)
-    assertNoOverlaps(after.tiles)
-    // It sits next to the plaza, nearest the centre of its column.
-    const column = after.tiles.filter((t) => t.x === added.x && Math.sign(t.y) === Math.sign(added.y))
-    assert.ok(column.every((t) => Math.abs(added.y + added.h / 2) <= Math.abs(t.y + t.h / 2)))
-  }
+test("refreshes prepend and append without moving any existing site or tile", () => {
+  const items = make(80).map((item, i) => ({ ...item, site: String(i % 8) }))
+  const before = layoutHome(items)
+  const next = [
+    page("fresh", "1"),
+    ...items.slice().reverse(),
+    page("old sibling", "2"),
+    page("a new site", "9"),
+    items[0]!,
+  ]
+  const after = layoutHome(next, PLAZA, before.slots)
+  for (const [key, slot] of before.slots) assert.deepEqual(after.slots.get(key), slot)
+  assert.equal(after.tiles.length, items.length + 3, "duplicate input cannot create a second tile")
+  assertNoOverlaps(after.tiles)
 })
 
-test("a new save lands beside the plaza, in view of the opening screen, however big the library", () => {
-  const screen: Rect = { x: -640, y: -400, w: 1280, h: 800 }
-  const inside = (t: Placement) => t.x >= screen.x && t.y >= screen.y && t.x + t.w <= screen.x + screen.w && t.y + t.h <= screen.y + screen.h
-  const tall = (n: number) => Array.from({ length: n }, (_, i) => ({ key: `item${i}`, aspect: 1.6 }))
-  for (const plazaSize of [PLAZA, { w: 0, h: 0 }]) {
-    for (const n of [10, 100, 400]) {
-      let items = tall(n)
-      let layout = layoutHome(items, plazaSize)
-      // Five saves in a row, each laid out on the last.
-      for (let s = 0; s < 5; s++) {
-        items = [{ key: `new${s}`, aspect: [1.6, 0.8, 1.3, 2.4, 1][s]! }, ...items]
-        layout = layoutHome(items, plazaSize, layout.slots)
-        const added = layout.tiles.find((t) => t.key === `new${s}`)!
-        assert.ok(inside(added), `${n} items, save ${s + 1}: at ${added.x}, ${added.y}`)
-      }
-      assertNoOverlaps(layout.tiles)
-    }
+test("sections and recordings prefer their page, including when the page arrives later", () => {
+  const related = [
+    { ...page("section", "alpha"), parent: "parent" },
+    { ...page("recording", "alpha"), parent: "parent" },
+  ]
+  const siblings = Array.from({ length: 10 }, (_, i) => page(`sibling ${i}`, "alpha"))
+  const parent = page("parent", "alpha")
+  const layout = layoutHome([...siblings, ...related, parent], closed)
+  for (const child of related) {
+    assert.ok(distance(layout.slots.get(child.key)!, layout.slots.get(parent.key)!) <= 256)
   }
+  const filtered = layoutHome([related[0]!, ...siblings, related[1]!], closed)
+  assert.ok(distance(filtered.slots.get("section")!, filtered.slots.get("recording")!) <= 256)
+  assert.equal(filtered.slots.has("parent"), false, "a filtered-out page never gets a tile")
+  const before = layoutHome([related[0]!, ...siblings], closed)
+  const after = layoutHome([parent, related[1]!, related[0]!, ...siblings], closed, before.slots)
+  assert.deepEqual(after.slots.get("section"), before.slots.get("section"))
+  assert.ok(distance(after.slots.get("section")!, after.slots.get("parent")!) < 430, "the late parent fills the nearest free space without displacing siblings")
+  assertNoOverlaps(after.tiles)
 })
 
-test("older items loaded later go to the edge and move nothing", () => {
+test("a changed aspect updates only that tile, retaining its location where it fits", () => {
+  const items = [page("one", "alpha"), page("two", "alpha"), page("three", "beta")]
+  const before = layoutHome(items, closed)
+  const after = layoutHome([{ ...items[0]!, aspect: 2.4 }, ...items.slice(1)], closed, before.slots)
+  assert.deepEqual(after.slots.get("one"), { ...before.slots.get("one"), h: 100 })
+  const larger = layoutHome([{ ...items[0]!, aspect: 0.4 }, ...items.slice(1)], closed, after.slots)
+  assert.equal(larger.slots.get("one")!.h, 600)
+  for (const item of items.slice(1)) assert.deepEqual(larger.slots.get(item.key), before.slots.get(item.key))
+  assertNoOverlaps(larger.tiles)
+})
+
+test("loading a page of older tiles leaves existing coordinates unchanged", () => {
   const before = layoutHome(make(100))
   const after = layoutHome(make(160), PLAZA, before.slots)
   for (const t of before.tiles) {
@@ -114,19 +123,15 @@ test("older items loaded later go to the edge and move nothing", () => {
   assertNoOverlaps(after.tiles)
 })
 
-test("an item that is gone leaves no hole: its column closes up", () => {
+test("removing a tile leaves its neighbours stable and available space can be reused", () => {
   const before = layoutHome(make(60))
   const items = make(60).filter((_, i) => i !== 5)
   const after = layoutHome(items, PLAZA, before.slots)
   assert.equal(after.tiles.length, 59)
   assertNoOverlaps(after.tiles)
-  const gone = before.tiles[5]!
-  // Its column, from the plaza outward: each tile starts one gap after the one before.
-  const column = after.tiles
-    .filter((t) => t.x === gone.x && Math.sign(t.y) === Math.sign(gone.y))
-    .map((t) => (t.y > 0 ? { from: t.y, to: t.y + t.h } : { from: -(t.y + t.h), to: -t.y }))
-    .sort((a, b) => a.from - b.from)
-  for (let i = 1; i < column.length; i++) assert.ok(Math.abs(column[i]!.from - column[i - 1]!.to - GAP) < EPS)
+  for (const [key, slot] of after.slots) assert.deepEqual(slot, before.slots.get(key))
+  const replacement = layoutHome([...items, { ...make(6)[5]!, key: "replacement" }], PLAZA, after.slots)
+  assert.deepEqual(replacement.slots.get("replacement"), before.slots.get("item5"))
 })
 
 test("a taller plaza passed in stays clear, and the 520-px card never touches a tile", () => {
@@ -135,7 +140,7 @@ test("a taller plaza passed in stays clear, and the 520-px card never touches a 
       const layout = layoutHome(make(n), { w: PLAZA.w, h })
       const card: Rect = { x: -260, y: -h / 2, w: 520, h }
       assert.equal(visibleTiles(layout, card).length, 0, `${n} items, plaza ${h}`)
-      if (n >= 60) assert.ok(visibleTiles(layout, { x: 264, y: -h / 2, w: 240, h }).length > 0, "beside the card, the field comes right up to it")
+      if (n >= 60) assert.ok(visibleTiles(layout, { x: 264 + GAP, y: -h / 2, w: 368, h }).length > 0, "there are still tiles beside the card")
     }
   }
 })

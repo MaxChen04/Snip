@@ -29,7 +29,7 @@ import { enterSite } from "@/lib/scope"
 const pill = "flex h-10 items-center rounded-full bg-control/90 shadow-button backdrop-blur-md"
 
 /** The website the canvas is scoped to: a removable chip at the front of search. */
-export type SearchScope = { domain: string; icon: string | null; onLeave: () => void }
+export type SearchScope = { domain: string; icon: string | null; details?: ReactNode; onLeave: () => void }
 
 export function TopBar({
   login,
@@ -104,38 +104,43 @@ export function TopBar({
  * focused and empty, a panel says what search matches and offers saved sites as one-click filters.
  */
 function SearchField({ query, onQuery, scope }: { query: string; onQuery: (q: string) => void; scope?: SearchScope }) {
+  const inputId = useId()
   const [sites, setSites] = useState<Reference[] | null>(null)
   const loadSites = () => api.references({ status: "ready" }, null, 8).then((p) => setSites(p.items.filter((r, i, a) => a.findIndex((x) => x.domain === r.domain) === i)), () => setSites([]))
   return (
     <div className="snip-toolbar-search group/search relative w-full min-w-0">
-      <label
+      <div
         className={cn(
           pill,
-          "w-full min-w-0 gap-2 px-3 has-focus-visible:outline-2 has-focus-visible:outline-offset-2",
+          "w-full min-w-0 gap-2 px-3 has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2",
+          scope && "pointer-coarse:h-11",
         )}
       >
         {scope ? (
-          <span className="-ml-1.5 flex h-7 max-w-[55%] shrink-0 items-center gap-1.5 rounded-full bg-ink-3 pr-1 pl-1.5 text-2xs font-medium text-foreground motion-safe:animate-in motion-safe:fade-in-0 motion-safe:zoom-in-95 motion-safe:duration-200">
-            <SiteIcon domain={scope.domain} icon={scope.icon} />
-            {/* Narrow windows keep the field room to type: the favicon and the placeholder name the site. */}
-            <span className="truncate max-md:sr-only">{scope.domain}</span>
+          <span className="-ml-1.5 flex h-7 max-w-[55%] shrink-0 items-center rounded-full bg-ink-3 pr-1 text-2xs font-medium text-foreground pointer-coarse:h-11 pointer-coarse:pr-0">
+            {scope.details ?? (
+              <span className="flex min-w-0 items-center gap-1.5 px-1.5">
+                <SiteIcon domain={scope.domain} icon={scope.icon} />
+                <span className="truncate max-md:sr-only">{scope.domain}</span>
+              </span>
+            )}
             <button
               type="button"
-              onClick={(e) => {
-                e.preventDefault()
-                scope.onLeave()
-              }}
+              onClick={scope.onLeave}
               aria-label={`Leave ${scope.domain}`}
-              title="Leave this site (Esc)"
-              className="press grid size-5 shrink-0 place-items-center rounded-full text-ink-10 hover:bg-ink-5 hover:text-foreground active:scale-[0.92]"
+              title="Leave this site"
+              className="press grid size-5 shrink-0 place-items-center rounded-full text-ink-10 hover:bg-ink-5 hover:text-foreground active:scale-[0.92] pointer-coarse:size-11"
             >
               <XIcon className="size-3" />
             </button>
           </span>
         ) : (
-          <SearchIcon className="size-3.5 shrink-0 text-ink-9" />
+          <label htmlFor={inputId} className="flex h-full items-center">
+            <SearchIcon aria-hidden className="size-3.5 shrink-0 text-ink-9" />
+          </label>
         )}
         <input
+          id={inputId}
           data-search
           value={query}
           onFocus={() => scope || void loadSites()}
@@ -152,14 +157,13 @@ function SearchField({ query, onQuery, scope }: { query: string; onQuery: (q: st
           </kbd>
         )}
         {query && (
-          <button onClick={() => onQuery("")} aria-label="Clear search" className="press grid size-5 place-items-center rounded-full bg-control text-ink-10 shadow-button hover:text-foreground active:scale-[0.92]">
+          <button type="button" onClick={() => onQuery("")} aria-label="Clear search" className="press grid size-5 place-items-center rounded-full bg-control text-ink-10 shadow-button hover:text-foreground active:scale-[0.92]">
             <XIcon className="size-3" />
           </button>
         )}
-      </label>
-      {/* Shown by CSS while focus is inside, so tabbing from the field to a chip keeps it open. */}
+      </div>
       {!query && scope && (
-        <div className="absolute inset-x-0 top-12 hidden flex-col gap-2.5 rounded-2xl bg-popover p-3 shadow-menu group-focus-within/search:flex">
+        <div className="absolute inset-x-0 top-12 hidden flex-col gap-2.5 rounded-2xl bg-popover p-3 shadow-menu group-has-[input:focus]/search:flex">
           <p className="text-2xs text-ink-10">Searches page titles, paths and section names in {scope.domain}. Remove the chip to search everything.</p>
         </div>
       )}
