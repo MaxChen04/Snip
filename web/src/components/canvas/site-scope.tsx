@@ -85,7 +85,7 @@ export function useSite(id: string | null) {
 }
 
 /** The owner's note on a website. Saved when the field loses focus; Escape discards the edit. */
-function NoteField({ r, onSaved }: { r: Reference; onSaved: (notes: string | null) => void }) {
+function NoteField({ r, onSaved, onCancel }: { r: Reference; onSaved: (notes: string | null) => void; onCancel: () => void }) {
   const [value, setValue] = useState(r.notes ?? "")
   const cancelling = useRef(false)
   useEffect(() => setValue(r.notes ?? ""), [r.notes])
@@ -115,7 +115,7 @@ function NoteField({ r, onSaved }: { r: Reference; onSaved: (notes: string | nul
           e.stopPropagation()
           cancelling.current = true
           setValue(r.notes ?? "")
-          e.currentTarget.blur()
+          onCancel()
         }
       }}
       maxLength={2000}
@@ -133,15 +133,12 @@ const savedOn = (iso: string) => new Date(iso).toLocaleDateString(undefined, { m
 
 const action = "tactile press flex h-8 items-center gap-1.5 rounded-full px-3 text-xs font-medium [&_svg]:size-3.5 [&_svg]:text-ink-10"
 
-/**
- * Bottom left inside a site: its name and page count, opening the site's details (note, Visit, Organize, More). Takes the
- * place of the library's "N saved" caption.
- */
-export function SitePill({ site, onChange }: { site: ReturnType<typeof useSite>; onChange: () => void }) {
+export function SiteScopeDetails({ site, onChange }: { site: ReturnType<typeof useSite>; onChange: () => void }) {
   const { collections, refresh } = useCollections()
   const [recapturing, setRecapturing] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [working, setWorking] = useState(false)
+  const visit = useRef<HTMLAnchorElement>(null)
   if (!site.detail) return null
   const { reference: r, pages, animations } = site.detail
   const sections = pages.reduce((n, p) => n + p.sections.length, 0)
@@ -191,14 +188,20 @@ export function SitePill({ site, onChange }: { site: ReturnType<typeof useSite>;
       <Popover>
         <PopoverTrigger
           aria-label={`Site details: ${name}`}
-          className="press flex h-10 max-w-[calc(50vw-200px)] min-w-0 items-center gap-2 rounded-full bg-control pr-3 pl-2.5 text-xs font-medium shadow-button hover:bg-control-hover data-popup-open:bg-control-hover max-md:max-w-none max-md:pr-2.5"
+          title={r.domain}
+          className="press flex h-full min-w-0 items-center gap-1.5 rounded-full px-1.5 hover:bg-ink-4 data-popup-open:bg-ink-4 active:scale-[0.97] pointer-coarse:min-w-11"
         >
-          <SiteIcon domain={r.domain} icon={r.favicon} className="size-5 rounded-md" />
-          <span className="truncate max-md:hidden">{name}</span>
-          <span className="shrink-0 text-ink-10 tabular-nums max-lg:hidden">· {plural(r.pageCount, "page")}</span>
-          <ChevronDownIcon className="size-3.5 shrink-0 text-ink-10" />
+          <SiteIcon domain={r.domain} icon={r.favicon} />
+          <span className="truncate max-md:sr-only">{r.domain}</span>
+          <ChevronDownIcon className="size-3 shrink-0 text-ink-10" />
         </PopoverTrigger>
-        <PopoverContent side="top" align="start" sideOffset={10} className="flex w-[22rem] max-w-[calc(100vw-32px)] flex-col gap-3 rounded-2xl p-4">
+        <PopoverContent
+          aria-label={`Site details: ${name}`}
+          align="start"
+          sideOffset={12}
+          initialFocus={(type) => type === "keyboard" ? visit.current ?? true : false}
+          className="w-[22rem] max-w-[calc(100vw-32px)] max-h-[calc(100dvh-9rem)] overflow-y-auto overscroll-contain max-sm:max-h-[calc(100dvh-12rem)]"
+        >
           <div className="flex min-w-0 items-center gap-3">
             <SiteIcon domain={r.domain} icon={r.favicon} className="size-9 rounded-lg shadow-button" />
             <div className="min-w-0">
@@ -208,6 +211,49 @@ export function SitePill({ site, onChange }: { site: ReturnType<typeof useSite>;
                 <ArrowUpRightIcon className="size-3 shrink-0" />
               </a>
             </div>
+          </div>
+          <NoteField
+            r={r}
+            onSaved={(notes) => {
+              site.update((d) => ({ ...d, reference: { ...d.reference, notes } }))
+              reloadCanvas()
+            }}
+            onCancel={() => visit.current?.focus()}
+          />
+          <div className="flex flex-wrap items-center gap-2">
+            <a ref={visit} href={r.url} target="_blank" rel="noreferrer" title="Opens in a new tab" className={action}>
+              <ExternalLinkIcon />
+              Visit
+            </a>
+            <Popover>
+              <PopoverTrigger className={cn(action, "data-popup-open:bg-control-hover")}>
+                <FolderIcon />
+                Organize
+              </PopoverTrigger>
+              <PopoverContent align="start" className="w-80 max-w-[calc(100vw-32px)] p-2">
+                <CollectionPicker className="max-h-72" selected={r.collectionIds} onToggle={(cid, on) => void toggleBoard(cid, on)} />
+              </PopoverContent>
+            </Popover>
+            <DropdownMenu>
+              <DropdownMenuTrigger className={cn(action, "data-popup-open:bg-control-hover")}>
+                <MoreHorizontalIcon />
+                More
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-52">
+                {/* The server refuses to re-capture one that is still queued, capturing or paused. */}
+                {(r.status === "ready" || r.status === "failed") && (
+                  <DropdownMenuItem disabled={working} onClick={() => (pages.length ? setRecapturing(true) : recapture())}>
+                    <RefreshCwIcon /> Re-capture
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuItem disabled={!pages.length} onClick={() => void exportZip()}>
+                  <DownloadIcon /> Export as .zip
+                </DropdownMenuItem>
+                <DropdownMenuItem variant="destructive" onClick={() => setDeleting(true)}>
+                  <Trash2Icon /> Delete reference
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
           <p className="text-2xs text-ink-10 tabular-nums">
             {[plural(r.pageCount, "page"), plural(sections, "section"), plural(animations.length, "recording"), optionLabel(r), `saved ${savedOn(r.createdAt)}`].filter(Boolean).join(" · ")}
@@ -225,48 +271,6 @@ export function SitePill({ site, onChange }: { site: ReturnType<typeof useSite>;
               </>
             )}
           </p>
-          <NoteField
-            r={r}
-            onSaved={(notes) => {
-              site.update((d) => ({ ...d, reference: { ...d.reference, notes } }))
-              reloadCanvas()
-            }}
-          />
-          <div className="flex flex-wrap items-center gap-2">
-            <a href={r.url} target="_blank" rel="noreferrer" title="Opens in a new tab" className={action}>
-              <ExternalLinkIcon />
-              Visit
-            </a>
-            <Popover>
-              <PopoverTrigger className={cn(action, "data-popup-open:bg-control-hover")}>
-                <FolderIcon />
-                Organize
-              </PopoverTrigger>
-              <PopoverContent side="top" align="start" className="w-80 p-2">
-                <CollectionPicker className="max-h-72" selected={r.collectionIds} onToggle={(cid, on) => void toggleBoard(cid, on)} />
-              </PopoverContent>
-            </Popover>
-            <DropdownMenu>
-              <DropdownMenuTrigger className={cn(action, "data-popup-open:bg-control-hover")}>
-                <MoreHorizontalIcon />
-                More
-              </DropdownMenuTrigger>
-              <DropdownMenuContent side="top" align="start" className="w-52">
-                {/* The server refuses to re-capture one that is still queued, capturing or paused. */}
-                {(r.status === "ready" || r.status === "failed") && (
-                  <DropdownMenuItem disabled={working} onClick={() => (pages.length ? setRecapturing(true) : recapture())}>
-                    <RefreshCwIcon /> Re-capture
-                  </DropdownMenuItem>
-                )}
-                <DropdownMenuItem disabled={!pages.length} onClick={() => void exportZip()}>
-                  <DownloadIcon /> Export as .zip
-                </DropdownMenuItem>
-                <DropdownMenuItem variant="destructive" onClick={() => setDeleting(true)}>
-                  <Trash2Icon /> Delete reference
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
         </PopoverContent>
       </Popover>
 

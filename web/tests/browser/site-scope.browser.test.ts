@@ -38,9 +38,11 @@ test("the seed journey takes two actions: the inspector's site link enters the s
   const t = await open("/?filter=pages")
   const { page } = t
   // Move the canvas, so the restore has something to prove.
+  await page.getByRole("button", { name: "Judgment Labs · pricing", exact: true }).waitFor()
   await page.locator("[aria-label^='All saves. Drag']").focus()
-  for (let i = 0; i < 6; i++) await page.keyboard.press("ArrowRight")
-  await sleep(500)
+  const origin = await worldTransform(page)
+  await page.keyboard.press("ArrowRight")
+  await until("canvas pans from its starting position", async () => (await worldTransform(page)) !== origin)
   await openTile(page, "Judgment Labs · pricing")
   const before = page.url()
   const position = await worldTransform(page)
@@ -68,31 +70,36 @@ test("the seed journey takes two actions: the inspector's site link enters the s
   assert.deepEqual(t.consoleErrors, [])
 })
 
-test("each way out lands where the scope was entered from: the chip's ×, browser Back and Escape", async () => {
-  const t = await open("/?filter=sections&q=pricing")
-  const { page } = t
-  const start = page.url()
-  const enter = async () => {
+const scopeExits: [string, (page: import("playwright").Page) => Promise<unknown>][] = [
+  ["the chip's × with details open", async (page) => {
+    await page.getByRole("button", { name: "Site details: Linear" }).click()
+    await page.getByRole("dialog", { name: "Site details: Linear" }).waitFor()
+    await page.getByRole("button", { name: "Leave linear.app" }).click()
+  }],
+  ["browser Back", (page) => page.goBack()],
+  ["Escape on the scoped canvas", async (page) => {
+    await page.locator("[aria-roledescription=canvas]").focus()
+    await page.keyboard.press("Escape")
+  }],
+]
+
+for (const [label, leave] of scopeExits) {
+  test(`leaving a site with ${label} restores the previous view`, async (test) => {
+    const { page } = await open("/?filter=sections&q=pricing")
+    test.after(() => page.context().close())
+    const start = page.url()
     await page.getByRole("button", { name: "Pricing table · linear.app", exact: true }).first().focus()
     await page.getByRole("link", { name: "Show everything from linear.app" }).click()
     await until("scoped", () => search(page.url()).site === "linear")
     await page.getByRole("button", { name: "Back to Search: pricing" }).waitFor()
-  }
-  for (const leave of [
-    () => page.getByRole("button", { name: "Leave linear.app" }).click(),
-    () => page.goBack(),
-    () => page.keyboard.press("Escape"),
-  ]) {
-    await enter()
     // The scope starts on its own search: the library's query stays behind.
     assert.equal(await page.getByRole("textbox", { name: /Search in linear\.app/ }).inputValue(), "")
-    await page.locator("body").click({ position: { x: 5, y: 400 } })
-    await leave()
-    await until("left", () => page.url() === start)
+    await leave(page)
+    await page.waitForURL(start, { timeout: 8000 })
     assert.equal(await page.getByRole("textbox", { name: /Search your saves/ }).inputValue(), "pricing", "the search comes back")
     assert.equal(await page.getByRole("toolbar", { name: "Filter saves" }).getByRole("button", { name: /^Sections/ }).getAttribute("aria-pressed"), "true")
-  }
-})
+  })
+}
 
 test("search's \"Your sites\" enter a site's scope", async () => {
   const { page } = await open("/")
@@ -131,6 +138,55 @@ test("inside a site, the dock and search ask for that site's material only", asy
   await until("library search", () => !search(page.url()).site && search(page.url()).q === "zzz")
   await page.goBack()
   await until("back in the site", () => search(page.url()).site === "judgment" && search(page.url()).q === "zzz")
+})
+
+test("site details and clear scope are separate stops, and Escape dismisses details before leaving the site", async () => {
+  const { page, consoleErrors } = await open("/?filter=pages&q=pricing", { width: 1024 })
+  const start = page.url()
+  await page.getByRole("button", { name: "Linear · pricing", exact: true }).focus()
+  await page.getByRole("link", { name: "Show everything from linear.app" }).click()
+  const trigger = page.locator("header").getByRole("button", { name: "Site details: Linear" })
+  const clear = page.getByRole("button", { name: "Leave linear.app" })
+  const field = page.getByRole("textbox", { name: /Search in linear\.app/ })
+  const panel = page.getByRole("dialog", { name: "Site details: Linear" })
+  const dock = page.getByRole("toolbar", { name: "Filter saves" })
+  const focused = (locator: typeof field) => locator.evaluate((el) => document.activeElement === el)
+
+  await trigger.focus()
+  await page.keyboard.press("Tab")
+  assert.equal(await focused(clear), true)
+  await page.keyboard.press("Tab")
+  assert.equal(await focused(field), true)
+  await field.fill("pricing")
+  await until("scoped search updates", () => search(page.url()).q === "pricing")
+  assert.equal(await focused(field), true, "search keeps focus when results change")
+  assert.equal(await panel.isVisible(), false)
+
+  await trigger.focus()
+  await page.keyboard.press("Enter")
+  const visit = panel.getByRole("link", { name: "Visit" })
+  await until("keyboard opens at Visit", () => focused(visit))
+  await page.keyboard.press("Tab")
+  assert.equal(await focused(panel.getByRole("button", { name: "Organize" })), true)
+  const p = (await panel.boundingBox())!
+  const d = (await dock.boundingBox())!
+  assert.ok(p.y + p.height < d.y, "details do not overlap the dock")
+
+  const note = panel.getByRole("textbox", { name: "Note" })
+  const previous = await note.inputValue()
+  await note.fill("Unsaved edit")
+  await page.keyboard.press("Escape")
+  assert.equal(await note.inputValue(), previous)
+  assert.equal(await focused(visit), true)
+  await page.keyboard.press("Escape")
+  await panel.waitFor({ state: "hidden" })
+  await until("focus returns to details trigger", () => focused(trigger))
+  assert.equal(search(page.url()).site, "linear")
+  await page.keyboard.press("Tab")
+  assert.equal(await focused(clear), true)
+  await page.keyboard.press("Enter")
+  await until("clear returns to prior filter and query", () => page.url() === start)
+  assert.deepEqual(consoleErrors, [])
 })
 
 test("a capture in progress shows under search with Pause and Cancel, and pending pages hold their place", async () => {

@@ -1,118 +1,144 @@
-// Home canvas layout: masonry columns around a clear plaza at the world origin, newest items nearest the centre. Every
-// item has exactly one tile; the space around the content is empty.
-// Pure and free of `@/` imports: web/tests/canvas-layout.test.ts runs it under node.
-
 export const COLUMN = 240
 export const GAP = 16
+export const SITE_GAP = 72
 const PITCH = COLUMN + GAP
-/**
- * Default clear area centred on the origin, for the mascot and the 520-px capture card. Columns straddle the origin
- * (centres at ±128, ±384, …), so only the two inner ones stop at the plaza and the next ones clear the card by 4 px.
- * canvas-home passes the measured height, so the plaza grows only while a capture shows its landing row.
- */
 export const PLAZA = { w: 528, h: 260 }
 export type Plaza = { w: number; h: number }
-/** Rings grow wider than tall, like a screen. */
-const X_STRETCH = 1.5
 
 export type Rect = { x: number; y: number; w: number; h: number }
 /** A tile in world px. `index` points into the items passed to layoutHome; `key` is the item's. */
-export type Placement = { key: string; index: number; x: number; y: number; w: number; h: number }
-/** Where an item went: its column, and whether below the plaza's row (down) or above it. */
-export type Slot = { c: number; down: boolean }
+export type Placement = Rect & { key: string; index: number }
+export type Slot = Rect & { site?: string }
 export type HomeLayout = {
   tiles: Placement[]
-  /** Each item's slot, to pass back to the next layout of the same place so the items keep their places. */
   slots: Map<string, Slot>
 }
 
-type Column = { c: number; hole: boolean; top: number; bottom: number; up: number[]; down: number[] }
+export type HomeItem = { key: string; aspect: number; site?: string; parent?: string }
 
-/** Centre x of column c. */
-const cx = (c: number) => (c + 0.5) * PITCH
+const touchesPlaza = (x: number, plaza: Plaza) =>
+  plaza.w > 0 && plaza.h > 0 && Math.abs(x + COLUMN / 2) < plaza.w / 2 + COLUMN / 2 + GAP
 
-/**
- * Each item goes to the column end (above or below the plaza's row) whose tile centre would sit nearest the origin, so
- * the field grows outward in rings and the newest items, laid out first, sit nearest the plaza. Within a column the
- * newest is nearest the plaza.
- *
- * `keep` is the last layout's slots for this place. Items in it stay in their column; only new ones are placed. An item
- * saved since goes into the inner end of one of the middle columns, so it is beside the plaza, and moves that column's
- * older tiles out by one; older items
- * (another page of the feed) go to the outer ends, which moves nothing. Without `keep` the layout depends only on the
- * items, in order.
- */
-export function layoutHome(items: { key: string; aspect: number }[], plaza: Plaza = PLAZA, keep?: ReadonlyMap<string, Slot>): HomeLayout {
-  const heights = items.map((it) => COLUMN / it.aspect)
-  const cols = new Map<number, Column>()
-  const column = (c: number) => {
-    let col = cols.get(c)
-    if (!col) {
-      const hole = Math.abs(cx(c)) - COLUMN / 2 < plaza.w / 2
-      col = { c, hole, top: hole ? -plaza.h / 2 - GAP : -GAP / 2, bottom: hole ? plaza.h / 2 + GAP : GAP / 2, up: [], down: [] }
-      cols.set(c, col)
+/** The closest valid top edge in a column. */
+function nearestTop(blocked: [number, number][], target: number): number {
+  blocked.sort((a, b) => a[0] - b[0])
+  let bottom = -Infinity
+  let top = -Infinity
+  for (const [lo, hi] of blocked) {
+    if (lo >= bottom) {
+      if (target < bottom) return bottom - target <= target - top ? bottom : top
+      if (target <= lo) return target
+      top = lo
     }
-    return col
+    bottom = Math.max(bottom, hi)
   }
-  const put = (i: number, col: Column, down: boolean) => {
-    const h = heights[i]! + GAP
-    if (down) {
-      col.down.push(i)
-      col.bottom += h
-    } else {
-      col.up.push(i)
-      col.top -= h
-    }
-  }
+  if (target >= bottom) return target
+  return bottom - target <= target - top ? bottom : top
+}
 
-  const fresh: number[] = []
-  let oldestKept = -1
-  items.forEach((it, i) => {
-    const slot = keep?.get(it.key)
-    if (!slot) return fresh.push(i)
-    put(i, column(slot.c), slot.down)
-    oldestKept = i
-  })
-  // The nearest end is never further out than the columns the field already uses plus one either side.
-  let reach = Math.max(1, ...[...cols.keys()].map((c) => Math.abs(c) + 2))
-  for (const i of fresh) {
-    const h = heights[i]!
-    // An item newer than ones already placed lands at the inner end of its column, next to the plaza: it goes where
-    // that spot is nearest the centre (the middle columns), the shortest such column first. Older items land at the
-    // outer ends, where that end is nearest the centre.
-    const inner = i < oldestKept
-    let best: { col: Column; down: boolean; d: number; len: number } | null = null
-    for (let c = -reach; c < reach; c++) {
-      const col = column(c)
-      const x = cx(c) / X_STRETCH
-      for (const down of [false, true]) {
-        const start = col.hole ? plaza.h / 2 + GAP : GAP / 2
-        const end = down ? col.bottom : -col.top
-        const d = Math.round(Math.hypot(x, inner ? start + h / 2 : end + h / 2))
-        if (!best || d < best.d || (d === best.d && end < best.len)) best = { col, down, d, len: end }
-      }
-    }
-    put(i, best!.col, best!.down)
-    reach = Math.max(reach, Math.abs(best!.col.c) + 2)
-  }
-
-  const tiles: Placement[] = []
+/** Pack each site together. Subsequent feeds fill gaps near their own site (or parent), without shifting saved tiles. */
+export function layoutHome(items: HomeItem[], plaza: Plaza = PLAZA, keep?: ReadonlyMap<string, Slot>): HomeLayout {
   const slots = new Map<string, Slot>()
-  for (const col of cols.values()) {
-    const x = cx(col.c) - COLUMN / 2
-    for (const down of [true, false]) {
-      let y = col.hole ? (down ? plaza.h / 2 + GAP : -plaza.h / 2 - GAP) : down ? GAP / 2 : -GAP / 2
-      for (const index of (down ? col.down : col.up).sort((a, b) => a - b)) {
-        const h = heights[index]!
-        if (!down) y -= h
-        tiles.push({ key: items[index]!.key, index, x, y, w: COLUMN, h })
-        y += down ? h + GAP : -GAP
-        slots.set(items[index]!.key, { c: col.c, down })
-      }
+  const columns = new Map<number, Slot[]>()
+  const anchors = new Map<string | undefined, Slot>()
+  const groups = new Map<string | undefined, HomeItem[]>()
+  const byKey = new Map<string, HomeItem>()
+  const children = new Map<string, HomeItem[]>()
+  const put = (key: string, tile: Slot) => {
+    slots.set(key, tile)
+    const c = (tile.x + COLUMN / 2) / PITCH
+    const column = columns.get(c) ?? []
+    column.push(tile)
+    columns.set(c, column)
+    if (!anchors.has(tile.site)) anchors.set(tile.site, tile)
+  }
+  for (const item of items) {
+    if (byKey.has(item.key)) continue
+    byKey.set(item.key, item)
+    if (item.parent) {
+      const family = children.get(item.parent) ?? []
+      family.push(item)
+      children.set(item.parent, family)
     }
   }
-  tiles.sort((a, b) => a.index - b.index)
+  for (const [key, prior] of keep ?? []) {
+    const item = byKey.get(key)
+    if (!item || item.site !== prior.site || prior.h !== COLUMN / item.aspect) continue
+    if (touchesPlaza(prior.x, plaza) && prior.y < plaza.h / 2 + GAP && prior.y + prior.h > -plaza.h / 2 - GAP) continue
+    put(key, prior)
+  }
+  for (const item of byKey.values()) {
+    if (slots.has(item.key)) continue
+    const group = groups.get(item.site) ?? []
+    group.push(item)
+    groups.set(item.site, group)
+  }
 
+  const place = ({ key, aspect, site, parent }: HomeItem) => {
+    if (slots.has(key)) return
+    const previous = keep?.get(key)
+    const familyTile = children.get(parent ?? key)?.find((item) => item.site === site && slots.has(item.key))
+    const relative = (parent ? slots.get(parent) : undefined) ?? (familyTile ? slots.get(familyTile.key) : undefined)
+    const h = COLUMN / aspect
+    const anchor = previous && previous.site === site ? { ...previous, h }
+      : relative && relative.site === site ? relative : anchors.get(site)
+    const cx = anchor ? anchor.x + COLUMN / 2 : 0
+    const cy = anchor ? anchor.y + anchor.h / 2 : 0
+    const start = Math.round(cx / PITCH)
+    let best = Infinity
+    let bestX = 0
+    let bestY = 0
+    const tryColumn = (c: number) => {
+      const dx = ((c * PITCH - cx) / 1.3) ** 2
+      if (dx > best) return false
+      const x = c * PITCH - COLUMN / 2
+      const target = cy - h / 2
+      const reach = Math.sqrt(best - dx)
+      const blocked: [number, number][] = []
+      if (touchesPlaza(x, plaza)) blocked.push([-plaza.h / 2 - GAP - h, plaza.h / 2 + GAP])
+      for (let other = c - 1; other <= c + 1; other++) {
+        for (const tile of columns.get(other) ?? []) {
+          const gap = tile.site === site ? GAP : SITE_GAP
+          const lo = tile.y - gap - h
+          const hi = tile.y + tile.h + gap
+          if (lo < target + reach && hi > target - reach && Math.abs(tile.x - x) < COLUMN + gap) blocked.push([lo, hi])
+        }
+      }
+      const y = nearestTop(blocked, target)
+      const distance = dx + (y - target) ** 2
+      if (distance < best) {
+        best = distance
+        bestX = x
+        bestY = y
+      }
+      return true
+    }
+    tryColumn(start)
+    for (let step = 1; ; step++) {
+      const left = tryColumn(start - step)
+      const right = tryColumn(start + step)
+      if (!left && !right) break
+    }
+    put(key, { site, x: bestX, y: bestY, w: COLUMN, h })
+  }
+  for (const group of groups.values()) {
+    for (const item of group) {
+      if (slots.has(item.key)) continue
+      const family = item.parent ?? item.key
+      const parent = byKey.get(family)
+      if (parent && parent.site === item.site) place(parent)
+      place(item)
+      for (const child of children.get(family) ?? []) if (child.site === item.site) place(child)
+    }
+  }
+
+  const seen = new Set<string>()
+  const tiles = items.flatMap(({ key }, index): Placement[] => {
+    if (seen.has(key)) return []
+    seen.add(key)
+    const { x, y, w, h } = slots.get(key)!
+    return [{ key, index, x, y, w, h }]
+  })
   return { tiles, slots }
 }
 

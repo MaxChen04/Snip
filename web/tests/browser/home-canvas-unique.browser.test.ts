@@ -3,7 +3,8 @@
 import assert from "node:assert/strict"
 import { after, before, test } from "node:test"
 import type { Page } from "playwright"
-import { savedPage, sleep, startApp, until, type App, type Req } from "./harness.ts"
+import { reference, savedPage, sleep, startApp, until, type App, type Req } from "./harness.ts"
+import { mockLibrary, oneSite } from "./site-library.ts"
 
 let app: App
 before(async () => {
@@ -84,7 +85,7 @@ for (const n of [3, 40, 400, 1000]) {
     assert.ok(seen.size <= n)
     if (n <= 40) assert.equal(seen.size, n, "every item was reached")
 
-    // The way back: recenter brings the plaza, and the newest item beside it, to the middle.
+    // The way back: Recenter makes the newest tile reachable.
     await page.getByRole("button", { name: "Recenter" }).click()
     await until("the newest item is back on the screen", async () => {
       const b = await page.getByRole("button", { name: "Page 0", exact: true }).boundingBox()
@@ -122,6 +123,38 @@ test("a save that arrives on a refresh is on the screen after Recenter", { timeo
     const b = (await fresh.count()) ? await fresh.boundingBox() : null
     return !!b && b.x >= 0 && b.y >= 0 && b.x + b.width <= VIEW.width && b.y + b.height <= VIEW.height
   })
+  assert.deepEqual(t.consoleErrors, [])
+  await page.context().close()
+})
+
+test("the canvas groups two references from the same domain without broadening the site scope", async () => {
+  const root = reference({ id: "root", domain: "alpha.example", title: "Alpha", pageCount: 1 })
+  const docs = reference({ id: "docs", domain: root.domain, title: "Alpha Docs", pageCount: 1 })
+  const beta = reference({ id: "beta", domain: "beta.example", title: "Beta", pageCount: 1 })
+  const lib = oneSite(root, [savedPage({ id: "root-page", title: "Alpha Home", createdAt: "2026-01-03T00:00:00Z" })])
+  lib.references.push(docs, beta)
+  lib.pages.push(
+    savedPage({ id: "beta-page", referenceId: beta.id, title: "Beta Home", createdAt: "2026-01-02T00:00:00Z" }),
+    savedPage({ id: "docs-page", referenceId: docs.id, title: "Alpha Docs", createdAt: "2026-01-01T00:00:00Z" }),
+  )
+  const t = await app.session({ viewport: VIEW })
+  t.on("GET", /^\/api\//, mockLibrary(lib))
+  await t.goto("/?filter=pages")
+  const { page } = t
+  const canvas = page.locator("[aria-roledescription=canvas]")
+  const tile = (name: string) => canvas.getByRole("button", { name, exact: true })
+  const at = (name: string) => tile(name).evaluate((el) => {
+    const s = (el as HTMLElement).style
+    return [parseFloat(s.left), parseFloat(s.top)] as const
+  })
+  const [a, b, c] = await Promise.all(["Alpha Home", "Alpha Docs", "Beta Home"].map(at))
+  const distance = (p: readonly [number, number], q: readonly [number, number]) => Math.hypot(p[0] - q[0], p[1] - q[1])
+  assert.ok(distance(a!, b!) < distance(a!, c!), "same-domain references are closer than different sites")
+  await tile("Alpha Docs").focus()
+  await canvas.getByRole("link", { name: "Show everything from alpha.example" }).click()
+  await until("opens the individual reference scope", () => new URL(page.url()).searchParams.get("site") === "docs")
+  await tile("Alpha Docs").waitFor()
+  assert.equal(await tile("Alpha Home").count(), 0)
   assert.deepEqual(t.consoleErrors, [])
   await page.context().close()
 })
