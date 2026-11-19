@@ -1,14 +1,12 @@
-import { useId, useState } from "react"
+import { useId, useState, type ReactNode } from "react"
 import { Link } from "wouter"
 import { motion, useReducedMotion } from "motion/react"
-import { BookmarkIcon, ChevronDownIcon, KeyRound, LogOutIcon, McpServerIcon, MonitorIcon, MoonIcon, SearchIcon, SunIcon, XIcon } from "@/components/icons"
+import { ArrowLeft, BookmarkIcon, KeyRound, LogOutIcon, McpServerIcon, MonitorIcon, MoonIcon, SearchIcon, SunIcon, XIcon } from "@/components/icons"
 import { BookmarkletDialog } from "@/components/bookmarklet-dialog"
 import { api, type Reference, type StorageUsage } from "@/lib/api"
 import { SiteIcon } from "@/components/site-icon"
 import { useAddFlow } from "@/components/add-flow"
-import { BoardsList } from "@/components/canvas/boards-list"
 import { isLocalOrigin } from "@/lib/mcp"
-import { useCollections } from "@/lib/collections"
 import { useTheme } from "@/components/theme-provider"
 import { Logo } from "@/components/brand"
 import {
@@ -20,29 +18,37 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import { useGridSize, useHomeView, type GridSize, type HomeView } from "@/lib/prefs"
+import { enterSite } from "@/lib/scope"
 
-// Cosmos-style chrome: three floating pills (brand + board switcher, search, actions).
+// Balanced toolbar lanes keep search centered on the window, not between unequal controls.
 
 // Raised white pills: a fine ring and a crisp drop instead of a border.
 const pill = "flex h-10 items-center rounded-full bg-control/90 shadow-button backdrop-blur-md"
+
+/** The website the canvas is scoped to: a removable chip at the front of search. */
+export type SearchScope = { domain: string; icon: string | null; onLeave: () => void }
 
 export function TopBar({
   login,
   query,
   onQuery,
-  boardId,
+  scope,
+  back,
+  actions,
   solid,
   floating,
 }: {
   login: string
   query?: string
   onQuery?: (q: string) => void
-  /** The board in view, named in the switcher. Undefined is All saves. */
-  boardId?: string
+  scope?: SearchScope
+  /** Replaces the home link with a Back pill named for where it goes. */
+  back?: { label: string; onBack: () => void }
+  /** Pills before the account controls (Select, inside a site). */
+  actions?: ReactNode
   /** Opaque background, for pages with their own sticky bar underneath so content can't show through. */
   solid?: boolean
   /** Over a canvas: laid on top of it, and only the pills take the pointer so the gaps between them still pan. */
@@ -51,51 +57,92 @@ export function TopBar({
   return (
     <header
       className={cn(
-        "flex items-center gap-3 px-4 py-3 sm:px-6",
+        "snip-top-bar grid items-center gap-3 px-4 py-3 sm:px-6",
         floating ? "pointer-events-none absolute inset-x-0 top-0 z-50 *:pointer-events-auto" : "sticky top-0 z-30",
         solid && "bg-background",
       )}
     >
-      <BoardSwitcher boardId={boardId} />
+      {/* Boards live in the filter dock. On macOS this lane only reserves room for the traffic lights. */}
+      <div className="snip-toolbar-leading flex min-w-0">
+        {back ? (
+          <button
+            type="button"
+            onClick={back.onBack}
+            title={`Back to ${back.label}`}
+            aria-label={`Back to ${back.label}`}
+            className={cn(pill, "press min-w-0 gap-1.5 pr-4 pl-3 text-xs font-medium hover:bg-control-hover active:scale-[0.97]")}
+          >
+            <ArrowLeft className="size-4 shrink-0 text-ink-10" />
+            <span className="truncate max-sm:sr-only">{back.label}</span>
+          </button>
+        ) : (
+          <Link href="/" className={cn(pill, "snip-home-link press w-10 justify-center active:scale-[0.92]")} aria-label="Snip home">
+            <Logo className="size-7" />
+          </Link>
+        )}
+      </div>
 
       {onQuery ? (
-        <SearchField query={query ?? ""} onQuery={onQuery} />
+        <SearchField query={query ?? ""} onQuery={onQuery} scope={scope} />
       ) : (
-        <div className="flex-1" />
+        <div />
       )}
 
-      <div className={cn(pill, "shrink-0 gap-1.5 p-1")}>
-        <McpButton />
-        <AccountMenu login={login} />
+      <div className="snip-toolbar-actions flex shrink-0 items-center gap-2 justify-self-end">
+        {actions}
+        <div className={cn(pill, "gap-1.5 p-1")}>
+          <McpButton />
+          <AccountMenu login={login} />
+        </div>
       </div>
     </header>
   )
 }
 
 /**
- * Compact until it's in use: it widens while focused or holding a query, so the canvas doesn't feel crowded. While
+ * Stable width preserves orientation while typing. While
  * focused and empty, a panel says what search matches and offers saved sites as one-click filters.
  */
-function SearchField({ query, onQuery }: { query: string; onQuery: (q: string) => void }) {
+function SearchField({ query, onQuery, scope }: { query: string; onQuery: (q: string) => void; scope?: SearchScope }) {
   const [sites, setSites] = useState<Reference[] | null>(null)
   const loadSites = () => api.references({ status: "ready" }, null, 8).then((p) => setSites(p.items.filter((r, i, a) => a.findIndex((x) => x.domain === r.domain) === i)), () => setSites([]))
   return (
-    <div className="group/search relative mx-auto min-w-0">
+    <div className="snip-toolbar-search group/search relative w-full min-w-0">
       <label
         className={cn(
           pill,
-          "w-60 max-w-full min-w-0 gap-2 px-3 transition-[width] duration-200 ease-out focus-within:w-96 has-[input:not(:placeholder-shown)]:w-96 motion-reduce:transition-none has-focus-visible:outline-2 has-focus-visible:outline-offset-2 max-sm:focus-within:w-full max-sm:has-[input:not(:placeholder-shown)]:w-full",
+          "w-full min-w-0 gap-2 px-3 has-focus-visible:outline-2 has-focus-visible:outline-offset-2",
         )}
       >
-        <SearchIcon className="size-3.5 shrink-0 text-ink-9" />
+        {scope ? (
+          <span className="-ml-1.5 flex h-7 max-w-[55%] shrink-0 items-center gap-1.5 rounded-full bg-ink-3 pr-1 pl-1.5 text-2xs font-medium text-foreground motion-safe:animate-in motion-safe:fade-in-0 motion-safe:zoom-in-95 motion-safe:duration-200">
+            <SiteIcon domain={scope.domain} icon={scope.icon} />
+            {/* Narrow windows keep the field room to type: the favicon and the placeholder name the site. */}
+            <span className="truncate max-md:sr-only">{scope.domain}</span>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault()
+                scope.onLeave()
+              }}
+              aria-label={`Leave ${scope.domain}`}
+              title="Leave this site (Esc)"
+              className="press grid size-5 shrink-0 place-items-center rounded-full text-ink-10 hover:bg-ink-5 hover:text-foreground active:scale-[0.92]"
+            >
+              <XIcon className="size-3" />
+            </button>
+          </span>
+        ) : (
+          <SearchIcon className="size-3.5 shrink-0 text-ink-9" />
+        )}
         <input
           data-search
           value={query}
-          onFocus={() => void loadSites()}
+          onFocus={() => scope || void loadSites()}
           onChange={(e) => onQuery(e.target.value)}
           onKeyDown={(e) => e.key === "Escape" && e.currentTarget.blur()}
-          placeholder="Search sites, pages, sections…"
-          aria-label="Search your saves by site, page title, path or section"
+          placeholder={scope ? `Search ${scope.domain}` : "Search saves"}
+          aria-label={scope ? `Search in ${scope.domain} by page title, path or section` : "Search your saves by site, page title, path or section"}
           aria-keyshortcuts="/"
           className="peer h-full min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-ink-10 pointer-coarse:text-base"
         />
@@ -111,7 +158,12 @@ function SearchField({ query, onQuery }: { query: string; onQuery: (q: string) =
         )}
       </label>
       {/* Shown by CSS while focus is inside, so tabbing from the field to a chip keeps it open. */}
-      {!query && (
+      {!query && scope && (
+        <div className="absolute inset-x-0 top-12 hidden flex-col gap-2.5 rounded-2xl bg-popover p-3 shadow-menu group-focus-within/search:flex">
+          <p className="text-2xs text-ink-10">Searches page titles, paths and section names in {scope.domain}. Remove the chip to search everything.</p>
+        </div>
+      )}
+      {!query && !scope && (
         <div className="absolute inset-x-0 top-12 hidden flex-col gap-2.5 rounded-2xl bg-popover p-3 shadow-menu group-focus-within/search:flex">
           <p className="text-2xs text-ink-10">Matches site names and links, page titles and paths, and section names like “pricing” or “footer”.</p>
           {!!sites?.length && (
@@ -124,7 +176,11 @@ function SearchField({ query, onQuery }: { query: string; onQuery: (q: string) =
                     type="button"
                     // Keep focus in the field so the panel stays put and the results show at once.
                     onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => onQuery(r.domain)}
+                    onClick={() => {
+                      ;(document.activeElement as HTMLElement | null)?.blur()
+                      enterSite(r.id)
+                    }}
+                    title={`Show everything from ${r.domain}`}
                     className="tactile press flex h-7 items-center gap-1.5 rounded-full pr-2.5 pl-1.5 text-2xs"
                   >
                     <SiteIcon domain={r.domain} icon={r.favicon} />
@@ -136,32 +192,6 @@ function SearchField({ query, onQuery }: { query: string; onQuery: (q: string) =
           )}
         </div>
       )}
-    </div>
-  )
-}
-
-/** The logo goes home; the board name opens the boards popover. */
-function BoardSwitcher({ boardId }: { boardId?: string }) {
-  const { collections } = useCollections()
-  const [open, setOpen] = useState(false)
-  const name = boardId ? (collections.find((c) => c.id === boardId)?.name ?? "Board") : "All saves"
-  return (
-    <div className={cn(pill, "shrink-0 gap-0.5 p-1")}>
-      <Link href="/" className="press grid size-8 place-items-center rounded-full hover:bg-ink-2 active:scale-[0.92]" aria-label="Snip home">
-        <Logo className="size-7" />
-      </Link>
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger
-          aria-label={`${name}, switch board`}
-          className="press group/board flex h-8 max-w-[40vw] items-center gap-1 rounded-full pr-2.5 pl-1.5 text-xs font-medium hover:bg-ink-2 data-popup-open:bg-ink-3 sm:max-w-56"
-        >
-          <span className="truncate">{name}</span>
-          <ChevronDownIcon className="size-3.5 shrink-0 text-ink-10 transition-transform duration-150 ease-out group-data-popup-open/board:rotate-180" />
-        </PopoverTrigger>
-        <PopoverContent align="start" sideOffset={8} className="w-auto p-1.5">
-          <BoardsList activeId={boardId} onNavigate={() => setOpen(false)} />
-        </PopoverContent>
-      </Popover>
     </div>
   )
 }

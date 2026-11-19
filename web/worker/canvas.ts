@@ -18,6 +18,7 @@ const pageLimit = (limit: number | undefined) => Math.min(Math.max(limit || 60, 
 const feedFilter = (q: Record<string, string>): db.ListFilter => ({
   q: q.q || undefined,
   collectionId: q.collection || undefined,
+  referenceId: q.reference || undefined,
   cursor: q.cursor || null,
   limit: Number(q.limit) || undefined,
 })
@@ -84,6 +85,8 @@ function imageWhere(f: db.ListFilter): db.Where {
     where.push(`EXISTS (SELECT 1 FROM image_collections ic WHERE ic.image_id = i.id AND ic.collection_id = ?)`)
     args.push(f.collectionId)
   }
+  // Uploaded images belong to no website.
+  if (f.referenceId) where.push("0")
   return { where, args }
 }
 
@@ -236,8 +239,8 @@ async function listSections(database: D1Database, f: db.ListFilter): Promise<Pag
   return { items, nextCursor: results.length > limit && last ? db.encodeCursor(last.createdAt, last.id) : null }
 }
 
-/** What each list endpoint would return in total for the same q and collection. */
-async function typeCounts(database: D1Database, f: Pick<db.ListFilter, "q" | "collectionId">): Promise<LibraryTypeCounts> {
+/** What each list endpoint would return in total for the same q, collection and website. */
+async function typeCounts(database: D1Database, f: Pick<db.ListFilter, "q" | "collectionId" | "referenceId">): Promise<LibraryTypeCounts> {
   const count = (sql: string, { where, args }: db.Where) => database.prepare(`${sql} ${db.whereSql(where)}`).bind(...args)
   const [websites, pages, animations, images] = await database.batch<{ n: number; sections: number }>([
     count(`SELECT count(*) AS n FROM refs r`, db.referenceWhere(f)),
@@ -251,8 +254,8 @@ async function typeCounts(database: D1Database, f: Pick<db.ListFilter, "q" | "co
 
 canvas.get("/sections", async (c) => c.json(await listSections(c.env.DB, feedFilter(c.req.query()))))
 canvas.get("/counts", async (c) => {
-  const { q, collectionId } = feedFilter(c.req.query())
-  return c.json(await typeCounts(c.env.DB, { q, collectionId }))
+  const { q, collectionId, referenceId } = feedFilter(c.req.query())
+  return c.json(await typeCounts(c.env.DB, { q, collectionId, referenceId }))
 })
 
 // ---------- Boards ----------

@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { useLocation } from "wouter"
 import { ChevronRightIcon, ClipboardIcon, CornerDownLeftIcon, FileIcon, GlobeIcon, NetworkIcon, XIcon } from "@/components/icons"
 import { toast } from "sonner"
 import { CollectionPicker } from "@/components/collection-picker"
@@ -10,6 +9,7 @@ import { api, DuplicateError, type CaptureMode, type CaptureOptions, type Refere
 import { DESKTOP_WIDTHS } from "../../shared/types"
 import { CRAWL_LIMITS, extractUrls, typedUrls } from "@/lib/site-url"
 import { cn } from "@/lib/utils"
+import { enterSite } from "@/lib/scope"
 
 const MODES: { value: CaptureMode; title: string; description: string; icon: typeof FileIcon }[] = [
   { value: "single", title: "Single page", description: "Just this URL", icon: FileIcon },
@@ -39,7 +39,6 @@ export function AddReferenceDialog({
   defaultCollection?: string
   defaultUrl?: string
 }) {
-  const [, navigate] = useLocation()
   // Handed over as it is, because what was typed in the capture card is not a sentence to pick links out of; several
   // valid addresses are added together, as if pasted.
   const initial = useMemo(() => {
@@ -130,7 +129,7 @@ export function AddReferenceDialog({
       window.dispatchEvent(new Event("rs:reload"))
       if (!gone.current) onOpenChange(false)
       notify(mode === "crawl" ? `Crawling ${links[0].hostname}` : "Added 1 reference", {
-        action: { label: "View", onClick: () => navigate(`/r/${ref.id}`) },
+        action: { label: "View", onClick: () => enterSite(ref.id) },
       })
     } catch (err) {
       if (err instanceof DuplicateError) setDuplicate(err.existing)
@@ -225,7 +224,7 @@ export function AddReferenceDialog({
                   <span className="min-w-0 flex-1 truncate text-ink-11">
                     Already saved as <span className="font-medium text-foreground">{duplicate.title ?? duplicate.domain}</span>
                   </span>
-                  <button type="button" onClick={() => { onOpenChange(false); navigate(`/r/${duplicate.id}`) }} className="tactile press h-7 rounded-full px-2.75 font-medium">
+                  <button type="button" onClick={() => { onOpenChange(false); enterSite(duplicate.id) }} className="tactile press h-7 rounded-full px-2.75 font-medium">
                     Open
                   </button>
                   <button type="button" onClick={() => submit(undefined, true)} className="press h-7 rounded-full px-2 font-medium text-ink-11 hover:text-foreground">
@@ -373,7 +372,7 @@ export function AddReferenceDialog({
               disabled={!links.length || submitting}
               className="press flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-primary px-3.5 text-sm font-medium tracking-[-0.01em] text-primary-foreground shadow-primary hover:bg-(--primary-hover) disabled:opacity-60 disabled:active:scale-100 dark:disabled:bg-ink-4 dark:disabled:text-ink-8 dark:disabled:opacity-100 dark:disabled:shadow-none"
             >
-              {submitting ? <Spinner className="size-3.5" /> : null}
+              {submitting ? <Spinner aria-hidden className="size-3.5" /> : null}
               {submitting ? "Saving…" : links.length > 1 ? `Save ${links.length} websites` : mode === "crawl" ? "Crawl and save" : "Save reference"}
               {!submitting && (
                 <kbd className="grid size-[18px] place-items-center rounded-xs bg-primary-foreground/15">

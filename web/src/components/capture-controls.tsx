@@ -95,7 +95,7 @@ export function CaptureControls({ r, onChange, className }: { r: Reference; onCh
               "h-7 gap-1.5 px-3 text-xs",
             )}
           >
-            {busy === action ? <Spinner className="size-3.5" /> : <Icon className="size-3.5" />}
+            {busy === action ? <Spinner aria-hidden className="size-3.5" /> : <Icon className="size-3.5" />}
             {label}
           </button>
         )

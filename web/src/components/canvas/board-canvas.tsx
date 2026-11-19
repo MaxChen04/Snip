@@ -24,10 +24,10 @@ import { Button } from "@/components/ui/button"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Spinner } from "@/components/ui/spinner"
-import { useDesktopState } from "@/hooks/use-desktop-state"
 import { LIVE_POLL, usePoll } from "@/hooks/use-poll"
 import { api, type BoardGroup, type BoardItem, type BoardItemKind, type BoardItemPlacement, type Collection, type LibraryTypeCounts, type SavedImage } from "@/lib/api"
 import { useCollections } from "@/lib/collections"
+import { entry, landedByHistory, providePosition } from "@/lib/scope"
 import { cn } from "@/lib/utils"
 import { MAX_NAME, type BoardItemStyle } from "../../../shared/types"
 
@@ -187,7 +187,7 @@ const BoardNode = memo(function BoardNode({ node, selected, handles, dimmed, edi
       aria-label={`${node.item ? tileLabel(node.item) : `Note: ${node.text?.slice(0, 80) || "empty"}`}${s.locked ? " (locked)" : ""}`}
       aria-keyshortcuts="Shift+F10"
       tabIndex={0}
-      className="absolute rounded-md outline-none transition-[rotate,opacity] duration-[450ms,300ms] ease-[cubic-bezier(.3,.7,.2,1)] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-focus-ring in-data-dragging:transition-none motion-reduce:transition-none"
+      className="absolute rounded-md outline-none [transition:rotate_450ms_cubic-bezier(.3,.7,.2,1),opacity_300ms_cubic-bezier(.3,.7,.2,1),scale_var(--spring-duration)_var(--spring-ease)] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-focus-ring in-data-dragging:[transition:scale_var(--spring-duration)_var(--spring-ease)] motion-reduce:transition-none"
       style={{ left: node.x, top: node.y, width: node.w, height: node.h, rotate: s.rot ? `${s.rot}deg` : undefined, opacity: s.hidden ? 0.12 : s.op }}
     >
       {node.item ? (
@@ -286,8 +286,6 @@ function BoardHeader({ board, onRename, onAddNote, onAddWebsite, onDelete }: { b
  * save shortly after), Shift-drag to marquee-select, group into titled frames, filter to dim what doesn't match.
  */
 export function BoardCanvas({ login, id }: { login: string; id: string }) {
-  const [query, setQuery] = useDesktopState("snip:gallery:query", "")
-  const q = useDeferredValue(query.trim().toLowerCase())
   const { collections, refresh } = useCollections()
   const { addReference } = useAddFlow()
 
@@ -444,7 +442,11 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
   usePoll(load, capturing || statuses.includes("queued") || statuses.includes("paused"), capturing ? LIVE_POLL : undefined)
   const collection = collections.find((c) => c.id === id) ?? board?.collection
   const title = collection?.name ?? "Board"
-  const { filter, open, navigate, setParams, onOpen, close } = useCanvasRoute(title)
+  const { filter, open, params, navigate, setParams, onOpen, close } = useCanvasRoute(title)
+  // The board's search is in its URL, as on All saves: Back to the board brings it back, and each board has its own.
+  const query = params.get("q") ?? ""
+  const setQuery = useCallback((v: string) => setParams({ q: v || null }), [setParams])
+  const q = useDeferredValue(query.trim().toLowerCase())
 
   // ---- Moving ----
   /** Move items and frames by dx, dy (world px), regroup, save. `front` brings the moved items to the top. */
@@ -478,7 +480,12 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
         if (!keys.length && !frameIds.length) blocked?.()
         const selectors = [...keys.map((k) => `[data-key="${CSS.escape(k)}"]`), ...frameIds.map((g) => `[data-frame="${CSS.escape(g)}"]`)]
         moving = selectors.length ? [...el.querySelectorAll<HTMLElement>(selectors.join(","))] : []
-        for (const m of moving) if (m.dataset.key) m.style.zIndex = "1"
+        // Items lift as they leave their place, and settle back on the canvas spring when dropped.
+        for (const m of moving) {
+          if (!m.dataset.key) continue
+          m.style.zIndex = "1"
+          if (!reducedMotion()) m.style.scale = "1.03"
+        }
         el.dataset.dragging = ""
         window.getSelection()?.removeAllRanges()
       }
@@ -501,6 +508,7 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
       for (const m of moving) {
         m.style.translate = ""
         m.style.zIndex = ""
+        m.style.scale = ""
       }
       delete el.dataset.dragging
     }
@@ -1075,6 +1083,19 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
     const v = canvas.current?.getView()
     if (v) placeToolbar(v)
   })
+  // The board's place in its history entry: Back from a site's scope returns to this pan and zoom, as on All saves.
+  useEffect(
+    () =>
+      providePosition(() => {
+        const v = canvas.current?.getView()
+        return v && { x: v.x, y: v.y, zoom: v.zoom }
+      }),
+    [],
+  )
+  useEffect(() => {
+    const saved = status === "ready" && landedByHistory() ? entry().view : undefined
+    if (saved) canvas.current?.setView(saved)
+  }, [status])
   const onViewChange = useCallback(
     (v: CanvasView) => {
       zoomSink.current?.(v.zoom)
@@ -1150,7 +1171,7 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
         e.stopPropagation()
       }}
     >
-      <TopBar floating login={login} query={query} onQuery={setQuery} boardId={id} />
+      <TopBar floating login={login} query={query} onQuery={setQuery} />
       <div className="pointer-events-none absolute inset-x-0 top-16 z-50 flex justify-center">
         <div className="pointer-events-auto w-full max-w-xl">
           <AgentBanner />
@@ -1159,12 +1180,9 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
       {status === "ready" && collection && (
         <BoardHeader board={collection} onRename={(n) => void renameBoard(n)} onAddNote={() => void addNote()} onAddWebsite={() => addReference(id)} onDelete={() => void deleteBoard()} />
       )}
-      {status === "ready" && !empty && (
-        <>
-          <FilterDock className="absolute bottom-6 left-1/2 z-50 -translate-x-1/2" value={filter} onChange={(f) => setParams({ filter: f === "all" ? null : f, open: null })} counts={counts} boardId={id} />
-          <Zoom canvas={canvas} sink={zoomSink} />
-        </>
-      )}
+      {/* The dock is how you leave for another board: it shows while this one loads or fails, without counts. */}
+      <FilterDock className="absolute bottom-6 left-1/2 z-50 -translate-x-1/2" value={filter} onChange={(f) => setParams({ filter: f === "all" ? null : f, open: null })} counts={status === "ready" ? counts : null} boardId={id} />
+      {status === "ready" && !empty && <Zoom canvas={canvas} sink={zoomSink} />}
       {showToolbar && (
         <SelectionToolbar
           ref={toolbar}
@@ -1268,15 +1286,16 @@ export function BoardCanvas({ login, id }: { login: string; id: string }) {
             <div className="grid justify-items-center gap-3" role="alert">
               <p className="text-sm text-ink-12">{status === "missing" ? "This board doesn't exist" : "Couldn't load this board"}</p>
               <p className="text-xs text-ink-11">{status === "missing" ? "It may have been deleted." : "Check your connection and try again."}</p>
-              {status === "missing" ? (
+              <div className="flex gap-2">
+                {status !== "missing" && (
+                  <button type="button" onClick={() => void load()} className="tactile press h-8 rounded-full px-3.5 text-xs">
+                    Try again
+                  </button>
+                )}
                 <Link href="/" className="tactile press flex h-8 items-center rounded-full px-3.5 text-xs">
                   Go to All saves
                 </Link>
-              ) : (
-                <button type="button" onClick={() => void load()} className="tactile press h-8 rounded-full px-3.5 text-xs">
-                  Try again
-                </button>
-              )}
+              </div>
             </div>
           )}
         </div>

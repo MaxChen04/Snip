@@ -4,14 +4,42 @@ on:
     # 02:23 Pacific in winter / 03:23 in summer. GitHub schedules use UTC.
     - cron: '23 10 * * *'
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build and smoke-test from any branch without creating a release'
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
   group: snip-dev-nightly
   cancel-in-progress: false
 jobs:
+  # Skip the macOS build when the last published nightly already ships this commit.
+  gate:
+    if: github.repository == 'MaxChen04/Snip' && (github.ref == 'refs/heads/main' || inputs.dry_run)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      build: ${{ steps.last.outputs.build }}
+    steps:
+      - id: last
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          TAG="$(gh release list --exclude-drafts --limit 100 --json tagName,publishedAt --jq '[.[] | select(.tagName | startswith("nightly-v"))] | sort_by(.publishedAt) | last | .tagName // empty')"
+          if [[ -n "$TAG" && "$(gh api "repos/$GH_REPO/commits/$TAG" --jq .sha)" == "$COMMIT" ]]; then
+            echo "$TAG already ships $COMMIT; skipping the build."
+            echo 'build=false' >> "$GITHUB_OUTPUT"
+          else
+            echo "Last published nightly: ${TAG:-none}. Building $COMMIT."
+            echo 'build=true' >> "$GITHUB_OUTPUT"
+          fi
   nightly:
-    if: github.repository == 'MaxChen04/Snip' && github.ref == 'refs/heads/main'
+    needs: gate
+    if: needs.gate.outputs.build == 'true'
     runs-on: macos-15
     timeout-minutes: 60
     permissions:
@@ -53,7 +81,8 @@ jobs:
       - run: npm run typecheck
       - run: npm run build -w web
       - run: npx --no-install playwright install chromium
-      - run: npm test
+      # The pull request's browser check covers the UI suite; a flaky UI test must not block a shipped build.
+      - run: npm run test:core && npm run test:app
       - run: npm run test:desktop
       - name: Import Developer ID certificate
         if: steps.signing.outputs.signed == 'true'
@@ -87,6 +116,7 @@ jobs:
       - name: Verify capture and library persistence
         run: node desktop/scripts/release-smoke.cjs 'desktop/dist/Snip Dev-darwin-arm64/Snip Dev.app'
       - name: Publish nightly prerelease
+        if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ github.token }}
           BUILD: ${{ github.run_number }}
@@ -109,8 +139,39 @@ jobs:
           } > "$RUNNER_TEMP/nightly-notes.md"
           # Immutable per-run tags: never move a tag or overwrite a published ZIP.
           gh release create "$TAG" "$ARCHIVE" --target "$COMMIT" --draft --prerelease --latest=false --title "Snip Dev $VERSION" --notes-file "$RUNNER_TEMP/nightly-notes.md"
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq '.assets[] | select(.name == "Snip-Dev-'"$VERSION"'-darwin-arm64.zip") | .digest' | grep -Eq '^sha256:[a-f0-9]{64}$'
+          # The releases/tags API cannot see a draft (HTTP 404); gh release view can. Check the uploaded digest before publishing.
+          DIGEST="sha256:$(shasum -a 256 "$ARCHIVE" | cut -d ' ' -f 1)"
+          test "$(gh release view "$TAG" --json assets --jq ".assets[] | select(.name == \"Snip-Dev-$VERSION-darwin-arm64.zip\") | .digest")" = "$DIGEST"
           gh release edit "$TAG" --draft=false --prerelease --latest=false
       - name: Remove temporary signing keychain
         if: always() && steps.signing.outputs.signed == 'true'
         run: security delete-keychain snip-nightly.keychain || true
+  # A failed nightly opens one tracking issue (or comments on it); the next published nightly closes it.
+  report:
+    needs: [gate, nightly]
+    if: always() && !inputs.dry_run && github.repository == 'MaxChen04/Snip' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          GATE: ${{ needs.gate.result }}
+          NIGHTLY: ${{ needs.nightly.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          TITLE='Snip Dev nightly is failing'
+          ISSUE="$(gh issue list --state open --search "\"$TITLE\" in:title" --json number,title --jq "map(select(.title == \"$TITLE\")) | first | .number // empty")"
+          if [[ "$GATE" == failure || "$NIGHTLY" == failure ]]; then
+            BODY="The Snip Dev nightly failed on main commit $COMMIT: $RUN_URL"
+            if [[ -n "$ISSUE" ]]; then
+              gh issue comment "$ISSUE" --body "$BODY"
+            else
+              gh issue create --title "$TITLE" --body "$BODY"
+            fi
+          elif [[ "$NIGHTLY" == success && -n "$ISSUE" ]]; then
+            gh issue close "$ISSUE" --comment "Recovered: $RUN_URL published a nightly from $COMMIT."
+          fi

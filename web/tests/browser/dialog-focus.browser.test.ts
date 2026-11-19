@@ -71,10 +71,14 @@ const DIALOGS = [
   },
   {
     name: "Re-capture",
-    start: "/r/ref1",
+    start: "/?site=ref1",
     title: /Re-capture example.com/,
-    opener: "BUTTON:Re-capture",
-    open: (page: Page) => page.getByRole("button", { name: "Re-capture" }).click(),
+    opener: "BUTTON:More",
+    open: async (page: Page) => {
+      await page.getByRole("button", { name: /^Site details:/ }).click()
+      await page.getByRole("button", { name: "More" }).click()
+      await page.getByRole("menuitem", { name: "Re-capture" }).click()
+    },
   },
 ]
 

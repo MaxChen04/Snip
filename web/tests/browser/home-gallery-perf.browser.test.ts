@@ -6,9 +6,11 @@
 // what the staged mounting leaves behind, how long the viewport has holes after a zoom out. The counts, the will-change
 // and tab-order checks, the tiles mounted in one frame, the holes and the CSS transitions running after a zoom are
 // asserted, because they do not depend on the machine; the frame times are only logged, because software rendering on a
-// shared machine makes them too noisy to gate on. Run it alone to read them. It runs against the Vite dev server
-// (development React, which is slower than the build), so treat the numbers as a ceiling:
-//   node --import tsx --test web/tests/browser/home-gallery-perf.browser.test.ts
+// shared machine makes them too noisy to gate on. The two benchmarks are a manual check, not part of CI: the tab-order check
+// in the middle of a zoom out races the staged mounting and failed on unrelated pull requests. Run them alone with
+// SNIP_PERF=1 to read the numbers. They run against the Vite dev server (development React, which is slower than the
+// build), so treat the numbers as a ceiling:
+//   SNIP_PERF=1 node --import tsx --test web/tests/browser/home-gallery-perf.browser.test.ts
 //
 // What the first version of this benchmark missed, and the real library showed (247 items, Ctrl+wheel 40 ticks out and in:
 // p95 83 to 133 ms, 12 to 50 frames over 33 ms, the first zoom in step up to 600 ms), by measurement:
@@ -33,7 +35,7 @@ import { after, before, test } from "node:test"
 import type { Page } from "playwright"
 import type { PageWithRef, SavedImage, SectionItem } from "../../shared/types.ts"
 import { MOUNT_PER_FRAME } from "../../src/components/canvas/home-layout.ts"
-import { reference, sleep, startApp, until, type App, type Req } from "./harness.ts"
+import { reference, savedPage, sleep, startApp, until, type App, type Req } from "./harness.ts"
 
 let app: App
 let thumbs: Thumbs
@@ -215,8 +217,8 @@ const counts = (page: Page) =>
   })()`)
 
 /**
- * Keyboard and screen-reader view of the tiles: the ones a screen reader meets are the origin copy's, in tab order
- * (newest first); every repeated copy is hidden from both. Returns the labels in DOM order and any violation.
+ * Keyboard and screen-reader view of the tiles: every tile is announced and in tab order (newest first), and none is
+ * hidden from either. Returns the labels in DOM order and any violation.
  */
 async function audit(page: Page) {
   return page.evaluate<{ tabbable: number[]; announced: number; copies: number; leaks: number }>(`(() => {
@@ -399,7 +401,7 @@ const zoomPct = async (page: Page) => Number(((await page.getByRole("button", { 
 
 function checkTabOrder(a: Awaited<ReturnType<typeof audit>>, at: string) {
   assert.ok(a.tabbable.length > 0, `tiles are in the tab order at ${at}`)
-  assert.equal(a.leaks, 0, `at ${at}: announced tiles are focusable and repeated copies are not`)
+  assert.equal(a.leaks, 0, `at ${at}: every tile is announced and focusable`)
   assert.deepEqual(a.tabbable, [...a.tabbable].sort((x, y) => x - y), `at ${at}: tab order is newest first`)
   assert.equal(new Set(a.tabbable).size, a.tabbable.length, `at ${at}: each item is announced once`)
 }
@@ -580,15 +582,18 @@ function checkWeight(r: Report) {
   // A notch brings hundreds of tiles into view in one step (549 mounted in one 59 ms frame in a build, before the field
   // staged them). A frame mounts no more than MOUNT_PER_FRAME, and the viewport fills within a few frames.
   assert.ok(r.mountedInOneFrame <= MOUNT_PER_FRAME, `${r.mountedInOneFrame} tiles mounted in one frame`)
-  assert.ok(r.holes.cover > 0.7, `a zoomed-out viewport is ${Math.round(r.holes.cover * 100)}% covered by tiles`)
+  // Each item is drawn once, so a zoomed-out view is only as covered as the library is big (the feed's newest 400 a
+  // kind fill about a quarter of it at 25%): the holes that matter are the frames it takes to fill what it will.
   assert.ok(r.holes.frames <= 10, `the viewport had holes for ${r.holes.frames} frames after a zoom out`)
 }
 
-test("200 items: the zoomed-out gallery stays light", { timeout: 180_000 }, async () => {
+const benchmark = process.env.SNIP_PERF ? false : "a manual benchmark: set SNIP_PERF=1"
+
+test("200 items: the zoomed-out gallery stays light", { timeout: 180_000, skip: benchmark }, async () => {
   checkWeight(await measured(200))
 })
 
-test("1000 items: panning at 100% and zooming out stay light", { timeout: 240_000 }, async () => {
+test("1000 items: panning at 100% and zooming out stay light", { timeout: 240_000, skip: benchmark }, async () => {
   checkWeight(await measured(1000))
 })
 
@@ -601,7 +606,7 @@ test("a home tile shows its source on hover and focus, opens on click, and tabs 
   await page.getByRole("button", { name: /^Zoom \d+%/ }).waitFor()
   await until("tiles are on the canvas", async () => (await counts(page)).images > 5)
   await sleep(500)
-  const chip = page.locator('a[title^="Open "]')
+  const chip = page.locator('a[title^="Show everything from "]')
   const tile = page.getByRole("button", { name: "Page 0", exact: true })
 
   await tile.hover()
@@ -624,7 +629,9 @@ test("a home tile shows its source on hover and focus, opens on click, and tabs 
   }
   assert.deepEqual(next, ["Section 1 · beta.test", "Section 2 · gamma.test", "Section 3 · delta.test"], "Tab goes to the next newest tile")
   // Page 0 is from alpha.test, Section 3 from delta.test: the chip moved with focus.
-  await until("the chip follows focus", async () => (await chip.count()) === 1 && (await chip.getAttribute("title")) === "Open delta.test")
+  await until("the chip follows focus", async () => (await chip.count()) === 1 && (await chip.getAttribute("title")) === "Show everything from delta.test")
+  assert.equal(await chip.getAttribute("href"), "/?site=r3", "the chip goes to the site's scope in Snip")
+  assert.equal(await chip.getAttribute("target"), null, "and stays in the app")
 
   // Focus panned the canvas to Section 3.
   await page.getByRole("button", { name: "Section 3 · delta.test", exact: true }).click()
@@ -654,16 +661,49 @@ test("a home tile draws a section's thumbnail where there is one, the full crop 
   assert.deepEqual(t.consoleErrors, [])
 })
 
-test("on the Websites filter a tile is a link to its page", { timeout: 60_000 }, async () => {
-  const refs = Array.from({ length: 12 }, (_, i) => reference({ id: `w${i}`, url: `https://w${i}.test/`, domain: `w${i}.test`, title: `Site ${i}`, coverKey: `covers/w${i}.png`, createdAt: created(i) }))
+test("on the Websites filter a tile opens the inspector like every other tile, and its site link goes to the site", { timeout: 60_000 }, async () => {
+  const refs = Array.from({ length: 12 }, (_, i) => reference({ id: `w${i}`, url: `https://w${i}.test/`, domain: `w${i}.test`, title: `Site ${i}`, coverKey: `covers/w${i}.png`, pageCount: 3, createdAt: created(i) }))
   const t = await gallery(0)
   const { page } = t
   t.on("GET", "/api/references", () => ({ json: { items: refs, nextCursor: null } }))
   t.on("GET", "/api/counts", () => ({ json: { websites: refs.length, pages: 0, sections: 0, animations: 0, images: 0 } }))
+  t.on("GET", /^\/api\/references\/w0$/, () => ({ json: { reference: refs[0], pages: [], animations: [] } }))
   await t.goto("/?filter=websites")
-  const link = page.locator('a[href="/r/w0"]').first()
-  await link.waitFor()
-  assert.equal(await link.getAttribute("aria-label"), "Site 0")
-  assert.equal(await link.evaluate((el) => el.children.length), 1, "a link tile holds only its image")
+  const tile = page.getByRole("button", { name: "Site 0", exact: true })
+  await tile.waitFor()
+  assert.equal(await tile.evaluate((el) => el.children.length), 1, "a tile holds only its image")
+  await tile.click()
+  await until("the inspector opens", async () => new URL(page.url()).searchParams.get("open") === "website:w0")
+  assert.equal(new URL(page.url()).pathname, "/", "the canvas stays")
+
+  const visit = page.getByRole("link", { name: "Visit", exact: true })
+  assert.equal(await visit.getAttribute("target"), "_blank", "the live site is the external action")
+  const site = page.getByRole("link", { name: /^w0\.test · 3 pages/ })
+  assert.equal(await site.getAttribute("href"), "/?site=w0")
+  await site.click()
+  await until("the site's scope opens", async () => new URL(page.url()).searchParams.get("site") === "w0")
+  assert.deepEqual(t.consoleErrors, [])
+})
+
+test("from an open page, its site link opens the site's pages in one click, and Back reopens the page", { timeout: 60_000 }, async () => {
+  const t = await gallery(40)
+  const { page } = t
+  const r0 = reference({ id: "r0", url: "https://alpha.test/", domain: "alpha.test", title: "Site 0", pageCount: 3 })
+  // p0 is the seed's alpha.test page; the site has two more pages that aren't on the canvas.
+  const sitePages = ["about", "p0", "pricing"].map((id, ord) => savedPage({ id, referenceId: "r0", url: `https://alpha.test/${id}`, path: `/${id}`, title: id === "p0" ? "Page 0" : id, ord }))
+  t.on("GET", /^\/api\/references\/r0$/, () => ({ json: { reference: r0, pages: sitePages, animations: [] } }))
+  await t.goto("/?open=page:p0")
+  const site = page.getByRole("link", { name: "alpha.test · 3 pages" })
+  await site.waitFor()
+  assert.equal(await site.getAttribute("href"), "/?site=r0")
+  assert.equal(await page.getByRole("menuitem", { name: "Open in website view" }).count(), 0)
+
+  await site.click()
+  await until("one click lands on the site's scope", async () => new URL(page.url()).searchParams.get("site") === "r0")
+  await page.getByRole("button", { name: "Site details: Site 0" }).waitFor()
+  assert.equal(await page.getByRole("dialog").count(), 0, "nothing on top: the site's pages are what shows")
+
+  await page.goBack()
+  await until("Back reopens the page in the inspector", async () => new URL(page.url()).searchParams.get("open") === "page:p0")
   assert.deepEqual(t.consoleErrors, [])
 })

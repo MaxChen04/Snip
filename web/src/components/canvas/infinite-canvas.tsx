@@ -1,5 +1,6 @@
 import { useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type ReactNode, type Ref } from "react"
 import { cullRect, FAR_ZOOM } from "@/components/canvas/cull"
+import { settled, springStep } from "@/lib/spring"
 import { cn } from "@/lib/utils"
 
 /** A rectangle in world px. */
@@ -17,11 +18,15 @@ export interface InfiniteCanvasHandle {
   setZoom(zoom: number, around?: Around, opts?: Animate): void
   /** Back to the home view (the `home` prop). */
   recenter(opts?: Animate): void
+  /** Jump to a view getView() returned: its world centre and zoom. */
+  setView(view: { x: number; y: number; zoom: number }): void
   screenToWorld(clientX: number, clientY: number): { x: number; y: number }
   getView(): CanvasView
 }
 
 export const MIN_ZOOM = 0.25
+/** The share of the screen the content still covers at the far end of a pan (see `content`). */
+const KEEP_IN_VIEW = 0.25
 export const MAX_ZOOM = 2
 
 const clampZoom = (k: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, k))
@@ -40,11 +45,17 @@ const within = (target: EventTarget | null, selector: string) => target instance
  * Drag anywhere to pan (mouse, touch, pen; a 3–6 px threshold keeps clicks working and the click ending a pan is
  * swallowed). Wheel pans, ctrl/⌘+wheel and pinch zoom around the pointer. With focus: arrows pan, +/- zoom,
  * 0 recenters. Keyboard focus moving to a child that is out of view pans to it.
+ *
+ * Drags, wheel pans and pinches follow the input 1:1, with a rubber band past the content's edge or the zoom range. On
+ * release a pan glides on, and anything left past the limits springs back. Zoom controls, recenter and a mouse wheel's
+ * notch move on the same spring (see lib/spring); the keyboard's pans and zooms are instant. Reduced motion: no glide,
+ * no rubber band, no spring.
  */
 export function InfiniteCanvas({
   children,
   home = { x: 0, y: 0, zoom: 1 },
   onViewChange,
+  content,
   tiled = false,
   className,
   "aria-label": label,
@@ -55,6 +66,12 @@ export function InfiniteCanvas({
   home?: { x: number; y: number; zoom?: number }
   /** Called once per frame while the view changes. */
   onViewChange?: (view: CanvasView) => void
+  /**
+   * Where there is something to see. However far a pan, a fling, a zoom or a saved view goes, the view stops where one
+   * of these rects still covers a quarter of the screen's width or height (KEEP_IN_VIEW), so the user is never lost in
+   * empty space.
+   */
+  content?: readonly WorldRect[]
   /**
    * The children are many light tiles that mount and unmount as the view moves (the home gallery), not a few hundred
    * heavy items that stay mounted (a board). The canvas then differs in three ways, all measured with 200 to 1,000
@@ -85,25 +102,67 @@ export function InfiniteCanvas({
   tiledRef.current = tiled
   const onViewRef = useRef(onViewChange)
   onViewRef.current = onViewChange
+  const contentRef = useRef(content)
+  contentRef.current = content
 
   // One object of imperative helpers, created once; they read only refs.
   const api = useRef<ReturnType<typeof makeApi> | null>(null)
   function makeApi() {
     let frame = 0
-    let tween = 0
-    let glide = 0
+    let anim = 0
     let raster = 0
+    let idle = 0
     // Zoom an animation is heading to, so repeated zoom clicks compound from it rather than from mid-flight.
     let targetK: number | null = null
+    // While the user holds the view past its limits (a drag or wheel past the content's edge, a pinch past the zoom
+    // range) or a spring carries it, flush leaves it there; otherwise flush keeps it inside.
+    let free = false
+    // A drag's, wheel pan's or pinch's own centre and zoom, before the resistance at the limits.
+    let raw: { x: number; y: number; k: number } | null = null
+    // Where the last pinch or wheel zoom was centred, so a zoom pulled past the range springs back around it.
+    let anchor: { x: number; y: number } | null = null
+    // The spring's velocity, kept when it retargets: the centre in world px per ms, the zoom in log units per ms.
+    const vel = { x: 0, y: 0, z: 0 }
 
     const getView = (): CanvasView => {
       const { tx, ty, k, w, h } = view.current
       return { x: (w / 2 - tx) / k, y: (h / 2 - ty) / k, zoom: k, width: w, height: h }
     }
 
+    const place = (x: number, y: number, k: number) => {
+      const v = view.current
+      v.k = k
+      v.tx = v.w / 2 - x * k
+      v.ty = v.h / 2 - y * k
+    }
+
+    /** The nearest centre, at zoom k, from which some content rect still reaches KEEP_IN_VIEW into the screen: that rect, grown by the rest. */
+    const limit = (x: number, y: number, k: number) => {
+      const rects = contentRef.current
+      if (!rects?.length) return { x, y }
+      const v = view.current
+      const mx = (v.w * (0.5 - KEEP_IN_VIEW)) / k
+      const my = (v.h * (0.5 - KEEP_IN_VIEW)) / k
+      let best = { x, y, d: Infinity }
+      for (const r of rects) {
+        const px = Math.min(r.x + r.w + mx, Math.max(r.x - mx, x))
+        const py = Math.min(r.y + r.h + my, Math.max(r.y - my, y))
+        const d = (px - x) ** 2 + (py - y) ** 2
+        if (d < best.d) best = { x: px, y: py, d }
+        if (!d) break
+      }
+      return best
+    }
+
     const flush = () => {
       cancelAnimationFrame(frame)
       frame = 0
+      if (!free) {
+        const c = getView()
+        const k = clampZoom(c.zoom)
+        const p = limit(c.x, c.y, k)
+        place(p.x, p.y, k)
+      }
       const { tx, ty, k } = view.current
       if (world.current) world.current.style.transform = `translate3d(${tx}px, ${ty}px, 0) scale(${k})`
       if (tiledRef.current) world.current?.toggleAttribute("data-far", k < FAR_ZOOM)
@@ -128,10 +187,12 @@ export function InfiniteCanvas({
       }, 200)
     }
 
+    /** New input takes the view where it is: any spring or glide stops, and its velocity with it. */
     const stop = () => {
       targetK = null
-      cancelAnimationFrame(tween)
-      cancelAnimationFrame(glide)
+      cancelAnimationFrame(anim)
+      clearTimeout(idle)
+      vel.x = vel.y = vel.z = 0
     }
 
     const local = (p: Around) => {
@@ -139,77 +200,203 @@ export function InfiniteCanvas({
       return { x: p.clientX - box.left, y: p.clientY - box.top }
     }
 
-    const panBy = (dx: number, dy: number) => {
-      view.current.tx += dx
-      view.current.ty += dy
-      schedule()
-    }
-
-    const zoomAt = (k: number, sx: number, sy: number) => {
+    /**
+     * Spring to a centre and zoom. With an anchor (a screen point) the world point under it stays put while the zoom
+     * springs, as a zoom around the pointer should. Ends inside the limits: a target past them springs on to the edge.
+     */
+    const springTo = (x: number, y: number, k: number, around?: { x: number; y: number }) => {
+      cancelAnimationFrame(anim)
       const v = view.current
-      const next = clampZoom(k)
-      v.tx = sx - (sx - v.tx) * (next / v.k)
-      v.ty = sy - (sy - v.ty) * (next / v.k)
-      v.k = next
-      schedule()
-      sharpen()
+      free = true
+      targetK = k
+      const held = around && { sx: around.x, sy: around.y, wx: (around.x - v.tx) / v.k, wy: (around.y - v.ty) / v.k }
+      if (held) {
+        x = held.wx - (held.sx - v.w / 2) / k
+        y = held.wy - (held.sy - v.h / 2) / k
+      }
+      let last = performance.now()
+      const step = (now: number) => {
+        const dt = Math.min(64, now - last)
+        last = now
+        const c = getView()
+        const [dz, vz] = springStep(Math.log(c.zoom / k), vel.z, dt)
+        vel.z = vz
+        const nk = k * Math.exp(dz)
+        let rest = settled(dz, vz, 0.001)
+        if (held) {
+          place(held.wx - (held.sx - v.w / 2) / nk, held.wy - (held.sy - v.h / 2) / nk, nk)
+        } else {
+          const [dx, vx] = springStep(c.x - x, vel.x, dt)
+          const [dy, vy] = springStep(c.y - y, vel.y, dt)
+          vel.x = vx
+          vel.y = vy
+          rest &&= settled(dx * nk, vx * nk) && settled(dy * nk, vy * nk)
+          place(x + dx, y + dy, nk)
+        }
+        if (!rest) {
+          flush()
+          anim = requestAnimationFrame(step)
+          return
+        }
+        place(x, y, k)
+        targetK = null
+        vel.x = vel.y = vel.z = 0
+        const p = limit(x, y, k)
+        if (p.x !== x || p.y !== y) return springTo(p.x, p.y, k)
+        free = false
+        flush()
+        sharpen()
+      }
+      anim = requestAnimationFrame(step)
     }
 
-    /** Move to a centre world point and zoom, optionally with a short ease-out. */
+    /** Move to a centre world point and zoom, at once or on the spring. */
     const go = (cx: number, cy: number, k: number, animate = false) => {
       stop()
-      const v = view.current
       k = clampZoom(k)
-      targetK = animate && !reducedMotion() ? k : null
-      const set = (x: number, y: number, z: number) => {
-        v.k = z
-        v.tx = v.w / 2 - x * z
-        v.ty = v.h / 2 - y * z
-        flush()
-      }
-      if (!animate || reducedMotion()) {
-        set(cx, cy, k)
-        sharpen()
-        return
-      }
-      const from = getView()
-      const t0 = performance.now()
-      const step = (now: number) => {
-        const p = Math.min(1, (now - t0) / 320)
-        const e = 1 - (1 - p) ** 4
-        set(from.x + (cx - from.x) * e, from.y + (cy - from.y) * e, from.zoom + (k - from.zoom) * e)
-        if (p < 1) tween = requestAnimationFrame(step)
-        else {
-          targetK = null
-          sharpen()
-        }
-      }
-      tween = requestAnimationFrame(step)
+      const p = limit(cx, cy, k)
+      if (animate && !reducedMotion()) return springTo(p.x, p.y, k)
+      free = false
+      place(p.x, p.y, k)
+      flush()
+      sharpen()
     }
 
     const zoomTo = (k: number, around?: Around, opts?: Animate) => {
       const v = view.current
       const p = around ? local(around) : { x: v.w / 2, y: v.h / 2 }
-      if (!opts?.animate) return zoomAt(k, p.x, p.y)
-      // Animate toward the centre that keeps `around` still at the new zoom.
       const next = clampZoom(k)
-      const wx = (p.x - v.tx) / v.k
-      const wy = (p.y - v.ty) / v.k
-      go(wx - (p.x - v.w / 2) / next, wy - (p.y - v.h / 2) / next, next, true)
+      // A zoom that retargets the running spring keeps its velocity, so clicks in a row compound smoothly.
+      if (opts?.animate && !reducedMotion()) return springTo(0, 0, next, p)
+      stop()
+      free = false
+      v.tx = p.x - (p.x - v.tx) * (next / v.k)
+      v.ty = p.y - (p.y - v.ty) * (next / v.k)
+      v.k = next
+      flush()
+      sharpen()
     }
 
-    const fling = (vx: number, vy: number) => {
+    // ---- Direct manipulation: drag, wheel pan, pinch ----
+    // The view follows the input 1:1 inside the limits, and with growing resistance past them (rubber band).
+    const band = (d: number, size: number) => Math.sign(d) * size * (1 - 1 / ((Math.abs(d) * 0.55) / size + 1))
+    const softZoom = (k: number) => (k > MAX_ZOOM ? MAX_ZOOM * (k / MAX_ZOOM) ** 0.3 : k < MIN_ZOOM ? MIN_ZOOM * (k / MIN_ZOOM) ** 0.3 : k)
+
+    /** Start (or keep) following the input from where the view is now. */
+    const hold = () => {
+      stop()
+      if (!raw) {
+        const c = getView()
+        raw = { x: c.x, y: c.y, k: c.zoom }
+      }
+      free = !reducedMotion()
+    }
+    const show = () => {
+      const r = raw!
+      if (!free) {
+        // Reduced motion: no rubber band, the view stops at the limits.
+        r.k = clampZoom(r.k)
+        Object.assign(r, limit(r.x, r.y, r.k))
+      }
+      const v = view.current
+      const k = softZoom(r.k)
+      const p = limit(r.x, r.y, k)
+      // The pull is at most a fifth of the screen, so some content stays in view however hard it is pulled.
+      place(p.x + band(r.x - p.x, (v.w * 0.2) / k), p.y + band(r.y - p.y, (v.h * 0.2) / k), k)
+      schedule()
+    }
+    /** Pan by screen px. */
+    const drag = (dx: number, dy: number) => {
+      hold()
+      const k = view.current.k
+      raw!.x -= dx / k
+      raw!.y -= dy / k
+      show()
+    }
+    /** Zoom by a factor around one screen point, moving it to another (a pinch's midpoint moves as it zooms). */
+    const pinch = (factor: number, from: { x: number; y: number }, to = from) => {
+      hold()
+      const v = view.current
+      const wx = (from.x - v.tx) / v.k
+      const wy = (from.y - v.ty) / v.k
+      raw!.k *= factor
+      const k = softZoom(raw!.k)
+      raw!.x = wx - (to.x - v.w / 2) / k
+      raw!.y = wy - (to.y - v.h / 2) / k
+      anchor = to
+      show()
+      sharpen()
+    }
+
+    /**
+     * The input let go, with its velocity in screen px per ms. Past the limits the view springs back; inside them it
+     * glides on and slows down, and springs back from the edge if it reaches it.
+     */
+    const release = (vx = 0, vy = 0) => {
+      raw = null
+      clearTimeout(idle)
+      cancelAnimationFrame(frame)
+      frame = 0
+      if (reducedMotion()) {
+        free = false
+        return flush()
+      }
+      const c = getView()
+      const k = clampZoom(c.zoom)
+      if (k !== c.zoom) return springTo(0, 0, k, anchor ?? { x: c.width / 2, y: c.height / 2 })
+      const p = limit(c.x, c.y, k)
+      if (p.x !== c.x || p.y !== c.y) {
+        vel.x = -vx / k
+        vel.y = -vy / k
+        return springTo(p.x, p.y, k)
+      }
+      if (Math.hypot(vx, vy) < 0.3) {
+        free = false
+        return flush()
+      }
+      glide(vx, vy)
+    }
+    /** After a wheel pan or pinch, the input has let go once its events stop. */
+    const releaseSoon = () => {
+      clearTimeout(idle)
+      idle = window.setTimeout(() => release(), 120)
+    }
+
+    const glide = (vx: number, vy: number) => {
+      free = true
       let last = performance.now()
       const step = (now: number) => {
         const dt = Math.min(48, now - last)
         last = now
-        panBy(vx * dt, vy * dt)
+        const v = view.current
+        v.tx += vx * dt
+        v.ty += vy * dt
         const decay = 0.95 ** (dt / 16)
         vx *= decay
         vy *= decay
-        if (Math.hypot(vx, vy) > 0.02) glide = requestAnimationFrame(step)
+        const c = getView()
+        const p = limit(c.x, c.y, c.zoom)
+        if (p.x !== c.x || p.y !== c.y) {
+          // At the edge: the spring takes over with the glide's speed, and bounces back.
+          vel.x = -vx / c.zoom
+          vel.y = -vy / c.zoom
+          return springTo(p.x, p.y, c.zoom)
+        }
+        flush()
+        if (Math.hypot(vx, vy) > 0.02) anim = requestAnimationFrame(step)
+        else free = false
       }
-      glide = requestAnimationFrame(step)
+      anim = requestAnimationFrame(step)
+    }
+
+    /** Keyboard pans: immediate, and stopped at the limits. */
+    const nudge = (dx: number, dy: number) => {
+      stop()
+      raw = null
+      free = false
+      view.current.tx += dx
+      view.current.ty += dy
+      schedule()
     }
 
     const handle: InfiniteCanvasHandle = {
@@ -217,6 +404,7 @@ export function InfiniteCanvas({
       zoomBy: (factor, around, opts) => zoomTo((targetK ?? view.current.k) * factor, around, opts),
       setZoom: zoomTo,
       recenter: (opts) => go(homeRef.current.x, homeRef.current.y, homeRef.current.zoom ?? 1, opts?.animate),
+      setView: (v) => go(v.x, v.y, v.zoom, false),
       screenToWorld: (clientX, clientY) => {
         const p = local({ clientX, clientY })
         const { tx, ty, k } = view.current
@@ -224,7 +412,7 @@ export function InfiniteCanvas({
       },
       getView,
     }
-    return { handle, flush, schedule, stop, local, panBy, zoomAt, fling, cancel: () => cancelAnimationFrame(frame) }
+    return { handle, flush, stop, local, drag, pinch, release, releaseSoon, nudge, cancel: () => cancelAnimationFrame(frame) }
   }
   api.current ??= makeApi()
   const a = api.current
@@ -253,6 +441,11 @@ export function InfiniteCanvas({
     }
   }, [a])
 
+  // New content (the feed loaded or changed) brings a view left outside it back to its edge.
+  useLayoutEffect(() => {
+    if (content?.length) a.flush()
+  }, [a, content])
+
   // Wheel and Safari's gesture events need non-passive listeners to stop the page zooming or swiping back.
   useEffect(() => {
     const el = viewport.current!
@@ -260,12 +453,16 @@ export function InfiniteCanvas({
     const onWheel = (e: WheelEvent) => {
       e.preventDefault()
       if (gesturing && e.ctrlKey) return // Safari pinch: the gesture events have it
-      a.stop()
       const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? view.current.h : 1
       if (e.ctrlKey || e.metaKey) {
-        const p = a.local(e)
-        a.zoomAt(view.current.k * Math.exp(-Math.max(-50, Math.min(50, e.deltaY * unit)) * 0.01), p.x, p.y)
-      } else a.panBy(-e.deltaX * unit, -e.deltaY * unit)
+        const d = e.deltaY * unit
+        const factor = Math.exp(-Math.max(-50, Math.min(50, d)) * 0.01)
+        // A mouse wheel's notch zooms on the spring (each notch retargets it); a trackpad pinch's small steps follow
+        // the fingers, and spring back once they stop past the zoom range.
+        if (e.deltaMode !== 0 || Math.abs(d) >= 40) return a.handle.zoomBy(factor, e, { animate: true })
+        a.pinch(factor, a.local(e))
+      } else a.drag(-e.deltaX * unit, -e.deltaY * unit)
+      a.releaseSoon()
     }
     let gestureScale = 1
     type GestureEvent = UIEvent & { scale: number; clientX: number; clientY: number }
@@ -274,13 +471,15 @@ export function InfiniteCanvas({
       gestureScale = 1
       gesturing = true
     }
-    const onGestureEnd = () => (gesturing = false)
+    const onGestureEnd = () => {
+      gesturing = false
+      a.release()
+    }
     const onGestureChange = (e: Event) => {
       e.preventDefault()
       if (pointers.current.size > 1) return // touch pinch: the pointer handlers have it
       const g = e as GestureEvent
-      const p = a.local(g)
-      a.zoomAt((view.current.k * g.scale) / gestureScale, p.x, p.y)
+      a.pinch(g.scale / gestureScale, a.local(g))
       gestureScale = g.scale
     }
     el.addEventListener("wheel", onWheel, { passive: false })
@@ -345,19 +544,14 @@ export function InfiniteCanvas({
         if (Math.hypot(e.clientX - g.startX, e.clientY - g.startY) < (e.pointerType === "mouse" ? 3 : 6)) return
         startPan()
       }
-      a.panBy(e.clientX - prev.x, e.clientY - prev.y)
+      a.drag(e.clientX - prev.x, e.clientY - prev.y)
       const now = performance.now()
       g.samples = [...g.samples.filter((s) => now - s.t < 100), { t: now, x: e.clientX, y: e.clientY }]
     } else {
-      const next = pinchState()
-      const v = view.current
-      const k = clampZoom((v.k * next.dist) / (g.dist || next.dist))
       // Keep the world point under the old midpoint under the new one: zoom and pan in one step.
-      v.tx = next.mid.x - ((g.mid.x - v.tx) / v.k) * k
-      v.ty = next.mid.y - ((g.mid.y - v.ty) / v.k) * k
-      v.k = k
+      const next = pinchState()
+      a.pinch(next.dist / (g.dist || next.dist), g.mid, next.mid)
       Object.assign(g, next)
-      a.schedule()
     }
   }
 
@@ -370,33 +564,34 @@ export function InfiniteCanvas({
       Object.assign(g, { startX: p!.x, startY: p!.y, samples: [] })
       return
     }
-    if (pointers.current.size > 1 || !g.panning) return
+    if (pointers.current.size > 1) return
+    // A press that never panned may have stopped a spring part way: let it finish.
+    if (!g.panning) return a.release()
     g.panning = false
     delete viewport.current!.dataset.panning
     // The click that ends a pan must not open the tile under the pointer. Click fires before any timer.
     swallowClick.current = true
     setTimeout(() => (swallowClick.current = false))
     const [first, last] = [g.samples[0], g.samples.at(-1)]
-    if (e.type === "pointerup" && first && last && last.t > first.t && performance.now() - last.t < 60 && !reducedMotion()) {
+    if (e.type === "pointerup" && first && last && last.t > first.t && performance.now() - last.t < 60) {
       // At least a frame's worth of time, and at most 2 px/ms (a ~640-px glide): a burst of moves in a few ms
       // otherwise reads as a huge velocity and throws the canvas thousands of px.
       const dt = Math.max(16, last.t - first.t)
       const vx = (last.x - first.x) / dt
       const vy = (last.y - first.y) / dt
-      const speed = Math.hypot(vx, vy)
-      const cap = Math.min(1, 2 / speed)
-      if (speed > 0.3) a.fling(vx * cap, vy * cap)
-    }
+      const cap = Math.min(1, 2 / Math.hypot(vx, vy))
+      a.release(vx * cap, vy * cap)
+    } else a.release()
   }
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (!inside(e) || e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || within(e.target, OWN_KEYS)) return
     const step = e.shiftKey ? 320 : 80
-    const v = view.current
     const pans: Record<string, [number, number]> = { ArrowLeft: [step, 0], ArrowRight: [-step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] }
-    if (pans[e.key]) a.panBy(...pans[e.key]!)
-    else if (e.key === "+" || e.key === "=") a.zoomAt(v.k * 1.25, v.w / 2, v.h / 2)
-    else if (e.key === "-" || e.key === "_") a.zoomAt(v.k / 1.25, v.w / 2, v.h / 2)
+    if (pans[e.key]) a.nudge(...pans[e.key]!)
+    // Keyboard camera moves are instant, like every keyboard action (tactile-design's motion rules).
+    else if (e.key === "+" || e.key === "=") a.handle.zoomBy(1.25)
+    else if (e.key === "-" || e.key === "_") a.handle.zoomBy(1 / 1.25)
     else if (e.key === "0") a.handle.recenter()
     else return
     e.preventDefault()

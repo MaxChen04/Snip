@@ -23,14 +23,15 @@ test("an oklch colour is shown in full under its swatch, and a url() reference i
   const colors = ["oklch(0.2 0.01 250)", "oklch(0.92 0.02 90 / 0.5)", 'url("#paint0_linear")', "#ff8204"]
   const t = await app.session({ state: { references: { ref1: reference({ id: "ref1", tokens: tokens(colors) }) } }, viewport: { width: 1280, height: 900 } })
   const { page } = t
-  await t.goto("/r/ref1?tab=tokens")
+  await t.goto("/?site=ref1&filter=tokens")
   await page.getByRole("heading", { name: "Colors" }).waitFor()
-  const swatches = page.locator("section", { has: page.getByRole("heading", { name: "Colors" }) }).locator("button")
+  // The Colors section itself, not the tokens panel around it.
+  const swatches = page.locator("section", { has: page.getByRole("heading", { name: "Colors" }) }).last().locator("button")
   assert.equal(await swatches.count(), 3, "only the three real colours are swatches")
   assert.equal(await page.getByText("url(", { exact: false }).count(), 0)
 
   for (const value of ["oklch(0.2 0.01 250)", "oklch(0.92 0.02 90 / 0.5)"]) {
-    const label = swatches.filter({ hasText: value }).locator("div").last()
+    const label = swatches.getByText(value, { exact: true })
     // Wrapped, not cut off: its text is the whole value and it does not overflow its box or lose lines to an ellipsis.
     assert.equal((await label.innerText()).replace(/\s+/g, " "), value)
     const overflow = await label.evaluate((el) => ({ over: el.scrollWidth > el.clientWidth, ellipsis: getComputedStyle(el).textOverflow }))

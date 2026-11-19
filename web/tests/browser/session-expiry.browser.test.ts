@@ -16,13 +16,13 @@ test("a 401 while using the app goes to sign-in and remembers the page", async (
   const { page } = t
   let signedOut = false
   t.on("GET", /^\/api\//, () => (signedOut ? { status: 401, json: {} } : undefined))
-  await t.goto("/r/ref1?tab=tokens")
-  await page.getByRole("heading", { name: "Poll Target" }).waitFor()
+  await t.goto("/?site=ref1&filter=tokens")
+  await page.getByRole("button", { name: "Site details: Poll Target" }).waitFor()
 
   signedOut = true
   await page.clock.fastForward(4500)
   await page.getByRole("heading", { name: "Sign in to Snip" }).waitFor()
-  assert.equal(where(page), `/sign-in?next=${encodeURIComponent("/r/ref1?tab=tokens")}`)
+  assert.equal(where(page), `/sign-in?next=${encodeURIComponent("/?site=ref1&filter=tokens")}`)
   assert.equal(await page.getByText("Not signed in").isVisible(), false)
 })
 

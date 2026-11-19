@@ -278,6 +278,38 @@ test("counts match what each list endpoint returns for the same filter", async (
   }
 })
 
+test("a website scope narrows every feed and its counts to that site, and q matches only its items", async () => {
+  const { mf, database, get, uploaded } = await setup()
+  try {
+    const stripe = await capture(database, "https://stripe.com", [{ path: "/", sections: 3 }, { path: "/pricing", sections: 2 }])
+    await capture(database, "https://linear.app", [{ path: "/pricing", sections: 1 }])
+    await database.prepare(`INSERT INTO animations (id, reference_id, page_id, kind, viewport, gif_key, width, height, created_at) VALUES ('a1', ?, ?, 'scroll', 'desktop', 'k', 1, 1, ?)`)
+      .bind(stripe.reference.id, stripe.pages[0]!.id, db.now()).run()
+    await uploaded({ name: "stripe.png" })
+    const site = `reference=${stripe.reference.id}`
+    for (const query of [site, `${site}&q=pricing`, `${site}&q=stripe`]) {
+      const counts = await get<LibraryTypeCounts>(`/api/counts?${query}`)
+      const items = async (path: string) => (await get<Paged<{ referenceId?: string; id: string }>>(`/api/${path}?${query}&limit=100`)).items
+      for (const path of ["pages", "sections", "animations"]) {
+        for (const it of await items(path)) assert.equal(it.referenceId, stripe.reference.id, `${path} stays in the site`)
+      }
+      assert.deepEqual(counts, {
+        websites: (await items("references")).length,
+        pages: (await items("pages")).length,
+        sections: (await items("sections")).length,
+        animations: (await items("animations")).length,
+        images: (await items("images")).length,
+      }, query)
+    }
+    assert.deepEqual(await get<LibraryTypeCounts>(`/api/counts?${site}`), { websites: 1, pages: 2, sections: 5, animations: 1, images: 0 })
+    // "stripe" is the site's own name: inside the site it matches no page, section or recording.
+    assert.deepEqual(await get<LibraryTypeCounts>(`/api/counts?${site}&q=stripe`), { websites: 1, pages: 0, sections: 0, animations: 0, images: 0 })
+    assert.deepEqual(await get<LibraryTypeCounts>(`/api/counts?${site}&q=pricing`), { websites: 0, pages: 1, sections: 2, animations: 0, images: 0 })
+  } finally {
+    await mf.dispose()
+  }
+})
+
 // ---------- Boards ----------
 
 test("a board lists every member kind with positions, notes and groups", async () => {

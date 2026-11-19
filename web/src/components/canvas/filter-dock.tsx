@@ -1,11 +1,12 @@
 import { useState } from "react"
-import { FileIcon, GlobeIcon, GridIcon, ImageIcon, LayersIcon, PlayIcon, PlusIcon, SectionsIcon, type Icon } from "@/components/icons"
+import { FileIcon, GlobeIcon, GridIcon, ImageIcon, LayersIcon, PaletteIcon, PlayIcon, PlusIcon, SectionsIcon, type Icon } from "@/components/icons"
 import { BoardsList } from "@/components/canvas/boards-list"
 import { CaptureForm } from "@/components/canvas/capture-card"
-import type { CanvasFilter } from "@/components/canvas/types"
+import type { CanvasFilter, SiteFilter } from "@/components/canvas/types"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import type { LibraryTypeCounts } from "@/lib/api"
+import { useCollections } from "@/lib/collections"
 import { cn } from "@/lib/utils"
 
 const FILTERS: { value: CanvasFilter; label: string; icon: Icon }[] = [
@@ -17,12 +18,21 @@ const FILTERS: { value: CanvasFilter; label: string; icon: Icon }[] = [
   { value: "images", label: "Images", icon: ImageIcon },
 ]
 
+// Inside a site the dock means "of this site": Websites would show one tile and Images none, so they leave.
+const SITE_FILTERS: { value: SiteFilter; label: string; icon: Icon; tip: string }[] = [
+  { value: "all", label: "All", icon: GridIcon, tip: "Pages and sections of" },
+  { value: "pages", label: "Pages", icon: FileIcon, tip: "Pages of" },
+  { value: "sections", label: "Sections", icon: SectionsIcon, tip: "Sections of" },
+  { value: "animations", label: "Animations", icon: PlayIcon, tip: "Recordings of" },
+  { value: "tokens", label: "Tokens", icon: PaletteIcon, tip: "Design tokens of" },
+]
+
 export const countOf = (counts: LibraryTypeCounts, f: CanvasFilter) => (f === "all" ? counts.pages + counts.sections + counts.images : counts[f])
 
 // Filters show their name beside the icon (from md up), so it reads as "show me Websites", not a row of mystery glyphs.
 const filterButton = "press flex h-10 items-center gap-1.5 rounded-full px-2.5 text-xs text-ink-11 hover:bg-ink-3 hover:text-foreground max-md:w-10 max-md:justify-center max-md:px-0 [&_svg]:size-[18px] [&_svg]:shrink-0"
 const button = "press grid size-10 place-items-center rounded-full text-ink-11 hover:bg-ink-3 hover:text-foreground [&_svg]:size-[18px]"
-const tip = "h-8 gap-1.5 rounded-md bg-primary px-2.5 text-xs text-primary-foreground shadow-menu"
+const tipClass = "h-8 gap-1.5 rounded-md bg-primary px-2.5 text-xs text-primary-foreground shadow-menu"
 
 /** Arrow keys move between the dock's buttons (one tab stop, toolbar pattern). */
 function rove(e: React.KeyboardEvent<HTMLElement>) {
@@ -36,18 +46,24 @@ function rove(e: React.KeyboardEvent<HTMLElement>) {
   e.preventDefault()
 }
 
-/** Bottom-centre dock: add (+), what the canvas shows, and the boards popover. Tooltips carry the count. */
-export function FilterDock({
+/**
+ * Bottom-centre dock: add (+), what the canvas shows, and the boards popover. Tooltips carry the count. Inside a site
+ * (`site`) the filters are that site's, with its counts beside them.
+ */
+export function FilterDock<F extends CanvasFilter | SiteFilter>({
   value,
   onChange,
   counts,
+  site,
   boardId,
   canAdd,
   glow,
   className,
 }: {
-  value: CanvasFilter
-  onChange: (f: CanvasFilter) => void
+  value: F
+  onChange: (f: F) => void
+  /** The domain of the website the canvas is scoped to. */
+  site?: string
   /** For the tooltips and labels; null while loading. */
   counts: LibraryTypeCounts | null
   boardId?: string
@@ -59,6 +75,8 @@ export function FilterDock({
 }) {
   const [boards, setBoards] = useState(false)
   const [adding, setAdding] = useState(false)
+  const { collections } = useCollections()
+  const place = boardId ? (collections.find((c) => c.id === boardId)?.name ?? "Board") : "All saves"
   return (
     <div role="toolbar" aria-label="Filter saves" onKeyDown={rove} className={cn("flex h-[52px] items-center gap-1 rounded-full bg-control p-1.5 shadow-menu", className)}>
       {canAdd && (
@@ -84,7 +102,7 @@ export function FilterDock({
               >
                 <PlusIcon />
               </TooltipTrigger>
-              <TooltipContent sideOffset={10} className={tip}>
+              <TooltipContent sideOffset={10} className={tipClass}>
                 Add a site or images
               </TooltipContent>
             </Tooltip>
@@ -95,10 +113,11 @@ export function FilterDock({
           <span aria-hidden className="mx-1 h-5 w-px bg-ink-5" />
         </>
       )}
-      {FILTERS.map(({ value: f, label, icon: Glyph }) => {
+      {(site ? SITE_FILTERS : FILTERS).map(({ value: f, label, icon: Glyph, ...rest }) => {
         // A board's "all" is its members: websites, pages and images (sections and animations aren't board members).
-        const n = !counts ? null : boardId && f === "all" ? counts.websites + counts.pages + counts.images : countOf(counts, f)
+        const n = !counts || f === "tokens" ? null : boardId && f === "all" ? counts.websites + counts.pages + counts.images : countOf(counts, f)
         const on = value === f
+        const tip = "tip" in rest ? `${rest.tip} ${site}` : label
         return (
           <Tooltip key={f}>
             <TooltipTrigger
@@ -108,16 +127,17 @@ export function FilterDock({
                   aria-pressed={on}
                   aria-label={n === null ? label : `${label}, ${n}`}
                   tabIndex={on ? 0 : -1}
-                  onClick={() => onChange(f)}
+                  onClick={() => onChange(f as F)}
                   className={cn(filterButton, on && "bg-primary text-primary-foreground hover:bg-(--primary-hover) hover:text-primary-foreground")}
                 />
               }
             >
               <Glyph />
               <span className="max-md:hidden">{label}</span>
+              {site && n !== null && <span className={cn("tabular-nums max-md:hidden", on ? "opacity-60" : "text-ink-9")}>{n}</span>}
             </TooltipTrigger>
-            <TooltipContent sideOffset={10} className={tip}>
-              <span>{label}</span>
+            <TooltipContent sideOffset={10} className={tipClass}>
+              <span>{tip}</span>
               {n !== null && <span className="text-ink-9 tabular-nums">{n}</span>}
             </TooltipContent>
           </Tooltip>
@@ -126,11 +146,12 @@ export function FilterDock({
       <span aria-hidden className="mx-1 h-5 w-px bg-ink-5" />
       <Popover open={boards} onOpenChange={setBoards}>
         <Tooltip>
-          <TooltipTrigger render={<PopoverTrigger render={<button type="button" aria-label="Boards" tabIndex={-1} className={cn(button, "data-popup-open:bg-ink-3 data-popup-open:text-foreground")} />} />}>
+          <TooltipTrigger render={<PopoverTrigger render={<button type="button" aria-label={`Boards, in ${place}`} tabIndex={-1} className={cn(button, "data-popup-open:bg-ink-3 data-popup-open:text-foreground")} />} />}>
             <LayersIcon />
           </TooltipTrigger>
-          <TooltipContent sideOffset={10} className={tip}>
-            Boards
+          <TooltipContent sideOffset={10} className={tipClass}>
+            <span>Boards</span>
+            <span className="max-w-48 truncate text-ink-9">{place}</span>
           </TooltipContent>
         </Tooltip>
         <PopoverContent side="top" sideOffset={12} className="w-auto p-1.5">

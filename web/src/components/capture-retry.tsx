@@ -38,7 +38,7 @@ export function RetryCaptureButton({ id, error, onRetried, className }: { id: st
       }}
       className={cn("tactile press inline-flex h-6 shrink-0 items-center gap-1 rounded-full px-2.5 text-2xs font-medium text-foreground disabled:opacity-60", className)}
     >
-      {busy ? <Spinner className="size-3" /> : <RefreshCwIcon className="size-3" />}
+      {busy ? <Spinner aria-hidden className="size-3" /> : <RefreshCwIcon className="size-3" />}
       {stopped ? "Re-capture" : "Retry"}
     </button>
   )

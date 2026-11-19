@@ -57,6 +57,7 @@ import {
   StopIcon as HStop,
   SquareLock02Icon,
   StickyNote02Icon,
+  PaintBoardIcon,
   Search01Icon,
   Sun03Icon,
   Tick02Icon,
@@ -98,6 +99,7 @@ export const ArrowRight = make(ArrowRight02Icon, "ArrowRight")
 export const ArrowUpRightIcon = make(ArrowUpRight01Icon, "ArrowUpRightIcon")
 export const BookmarkIcon = make(Bookmark02Icon, "BookmarkIcon")
 export const CheckIcon = make(Tick02Icon, "CheckIcon")
+export const PaletteIcon = make(PaintBoardIcon, "PaletteIcon")
 export const Check = CheckIcon
 export const ChevronDownIcon = make(ArrowDown01Icon, "ChevronDownIcon")
 export const ChevronRightIcon = make(ArrowRight01Icon, "ChevronRightIcon")

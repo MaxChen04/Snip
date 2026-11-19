@@ -134,6 +134,7 @@ Every part comes from the parent, the surface the thing sits on. The tactile tok
 | Modal | in 240ms (16px rise, 4px blur, fade), out 200ms |
 | Sheet | up 320ms, down 200ms, solid the whole way |
 | Springs | `{ bounce, duration }`: .12 / 0.4s for every toggle's sliding pill and .2 / 0.45s for a switch knob, so the overshoot stays inside the track's inset (a pill travelling 100px at .35 overshoots ~7px, past a 4px inset, and is seen hitting the edge); up to .45 for rare celebrations |
+| Canvas camera | the one exception to "no bounce on a camera": the gallery canvas's zoom and pan, from pointer, gesture or on-screen button input, settle on `{ bounce: .25, duration: 0.4s }` (one ~3% overshoot, settled in ~360ms) and rubber-band at the content's edge; defined once in web/src/lib/spring.ts, which also sets `--spring-ease` for CSS. Keyboard camera moves stay instant |
 | Reduced motion | travel, blur and scale become a 150–200ms crossfade; a switch knob moves at once |
 
 ### Phone

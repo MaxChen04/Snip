@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactElement } from "react"
-import { navigate } from "wouter/use-browser-location"
 import { toast } from "sonner"
-import { AlertCircleIcon, ArrowRight, CheckIcon, Clock, FileIcon, GlobeIcon, ImageIcon, Link2, Loader2Icon, MoreHorizontalIcon, StopIcon, XIcon } from "@/components/icons"
+import { AlertCircleIcon, ArrowRight, CheckIcon, FileIcon, GlobeIcon, ImageIcon, Link2, MoreHorizontalIcon, StopIcon, XIcon } from "@/components/icons"
 import { useAddFlow } from "@/components/add-flow"
 import { CaptureControls, captureLabel, isStopped } from "@/components/capture-controls"
 import { diagnoseCaptureError, RetryCaptureButton } from "@/components/capture-retry"
 import { notify } from "@/components/notify"
+import { Progress } from "@/components/ui/progress"
+import { Skeleton } from "@/components/ui/skeleton"
+import { Spinner } from "@/components/ui/spinner"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { reloadCanvas } from "@/components/canvas/types"
 import { LIVE_POLL, usePoll } from "@/hooks/use-poll"
@@ -17,6 +19,7 @@ import { useCollections } from "@/lib/collections"
 import { cn } from "@/lib/utils"
 import { warningText } from "@/lib/page-warnings"
 import { WAITING } from "../../../shared/capture-errors"
+import { enterSite } from "@/lib/scope"
 
 // ---------- Captures the card follows (one shows at a time; a dropped link joins them) ----------
 
@@ -82,7 +85,7 @@ export async function captureLink(url: URL, opts: CaptureOpts): Promise<Referenc
     toast("Already saved", {
       id: `saved-${existing.id}`,
       description: existing.title ?? existing.domain,
-      action: { label: "Open", onClick: () => navigate(`/r/${existing.id}`) },
+      action: { label: "Open", onClick: () => enterSite(existing.id) },
       cancel: {
         label: "Capture again",
         onClick: () => void captureLink(url, { ...opts, allowDuplicate: true }).catch((e) => toast.error((e as Error).message)),
@@ -212,7 +215,7 @@ export function CaptureForm({ boardId, onDone }: { boardId?: string; onDone?: ()
           className="press flex h-8 shrink-0 items-center gap-1.5 rounded-md bg-primary px-3 text-xs tracking-[-0.01em] text-primary-foreground shadow-primary hover:bg-(--primary-hover) disabled:opacity-60"
         >
           Snip
-          {submitting ? <Loader2Icon className="size-3.5 animate-spin motion-reduce:animate-none" /> : <ArrowRight className="size-3.5" />}
+          {submitting ? <Spinner aria-hidden className="size-3.5" /> : <ArrowRight className="size-3.5" />}
         </button>
       </label>
 
@@ -284,7 +287,7 @@ export function CaptureForm({ boardId, onDone }: { boardId?: string; onDone?: ()
         <span aria-live="polite" className="ml-auto flex min-w-0 items-center gap-1.5 pr-1 text-2xs text-ink-10">
           {uploading ? (
             <>
-              <Loader2Icon className="size-3 shrink-0 animate-spin motion-reduce:animate-none" />
+              <Spinner aria-hidden className="size-3" />
               Uploading {Math.min(uploading.done + 1, uploading.total)} of {uploading.total}…
             </>
           ) : board ? (
@@ -346,7 +349,7 @@ export function CaptureCard({
     if (ref.status === "failed" && !isStopped(ref))
       toast.error(`Couldn't capture ${ref.domain}`, {
         description: diagnoseCaptureError(ref.error)?.summary ?? ref.error ?? undefined,
-        action: { label: "Open", onClick: () => navigate(`/r/${ref.id}`) },
+        action: { label: "Open", onClick: () => enterSite(ref.id) },
       })
   }
 
@@ -398,7 +401,7 @@ export function CaptureCard({
 
       {cur && (
         <div data-capture-status className="surface-raised w-[520px] max-w-[calc(100vw-2rem)] rounded-3xl bg-card p-2 shadow-modal">
-          <Status r={r} pages={view?.pages ?? []} more={more} onChange={() => void poll().catch(() => {})} onOpen={(id) => navigate(`/r/${id}`)} />
+          <Status r={r} pages={view?.pages ?? []} more={more} onChange={() => void poll().catch(() => {})} onOpen={(id) => enterSite(id)} />
         </div>
       )}
 
@@ -436,7 +439,7 @@ function Status({
   if (!r) {
     return (
       <div className="flex h-9 items-center gap-2 px-1.5 text-xs text-ink-10">
-        <Loader2Icon className="size-3.5 animate-spin motion-reduce:animate-none" />
+        <Spinner aria-hidden className="size-3.5" />
         Starting…
       </div>
     )
@@ -521,17 +524,7 @@ function Status({
         </p>
         <CaptureControls r={r} onChange={onChange} className="ml-auto gap-1" />
       </div>
-      <div className="h-1 overflow-hidden rounded-full bg-ink-4">
-        {fraction !== null ? (
-          <div
-            className={cn("h-full rounded-full transition-[width] duration-300 ease-out motion-reduce:transition-none", paused ? "bg-ink-9" : "bg-ink-12")}
-            style={{ width: `${Math.max(4, Math.min(100, fraction * 100))}%` }}
-          />
-        ) : r.status === "capturing" ? (
-          // Reduced motion gets the whole track, still; otherwise a segment sweeps along it.
-          <div role="progressbar" aria-label="Capturing" className="h-full w-full rounded-full bg-ink-7 motion-safe:w-2/5 motion-safe:animate-[indeterminate_1.4s_ease-in-out_infinite] motion-safe:bg-ink-12" />
-        ) : null}
-      </div>
+      <div className="h-1">{(fraction !== null || r.status === "capturing") && <Progress value={fraction} paused={paused} label="Capturing" />}</div>
     </div>
   )
 }
@@ -558,18 +551,13 @@ function Landing({ r, pages }: { r: Reference; pages: Page[] }) {
           </span>
         </div>
       ))}
+      {/* The page being captured and the pages behind it are both pages still to come, so they look the same. */}
       {capturing && (
-        <div className={cn(tile, "flex flex-col items-center justify-center gap-2 bg-ink-3 px-3 shadow-[0_0_0_1px_rgb(var(--shadow-ink)/0.08)] dark:shadow-[0_0_0_0.5px_var(--ink-6)]")}>
-          <Loader2Icon className="size-4 animate-spin text-ink-10 motion-reduce:animate-none" />
-          <span className="max-w-full truncate text-2xs text-ink-11">{p?.path ?? "Starting…"}</span>
-        </div>
+        <Skeleton className={tile}>
+          <span className="max-w-full truncate">{p?.path ?? "Starting…"}</span>
+        </Skeleton>
       )}
-      {queued > 0 && (
-        <div className={cn(tile, "flex flex-col items-center justify-center gap-2 border border-dashed border-ink-7")}>
-          <Clock className="size-4 text-ink-9" />
-          <span className="text-2xs text-ink-10">{queued} more queued</span>
-        </div>
-      )}
+      {queued > 0 && <Skeleton className={tile}>{queued} more queued</Skeleton>}
     </div>
   )
 }
