@@ -319,8 +319,8 @@ export const HomeTile = memo(function HomeTile({
   const warning = item.kind === "page" && item.page.warnings?.length ? warningText(item.page) : ""
   // Pointer or focus moving between the tile and its chip (a sibling element) keeps the chip.
   const leave = (e: PointerEvent | FocusEvent) => {
-    const to = e.relatedTarget as Node | null
-    if (!to || !(face.current?.contains(to) || chip.current?.contains(to))) setLive(false)
+    const to = e.relatedTarget
+    if (!(to instanceof Node) || !(face.current?.contains(to) || chip.current?.contains(to))) setLive(false)
   }
   const shared = {
     "aria-label": name,

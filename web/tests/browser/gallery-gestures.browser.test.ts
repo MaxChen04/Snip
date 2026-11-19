@@ -104,6 +104,28 @@ test("touch tap selects, then a second finger cancels a primed tile and drains a
   await page.context().close()
 })
 
+for (const compact of [false, true]) {
+  test(`a touch-only double tap opens the inspector in ${compact ? "compact Pages" : "All saves"}`, async () => {
+    const t = await gallery(compact)
+    const { page } = t
+    const target = tile(page)
+    const box = (await target.boundingBox())!
+    const finger = { x: box.x + box.width / 2, y: box.y + box.height / 2, id: 1 }
+    const cdp = await page.context().newCDPSession(page)
+    for (let i = 0; i < 2; i++) {
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [finger] })
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] })
+      if (i === 0) {
+        assert.equal(await target.getAttribute("aria-pressed"), "true")
+        assert.equal(new URL(page.url()).searchParams.has("open"), false)
+      }
+    }
+    await until("the inspector opens without a keyboard", () => new URL(page.url()).searchParams.has("open"))
+    assert.deepEqual(t.consoleErrors, [])
+    await page.context().close()
+  })
+}
+
 test("wheel locks to pan or Ctrl pinch; either moves the camera while an edge carries a tile", { timeout: 30_000 }, async () => {
   const t = await gallery()
   const { page } = t

@@ -109,7 +109,7 @@ Pages behind a login can be captured with a saved sign-in (`STORAGE_STATE`, see 
 
 Choose an **infinite canvas** or a **scrolling grid** in the account menu's **Gallery: Canvas | Grid** switch. Filter the library by websites, pages, sections, animations or uploaded images, then search or sort your saves.
 
-On the canvas, **Arrow** selects tiles and **Hand** pans, even over a tile. Scroll to pan, pinch or Ctrl-scroll to zoom, and double-click a tile to inspect it. In **All saves**, drag a tile edge to move it, or drag an edge of a selected group to move it together. The library saves your arrangement, and Command-Z undoes your last move. Filters, search and site views have their own compact layouts and don’t change your arrangement.
+On the canvas, **Arrow** selects tiles and **Hand** pans, even over a tile. Scroll to pan, pinch or Ctrl-scroll to zoom, and double-click or double-tap a tile to inspect it. In **All saves**, drag a tile edge to move it, or drag an edge of a selected group to move it together. The library saves your arrangement, and Command-Z undoes your last move. Filters, search and site views have their own compact layouts and don’t change your arrangement.
 
 - **Add** with the dock's **+** button, by pasting URLs, or with the **bookmarklet**. Paste several URLs to queue them together; Snip identifies URLs already saved. **Upload images** or drop PNG, JPEG, WebP, GIF or AVIF files into the app.
 - **Capture controls**: pause, resume or stop a crawl between pages while retaining completed pages. Failed captures show a diagnosis and **Retry**. Re-capture asks before replacing captured pages.

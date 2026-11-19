@@ -134,6 +134,7 @@ export function attachGalleryGestures(
   let suppressClick = false
   let clickTimer = 0
   let lastClick: string | null = null
+  let lastTap: { id: string; point: Point; at: number } | null = null
   let inspect: string | null = null
 
   const enabled = () => getConfig().enabled !== false
@@ -294,6 +295,7 @@ export function attachGalleryGestures(
       touches.set(e.pointerId, p)
       el.setPointerCapture(e.pointerId)
       if (press?.touch && touches.size === 2) {
+        lastTap = null
         const view = camera.getView()
         const ended = clearPress()!
         if (ended.action === "move") getConfig().onMoveEnd(false)
@@ -401,8 +403,15 @@ export function attachGalleryGestures(
       inspect = g.plain && !g.touch && id === lastClick ? id : null
       lastClick = g.plain && !g.touch ? id : null
       camera.release()
+      if (g.touch && id && g.action === "touch") {
+        const next = { id, point: point(e), at: performance.now() }
+        const double = lastTap?.id === id && next.at - lastTap.at <= 320 && distance(next.point, lastTap.point) <= 24
+        lastTap = double ? null : next
+        if (double) cfg.onInspect(id)
+      } else lastTap = null
     } else {
       lastClick = null
+      lastTap = null
       if (g.action === "move") {
         cfg.onMoveEnd(true)
         clearWheel()
@@ -432,6 +441,7 @@ export function attachGalleryGestures(
     const restore = pinch?.view ?? canceled?.view
     pinch = null
     lastClick = inspect = null
+    lastTap = null
     if (canceled?.action === "move" && canceled.stage !== "armed") previousConfig.onMoveEnd(false)
     if (restore) camera.restore(restore)
     else if (hadWheel) camera.release()
@@ -461,7 +471,7 @@ export function attachGalleryGestures(
       return
     }
     if (!unmodified || within(e.target, ownKeys) || document.querySelector(OVERLAY)) return
-    if (e.key === " " && (e.target === document.body || e.target === el || (el.contains(e.target as Node) && within(e.target, TILE)))) {
+    if (e.key === " " && (e.target === document.body || e.target === el || (e.target instanceof Element && el.contains(e.target) && within(e.target, TILE)))) {
       e.preventDefault()
       space = true
       refresh()
