@@ -9,7 +9,7 @@ import { app } from "../../web/worker/app"
 import * as db from "../../web/worker/db"
 import { STOPPED_EMPTY } from "../../web/shared/capture-errors"
 import { SnipApi, JobGoneError } from "../src/api"
-import { captureJob } from "../src/capture"
+import { captureJob, LEASE_CHECK_MS } from "../src/capture"
 import { renderer } from "../src/sheet"
 
 // Real HTTP -> Worker/D1 -> lease polling -> Chromium. The fixture site never
@@ -117,7 +117,7 @@ for (const [mode, stall] of [["single", "navigation"], ["crawl", "navigation"], 
     await Promise.all(pending)
     assert.equal((await files.list()).objects.length, 0)
     const checked = controls
-    await delay(1200)
+    await delay(LEASE_CHECK_MS + 200)
     assert.equal(controls, checked, "the lease polling timer ends with the capture")
     assert.equal((await db.getReference(database, ref.id))!.reference.error, STOPPED_EMPTY)
   } finally {

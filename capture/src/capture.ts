@@ -1329,10 +1329,18 @@ export function signedInState(env = process.env): string {
 }
 
 /**
+ * How often a running capture asks whether it was cancelled: one Worker request and one indexed D1 row read each time. The user
+ * sees a Cancel at once either way (the Worker settles it and refuses later writes); this is how soon the agent lets go of the
+ * browser and can start the next capture. Measured against a local Worker: released within 2 s, 0.9 s on average, at half the
+ * requests of a 1 s check.
+ */
+export const LEASE_CHECK_MS = 2000
+
+/**
  * `signal` asks the crawl to wind down at its next page boundary; `progress` tells the runtime the capture is still moving.
  * A page that finishes no step for `pageStallMs` (see PAGE_STALL_MS) is given up on like any page that fails.
  */
-export async function captureJob(browser: Browser, api: SnipApi, job: Job, signal = new AbortController().signal, progress = () => {}, { pageStallMs = PAGE_STALL_MS }: { pageStallMs?: number } = {}) {
+export async function captureJob(browser: Browser, api: SnipApi, job: Job, signal = new AbortController().signal, progress = () => {}, { pageStallMs = PAGE_STALL_MS, leaseCheckMs = LEASE_CHECK_MS }: { pageStallMs?: number; leaseCheckMs?: number } = {}) {
   await assertPublicUrl(job.url)
   const options = job.options ?? {}
   const colorScheme = options.colorScheme === "dark" ? "dark" : "light"
@@ -1364,7 +1372,7 @@ export async function captureJob(browser: Browser, api: SnipApi, job: Job, signa
       }
       // A transient control outage is not cancellation. Retry on the next tick.
     } finally { checking = false }
-  }, 1000)
+  }, leaseCheckMs)
   const newContext = async (options: BrowserContextOptions) => {
     cancelled.signal.throwIfAborted()
     const context = await browser.newContext(options)
