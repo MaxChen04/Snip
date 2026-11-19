@@ -948,13 +948,16 @@ export async function requestStop(db: D1Database, id: string) {
   return results.some((r) => r.meta.changes > 0)
 }
 
-/** Cancel immediately: revoke the lease, retain committed pages and retire unfinished uploads. */
-export async function cancelReference(db: D1Database, id: string) {
+/**
+ * Cancel immediately: revoke the lease, retain committed pages and retire unfinished uploads. Only the capture run the caller saw
+ * is cancelled: a stale `run` changes nothing, so it retires no files and leaves a newer run's lease alone.
+ */
+export async function cancelReference(db: D1Database, id: string, run: number) {
+  const active = `id = ? AND capture_run = ? AND status IN ('queued', 'capturing')`
   const results = await db.batch([
     db.prepare(`INSERT OR IGNORE INTO capture_cleanup (prefix)
-      SELECT 'refs/' || id || '/' || capture_attempt || '/' FROM refs
-      WHERE id = ? AND status IN ('queued', 'capturing') AND capture_attempt IS NOT NULL`).bind(id),
-    ...settleStopped(db, `id = ? AND status IN ('queued', 'capturing')`, [id], now()),
+      SELECT 'refs/' || id || '/' || capture_attempt || '/' FROM refs WHERE ${active} AND capture_attempt IS NOT NULL`).bind(id, run),
+    ...settleStopped(db, active, [id, run], now()),
   ])
   return results.slice(1).some((r) => r.meta.changes > 0)
 }

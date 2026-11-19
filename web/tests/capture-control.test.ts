@@ -21,6 +21,8 @@ const state = (captured: number): CrawlState => ({
   tokens: { colors: [{ value: "#000", count: 3 }], fonts: [], fontSizes: [], spacing: [], radii: [], shadows: [], transitions: [], keyframes: [], cssVariables: {} },
 })
 
+const cancelRun = (run: unknown): RequestInit => ({ method: "POST", body: JSON.stringify({ run }), headers: { "content-type": "application/json" } })
+
 async function setup() {
   const mf = new Miniflare(convertV4MiniflareOptions({ modules: true, script: 'export default {fetch(){return new Response("ok")}}', d1Databases: ["DB"], r2Buckets: ["FILES"] }))
   const database = await mf.getD1Database("DB") as unknown as D1Database
@@ -48,8 +50,8 @@ test("Cancel immediately fences queued, running and paused captures in either mo
         assert.equal(await db.pauseJob(database, ref.id, job!.lease, state(0)), "paused")
       }
       const url = `http://localhost/api/references/${ref.id}/cancel`
-      assert.equal((await app.request(url, { method: "POST" }, { ...env, DEV_LOGIN: undefined }, ctx)).status, 401)
-      const response = await app.request(url, { method: "POST" }, env, ctx)
+      assert.equal((await app.request(url, cancelRun(1), { ...env, DEV_LOGIN: undefined }, ctx)).status, 401)
+      const response = await app.request(url, cancelRun(1), env, ctx)
       assert.equal(response.status, 200)
       const stopped = await response.json() as { status: string; error: string; control: string | null }
       assert.deepEqual([stopped.status, stopped.error, stopped.control], ["failed", STOPPED_EMPTY, null])
@@ -63,7 +65,7 @@ test("Cancel immediately fences queued, running and paused captures in either mo
         assert.equal(await db.failJob(database, ref.id, job.lease, "late failure"), false)
         assert.equal(await db.pauseJob(database, ref.id, job.lease, state(0), true), "gone")
       }
-      assert.equal((await app.request(url, { method: "POST" }, env, ctx)).status, 409)
+      assert.equal((await app.request(url, cancelRun(1), env, ctx)).status, 409)
       await Promise.all(pending)
     }
   } finally { await Promise.allSettled(pending); await mf.dispose() }
@@ -84,7 +86,7 @@ test("Cancel preserves committed pages and their icon, and retries cleanup past 
     for (const key of [icon, saved, clip, orphan]) await files.put(key, "fixture")
     await db.addPage(database, ref.id, job.lease, { ...page(ref.id, job.attempt, 2), state: { ...state(1), meta: { title: "Kept title", description: "Kept description", favicon: icon } } })
     const upload = (await db.beginUpload(database, ref.id, job.lease, late))!
-    assert.equal(await db.cancelReference(database, ref.id), true)
+    assert.equal(await db.cancelReference(database, ref.id, 1), true)
     const kept = (await db.getReference(database, ref.id))!
     assert.deepEqual([kept.reference.status, kept.reference.pageCount, kept.reference.title, kept.reference.favicon], ["ready", 1, "Kept title", icon])
     assert.deepEqual(kept.reference.tokens, state(1).tokens)
@@ -100,7 +102,7 @@ test("Cancel preserves committed pages and their icon, and retries cleanup past 
     await db.cleanupRetiredFiles(database, files)
     assert.deepEqual((await files.list({ prefix })).objects.map((o) => o.key).sort(), [icon, saved, clip].sort())
     assert.equal(await database.prepare("SELECT prefix FROM capture_cleanup WHERE prefix = ?").bind(prefix).first(), null)
-    assert.equal(await db.cancelReference(database, ref.id), false, "completed pages cannot be cancelled again")
+    assert.equal(await db.cancelReference(database, ref.id, 1), false, "completed pages cannot be cancelled again")
   } finally { await mf.dispose() }
 })
 
@@ -113,7 +115,7 @@ test("a recapture during cancellation cleanup cannot strand retained files or er
     const saved = page(ref.id, job.attempt, 0)
     await files.put(saved.desktopKey!, "old")
     await db.addPage(database, ref.id, job.lease, saved)
-    await db.cancelReference(database, ref.id)
+    await db.cancelReference(database, ref.id, 1)
     let replacement: string | undefined
     const raced = { list: async (options: R2ListOptions) => {
       if (!replacement && options.prefix === `refs/${ref.id}/${job.attempt}/`) {
@@ -131,6 +133,43 @@ test("a recapture during cancellation cleanup cannot strand retained files or er
     assert.equal(await files.head(saved.desktopKey!), null)
     assert.ok(await files.head(replacement!))
   } finally { await mf.dispose() }
+})
+
+test("a Cancel for an earlier capture run leaves the Recapture that replaced it running, with its lease and files", async () => {
+  const { mf, database } = await setup()
+  const files = await mf.getR2Bucket("FILES") as unknown as R2Bucket
+  const pending: Promise<unknown>[] = []
+  const ctx = { waitUntil(p: Promise<unknown>) { pending.push(p) }, passThroughOnException() {} } as ExecutionContext
+  const env = { DB: database, FILES: files, DEV_LOGIN: "tester", SESSION_SECRET: "test", CAPTURE_TOKEN: "test" } as Env
+  try {
+    const ref = await db.createReference(database, { url: "https://rerun.example", mode: "crawl" })
+    const first = (await db.claimJob(database))!
+    await db.addPage(database, ref.id, first.lease, page(ref.id, first.attempt, 0))
+    assert.equal(await db.completeJob(database, ref.id, first.lease, { title: "Run 1", description: null, favicon: null, coverKey: null, tokens: null }), true)
+    // Another window recaptures the finished website: same id, next run.
+    assert.equal(await db.requeueReference(database, ref.id), true)
+    const second = (await db.claimJob(database))!
+    const prefix = `refs/${ref.id}/${second.attempt}/`
+    const inFlight = `${prefix}p0/desktop.jpg`
+    await files.put(inFlight, "run 2")
+    const url = `http://localhost/api/references/${ref.id}/cancel`
+    assert.equal((await app.request(url, { method: "POST" }, env, ctx)).status, 400, "a Cancel that names no run is refused")
+    // The stale tab still shows run 1 as capturing and presses Cancel.
+    const stale = await app.request(url, cancelRun(1), env, ctx)
+    assert.equal(stale.status, 409)
+    assert.match((await stale.json() as { error: string }).error, /captured again/)
+    await Promise.all(pending)
+    assert.deepEqual(await db.getControl(database, ref.id, second.lease), { control: null }, "run 2 keeps its lease")
+    assert.equal((await db.getReference(database, ref.id))!.reference.status, "capturing")
+    assert.equal(await database.prepare("SELECT prefix FROM capture_cleanup WHERE prefix = ?").bind(prefix).first(), null, "no cleanup is queued for run 2")
+    await db.cleanupRetiredFiles(database, files)
+    assert.ok(await files.head(inFlight), "run 2's files survive")
+    // Cancel for the run on screen still works.
+    const current = await app.request(url, cancelRun(2), env, ctx)
+    assert.equal(current.status, 200)
+    assert.equal(await db.getControl(database, ref.id, second.lease), null)
+    await Promise.all(pending)
+  } finally { await Promise.allSettled(pending); await mf.dispose() }
 })
 
 test("a paused crawl keeps its pages and resumes where it left off", async () => {

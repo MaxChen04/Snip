@@ -298,18 +298,30 @@ api.post("/references/:id/recapture", async (c) => {
 })
 
 // Pause, resume and stop take effect between pages: the page being captured always finishes.
-const control = (action: (database: D1Database, id: string) => Promise<boolean>, cleanup = false) => async (c: Context<AppEnv>) => {
+const control = (action: (database: D1Database, id: string) => Promise<boolean>) => async (c: Context<AppEnv>) => {
   const id = c.req.param("id")!
   if (!(await action(c.env.DB, id))) return c.json({ error: "This capture can't do that right now" }, 409)
-  if (cleanup) c.executionCtx.waitUntil(db.cleanupRetiredFiles(c.env.DB, c.env.FILES))
   const ref = await db.getReference(c.env.DB, id)
   return c.json(ref?.reference ?? null)
 }
 api.post("/references/:id/pause", control(db.requestPause))
 api.post("/references/:id/resume", control(db.resumeReference))
 api.post("/references/:id/stop", control(db.requestStop))
-// Unlike the graceful Stop endpoint, Cancel revokes the running lease immediately.
-api.post("/references/:id/cancel", control(db.cancelReference, true))
+// Unlike the graceful Stop endpoint, Cancel revokes the running lease immediately. It names the capture run the user is looking
+// at: a Recapture started from another window reuses the id with the next run, and a stale Cancel must not end it.
+api.post("/references/:id/cancel", async (c) => {
+  const id = c.req.param("id")
+  const { run } = await c.req.json<{ run?: unknown }>().catch(() => ({ run: undefined }))
+  if (typeof run !== "number" || !Number.isInteger(run)) return c.json({ error: "Cancel needs the capture run it is for" }, 400)
+  if (!(await db.cancelReference(c.env.DB, id, run))) {
+    const current = await db.getReference(c.env.DB, id)
+    const restarted = current && current.reference.captureRun !== run
+    return c.json({ error: restarted ? "This website was captured again since this window loaded it, so nothing was cancelled" : "This capture can't do that right now" }, 409)
+  }
+  c.executionCtx.waitUntil(db.cleanupRetiredFiles(c.env.DB, c.env.FILES))
+  const ref = await db.getReference(c.env.DB, id)
+  return c.json(ref?.reference ?? null)
+})
 
 api.delete("/references/:id", async (c) => {
   await db.deleteReference(c.env.DB, c.req.param("id"))

@@ -84,7 +84,7 @@ for (const [mode, stall] of [["single", "navigation"], ["crawl", "navigation"], 
     await outage.promise
     assert.ok(browser.contexts().length > 1, "a transient control failure does not cancel the scrape")
     const start = performance.now()
-    const response = await fetch(`${base}/api/references/${ref.id}/cancel`, { method: "POST" })
+    const response = await fetch(`${base}/api/references/${ref.id}/cancel`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ run: ref.captureRun }) })
     assert.equal(response.status, 200)
     assert.equal((await response.json() as { error: string }).error, STOPPED_EMPTY)
     let timeout: ReturnType<typeof setTimeout> | undefined

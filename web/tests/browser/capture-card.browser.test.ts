@@ -63,6 +63,7 @@ test("a suggestion capture has a Hugeicons Cancel control while queued, with one
   try {
     await cancel.click()
     await until("cancel pending", () => t.count("POST", "/api/references/suggested/cancel") === 1)
+    assert.deepEqual(t.list("POST", "/api/references/suggested/cancel")[0]!.body, { run: 1 }, "Cancel names the capture run on screen")
     assert.equal(await cancel.isDisabled(), true)
     assert.equal(await cancel.getAttribute("aria-busy"), "true")
     await cancel.evaluate((el) => { (el as HTMLButtonElement).click(); (el as HTMLButtonElement).click() })

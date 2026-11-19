@@ -49,7 +49,7 @@ export function CaptureControls({ r, onChange, className }: { r: Reference; onCh
     pending.current = true
     setBusy(action)
     try {
-      const next = await api.captureControl(r.id, action)
+      const next = await api.captureControl(r, action)
       // What the response says happened: a capture with no page in flight pauses at once.
       notify(
         next?.status === "ready"
