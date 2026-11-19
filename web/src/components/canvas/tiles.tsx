@@ -325,13 +325,10 @@ export const HomeTile = memo(function HomeTile({
   const shared = {
     "aria-label": name,
     "aria-description": warning || undefined,
-    style: { left: x, top: y, width: w, height: h, ...(selected && galleryKey ? {
-      outline: "calc(0.2px / var(--gallery-zoom, 1)) solid white",
-      outlineOffset: "calc(-0.2px / var(--gallery-zoom, 1))",
-    } : undefined) },
+    style: { left: x, top: y, width: w, height: h },
     className: cn(
       HOME_FACE,
-      galleryKey && "group cursor-inherit outline-none active:scale-100",
+      galleryKey && "group cursor-inherit active:scale-100",
       moving && "z-30 [translate:var(--drag-at)] shadow-dialog",
       checked && "ring-2 ring-ink-12 ring-offset-2 ring-offset-background",
       dim && "opacity-35",
@@ -368,6 +365,14 @@ export const HomeTile = memo(function HomeTile({
       {...shared}
     >
       {media}
+      {galleryKey && selected && (
+        <span
+          aria-hidden
+          data-gallery-selection
+          className="pointer-events-none absolute inset-0 rounded-[inherit]"
+          style={{ boxShadow: "inset 0 0 0 calc(0.2px / var(--gallery-zoom, 1)) white" }}
+        />
+      )}
       {checked !== undefined && <SelectBadge on={checked} />}
       {warning && <WarningBadge text={warning} />}
       {galleryKey && live && (

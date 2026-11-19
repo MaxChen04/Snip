@@ -324,7 +324,7 @@ export function attachGalleryGestures(
     if (touch) touches.set(e.pointerId, p)
     else hover = p
     el.setPointerCapture(e.pointerId)
-    if (touch && found && found.kind !== "group" && getConfig().canMove) {
+    if (touch && !hand && found && found.kind !== "group" && getConfig().canMove) {
       prime = window.setTimeout(() => {
         if (press?.action !== "touch" || press.stage !== "armed") return
         press.action = "move"

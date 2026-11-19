@@ -258,7 +258,7 @@ export async function startApp() {
         if (method === "GET" && path === "/api/library-positions") return { json: state.libraryPositions }
         const seed = method === "POST" && path === "/api/library-positions/seed"
         if (!seed && !(method === "PUT" && path === "/api/library-positions")) return
-        if (!seed && body.version !== state.libraryPositions.version) return { status: 409, json: { error: "The library layout changed" } }
+        if (body.version !== state.libraryPositions.version) return { status: 409, json: { error: "The library layout changed" } }
         const key = ({ kind, id }: LibraryPosition) => `${kind}:${id}`
         const positions = new Map(state.libraryPositions.positions.map((p) => [key(p), p]))
         for (const p of body.positions as LibraryPosition[]) if (!seed || !positions.has(key(p))) positions.set(key(p), p)

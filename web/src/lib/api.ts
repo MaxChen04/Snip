@@ -123,7 +123,7 @@ export const api = {
   /** Counts per kind for the filter dock, for the whole library or one board, matching q. */
   counts: (f: Pick<Filters, "q" | "collection" | "reference"> = {}) => request<LibraryTypeCounts>(`/api/counts?${qs({ ...f })}`),
   libraryPositions: () => request<LibraryPositionsSnapshot>("/api/library-positions"),
-  seedLibraryPositions: (positions: LibraryPosition[]) => request<LibraryPositionsSnapshot>("/api/library-positions/seed", { method: "POST", body: JSON.stringify({ positions }) }),
+  seedLibraryPositions: (version: number, positions: LibraryPosition[]) => request<LibraryPositionsSnapshot>("/api/library-positions/seed", { method: "POST", body: JSON.stringify({ version, positions }) }),
   moveLibraryPositions: (version: number, positions: LibraryPosition[]) => request<LibraryPositionsSnapshot>("/api/library-positions", { method: "PUT", body: JSON.stringify({ version, positions }) }),
   /**
    * Upload one image (multipart). The browser makes the thumbnail and palette; see lib/images.ts.

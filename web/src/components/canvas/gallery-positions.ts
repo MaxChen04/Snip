@@ -51,16 +51,20 @@ export function useGalleryPositions(enabled: boolean) {
   }, [enabled, refresh])
 
   const seed = useCallback(async (positions: LibraryPosition[]) => {
-    if (!saved.current || busy.current || failed || positions.length === 0) return
+    if (!snapshot || saved.current !== snapshot || busy.current || failed || positions.length === 0) return
     busy.current = true
     try {
-      accept(await api.seedLibraryPositions(positions))
-    } catch {
-      setFailed(true)
-    } finally {
-      busy.current = false
+      accept(await api.seedLibraryPositions(snapshot.version, positions))
+    } catch (error) {
+      if ((error as { status?: number }).status !== 409) setFailed(true)
+      else {
+        busy.current = false
+        void refresh()
+        return
+      }
     }
-  }, [accept, failed])
+    busy.current = false
+  }, [accept, failed, refresh, snapshot])
 
   const send = (positions: LibraryPosition[]) => {
     queue.current.push(positions)

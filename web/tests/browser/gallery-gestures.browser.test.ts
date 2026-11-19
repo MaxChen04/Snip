@@ -104,6 +104,72 @@ test("touch tap selects, then a second finger cancels a primed tile and drains a
   await page.context().close()
 })
 
+test("Hand pans even when a touch has held a tile past the Arrow hold threshold", async () => {
+  const t = await gallery()
+  const { page } = t
+  await page.getByRole("button", { name: "Hand", exact: true }).click()
+  const box = (await tile(page).boundingBox())!
+  const first = { x: box.x + box.width / 2, y: box.y + box.height / 2, id: 1 }
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [first] })
+  await sleep(390)
+  assert.equal(await lift(page), null, "holding in Hand never arms a tile move")
+  const before = await camera(page)
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ ...first, x: first.x + 35 }] })
+  await frame(page)
+  assert.notDeepEqual(await camera(page), before, "the touch drags the camera")
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] })
+  assert.equal(t.count("PUT", "/api/library-positions"), 0)
+  assert.deepEqual(t.consoleErrors, [])
+  await page.context().close()
+})
+
+test("keyboard focus uses the shared token while pointer selection keeps only its white stroke", async () => {
+  const t = await gallery()
+  const target = tile(t.page)
+  await target.click()
+  assert.equal(await target.getAttribute("aria-pressed"), "true")
+  assert.equal(await target.evaluate((el) => el.matches(":focus-visible")), false)
+  assert.equal(await target.evaluate((el) => getComputedStyle(el).outlineStyle), "none")
+
+  await target.press("Tab")
+  await t.page.keyboard.press("Shift+Tab")
+  assert.equal(await target.evaluate((el) => el.matches(":focus-visible")), true)
+  const focus = await target.evaluate((el) => {
+    const styles = getComputedStyle(el)
+    const reference = document.createElement("span")
+    reference.style.color = "var(--focus-ring)"
+    el.append(reference)
+    const token = getComputedStyle(reference).color
+    reference.remove()
+    return { width: styles.outlineWidth, color: styles.outlineColor, token }
+  })
+  assert.deepEqual(focus, { width: "2px", color: focus.token, token: focus.token })
+  assert.equal(await target.getAttribute("aria-pressed"), "true")
+  assert.match(await target.locator("[data-gallery-selection]").evaluate((el) => getComputedStyle(el).boxShadow), /rgb\(255, 255, 255\)/)
+  assert.deepEqual(t.consoleErrors, [])
+  await t.page.context().close()
+})
+
+test("F changes the camera immediately, with and without a selection", async () => {
+  const t = await gallery()
+  const { page } = t
+  await page.emulateMedia({ reducedMotion: "no-preference" })
+  const target = tile(page)
+  const initial = await camera(page)
+  const frameWithKey = () => page.locator(selector).evaluate((el) => {
+    el.dispatchEvent(new KeyboardEvent("keydown", { key: "f", bubbles: true, cancelable: true }))
+    const matrix = new DOMMatrix((el.firstElementChild as HTMLElement).style.transform)
+    return { x: matrix.e, y: matrix.f, k: matrix.a }
+  })
+  await target.click()
+  assert.equal((await frameWithKey()).k, 2, "selected tile is framed before the next animation frame")
+  await page.keyboard.press("Escape")
+  assert.deepEqual(await frameWithKey(), initial, "no selection restores the same camera as Recenter immediately")
+  assert.deepEqual(t.consoleErrors, [])
+  await page.context().close()
+})
+
 for (const compact of [false, true]) {
   test(`a touch-only double tap opens the inspector in ${compact ? "compact Pages" : "All saves"}`, async () => {
     const t = await gallery(compact)

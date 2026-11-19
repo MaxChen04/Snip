@@ -546,8 +546,8 @@ export function CanvasHome({ login }: { login: string }) {
         if (area) {
           const { width, height } = canvas.current.getView()
           const zoom = Math.min(2, (width * 0.86) / area.w, (height * 0.74) / area.h)
-          canvas.current.setView({ x: area.x + area.w / 2, y: area.y + area.h / 2, zoom }, { animate: true })
-        } else canvas.current.recenter({ animate: true })
+          canvas.current.setView({ x: area.x + area.w / 2, y: area.y + area.h / 2, zoom })
+        } else canvas.current.recenter()
         e.preventDefault()
       } else if (e.altKey && !e.ctrlKey && !e.metaKey && key.startsWith("arrow")) {
         const by = (e.shiftKey ? 48 : 16) / canvas.current.getView().zoom

@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { after, before, test } from "node:test"
 import type { Page } from "playwright"
 import { reference, savedPage, startApp, until, type App } from "./harness.ts"
+import type { LibraryPosition } from "../../shared/types.ts"
 import { mockLibrary, oneSite } from "./site-library.ts"
 
 let app: App
@@ -20,7 +21,7 @@ async function home() {
   await t.page.emulateMedia({ reducedMotion: "reduce" })
   await t.goto("/")
   await until("three positions were seeded", () => t.state.libraryPositions.positions.length === 3)
-  return t
+  return { ...t, lib }
 }
 
 const tile = (page: Page, id: string) => page.locator(`[data-gallery-tile="page:${id}"]`)
@@ -104,4 +105,32 @@ test("a stale move yields to the other window's layout, and compact pages do not
   assert.equal(calls(), known)
   assert.deepEqual(t.consoleErrors, [])
   await page.context().close()
+})
+
+test("a rejected seed refetches and computes a clear position for only the new tile", async () => {
+  const t = await home()
+  const path = "/api/library-positions/seed"
+  const before = t.state.libraryPositions
+  let moved: LibraryPosition | undefined
+  t.on("POST", path, ({ body }) => {
+    if (moved || body.positions[0]?.id !== "new") return
+    const proposed = body.positions[0] as LibraryPosition
+    moved = { ...proposed, id: "a" }
+    t.state.libraryPositions = {
+      version: before.version + 1,
+      positions: before.positions.map((p) => p.id === "a" ? moved! : p),
+    }
+  })
+  t.lib.pages.unshift(savedPage({ id: "new", title: "New arrival", createdAt: "2026-02-01T00:00:00Z" }))
+  await t.page.evaluate(() => window.dispatchEvent(new Event("rs:reload")))
+  const added = await until("the new tile is seeded after refreshing positions", () => t.state.libraryPositions.positions.find((p) => p.id === "new"))
+  const attempts = t.list("POST", path).filter(({ body }) => body.positions.some((p: LibraryPosition) => p.id === "new"))
+  assert.deepEqual(attempts.map(({ body }) => [body.version, body.positions.map((p: LibraryPosition) => p.id)]), [
+    [before.version, ["new"]], [before.version + 1, ["new"]],
+  ])
+  assert.ok(t.count("GET", "/api/library-positions") >= 2)
+  assert.deepEqual(t.state.libraryPositions.positions.find((p) => p.id === "a"), moved)
+  assert.ok(Math.abs(moved!.x - added.x) >= 240 || Math.abs(moved!.y - added.y) >= 150, "the new page no longer overlaps the moved page")
+  assert.deepEqual(t.consoleErrors, [])
+  await t.page.context().close()
 })
