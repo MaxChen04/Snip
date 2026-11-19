@@ -2,10 +2,12 @@
 
 ## macOS releases and local updates
 
-For now, distributed macOS builds are **not notarized by Apple**. The current
-Snip Dev beta is ad-hoc signed and has native automatic updates disabled.
-Update releases locally through the CLI. Revisit this guidance when Apple
-signing, notarization, and native updates are configured and verified.
+For now, distributed macOS builds are **not notarized by Apple**. Snip Dev builds
+are ad-hoc signed with native installation disabled: a versioned `beta-vX.Y.Z`
+has update checks disabled, while a `nightly-v0.0.N` checks for updates and
+offers a download that you install manually. Update releases locally through the
+CLI. Revisit this guidance when Apple signing, notarization, and native updates
+are configured and verified.
 
 Before updating, identify the installed app, channel, and actual library. Quit
 the app gracefully, let captures finish, and back up its profile/library and
