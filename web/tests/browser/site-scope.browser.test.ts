@@ -68,35 +68,36 @@ test("the seed journey takes two actions: the inspector's site link enters the s
   assert.deepEqual(t.consoleErrors, [])
 })
 
-test("each way out lands where the scope was entered from: the chip's ×, browser Back and Escape", async () => {
-  const t = await open("/?filter=sections&q=pricing")
-  const { page } = t
-  const start = page.url()
-  const enter = async () => {
+const scopeExits: [string, (page: import("playwright").Page) => Promise<unknown>][] = [
+  ["the chip's × with details open", async (page) => {
+    await page.getByRole("button", { name: "Site details: Linear" }).click()
+    await page.getByRole("dialog", { name: "Site details: Linear" }).waitFor()
+    await page.getByRole("button", { name: "Leave linear.app" }).click()
+  }],
+  ["browser Back", (page) => page.goBack()],
+  ["Escape on the scoped canvas", async (page) => {
+    await page.locator("[aria-roledescription=canvas]").focus()
+    await page.keyboard.press("Escape")
+  }],
+]
+
+for (const [label, leave] of scopeExits) {
+  test(`leaving a site with ${label} restores the previous view`, async (test) => {
+    const { page } = await open("/?filter=sections&q=pricing")
+    test.after(() => page.context().close())
+    const start = page.url()
     await page.getByRole("button", { name: "Pricing table · linear.app", exact: true }).first().focus()
     await page.getByRole("link", { name: "Show everything from linear.app" }).click()
     await until("scoped", () => search(page.url()).site === "linear")
     await page.getByRole("button", { name: "Back to Search: pricing" }).waitFor()
-  }
-  for (const leave of [
-    async () => {
-      await page.getByRole("button", { name: "Site details: Linear" }).click()
-      await page.getByRole("dialog", { name: "Site details: Linear" }).waitFor()
-      await page.getByRole("button", { name: "Leave linear.app" }).click()
-    },
-    () => page.goBack(),
-    () => page.keyboard.press("Escape"),
-  ]) {
-    await enter()
     // The scope starts on its own search: the library's query stays behind.
     assert.equal(await page.getByRole("textbox", { name: /Search in linear\.app/ }).inputValue(), "")
-    await page.locator("body").click({ position: { x: 5, y: 400 } })
-    await leave()
-    await until("left", () => page.url() === start)
+    await leave(page)
+    await page.waitForURL(start, { timeout: 8000 })
     assert.equal(await page.getByRole("textbox", { name: /Search your saves/ }).inputValue(), "pricing", "the search comes back")
     assert.equal(await page.getByRole("toolbar", { name: "Filter saves" }).getByRole("button", { name: /^Sections/ }).getAttribute("aria-pressed"), "true")
-  }
-})
+  })
+}
 
 test("search's \"Your sites\" enter a site's scope", async () => {
   const { page } = await open("/")
