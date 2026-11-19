@@ -48,8 +48,14 @@ test("zoomed-out site labels frame the main cluster, and F frames a selection or
   assert.ok((await view()).zoom < 0.3)
   assert.equal(await label.count(), 1, "a scattered site has a single label")
   assert.equal(await label.locator("svg, img, [aria-hidden=true]").count() > 0, true, "the label has a site icon")
-  await label.click()
-  await until("the cluster fills the view", async () => (await view()).zoom > 1)
+  await page.emulateMedia({ reducedMotion: "no-preference" })
+  const beforeSpring = await label.evaluate((button) => {
+    const world = button.parentElement!
+    ;(button as HTMLButtonElement).click()
+    return new DOMMatrix(world.style.transform).a
+  })
+  assert.ok(beforeSpring < 0.3, "pointer framing starts a spring instead of jumping immediately")
+  await until("the cluster fills the view", async () => (await view()).zoom === 2)
   await label.waitFor({ state: "detached" })
   for (const id of ["one", "two"]) {
     const box = (await tile(id).boundingBox())!
@@ -57,6 +63,7 @@ test("zoomed-out site labels frame the main cluster, and F frames a selection or
   }
   assert.equal(await tile("outlier").count(), 0)
 
+  await page.emulateMedia({ reducedMotion: "reduce" })
   await canvas.press("f")
   assert.deepEqual(await view(), initial)
   await tile("two").press("Shift+Space")
