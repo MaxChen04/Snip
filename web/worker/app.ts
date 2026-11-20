@@ -18,6 +18,7 @@ import {
 import * as db from "./db"
 import { validStylesSummary } from "../shared/style-parts"
 import { canvas } from "./canvas"
+import { libraryPositions } from "./library-positions"
 import { signInPath } from "../shared/safe-next"
 import { CAPTURE_PROTOCOL, CAPTURE_PROTOCOL_HEADER, parseProtocol, refusalMessage } from "../shared/capture-protocol"
 import { loginOptions, loginVerify, registerOptions, registerVerify, listDevices, removeDevice } from "./passkeys"
@@ -204,6 +205,7 @@ api.use("*", async (c, next) => {
   await next()
 })
 api.use("*", requireSession)
+api.route("/library-positions", libraryPositions)
 
 api.get("/me", (c) => {
   const session = c.get("session")

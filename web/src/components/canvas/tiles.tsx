@@ -227,6 +227,7 @@ function SourceChip({ src, scoped, ref, onLeave }: { src: NonNullable<ReturnType
       id={src.site}
       tabIndex={-1}
       draggable={false}
+      data-no-pan=""
       aria-label={`Show everything from ${src.domain}`}
       title={`Show everything from ${src.domain}`}
       onPointerLeave={onLeave}
@@ -287,6 +288,10 @@ export const HomeTile = memo(function HomeTile({
   scoped,
   checked,
   dim,
+  selected,
+  moving,
+  galleryKey,
+  onGallerySelect,
 }: {
   item: CanvasItem
   /** Inside this item's site: the hover chip names the page instead of linking to the site. */
@@ -302,6 +307,10 @@ export const HomeTile = memo(function HomeTile({
   h: number
   /** Click opens it. */
   onOpen: (item: CanvasItem) => void
+  selected?: boolean
+  moving?: boolean
+  galleryKey?: string
+  onGallerySelect?: (key: string, toggle: boolean) => void
 }) {
   const [live, setLive] = useState(false)
   const face = useRef<HTMLButtonElement>(null)
@@ -310,14 +319,20 @@ export const HomeTile = memo(function HomeTile({
   const warning = item.kind === "page" && item.page.warnings?.length ? warningText(item.page) : ""
   // Pointer or focus moving between the tile and its chip (a sibling element) keeps the chip.
   const leave = (e: PointerEvent | FocusEvent) => {
-    const to = e.relatedTarget as Node | null
-    if (!to || !(face.current?.contains(to) || chip.current?.contains(to))) setLive(false)
+    const to = e.relatedTarget
+    if (!(to instanceof Node) || !(face.current?.contains(to) || chip.current?.contains(to))) setLive(false)
   }
   const shared = {
     "aria-label": name,
     "aria-description": warning || undefined,
     style: { left: x, top: y, width: w, height: h },
-    className: cn(HOME_FACE, checked && "ring-2 ring-ink-12 ring-offset-2 ring-offset-background", dim && "opacity-35"),
+    className: cn(
+      HOME_FACE,
+      galleryKey && "group cursor-inherit active:scale-100",
+      moving && "z-30 [translate:var(--drag-at)] shadow-dialog",
+      checked && "ring-2 ring-ink-12 ring-offset-2 ring-offset-background",
+      dim && "opacity-35",
+    ),
     onPointerEnter: (e: PointerEvent) => e.pointerType === "mouse" && setLive(true),
     onPointerLeave: leave,
     onFocus: () => setLive(true),
@@ -326,13 +341,46 @@ export const HomeTile = memo(function HomeTile({
   // Called, not rendered as <Media />: one fewer element and fiber for each of hundreds of tiles.
   const media = Media({ item, live, home: true })
   const tile = (
-    <button ref={face} type="button" onClick={() => onOpen(item)} aria-pressed={checked} {...shared}>
+    <button
+      ref={face}
+      type="button"
+      data-gallery-tile={galleryKey}
+      data-no-pan={galleryKey ? undefined : ""}
+      data-moving={moving || undefined}
+      onClick={(event) => {
+        if (!galleryKey) onOpen(item)
+        else if (!event.detail) onGallerySelect?.(galleryKey, event.shiftKey || event.metaKey)
+      }}
+      onKeyDown={(event) => {
+        if (!galleryKey || event.defaultPrevented) return
+        if (event.key === "Enter" && !event.metaKey && !event.ctrlKey && !event.altKey) {
+          event.preventDefault()
+          if (!event.repeat) onOpen(item)
+        } else if (event.key === " " && event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey) {
+          event.preventDefault()
+          if (!event.repeat) onGallerySelect?.(galleryKey, true)
+        }
+      }}
+      aria-pressed={galleryKey ? selected : checked}
+      {...shared}
+    >
       {media}
+      {galleryKey && selected && (
+        <span
+          aria-hidden
+          data-gallery-selection
+          className="pointer-events-none absolute inset-0 rounded-[inherit]"
+          style={{ boxShadow: "inset 0 0 0 calc(0.2px / var(--gallery-zoom, 1)) white" }}
+        />
+      )}
       {checked !== undefined && <SelectBadge on={checked} />}
       {warning && <WarningBadge text={warning} />}
+      {galleryKey && live && (
+        <span aria-hidden className="pointer-events-none absolute inset-x-2 top-2 hidden w-fit max-w-[calc(100%-1rem)] truncate rounded-full bg-control px-2 py-0.5 text-2xs text-foreground underline decoration-double underline-offset-2 group-focus-visible:block">{name}</span>
+      )}
     </button>
   )
-  const src = live && checked === undefined && !dim ? source(item) : null
+  const src = live && checked === undefined && !dim && !moving ? source(item) : null
   if (!src) return tile
   return (
     <>

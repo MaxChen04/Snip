@@ -12,7 +12,11 @@ import { CaptureCard } from "@/components/canvas/capture-card"
 import { DropOverlay } from "@/components/canvas/drop-overlay"
 import { countOf, FilterDock } from "@/components/canvas/filter-dock"
 import { GAP, layoutHome, PLAZA, stageTiles, visibleTiles, type HomeItem, type HomeLayout, type Placement, type Plaza, type Slot } from "@/components/canvas/home-layout"
+import { boundsOf, useGalleryEditing } from "@/components/canvas/gallery-editing"
+import { tilePosition, useGalleryPositions } from "@/components/canvas/gallery-positions"
+import { useGalleryReflow } from "@/components/canvas/gallery-reflow"
 import { InfiniteCanvas, type CanvasView, type InfiniteCanvasHandle, type WorldRect } from "@/components/canvas/infinite-canvas"
+import type { GalleryTool } from "@/components/canvas/gallery-gestures"
 import { ItemInspector, type PagePrompt } from "@/components/canvas/item-inspector"
 import { CapturePill, isBusy, SiteScopeDetails, useSite, type SiteDetail } from "@/components/canvas/site-scope"
 import { CanvasTile, HomeTile } from "@/components/canvas/tiles"
@@ -26,6 +30,8 @@ import { useCollections } from "@/lib/collections"
 import { masonryCols, useGridSize, useHomeView } from "@/lib/prefs"
 import { backLabel, entry, landedByHistory, leaveSite, patchEntry, providePosition, type Entry } from "@/lib/scope"
 import { cn } from "@/lib/utils"
+import { Cursor02Icon, HandIcon } from "@hugeicons/core-free-icons"
+import { HugeiconsIcon } from "@hugeicons/react"
 
 const FILTERS: CanvasFilter[] = ["all", "websites", "pages", "sections", "animations", "images"]
 const SITE_FILTERS: SiteFilter[] = ["all", "pages", "sections", "animations", "tokens"]
@@ -188,6 +194,9 @@ const Field = memo(function Field({
   scoped,
   pick,
   pending,
+  selected,
+  moving,
+  onGallerySelect,
 }: {
   layout: HomeLayout
   items: CanvasItem[]
@@ -199,11 +208,15 @@ const Field = memo(function Field({
   pick?: Selection | null
   /** Slots after the items for pages a capture is still to save. */
   pending?: Pending[]
+  selected: ReadonlySet<string>
+  moving: readonly Placement[]
+  onGallerySelect: (key: string, toggle: boolean) => void
 }) {
   // `mounted` is the set of keys the last commit put on the canvas.
-  const cache = useMemo(() => ({ elements: new Map<string, ReactElement>(), mounted: new Set<string>() }), [layout, items, onOpen, scoped, pick, pending])
+  const cache = useMemo(() => ({ elements: new Map<string, ReactElement>(), mounted: new Set<string>() }), [layout, items, onOpen, scoped, pick, pending, selected, moving, onGallerySelect])
   const [, nextFrame] = useState(0)
-  const wanted = visibleTiles(layout, rect)
+  const movingKeys = useMemo(() => new Set(moving.map((t) => t.key)), [moving])
+  const wanted = moving.length ? layout.tiles.filter((t) => movingKeys.has(t.key) || (t.x < rect.x + rect.w && t.x + t.w > rect.x && t.y < rect.y + rect.h && t.y + t.h > rect.y)) : visibleTiles(layout, rect)
   // A new feed or layout mounts everything at once, as it always did: there is no view to keep smooth yet.
   const { tiles: staged, later } = cache.mounted.size ? stageTiles(wanted, cache.mounted, rect) : { tiles: wanted, later: false }
   const kept = new Map<string, ReactElement>()
@@ -223,6 +236,10 @@ const Field = memo(function Field({
           scoped={scoped}
           checked={pick && pickable(item) ? isPicked(pick, item) : undefined}
           dim={!!pick && !pickable(item)}
+          galleryKey={pick ? undefined : t.key}
+          selected={selected.has(t.key)}
+          moving={movingKeys.has(t.key)}
+          onGallerySelect={onGallerySelect}
         />
       ) : (
         <PendingTile key={t.key} p={pending![t.index - items.length]!} style={at(t)} />
@@ -256,7 +273,13 @@ const Ghosts = memo(function Ghosts({ loading, plaza }: { loading: boolean; plaz
 })
 
 /** Zoom pill with its own state, so zooming re-renders only the pill. */
-export function Zoom({ canvas, sink }: { canvas: RefObject<InfiniteCanvasHandle | null>; sink: RefObject<((zoom: number) => void) | null> }) {
+export function Zoom({ canvas, sink, tool, onToolChange, movable }: {
+  canvas: RefObject<InfiniteCanvasHandle | null>
+  sink: RefObject<((zoom: number) => void) | null>
+  tool?: GalleryTool
+  onToolChange?: (tool: GalleryTool) => void
+  movable?: boolean
+}) {
   const [zoom, setZoom] = useState(() => canvas.current?.getView().zoom ?? 1)
   useEffect(() => {
     sink.current = setZoom
@@ -265,13 +288,33 @@ export function Zoom({ canvas, sink }: { canvas: RefObject<InfiniteCanvasHandle 
     }
   }, [sink])
   return (
-    <ZoomControls
-      className="absolute right-6 bottom-6 z-50 max-sm:hidden"
-      zoom={zoom}
-      onZoom={(f) => canvas.current?.zoomBy(f, undefined, { animate: true })}
-      onReset={() => canvas.current?.setZoom(1, undefined, { animate: true })}
-      onRecenter={() => canvas.current?.recenter({ animate: true })}
-    />
+    <div className={cn("absolute right-6 bottom-6 z-50 flex gap-2", tool ? "max-lg:bottom-[88px] max-sm:right-4" : "max-sm:hidden")}>
+      {tool && (
+        <div role="group" aria-label="Canvas tools" className="flex h-10 items-center gap-0.5 rounded-full bg-control p-1 shadow-button max-sm:h-auto">
+          {(["arrow", "hand"] as const).map((name) => (
+            <button
+              key={name}
+              type="button"
+              aria-label={name === "arrow" ? "Arrow" : "Hand"}
+              aria-pressed={tool === name}
+              aria-keyshortcuts={name === "arrow" ? "V" : "H"}
+              title={name === "arrow" ? movable ? "Arrow (V) · Select or drag a tile edge" : "Arrow (V) · Select tiles" : "Hand (H) · Pan"}
+              className="press grid size-8 place-items-center rounded-full text-ink-11 hover:bg-ink-3 hover:text-foreground aria-pressed:bg-ink-4 aria-pressed:text-foreground max-sm:size-11"
+              onClick={() => onToolChange?.(name)}
+            >
+              <HugeiconsIcon icon={name === "arrow" ? Cursor02Icon : HandIcon} className="size-4" />
+            </button>
+          ))}
+        </div>
+      )}
+      <ZoomControls
+        className={tool ? "max-sm:hidden" : undefined}
+        zoom={zoom}
+        onZoom={(f) => canvas.current?.zoomBy(f, undefined, { animate: true })}
+        onReset={() => canvas.current?.setZoom(1, undefined, { animate: true })}
+        onRecenter={() => canvas.current?.recenter({ animate: true })}
+      />
+    </div>
   )
 }
 
@@ -401,7 +444,7 @@ export function CanvasHome({ login }: { login: string }) {
 
   // The plaza hugs what it holds (a running capture, a message, the first-run prompt): its measured height, in 40-px
   // steps so small text changes don't relayout the field. Holding nothing, it closes and the tiles meet in the middle.
-  const [plazaH, setPlazaH] = useState(0)
+  const [plazaH, setPlazaH] = useState<number | null>(null)
   const measurePlaza = useCallback((el: HTMLDivElement | null) => {
     if (!el) return
     const ro = new ResizeObserver(() => setPlazaH(el.offsetHeight ? Math.max(PLAZA.h, Math.ceil((el.offsetHeight + 2 * GAP) / 40) * 40) : 0))
@@ -410,16 +453,33 @@ export function CanvasHome({ login }: { login: string }) {
   }, [])
   const plazaRect = useMemo(() => (plazaH ? { w: PLAZA.w, h: plazaH } : { w: 0, h: 0 }), [plazaH])
   const place = `${site ?? ""}|${feedFilter}|${q}`
+  const free = view === "canvas" && !site && feedFilter === "all" && !q
+  const storage = useGalleryPositions(free)
+  const fixed = free && storage.loaded ? storage.positions : undefined
   const pendingSite = reference ? siteKey(reference) : undefined
   const layout = useMemo(() => {
     const next = layoutHome(
       [...(items ?? []).map(homeItem), ...pending.map((_, i) => ({ key: `${PENDING_KEY}${i}`, aspect: 16 / 10, site: pendingSite }))],
       plazaRect,
-      slotCache.get(place),
+      free ? undefined : slotCache.get(place),
+      fixed,
     )
-    if (items) cache(slotCache, place, new Map([...next.slots].filter(([key]) => !key.startsWith(PENDING_KEY))))
+    if (items && !free) cache(slotCache, place, new Map([...next.slots].filter(([key]) => !key.startsWith(PENDING_KEY))))
     return next
-  }, [items, pending, plazaRect, place, pendingSite])
+  }, [items, pending, plazaRect, place, pendingSite, free, fixed])
+  const unseeded = useMemo(() => fixed ? layout.tiles.filter((t) => !fixed.has(t.key)) : [], [fixed, layout])
+  useEffect(() => {
+    if (free && plazaH !== null && items && unseeded.length) void storage.seed(unseeded.map((t) => tilePosition(t.key, t)))
+  }, [free, plazaH, items, unseeded, storage.seed])
+  const showingTiles = !free || ((storage.loaded || storage.failed) && plazaH !== null)
+  const galleryTiles = useMemo(() => showingTiles ? layout.tiles.filter((t) => !t.key.startsWith(PENDING_KEY)) : [], [layout, showingTiles])
+  const plazaBounds = useMemo(() => plazaH ? { x: -PLAZA.w / 2, y: -plazaH / 2, w: PLAZA.w, h: plazaH } : undefined, [plazaH])
+  const editable = free && !picking && storage.loaded && !storage.failed && unseeded.length === 0
+  const inspectTile = useCallback((key: string) => {
+    const item = items?.find((t) => keyOf(t) === key)
+    if (item) tileOpen(item)
+  }, [items, tileOpen])
+  const edit = useGalleryEditing(`${view}|${place}`, galleryTiles, plazaBounds, editable, storage, inspectTile)
   const newest = layout.tiles[0]
   const home = newest && !newest.key.startsWith(PENDING_KEY) && (Math.abs(newest.x + newest.w / 2) > 256 || Math.abs(newest.y + newest.h / 2) > 240)
     ? { x: newest.x + newest.w / 2, y: newest.y + newest.h / 2 }
@@ -429,10 +489,10 @@ export function CanvasHome({ login }: { login: string }) {
   // (the capture card, a welcome, no results, a retry). Nothing while the feed first loads, so a saved view isn't moved
   // before its tiles are there.
   const content = useMemo(() => {
-    if (!items && !error) return undefined
-    const rects: WorldRect[] = plazaH ? [...layout.tiles, { x: -PLAZA.w / 2, y: -plazaH / 2, w: PLAZA.w, h: plazaH }] : layout.tiles
+    if ((!items && !error) || !showingTiles) return undefined
+    const rects: WorldRect[] = plazaBounds ? [...layout.tiles, plazaBounds] : layout.tiles
     return rects.length ? rects : undefined
-  }, [items, error, layout, plazaH])
+  }, [items, error, layout, plazaBounds, showingTiles])
 
   const canvas = useRef<InfiniteCanvasHandle>(null)
   // A new place (scope, filter, search) lays the field out again around the plaza: bring the plaza back. Back or
@@ -465,21 +525,38 @@ export function CanvasHome({ login }: { login: string }) {
     savePosition.current = setTimeout(() => patchEntry({ view: { x: v.x, y: v.y, zoom: v.zoom } }), 300)
   }, [])
 
-  // Escape leaves the site when nothing else would take it (an open menu, dialog or field), after ending a selection.
   useEffect(() => {
-    if (!site) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return
+      if (e.defaultPrevented || e.repeat) return
       const t = e.target as HTMLElement | null
       if (t?.closest?.("input, textarea, select, [contenteditable]")) return
       if (document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"], [data-popup-open]')) return
-      if (picking) doneSelecting()
-      else leaveSite()
+      if (e.key === "Escape" && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+        if (edit.selected.size) edit.select(null, false)
+        else if (picking) doneSelecting()
+        else if (site) leaveSite()
+        return
+      }
+      if (view !== "canvas" || !feedFilter || !canvas.current || edit.moving.length || picking || open) return
+      const key = e.key.toLowerCase()
+      if (free && (e.metaKey || e.ctrlKey) && !e.altKey && key === "z") {
+        if (storage.step(e.shiftKey)) e.preventDefault()
+      } else if (!e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && key === "f") {
+        const area = boundsOf(edit.selectedTiles)
+        if (area) {
+          const { width, height } = canvas.current.getView()
+          const zoom = Math.min(2, (width * 0.86) / area.w, (height * 0.74) / area.h)
+          canvas.current.setView({ x: area.x + area.w / 2, y: area.y + area.h / 2, zoom })
+        } else canvas.current.recenter()
+        e.preventDefault()
+      } else if (e.altKey && !e.ctrlKey && !e.metaKey && key.startsWith("arrow")) {
+        const by = (e.shiftKey ? 48 : 16) / canvas.current.getView().zoom
+        if (edit.nudge({ x: key === "arrowleft" ? -by : key === "arrowright" ? by : 0, y: key === "arrowup" ? -by : key === "arrowdown" ? by : 0 })) e.preventDefault()
+      }
     }
-    // Capture phase: a popover closing on this same Escape still shows as open here.
     window.addEventListener("keydown", onKey, true)
     return () => window.removeEventListener("keydown", onKey, true)
-  }, [site, picking, doneSelecting])
+  }, [site, picking, doneSelecting, view, feedFilter, free, edit, open, storage])
 
   const list = items ?? []
   // Each feed stops at CAP items. Say so, or a big library looks like it lost its older saves.
@@ -523,7 +600,7 @@ export function CanvasHome({ login }: { login: string }) {
       error ? (
         <p className="flex items-center gap-2 text-xs text-ink-11" role="alert">
           Couldn't load your saves.
-          <button type="button" onClick={reloadCanvas} className="tactile press h-7 rounded-full px-3 text-xs">
+          <button type="button" data-no-pan onClick={reloadCanvas} className="tactile press h-7 rounded-full px-3 text-xs">
             Try again
           </button>
         </p>
@@ -534,7 +611,7 @@ export function CanvasHome({ login }: { login: string }) {
             {site ? (
               <>
                 It may be on another site.{" "}
-                <button type="button" onClick={() => go(`/?q=${encodeURIComponent(q)}`)} className="underline decoration-ink-7 underline-offset-2 hover:text-foreground">
+                <button type="button" data-no-pan onClick={() => go(`/?q=${encodeURIComponent(q)}`)} className="underline decoration-ink-7 underline-offset-2 hover:text-foreground">
                   Search all saves
                 </button>
                 {" or "}
@@ -542,7 +619,7 @@ export function CanvasHome({ login }: { login: string }) {
             ) : (
               "Try a different word, or "
             )}
-            <button type="button" onClick={() => setQuery("")} className="underline decoration-ink-7 underline-offset-2 hover:text-foreground">
+            <button type="button" data-no-pan onClick={() => setQuery("")} className="underline decoration-ink-7 underline-offset-2 hover:text-foreground">
               clear the search
             </button>
             .
@@ -557,28 +634,40 @@ export function CanvasHome({ login }: { login: string }) {
   )
   const plaza = useMemo(
     () => (
-      <div ref={measurePlaza} className="absolute top-0 left-0 flex w-max -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-4">
+      <div ref={measurePlaza} className={cn("absolute top-0 left-0 flex w-max -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-4", free && "z-10")}>
         {!site && <CaptureCard firstRun={firstRun} compact={!firstRun} />}
         {messages}
       </div>
     ),
-    [site, firstRun, messages, measurePlaza],
+    [site, firstRun, messages, measurePlaza, free],
   )
   const ghosts = useMemo(
-    () => (!items || (items.length === 0 && !q && !site) ? <Ghosts loading={!items && !error} plaza={plazaRect} /> : null),
-    [items, q, site, error, plazaRect],
+    () => (!showingTiles || !items || (items.length === 0 && !q && !site) ? <Ghosts loading={!showingTiles || (!items && !error)} plaza={plazaRect} /> : null),
+    [items, q, site, error, plazaRect, showingTiles],
   )
   const pickState = picking ? sel : null
+  const { field, selected, moving } = edit
+  useGalleryReflow(place, items && showingTiles ? galleryTiles : null, field)
+  const keyboardSelect = useCallback((key: string, toggle: boolean) => {
+    if (toggle || edit.gallery.tool === "arrow") edit.select(key, toggle)
+  }, [edit.gallery.tool, edit.select])
   const renderWorld = useCallback(
     // The plaza comes first so the capture card is the first stop when tabbing into the canvas.
     (rect: WorldRect) => (
       <>
         {plaza}
-        {items && <Field layout={layout} items={items} rect={rect} onOpen={tileOpen} scoped={!!site} pick={pickState} pending={pending} />}
+        <div ref={field} className="group/field">
+          <div>
+            {items && showingTiles && <Field layout={layout} items={items} rect={rect} onOpen={tileOpen} scoped={!!site} pick={pickState} pending={pending} selected={selected} moving={moving} onGallerySelect={keyboardSelect} />}
+          </div>
+          {moving.map((t) => (
+            <div key={t.key} aria-hidden style={at(t)} className="pointer-events-none absolute hidden [translate:var(--landing-at)] rounded-md bg-ink-8/30 group-data-collision/field:block" />
+          ))}
+        </div>
         {ghosts}
       </>
     ),
-    [items, layout, tileOpen, site, pickState, pending, ghosts, plaza],
+    [items, layout, tileOpen, site, pickState, pending, ghosts, plaza, field, selected, moving, keyboardSelect, showingTiles],
   )
 
   const tokens = reference?.tokens ?? null
@@ -652,7 +741,7 @@ export function CanvasHome({ login }: { login: string }) {
       )}
       {chrome && (
         <>
-          {view === "canvas" && feedFilter && <Zoom canvas={canvas} sink={zoomSink} />}
+          {view === "canvas" && feedFilter && <Zoom canvas={canvas} sink={zoomSink} tool={edit.gallery.tool} onToolChange={edit.gallery.onToolChange} movable={free} />}
           {view === "canvas" && caption && (
             <p className={cn("absolute left-6 z-50 flex h-10 max-w-[calc(50vw-320px)] items-center rounded-full bg-control px-4 text-2xs text-ink-11 shadow-button max-lg:hidden", site ? "bottom-[72px]" : "bottom-6")}>{caption}</p>
           )}
@@ -757,9 +846,16 @@ export function CanvasHome({ login }: { login: string }) {
         home={home}
         onViewChange={onViewChange}
         content={content}
+        gallery={{ ...edit.gallery, enabled: !open && !picking }}
       >
         {renderWorld}
       </InfiniteCanvas>
+      )}
+      {free && storage.failed && (
+        <div role="status" className="absolute right-6 bottom-[74px] z-40 flex items-center gap-2 rounded-full bg-control py-1 pr-1 pl-3 text-xs text-ink-11 shadow-button">
+          Couldn’t load saved positions.
+          <button type="button" className="press h-7 rounded-full px-3 hover:bg-ink-3" onClick={() => void storage.refresh()}>Try again</button>
+        </div>
       )}
       {/* Fades from the ground so the chrome floats over the field. */}
       <div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 z-10 h-20 bg-linear-to-b from-background to-transparent" />

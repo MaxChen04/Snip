@@ -270,6 +270,7 @@ async function drag(page: Page, from: [number, number], to: [number, number], st
 }
 
 async function pan(page: Page, bounce = 3) {
+  await page.getByRole("button", { name: "Hand", exact: true }).click()
   for (let r = 0; r < bounce; r++) {
     const dir = r % 2 ? -1 : 1
     await drag(page, [dir > 0 ? 200 : 900, 520], [dir > 0 ? 900 : 200, 300])
@@ -288,7 +289,7 @@ async function wheelZoom(page: Page, deltaY: number, ticks: number) {
 }
 
 /**
- * The end-to-end gesture: `out` Ctrl+wheel ticks of 40 (a notch, which zooms by 49%) and then `back` ticks the other way,
+ * The end-to-end gesture: `out` Ctrl+wheel ticks of 40 (a notch, which zooms by about 18%) and then `back` ticks the other way,
  * 16 ms apart, around the middle of the canvas. They are dispatched from the page: through the browser's input pipeline
  * (wheelZoom) a tick takes about 60 ms here, which spreads the work out; this is the harder gesture of a free-spinning
  * wheel or a trackpad.
@@ -315,8 +316,8 @@ const watch = (page: Page) =>
     window.__transitions = 0
     const world = document.querySelector("[aria-roledescription=canvas] > div")
     new MutationObserver((records) => {
-      for (const r of records) for (const n of r.addedNodes) if (n.nodeName === "BUTTON" || n.nodeName === "A") window.__added++
-    }).observe(world, { childList: true })
+      for (const r of records) for (const n of r.addedNodes) if (n instanceof HTMLElement && n.hasAttribute("data-gallery-tile")) window.__added++
+    }).observe(world, { childList: true, subtree: true })
     const tick = () => {
       window.__peak = Math.max(window.__peak, window.__added)
       window.__added = 0
@@ -339,8 +340,7 @@ const cover = (page: Page) =>
       const m = new DOMMatrix(world.style.transform)
       const view = { x: -m.e / m.a, y: -m.f / m.a, w: el.clientWidth / m.a, h: el.clientHeight / m.a }
       let area = 0
-      for (const c of world.children) {
-        if (c.nodeName !== "BUTTON" && c.nodeName !== "A") continue
+      for (const c of world.querySelectorAll("[data-gallery-tile]")) {
         const x = parseFloat(c.style.left), y = parseFloat(c.style.top), w = parseFloat(c.style.width), h = parseFloat(c.style.height)
         area += Math.max(0, Math.min(x + w, view.x + view.w) - Math.max(x, view.x)) * Math.max(0, Math.min(y + h, view.y + view.h) - Math.max(y, view.y))
       }
@@ -469,7 +469,7 @@ async function run(n: number): Promise<Report> {
 
   const pan100 = await frames(page, () => pan(page))
 
-  // The first zoom of a page that has never zoomed, as a mouse wheel does it: each notch zooms by half, so 4 of them cross
+  // The first zoom of a page that has never zoomed, as a mouse wheel does it: each notch zooms by about 18%, so 8 cross
   // the whole range and the field changes by hundreds of tiles in a frame. The tile nearest the anchor stays mounted all
   // the way out and back: its image must be the same element throughout (crossing the far threshold changes its look with
   // CSS, not its DOM, and staging mounts only tiles that are new).
@@ -501,7 +501,7 @@ async function run(n: number): Promise<Report> {
   // within a few frames.
   await reset()
   await cover(page)
-  await notches(page, 6, 0)
+  await notches(page, 8, 0)
   checkTabOrder(await audit(page), "the middle of a zoom out")
   await until("zoomed all the way out", async () => (await zoomPct(page)) === 25, 30_000)
   await sleep(1500)
@@ -582,6 +582,7 @@ function checkWeight(r: Report) {
   // A notch brings hundreds of tiles into view in one step (549 mounted in one 59 ms frame in a build, before the field
   // staged them). A frame mounts no more than MOUNT_PER_FRAME, and the viewport fills within a few frames.
   assert.ok(r.mountedInOneFrame <= MOUNT_PER_FRAME, `${r.mountedInOneFrame} tiles mounted in one frame`)
+  assert.ok(r.holes.cover > 0, "the coverage observer found visible gallery tiles")
   // Each item is drawn once, so a zoomed-out view is only as covered as the library is big (the feed's newest 400 a
   // kind fill about a quarter of it at 25%): the holes that matter are the frames it takes to fill what it will.
   assert.ok(r.holes.frames <= 10, `the viewport had holes for ${r.holes.frames} frames after a zoom out`)
@@ -599,7 +600,7 @@ test("1000 items: panning at 100% and zooming out stay light", { timeout: 240_00
 
 // The tile is two elements now, with its hover chip a sibling: the chip must still follow hover and focus, survive the
 // pointer moving onto it, and the tile must still open, in tab order.
-test("a home tile shows its source on hover and focus, opens on click, and tabs newest first", { timeout: 60_000 }, async () => {
+test("a home tile shows its source on hover and focus, opens on double-click, and tabs newest first", { timeout: 60_000 }, async () => {
   const t = await gallery(40)
   const { page } = t
   await t.goto("/")
@@ -634,7 +635,11 @@ test("a home tile shows its source on hover and focus, opens on click, and tabs 
   assert.equal(await chip.getAttribute("target"), null, "and stays in the app")
 
   // Focus panned the canvas to Section 3.
-  await page.getByRole("button", { name: "Section 3 · delta.test", exact: true }).click()
+  const section = page.getByRole("button", { name: "Section 3 · delta.test", exact: true })
+  await section.click()
+  assert.equal(await section.getAttribute("aria-pressed"), "true", "a single click selects")
+  assert.equal(new URL(page.url()).searchParams.get("open"), null)
+  await section.dblclick()
   await until("the inspector opens", async () => new URL(page.url()).searchParams.get("open") === "section:p3:0")
   assert.deepEqual(t.consoleErrors, [])
 })
@@ -653,7 +658,7 @@ test("a home tile draws a section's thumbnail where there is one, the full crop 
   assert.equal(await src("Section 1 · beta.test"), "/files/pages/p1/section-0-thumb.jpg", "a stored thumbnail is what the tile draws")
   assert.equal(await src("Section 2 · gamma.test"), "/files/pages/p2/section-0.jpg", "without one, the crop")
 
-  await page.getByRole("button", { name: "Section 1 · beta.test", exact: true }).click()
+  await page.getByRole("button", { name: "Section 1 · beta.test", exact: true }).dblclick()
   await until("the inspector opens", async () => new URL(page.url()).searchParams.get("open") === "section:p1:0")
   const still = page.getByRole("img", { name: "Section 1", exact: true })
   await still.waitFor()
@@ -672,7 +677,7 @@ test("on the Websites filter a tile opens the inspector like every other tile, a
   const tile = page.getByRole("button", { name: "Site 0", exact: true })
   await tile.waitFor()
   assert.equal(await tile.evaluate((el) => el.children.length), 1, "a tile holds only its image")
-  await tile.click()
+  await tile.dblclick()
   await until("the inspector opens", async () => new URL(page.url()).searchParams.get("open") === "website:w0")
   assert.equal(new URL(page.url()).pathname, "/", "the canvas stays")
 

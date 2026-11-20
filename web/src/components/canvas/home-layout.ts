@@ -37,7 +37,7 @@ function nearestTop(blocked: [number, number][], target: number): number {
 }
 
 /** Pack each site together. Subsequent feeds fill gaps near their own site (or parent), without shifting saved tiles. */
-export function layoutHome(items: HomeItem[], plaza: Plaza = PLAZA, keep?: ReadonlyMap<string, Slot>): HomeLayout {
+export function layoutHome(items: HomeItem[], plaza: Plaza = PLAZA, keep?: ReadonlyMap<string, Slot>, fixed?: ReadonlyMap<string, { x: number; y: number }>): HomeLayout {
   const slots = new Map<string, Slot>()
   const columns = new Map<number, Slot[]>()
   const anchors = new Map<string | undefined, Slot>()
@@ -46,7 +46,7 @@ export function layoutHome(items: HomeItem[], plaza: Plaza = PLAZA, keep?: Reado
   const children = new Map<string, HomeItem[]>()
   const put = (key: string, tile: Slot) => {
     slots.set(key, tile)
-    const c = (tile.x + COLUMN / 2) / PITCH
+    const c = Math.round((tile.x + COLUMN / 2) / PITCH)
     const column = columns.get(c) ?? []
     column.push(tile)
     columns.set(c, column)
@@ -61,9 +61,13 @@ export function layoutHome(items: HomeItem[], plaza: Plaza = PLAZA, keep?: Reado
       children.set(item.parent, family)
     }
   }
+  for (const item of byKey.values()) {
+    const pos = fixed?.get(item.key)
+    if (pos) put(item.key, { ...pos, site: item.site, w: COLUMN, h: COLUMN / item.aspect })
+  }
   for (const [key, prior] of keep ?? []) {
     const item = byKey.get(key)
-    if (!item || item.site !== prior.site || prior.h !== COLUMN / item.aspect) continue
+    if (!item || slots.has(key) || item.site !== prior.site || prior.h !== COLUMN / item.aspect) continue
     if (touchesPlaza(prior.x, plaza) && prior.y < plaza.h / 2 + GAP && prior.y + prior.h > -plaza.h / 2 - GAP) continue
     put(key, prior)
   }
