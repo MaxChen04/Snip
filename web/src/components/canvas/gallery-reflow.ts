@@ -21,6 +21,22 @@ export function useGalleryReflow(place: string, tiles: readonly Placement[] | nu
     if (matchMedia("(prefers-reduced-motion: reduce)").matches) return
     const from = new Map(old.tiles.map((t) => [t.key, t]))
     const to = new Map(tiles.map((t) => [t.key, t]))
+    const track = (effects: Animation[], remove?: () => void) => {
+      if (!effects.length) return
+      el.setAttribute("data-reflowing", "")
+      const clear = () => {
+        remove?.()
+        if (cleanup.current !== cancel) return
+        cleanup.current = undefined
+        el.removeAttribute("data-reflowing")
+      }
+      const cancel = () => {
+        effects.forEach((a) => a.cancel())
+        clear()
+      }
+      cleanup.current = cancel
+      void Promise.allSettled(effects.map((a) => a.finished)).then(clear)
+    }
     if (Math.max(nodes.length, old.nodes.length) <= SPRING_TILE_LIMIT) {
       const easing = getComputedStyle(document.documentElement).getPropertyValue("--spring-ease").trim()
       const effects: Animation[] = []
@@ -31,7 +47,7 @@ export function useGalleryReflow(place: string, tiles: readonly Placement[] | nu
         if (!a || !b || (a.x === b.x && a.y === b.y)) continue
         effects.push(node.animate([{ translate: `${a.x - b.x}px ${a.y - b.y}px` }, { translate: "0px 0px" }], { duration: SPRING.duration, easing }))
       }
-      cleanup.current = () => effects.forEach((a) => a.cancel())
+      track(effects)
       return
     }
     const outgoing = document.createElement("div")
@@ -54,12 +70,7 @@ export function useGalleryReflow(place: string, tiles: readonly Placement[] | nu
     el.append(outgoing)
     const exit = outgoing.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 150, easing: "ease-out" })
     const enter = stage.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 150, easing: "ease-out" })
-    exit.onfinish = () => outgoing.remove()
-    cleanup.current = () => {
-      exit.cancel()
-      enter.cancel()
-      outgoing.remove()
-    }
+    track([exit, enter], () => outgoing.remove())
   }, [place, tiles, field])
   useLayoutEffect(() => () => cleanup.current?.(), [])
 }

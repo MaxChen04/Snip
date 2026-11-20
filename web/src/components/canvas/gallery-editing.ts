@@ -33,6 +33,7 @@ export function useGalleryEditing(
   const field = useRef<HTMLDivElement>(null)
   const drag = useRef<{ tiles: Placement[]; solve: (raw: Point) => Point; raw: Point; landing: Point }>(undefined)
   const correction = useRef<{ keys: string[]; x: number; y: number }>(undefined)
+  const stopSettling = useRef<(() => void) | undefined>(undefined)
   const changeSelection = useCallback((ids: ReadonlySet<string>) => setSelection({ key: viewKey, tiles: ids }), [viewKey])
   const select = useCallback((id: string | null, toggle: boolean) => {
     if (id === null) {
@@ -92,14 +93,32 @@ export function useGalleryEditing(
   useLayoutEffect(() => {
     const change = correction.current
     correction.current = undefined
-    if (!change || matchMedia("(prefers-reduced-motion: reduce)").matches) return
-    for (const key of change.keys) {
-      field.current?.querySelector<HTMLElement>(`[data-gallery-tile="${CSS.escape(key)}"]`)?.animate(
+    const el = field.current
+    if (!change || !el || matchMedia("(prefers-reduced-motion: reduce)").matches) return
+    stopSettling.current?.()
+    const easing = getComputedStyle(document.documentElement).getPropertyValue("--spring-ease").trim()
+    const animations = change.keys.flatMap((key) => {
+      const tile = el.querySelector<HTMLElement>(`[data-gallery-tile="${CSS.escape(key)}"]`)
+      return tile ? [tile.animate(
         [{ translate: `${change.x}px ${change.y}px` }, { translate: "0px 0px" }],
-        { duration: 150, easing: getComputedStyle(document.documentElement).getPropertyValue("--spring-ease").trim() },
-      )
+        { duration: 150, easing },
+      )] : []
+    })
+    if (!animations.length) return
+    el.setAttribute("data-settling", "")
+    const clear = () => {
+      if (stopSettling.current !== cancel) return
+      stopSettling.current = undefined
+      el.removeAttribute("data-settling")
     }
+    const cancel = () => {
+      animations.forEach((a) => a.cancel())
+      clear()
+    }
+    stopSettling.current = cancel
+    void Promise.allSettled(animations.map((a) => a.finished)).then(clear)
   }, [tiles, moving])
+  useLayoutEffect(() => () => stopSettling.current?.(), [])
 
   const gallery: GalleryGestures = {
     tool, canMove, viewKey, onToolChange,
