@@ -6,7 +6,7 @@
   "workspaces": ["web", "capture"],
   "devDependencies": {
     "miniflare": "5.20261101.0-beta",
-    "wrangler": "4.160.0"
+    "wrangler": "4.164.0"
   },
   "scripts": {
     "test": "npm run test:core && npm run test:app && npm run test:browser",
