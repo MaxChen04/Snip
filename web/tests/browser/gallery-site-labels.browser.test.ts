@@ -51,7 +51,7 @@ test("zoomed-out site labels frame the main cluster, and F frames a selection or
   await page.emulateMedia({ reducedMotion: "no-preference" })
   const beforeSpring = await label.evaluate((button) => {
     const world = button.parentElement!
-    ;(button as HTMLButtonElement).click()
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }))
     return new DOMMatrix(world.style.transform).a
   })
   assert.ok(beforeSpring < 0.3, "pointer framing starts a spring instead of jumping immediately")
@@ -62,6 +62,22 @@ test("zoomed-out site labels frame the main cluster, and F frames a selection or
     assert.ok(box.x > 0 && box.x + box.width < 1440, `${id} is inside the framed region`)
   }
   assert.equal(await tile("outlier").count(), 0)
+
+  for (const key of ["Enter", "Space"]) {
+    await page.emulateMedia({ reducedMotion: "reduce" })
+    for (let i = 0; i < 10; i++) await zoomOut.click()
+    await label.waitFor()
+    await page.emulateMedia({ reducedMotion: "no-preference" })
+    await label.evaluate((button) => {
+      const world = button.parentElement!
+      delete document.body.dataset.zoomOnLabelActivation
+      window.addEventListener("click", () => {
+        document.body.dataset.zoomOnLabelActivation = String(new DOMMatrix(world.style.transform).a)
+      }, { once: true })
+    })
+    await label.press(key)
+    assert.ok(Number(await page.locator("body").getAttribute("data-zoom-on-label-activation")) > 1, `${key} frames before the next animation frame`)
+  }
 
   await page.emulateMedia({ reducedMotion: "reduce" })
   await canvas.press("f")
@@ -76,6 +92,27 @@ test("zoomed-out site labels frame the main cluster, and F frames a selection or
   assert.ok(Math.abs(box.y + box.height / 2 - 450) < 1)
   assert.deepEqual(t.consoleErrors, [])
   await page.context().close()
+})
+
+test("overview labels have phone-sized text and hit areas at 700px", async () => {
+  const ref = reference({ title: "Atlas", pageCount: 1 })
+  const t = await app.session({ viewport: { width: 700, height: 820 } })
+  t.on("GET", /^\/api\//, mockLibrary(oneSite(ref, [savedPage()])))
+  await t.page.emulateMedia({ reducedMotion: "reduce" })
+  await t.goto("/")
+  const label = t.page.getByRole("button", { name: "Frame Atlas cluster" })
+  await t.page.locator("[data-gallery-tile]").first().waitFor()
+  for (let i = 0; i < 6; i++) await t.page.getByRole("button", { name: "Zoom out" }).click()
+  await label.waitFor()
+  const box = (await label.boundingBox())!
+  assert.ok(box.width >= 44 && box.height >= 44, `touch target is ${box.width} × ${box.height}`)
+  const paintedFontSize = await label.evaluate((el) => {
+    const button = el as HTMLElement
+    return Number.parseFloat(getComputedStyle(button).fontSize) * button.getBoundingClientRect().height / button.offsetHeight
+  })
+  assert.ok(paintedFontSize >= 15, `painted font size is ${paintedFontSize}px`)
+  assert.deepEqual(t.consoleErrors, [])
+  await t.page.context().close()
 })
 
 test("stacked sites use clear sides at overview zoom without covering tiles or another label", async () => {

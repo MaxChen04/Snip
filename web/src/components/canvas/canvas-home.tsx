@@ -524,8 +524,8 @@ export function CanvasHome({ login }: { login: string }) {
   const labelViewRef = useRef(labelView)
   const onViewChange = useCallback((v: CanvasView) => {
     zoomSink.current?.(v.zoom)
-    const zoom = v.zoom < SITE_LABEL_ZOOM ? Math.round(v.zoom * 200) / 200 : 0
-    const height = v.width < 640 ? 44 : 28
+    const zoom = v.zoom < SITE_LABEL_ZOOM ? Math.floor(v.zoom * 200) / 200 : 0
+    const height = v.width < 768 ? 44 : 28
     if (zoom !== labelViewRef.current.zoom || height !== labelViewRef.current.height) {
       labelViewRef.current = { zoom, height }
       setLabelView(labelViewRef.current)
@@ -657,8 +657,8 @@ export function CanvasHome({ login }: { login: string }) {
   const siteLabels = useMemo(() => sitePins.length && !moving.length
     ? placeSiteLabels(sitePins, plazaBounds ? [...layout.tiles, plazaBounds] : layout.tiles, labelView.zoom, labelView.height)
     : [], [sitePins, layout.tiles, labelView, plazaBounds, moving.length])
-  const frameSite = useCallback((area: WorldRect) => {
-    if (canvas.current) frameGallery(canvas.current, area, true)
+  const frameSite = useCallback((area: WorldRect, animate: boolean) => {
+    if (canvas.current) frameGallery(canvas.current, area, animate)
   }, [])
   const keyboardSelect = useCallback((key: string, toggle: boolean) => {
     if (toggle || edit.gallery.tool === "arrow") edit.select(key, toggle)

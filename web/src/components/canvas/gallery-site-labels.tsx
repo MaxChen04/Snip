@@ -64,7 +64,7 @@ export function gallerySitePins(tiles: readonly Placement[], items: readonly Can
   return pins.sort((a, b) => b.count - a.count || a.key.localeCompare(b.key))
 }
 
-type Label = SitePin & { box: WorldRect }
+type Label = SitePin & { box: WorldRect; width: number }
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n))
 const intersects = (a: WorldRect, b: WorldRect) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
 
@@ -92,7 +92,8 @@ export function placeSiteLabels(pins: readonly SitePin[], tiles: readonly WorldR
   const gap = 5 / zoom
   for (const pin of pins) {
     const { area, anchorX } = pin
-    const w = pin.width / zoom, h = height / zoom
+    const width = height === 44 ? Math.min(180, Math.ceil(pin.width * 1.2)) : pin.width
+    const w = width / zoom, h = height / zoom
     const rails = [
       { axis: "x", fixed: area.y - h - gap, desired: anchorX - w / 2 },
       { axis: "y", fixed: area.x - w - gap, desired: area.y },
@@ -131,7 +132,7 @@ export function placeSiteLabels(pins: readonly SitePin[], tiles: readonly WorldR
     }
     if (best) {
       obstacles.push(best)
-      labels.push({ ...pin, box: best })
+      labels.push({ ...pin, width, box: best })
     }
   }
   return labels
@@ -142,7 +143,7 @@ export const GallerySiteLabels = memo(function GallerySiteLabels({ labels, zoom,
   zoom: number
   height: number
   visible: WorldRect
-  onFrame: (area: WorldRect) => void
+  onFrame: (area: WorldRect, animate: boolean) => void
 }) {
   return labels.filter(({ box }) => intersects(box, visible)).map(({ key, name, domain, icon, box, width, area }) => (
     <button
@@ -151,13 +152,14 @@ export const GallerySiteLabels = memo(function GallerySiteLabels({ labels, zoom,
       data-no-pan
       aria-label={`Frame ${name} cluster`}
       title={domain && domain !== name ? `${name} · ${domain}` : name}
-      onClick={() => onFrame(area)}
+      onClick={(event) => onFrame(area, event.detail > 0)}
       className="tactile press absolute z-20 flex items-center gap-1.5 rounded-full px-2 text-xs text-foreground peer-data-reflowing:hidden peer-data-settling:hidden"
       style={{
         left: box.x,
         top: box.y,
         width,
         height,
+        fontSize: height === 44 ? 15 : undefined,
         transformOrigin: "top left",
         transform: `scale(${1 / zoom})`,
       }}
