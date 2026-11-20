@@ -156,7 +156,7 @@ test("pages can be saved to many collections without copying files, and survive 
       assert.deepEqual(await freshRemoval.json(), { ok: true, changed: 1 })
       assert.equal(await db.setPageCollection(database, pricing, [replacement.id], false), 0)
       const freshSave = await rpc("set_page_collection_membership", { page_ids: [replacement.id], collection_id: pricing, member: true })
-      assert.deepEqual(freshSave.structuredContent, { ok: true, changed: 1 })
+      assert.deepEqual(freshSave.structuredContent, { ok: true, changed: 1, collectionId: pricing, appUrl: `http://localhost/b/${pricing}` })
       await unchanged()
     })
 

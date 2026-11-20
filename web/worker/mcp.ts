@@ -41,9 +41,9 @@ const LIMITS = {
   summaryImageBytes: 1_500_000,
 }
 
-const INSTRUCTIONS = `Snip stores website design references captured by the user: per-page desktop/mobile screenshots, scroll and hover animations, design tokens, computed styles and HTML snapshots.
+const INSTRUCTIONS = `Snip is the user's library of saved websites for design reference: page screenshots cut into sections, scroll and hover animations, design tokens (colors, type, spacing), computed styles and HTML snapshots. Find things with search_pages (pages and sections) or search_references (whole websites), then open one with get_page, get_reference, get_animation or get_motion_profile. Save a new site with add_reference, then wait_for_capture. Boards in the Snip app are called collections here.
 
-Collections group work by project or theme. A collection holds whole websites and individually saved pages (e.g. "Pricing pages" gathering pricing pages from many sites). A saved page still belongs to its website and can sit in many collections. To read a collection: list_collections -> search_pages(collection_id) for its pages, search_references(collection_id) for the websites saved whole.
+Collections (boards) group work by project or theme. A collection holds whole websites and individually saved pages (e.g. "Pricing pages" gathering pricing pages from many sites). A saved page still belongs to its website and can sit in many collections. To read a collection: list_collections -> search_pages(collection_id) for its pages, search_references(collection_id) for the websites saved whole.
 
 To find something the user saved: search_pages(query) or search_references(query). Both match words in the user's notes (why they saved it), section labels, page titles and the text captured on pages, rank by how many words matched, and say what matched and which section to open. They don't see pixels: confirm a hit with its screenshot.
 
@@ -55,7 +55,7 @@ To capture a site for the user ("snip/scrape/gallerize example.com"): add_refere
 
 Results carry appUrl, a link to the reference in Snip. When you mention a reference to the user, link it to its appUrl so they can open it.
 
-Pages are cut into sections (header, hero, content blocks, footer): get_page lists them, and get_page(page_id, section) shows one section sharply. Prefer that to the full-page screenshot when you need detail. get_animation's motion lists the transitions and animations the browser ran, with exact timing and easing: use those numbers rather than estimating from frames.
+Pages are cut into sections (header, hero, content blocks, footer): get_page lists them, and get_page(page_id, section) shows one section sharply. Prefer that to the full-page screenshot when you need detail. For one section's markup, call get_page(page_id, include_html true, html_find "<its label or a phrase from it>"): it returns the element that contains the text, not the whole document. get_animation's motion lists the transitions and animations the browser ran, with exact timing and easing: use those numbers rather than estimating from frames.
 
 To explain how a site moves or why its motion feels good, call get_motion_profile(reference_id) first: the site's named motion tokens, its easing curves and durations by use (with each curve's shape described), staggers, entrance animations, hover timings, the animation tech found, and which motion is only pixels (canvas, WebGL). Then open get_animation for the recordings it points to.
 
@@ -73,6 +73,9 @@ const ok = (data: Record<string, unknown>, images: Content[] = []) => ({
   content: [{ type: "text" as const, text: JSON.stringify(data) }, ...images],
   structuredContent: data,
 })
+
+/** Reads the user's own library and nothing beyond it. */
+const READ = { readOnlyHint: true, openWorldHint: false } as const
 
 const fail = (message: string) => ({ content: [{ type: "text" as const, text: message }], isError: true })
 
@@ -120,10 +123,49 @@ function tokenSummary(t: DesignTokens | null, perGroup = 6) {
 /** Ids come from one capture: a recapture replaces them. A copied prompt carries what resolve_selection needs to find them again. */
 const GONE_HINT = "If it came from a copied Snip prompt, the website was probably recaptured since: call resolve_selection with the prompt's Selection."
 
+const BLOCK_TAGS = ["section", "article", "header", "footer", "main", "aside", "nav", "figure", "form", "li", "div"]
+
+/**
+ * The smallest block element around a position in an HTML snapshot: its start and end offsets and tag. A landmark
+ * (section, article, header...) wins over a div when both enclose the text. Looks at the 8 nearest openings of each tag
+ * and 200,000 characters past the text; falls back to the next 8,000 characters from the nearest tag.
+ */
+function enclosingElement(html: string, at: number): { start: number; end: number; tag: string | null } {
+  const lower = html.toLowerCase()
+  const limit = at + 200_000
+  const closeOf = (tag: string, from: number) => {
+    const re = new RegExp(`<(/?)${tag}\\b[^>]*>`, "g")
+    re.lastIndex = from
+    let depth = 0
+    for (let m = re.exec(lower); m && m.index < limit; m = re.exec(lower)) {
+      depth += m[1] ? -1 : 1
+      if (depth === 0) return m.index + m[0].length
+    }
+    return -1
+  }
+  let best: { start: number; end: number; tag: string } | null = null
+  for (const tag of BLOCK_TAGS) {
+    let start = lower.lastIndexOf(`<${tag}`, at)
+    for (let tries = 0; start >= 0 && tries < 8; tries++) {
+      const next = lower[start + tag.length + 1]
+      const end = next && /[\s>/]/.test(next) ? closeOf(tag, start) : -1
+      if (end > at) {
+        if (!best || (tag !== "div" && best.tag === "div") || (start > best.start && (tag === "div") === (best.tag === "div"))) best = { start, end, tag }
+        break
+      }
+      start = start > 0 ? lower.lastIndexOf(`<${tag}`, start - 1) : -1
+    }
+  }
+  if (best) return best
+  const start = Math.max(0, lower.lastIndexOf("<", at))
+  return { start, end: Math.min(html.length, start + 8_000), tag: null }
+}
+
 const PAGE_CLIP_PX = 15_990 // capture clips full-page screenshots near 16,000 physical px
 
 function buildServer(env: Env, origin: string, ctx: ExecutionContext) {
   const url = (key: string | null) => (key ? signFileUrl(env, origin, key) : Promise.resolve(null))
+  const boardUrl = (collectionId: string) => `${origin}/b/${collectionId}`
 
   async function inlineImage(key: string | null): Promise<{ image: Content } | { reason: string }> {
     if (!key) return { reason: "not captured" }
@@ -263,6 +305,7 @@ function buildServer(env: Env, origin: string, ctx: ExecutionContext) {
         pageCount: full.pageCount,
         animationCount: full.animationCount,
         galleryUrl: `${origin}/r/${full.id}`,
+        appUrl: `${origin}/r/${full.id}`,
         images: images.length ? `${images.length} page thumbnail${images.length === 1 ? "" : "s"} attached, in page order` : "none attached",
         ...(skipped.length ? { imagesUnavailable: skipped } : {}),
         pages: listed.items,
@@ -332,7 +375,7 @@ function buildServer(env: Env, origin: string, ctx: ExecutionContext) {
         limit: z.number().int().min(1).max(50).optional().describe("Default 20"),
         cursor: z.string().optional().describe("nextCursor from a previous call"),
       }),
-      annotations: { readOnlyHint: true },
+      annotations: READ,
     },
     async (args) => {
       const ranked = !!args.query && (args.sort ?? "relevance") === "relevance" && searchTerms(args.query).length > 0
@@ -379,7 +422,7 @@ Signed file URLs expire after 24 hours.`,
         limit: z.number().int().min(1).max(200).optional().describe("Max items per list (default 25; 100 for a token group)"),
         cursor: z.string().optional().describe("nextCursor from a previous call with the same part"),
       }),
-      annotations: { readOnlyHint: true },
+      annotations: READ,
     },
     async ({ id, part = "full", token_group, limit: limitArg, cursor }) => {
       const limit = limitArg ?? 25
@@ -474,7 +517,16 @@ Signed file URLs expire after 24 hours.`,
           unavailable: ref.status === "ready" ? "No tokens were captured for this reference." : `Capture is ${ref.status}; tokens are saved when it finishes.`,
         })
       const provenance = "Merged by the capture across pages by usage count (top values per group). Observed computed values, not the site's source design system. Per-page tokens: get_page."
-      if (!token_group) return ok({ referenceId: id, provenance, groups: tokenSummary(ref.tokens, 12), next: "Pass token_group for a complete group." })
+      if (!token_group) {
+        const groups = tokenSummary(ref.tokens, 12)!
+        const partial = Object.entries(groups).filter(([, g]) => g.top.length < g.total).map(([name]) => name)
+        return ok({
+          referenceId: id,
+          provenance,
+          groups,
+          next: partial.length ? `Pass token_group for the rest of: ${partial.join(", ")}.` : "Every group is complete here.",
+        })
+      }
       const res = bounded(tokenGroup(ref.tokens, token_group), offset, limitArg ?? 100)
       return ok({ referenceId: id, group: token_group, provenance, ...res, nextCursor: nextCursor(res.nextOffset) })
     },
@@ -485,7 +537,7 @@ Signed file URLs expire after 24 hours.`,
     {
       title: "Get a captured page",
       description:
-        "Get one captured page: signed screenshot URLs with coverage, the page's sections, a token summary, and optionally an inline viewport screenshot (desktop by default) and a chunk of the self-contained HTML snapshot. sections lists the desktop page cut into header, hero, content blocks and footer; pass section (an index) to inline that one section at full desktop width, which stays legible where the full-page screenshot would be scaled down. A section with live set moved on its own at capture time (canvas or WebGL backgrounds, marquees, carousels): a short looping WebM of it covers live.height px from live.y (touching sections that move share one clip), for people or tools that play video; it is never inlined. Sections come without file URLs unless include_section_urls is true; the section you inline always carries its own. otherScheme, when set, means the site also has a theme for the other color scheme (e.g. dark): pass scheme to see the desktop screenshot or a section in it. For computed styles use get_page_styles. If an image can't be inlined the result says why.",
+        "Get one captured page: signed screenshot URLs with coverage, the page's sections, a token summary, and optionally an inline viewport screenshot (desktop by default) and a chunk of the self-contained HTML snapshot. sections lists the desktop page cut into header, hero, content blocks and footer; pass section (an index) to inline that one section at full desktop width, which stays legible where the full-page screenshot would be scaled down. A section with live set moved on its own at capture time (canvas or WebGL backgrounds, marquees, carousels): a short looping WebM of it covers live.height px from live.y (touching sections that move share one clip), for people or tools that play video; it is never inlined. Sections come without file URLs unless include_section_urls is true; the section you inline always carries its own. otherScheme, when set, means the site also has a theme for the other color scheme (e.g. dark): pass scheme to see the desktop screenshot or a section in it. For one section's markup pass include_html with html_find set to the section's label or a phrase from it. When comparing several pages, pass image \"none\" and read sections instead of inlining every screenshot. For computed styles use get_page_styles. If an image can't be inlined, or the page has no HTML, styles or tokens, the result says why under unavailable.",
       inputSchema: z.object({
         page_id: z.string().describe("From get_reference or a copied Snip prompt"),
         image: z.enum(["none", "desktop", "mobile"]).optional().describe("Inline a viewport-sized screenshot. Default desktop, or none when section is given."),
@@ -493,12 +545,13 @@ Signed file URLs expire after 24 hours.`,
         include_section_urls: z.boolean().optional().describe("Add signed file URLs (screenshot and live clip) to every section. Default false"),
         scheme: z.enum(["light", "dark"]).optional().describe("Show the desktop screenshot or section in this color scheme, when otherScheme says the page has it. Default: the scheme it was captured in"),
         include_styles: z.boolean().optional().describe("Deprecated: adds a style summary. Use get_page_styles."),
-        include_html: z.boolean().optional(),
-        html_offset: z.number().int().min(0).optional().describe("Character offset to continue the HTML from"),
+        include_html: z.boolean().optional().describe("Add the page's HTML snapshot, in chunks. Without html_find, chunks start at the top of the document"),
+        html_find: z.string().min(1).optional().describe("With include_html: return only the element (section, article, header, footer...) containing this text, e.g. a section label like \"Loved by teams\""),
+        html_offset: z.number().int().min(0).optional().describe("Character offset to continue the HTML from. With html_find: where to start searching, e.g. html.found.nextSearchFrom for the next match"),
       }),
-      annotations: { readOnlyHint: true },
+      annotations: READ,
     },
-    async ({ page_id, image: imageArg, section, include_section_urls, scheme, include_styles, include_html, html_offset = 0 }) => {
+    async ({ page_id, image: imageArg, section, include_section_urls, scheme, include_styles, include_html, html_find, html_offset = 0 }) => {
       const p = await db.getPageInCapture(env.DB, page_id)
       if (!p) return fail(`No page with id "${page_id}". ${GONE_HINT} Otherwise use get_reference(id, part "pages") to list page ids.`)
       const data: Record<string, unknown> = {
@@ -507,6 +560,12 @@ Signed file URLs expire after 24 hours.`,
         capturedScheme: capturedScheme(p.altScheme, p.captureOptions),
         tokens: tokenSummary(p.tokens),
       }
+      const unavailable = {
+        ...(p.snapshotKey ? {} : { html: "No HTML snapshot was captured for this page." }),
+        ...(p.stylesKey ? {} : { styles: "Computed styles were not captured for this page, so get_page_styles has nothing for it." }),
+        ...(p.tokens ? {} : { tokens: "No design tokens were captured for this page. Try get_reference(referenceId, part \"tokens\")." }),
+      }
+      if (Object.keys(unavailable).length) data.unavailable = unavailable
       if (!p.sections.length)
         data.sectionsUnavailable = p.sectionsCaptured
           ? "This page doesn't break into separate sections. Use the full-page screenshot."
@@ -545,7 +604,22 @@ Signed file URLs expire after 24 hours.`,
       if (include_html) {
         const body = p.snapshotKey ? await readText(env.FILES, p.snapshotKey) : null
         if (body === null) data.html = { included: false, reason: p.snapshotKey ? "file missing from storage" : "not captured" }
-        else {
+        else if (html_find) {
+          const at = body.toLowerCase().indexOf(html_find.toLowerCase(), html_offset)
+          if (at < 0) data.html = { included: false, totalChars: body.length, reason: `"${html_find}" does not appear in the HTML snapshot${html_offset ? ` after offset ${html_offset}` : ""}. Try a shorter phrase from the section's text, or include_html without html_find to read the document in chunks.` }
+          else {
+            const el = enclosingElement(body, at)
+            const end = Math.min(el.end, el.start + LIMITS.htmlChars)
+            data.html = {
+              included: true,
+              offset: el.start,
+              totalChars: body.length,
+              nextOffset: end < el.end ? end : null,
+              found: { text: html_find, at, element: el.tag, nextSearchFrom: at + html_find.length },
+              content: body.slice(el.start, end),
+            }
+          }
+        } else {
           const end = Math.min(body.length, html_offset + LIMITS.htmlChars)
           data.html = {
             included: true,
@@ -553,6 +627,7 @@ Signed file URLs expire after 24 hours.`,
             totalChars: body.length,
             nextOffset: end < body.length ? end : null,
             content: body.slice(html_offset, end),
+            ...(section != null ? { hint: "This is the whole document. For just this section's markup, call again with html_find set to its label." } : {}),
           }
         }
       }
@@ -576,7 +651,7 @@ Signed file URLs expire after 24 hours.`,
         limit: z.number().int().min(1).max(200).optional().describe("Default 40"),
         offset: z.number().int().min(0).optional().describe("nextOffset from a previous call with the same filters"),
       }),
-      annotations: { readOnlyHint: true },
+      annotations: READ,
     },
     async ({ page_id, section = "summary", selector_contains, text_contains, limit = 40, offset = 0 }) => {
       const p = await db.getPage(env.DB, page_id)
@@ -704,7 +779,7 @@ Scroll timing is synthetic playback; hover offsets are measured. Treat easing an
         frame: z.number().int().min(0).optional().describe("With representation \"frame\": index into manifest.frames"),
         motion_offset: z.number().int().min(0).optional().describe("motion.nextOffset from a previous call, to read further motion entries"),
       }),
-      annotations: { readOnlyHint: true },
+      annotations: READ,
     },
     async ({ animation_id, representation = "contact_sheet", frame, motion_offset = 0 }) => {
       const a = await db.getAnimation(env.DB, animation_id)
@@ -822,7 +897,7 @@ Scroll timing is synthetic playback; hover offsets are measured. Treat easing an
           .optional(),
         tokens: z.boolean().optional(),
       }),
-      annotations: { readOnlyHint: true },
+      annotations: READ,
     },
     async (sel) => {
       const r = await db.getReference(env.DB, sel.reference_id)
@@ -852,7 +927,7 @@ With page_id, that page alone; without it, merged across the reference's pages. 
         limit: z.number().int().min(1).max(100).optional().describe("Max items per group (overview default 6; a group 40)"),
         cursor: z.string().optional().describe("nextCursor from a previous call with the same page_id and group"),
       }),
-      annotations: { readOnlyHint: true },
+      annotations: READ,
     },
     async ({ reference_id, page_id, group, limit: limitArg, cursor }) => {
       const ref = await db.getReferenceRecord(env.DB, reference_id)
@@ -964,7 +1039,7 @@ With page_id, that page alone; without it, merged across the reference's pages. 
         limit: z.number().int().min(1).max(50).optional().describe("Default 20"),
         cursor: z.string().optional().describe("nextCursor from a previous call"),
       }),
-      annotations: { readOnlyHint: true },
+      annotations: READ,
     },
     async (args) => {
       const summarize = async (p: Page & { reference: unknown }, extra: { match?: SearchMatch; notes?: string | null; section?: unknown; excerpt?: string | null } = {}) => ({
@@ -1001,12 +1076,12 @@ With page_id, that page alone; without it, merged across the reference's pages. 
       description:
         "List captured scroll and hover animations across all references, newest first. With collection_id: animations of websites saved to the collection and of pages saved to it. Next: get_animation(animation_id).",
       inputSchema: z.object({
-        query: z.string().optional(),
-        collection_id: z.string().optional(),
-        limit: z.number().int().min(1).max(50).optional(),
-        cursor: z.string().optional(),
+        query: z.string().optional().describe("Substring of the animation's label or its website's title or URL, e.g. \"marquee\" or \"linear.app\""),
+        collection_id: z.string().optional().describe("From list_collections"),
+        limit: z.number().int().min(1).max(50).optional().describe("Default 20"),
+        cursor: z.string().optional().describe("nextCursor from a previous call"),
       }),
-      annotations: { readOnlyHint: true },
+      annotations: READ,
     },
     async (args) => {
       const res = await db.listAnimations(env.DB, { q: args.query, collectionId: args.collection_id, limit: args.limit ?? 20, cursor: args.cursor })
@@ -1024,7 +1099,7 @@ With page_id, that page alone; without it, merged across the reference's pages. 
       description:
         "Check a queued or running capture. Reports job state, last progress, and when the capture worker on the user's machine last contacted Snip, with advice and a suggested poll delay. When pollAfterSeconds is null, stop polling and tell the user what the advice says.",
       inputSchema: z.object({ reference_id: z.string() }),
-      annotations: { readOnlyHint: true },
+      annotations: READ,
     },
     async ({ reference_id }) => {
       const r = await db.getReferenceRecord(env.DB, reference_id)
@@ -1043,7 +1118,7 @@ With page_id, that page alone; without it, merged across the reference's pages. 
         timeout_seconds: z.number().int().min(1).max(WAIT_MAX_SECONDS).optional().describe(`Longest wait in this call. Default ${WAIT_DEFAULT_SECONDS}; keep it under your client's tool timeout.`),
         max_images: z.number().int().min(0).max(LIMITS.summaryImages).optional().describe(`Page thumbnails to inline when done. Default ${LIMITS.summaryImages}.`),
       }),
-      annotations: { readOnlyHint: true },
+      annotations: READ,
     },
     async ({ reference_id, timeout_seconds, max_images }) => {
       const deadline = Date.now() + (timeout_seconds ?? WAIT_DEFAULT_SECONDS) * 1000
@@ -1078,11 +1153,11 @@ With page_id, that page alone; without it, merged across the reference's pages. 
     {
       title: "List collections",
       description:
-        "List collections. referenceCount counts websites saved whole; pageCount counts pages saved individually. Pass a collection id to search_pages (all its pages), search_references (its websites) or search_animations.",
+        "List collections, which the Snip app calls boards. referenceCount counts websites saved whole; pageCount counts pages saved individually; appUrl opens the board. Pass a collection id to search_pages (all its pages), search_references (its websites) or search_animations.",
       inputSchema: z.object({}),
-      annotations: { readOnlyHint: true },
+      annotations: READ,
     },
-    async () => ok({ collections: await db.listCollections(env.DB) }),
+    async () => ok({ collections: (await db.listCollections(env.DB)).map((c) => ({ ...c, appUrl: boardUrl(c.id) })) }),
   )
 
   server.registerTool(
@@ -1090,17 +1165,17 @@ With page_id, that page alone; without it, merged across the reference's pages. 
     {
       title: "Add a design reference",
       description:
-        "Queue a website for capture. mode 'single' captures just this page; 'crawl' follows same-domain links up to max_pages. Capture runs in the background on the user's machine. With MCP Tasks the call becomes a task that finishes with page thumbnails and a gallery link. Otherwise the result includes worker status; then call wait_for_capture until done is true.",
+        "Queue a website for capture. mode 'single' captures just this page; 'crawl' follows same-domain links up to max_pages. Capture runs in the background on the user's machine. With MCP Tasks the call becomes a task that finishes with page thumbnails and a gallery link. Otherwise the result includes worker status and referenceId; call wait_for_capture(referenceId) right away and again until done is true (pollAfterSeconds is only for get_capture_status).",
       inputSchema: z.object({
-        url: z.string(),
-        mode: z.enum(["single", "crawl"]).optional(),
-        max_pages: z.number().int().min(1).max(200).optional(),
-        collection_ids: z.array(z.string()).optional(),
+        url: z.string().describe("Full http(s) URL of the page to capture, e.g. https://linear.app/pricing"),
+        mode: z.enum(["single", "crawl"]).optional().describe("single (default): just this page. crawl: this page and same-domain pages it links to, up to max_pages"),
+        max_pages: z.number().int().min(1).max(200).optional().describe("crawl only: most pages to capture. Default 25"),
+        collection_ids: z.array(z.string()).optional().describe("Collections (boards) to add the website to, from list_collections or create_collection"),
         notes: z.string().max(db.MAX_NOTES).optional().describe("Why this is being saved. Searchable, and shown to agents later."),
         color_scheme: z.enum(["light", "dark"]).optional().describe("Emulated prefers-color-scheme. Default light."),
         allow_duplicate: z.boolean().optional().describe("Queue a new capture even if this URL is already saved. Default false returns the saved reference."),
       }),
-      annotations: { destructiveHint: false },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
     async (args, ctx) => {
       try {
@@ -1140,8 +1215,8 @@ With page_id, that page alone; without it, merged across the reference's pages. 
     {
       title: "Set a reference's notes",
       description: "Replace the owner's note on a saved website (why it was saved, what to borrow from it). An empty string clears it.",
-      inputSchema: z.object({ reference_id: z.string(), notes: z.string().max(db.MAX_NOTES) }),
-      annotations: { destructiveHint: false, idempotentHint: true },
+      inputSchema: z.object({ reference_id: z.string().describe("From search_references"), notes: z.string().max(db.MAX_NOTES) }),
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
     },
     async ({ reference_id, notes }) => ((await db.setNotes(env.DB, reference_id, notes)) ? ok({ ok: true, notes: notes.trim() || null }) : fail(`No reference ${reference_id}. Use search_references to find ids.`)),
   )
@@ -1150,27 +1225,29 @@ With page_id, that page alone; without it, merged across the reference's pages. 
     "create_collection",
     {
       title: "Create a collection",
-      description: "Create a new collection to organize references. Returns its id for set_collection_membership or set_page_collection_membership.",
-      inputSchema: z.object({ name: z.string(), description: z.string().optional() }),
-      annotations: { destructiveHint: false },
+      description: "Create a new collection (a board in the Snip app). Returns its id for set_page_collection_membership (individual pages) or set_collection_membership (whole websites), and appUrl to link the user to the board. Call list_collections first to reuse one with the same name.",
+      inputSchema: z.object({ name: z.string().describe("e.g. \"Pricing inspiration\""), description: z.string().optional() }),
+      annotations: { readOnlyHint: false, destructiveHint: false },
     },
     async ({ name, description }) => {
       const invalid = db.nameError(name)
-      return invalid ? fail(invalid) : ok({ id: await db.createCollection(env.DB, name, description) })
+      if (invalid) return fail(invalid)
+      const id = await db.createCollection(env.DB, name, description)
+      return ok({ id, name: name.trim(), appUrl: boardUrl(id), next: "set_page_collection_membership(page_ids, collection_id: id, member: true)" })
     },
   )
 
   server.registerTool(
     "set_collection_membership",
     {
-      title: "Add or remove a reference from a collection",
-      description: "Add a reference to a collection (member=true) or remove it (member=false).",
-      inputSchema: z.object({ reference_id: z.string(), collection_id: z.string(), member: z.boolean() }),
-      annotations: { destructiveHint: false, idempotentHint: true },
+      title: "Add or remove a website from a collection",
+      description: "Add a whole website (reference) to a collection, a board in the Snip app (member=true), or remove it (member=false). Every page of the website shows on the board. To put individual pages on a board, use set_page_collection_membership.",
+      inputSchema: z.object({ reference_id: z.string().describe("From search_references"), collection_id: z.string().describe("From list_collections or create_collection"), member: z.boolean() }),
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
     },
     async ({ reference_id, collection_id, member }) => {
       await db.setReferenceCollection(env.DB, reference_id, collection_id, member)
-      return ok({ ok: true })
+      return ok({ ok: true, collectionId: collection_id, appUrl: boardUrl(collection_id) })
     },
   )
 
@@ -1179,13 +1256,13 @@ With page_id, that page alone; without it, merged across the reference's pages. 
     {
       title: "Add or remove pages from a collection",
       description:
-        "Save individual pages to a collection (member=true) or remove them (member=false), e.g. gather pricing pages from several sites into one collection. Pages stay in their website and in any other collections; no files are copied. Page ids come from get_reference(id, part \"pages\") or search_pages.",
+        "Save individual pages to a collection, a board in the Snip app (member=true), or remove them (member=false), e.g. gather pricing pages from several sites onto one board. Pages stay in their website and in any other collections; no files are copied. Page ids come from get_reference(id, part \"pages\") or search_pages.",
       inputSchema: z.object({
-        page_ids: z.array(z.string()).min(1).max(db.MAX_PAGES_PER_CHANGE),
-        collection_id: z.string(),
+        page_ids: z.array(z.string()).min(1).max(db.MAX_PAGES_PER_CHANGE).describe("Page ids (the id field of search_pages hits)"),
+        collection_id: z.string().describe("From list_collections or create_collection"),
         member: z.boolean(),
       }),
-      annotations: { destructiveHint: false, idempotentHint: true },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
     },
     async ({ page_ids, collection_id, member }) => {
       let changed: number | null
@@ -1197,7 +1274,7 @@ With page_id, that page alone; without it, merged across the reference's pages. 
         throw e
       }
       if (changed === null) return fail(`No collection with id "${collection_id}". Call list_collections, or create_collection first.`)
-      return ok({ ok: true, changed })
+      return ok({ ok: true, changed, collectionId: collection_id, appUrl: boardUrl(collection_id) })
     },
   )
 
@@ -1220,7 +1297,7 @@ With page_id, that page alone; without it, merged across the reference's pages. 
       {
         title: "Get cloud setup status",
         description:
-          "Report what this Snip Worker can see about cloud setup: whether the request arrived on a local origin, whether an owner is configured, and whether a capture agent is online. This tool runs inside the Worker and cannot inspect the user's Mac, so it also returns the command to run for full status.",
+          "Only when the user asks to set up Snip cloud or bring a cloud library back to this Mac. Reports what this Snip Worker can see about cloud setup: whether the request arrived on a local origin, whether an owner is configured, and whether a capture agent is online. This tool runs inside the Worker and cannot inspect the user's Mac, so it also returns the command to run for full status.",
         inputSchema: z.object({
           command: z.enum(["setup", "pull"]).optional().describe("Which runbook to prepare. Default setup"),
         }),
