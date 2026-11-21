@@ -24,6 +24,14 @@ export const mcpJsonConfig = (url: string) => JSON.stringify({ mcpServers: { sni
 export const codexCommand = (url: string) => `codex mcp add snip --url ${url}`
 export const codexToml = (url: string) => `[mcp_servers.snip]\nurl = ${JSON.stringify(url)}`
 
+/**
+ * The Snip plugin bundles this MCP server, at Snip's local address, with a skill that teaches the agent the tools.
+ * Its marketplace is this repository (.claude-plugin/ for Claude Code, .agents/plugins/ for Codex).
+ */
+export const PLUGIN_MARKETPLACE = "MaxChen04/Snip"
+export const claudePluginCommand = `/plugin install snip --marketplace ${PLUGIN_MARKETPLACE}`
+export const codexPluginCommands = `codex plugin marketplace add ${PLUGIN_MARKETPLACE}\ncodex plugin add snip@snip`
+
 /** OpenCode wants an "mcp" block (not "mcpServers") and type "remote". */
 export const opencodeJson = (url: string) =>
   JSON.stringify({ $schema: "https://opencode.ai/config.json", mcp: { snip: { type: "remote", url, enabled: true } } }, null, 2)

@@ -1,0 +1,16 @@
+{
+  "name": "snip",
+  "owner": {
+    "name": "Max Chen"
+  },
+  "metadata": {
+    "description": "Snip, a private library of website design references, for coding agents."
+  },
+  "plugins": [
+    {
+      "name": "snip",
+      "source": "./plugins/snip",
+      "description": "Search and pull the websites you saved in Snip: screenshots cut into sections, animations, design tokens and HTML. Connects to Snip running on your Mac."
+    }
+  ]
+}
