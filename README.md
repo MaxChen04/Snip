@@ -181,6 +181,19 @@ OpenCode (`~/.config/opencode/opencode.json` or a project `opencode.json`; note 
 { "mcp": { "snip": { "type": "remote", "url": "http://localhost:5173/mcp" } } }
 ```
 
+**Or install the Snip plugin** (Snip on this Mac). It connects the same server at `http://localhost:5173/mcp` and adds a `snip` skill that tells the agent which tool answers which request. The marketplace is this repository.
+
+```bash
+# Claude Code, inside a session
+/plugin install snip --marketplace MaxChen04/Snip
+# Codex
+codex plugin marketplace add MaxChen04/Snip
+codex plugin add snip@snip
+codex mcp login snip
+```
+
+The plugin lives in [plugins/snip](plugins/snip) (`.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`, `.mcp.json` and `skills/snip/SKILL.md`). In cloud mode, add the server by URL as above instead: the plugin always points at the local address.
+
 For Claude.ai or Claude Desktop, add it as a custom connector with the same URL. In cloud mode, use your deployed URL in every command and connector above; the client signs in with your passkey when it connects.
 
 <img src="docs/media/connect-mcp.png" alt="Connect MCP dialog" width="420">
@@ -191,7 +204,7 @@ The **Connect MCP** button in the app's top bar shows these steps with your own 
 | --- | --- |
 | `search_references` | Search by text (title, URL or notes), collection or domain; returns summaries with ids |
 | `get_reference` | One reference in bounded parts: `overview`, `pages`, `animations`, `tokens` (optionally one `token_group`, paginated). `full` is the legacy everything-at-once read |
-| `get_page` | One page: signed screenshot URLs with coverage, a token summary, an inline viewport screenshot and optional HTML in chunks |
+| `get_page` | One page: signed screenshot URLs with coverage, a token summary, an inline viewport screenshot and optional HTML in chunks. `html_find` returns just the element around a phrase, such as one section's markup |
 | `get_page_styles` | Valid, bounded computed styles: summary, filtered elements, keyframes, hover rules, font faces, CSS variables |
 | `get_motion_profile` | How a site moves: named motion tokens, easing curves and durations by use (each curve's shape described), staggers, entrance animations, hover timings, the animation tech found, and which motion is only pixels (canvas, WebGL) |
 | `get_animation` | One animation: a manifest (timing provenance, sampled frames, the element's observed styles) plus a contact sheet or a single frame, and a link to the recording |
@@ -200,7 +213,7 @@ The **Connect MCP** button in the app's top bar shows these steps with your own 
 | `search_animations` | Scroll and hover animations across all references |
 | `get_capture_status` | Job state, last progress and when the capture worker last checked in, with a suggested poll delay |
 | `wait_for_capture` | Waits up to 40s (max 50) for a capture, then returns the finished capture (page thumbnails, gallery link, page ids) or says whether to call again. For clients without MCP Tasks |
-| `list_collections` | Collections with website and page counts |
+| `list_collections` | Collections (boards in the app) with website and page counts and a link to each |
 | `add_reference` | Queue a URL (`single` or `crawl`) for capture, with optional notes and color scheme. A URL that's already saved returns the saved reference unless `allow_duplicate`. With MCP Tasks it runs as a background task (see below) |
 | `set_reference_notes` | Replace a website's note (why it was saved) |
 | `create_collection` | New collection |

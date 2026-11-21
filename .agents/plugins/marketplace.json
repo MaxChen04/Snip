@@ -1,0 +1,16 @@
+{
+  "name": "snip",
+  "plugins": [
+    {
+      "name": "snip",
+      "source": {
+        "source": "local",
+        "path": "./plugins/snip"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      }
+    }
+  ]
+}

@@ -4,7 +4,7 @@ import { Logo } from "@/components/brand"
 import { notify } from "@/components/notify"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { claudeCodeCommand, codexCommand, codexToml, isLocalOrigin, mcpJsonConfig, mcpUrl, opencodeJson } from "@/lib/mcp"
+import { claudeCodeCommand, claudePluginCommand, codexCommand, codexPluginCommands, codexToml, isLocalOrigin, mcpJsonConfig, mcpUrl, opencodeJson } from "@/lib/mcp"
 import { cn, copyToClipboard } from "@/lib/utils"
 
 // Pattern from MCP connect screens on Mobbin (Descript, Cursor, Perplexity): the server URL up
@@ -152,6 +152,12 @@ export function ConnectMcpDialog({ open, onOpenChange }: { open: boolean; onOpen
                 ]}
               </Steps>
             </ClientSection>
+            {local && (
+              <ClientSection title="Or install the Claude Code plugin" note="adds a Snip skill">
+                <span className="text-sm leading-[1.5]">Run this inside Claude Code. It connects the same server and teaches Claude when to use each Snip tool:</span>
+                <Code text={claudePluginCommand} label="Claude Code plugin command" />
+              </ClientSection>
+            )}
             <ClientSection title="Claude.ai and Claude Desktop" note="set up separately">
               <Steps>
                 {[
@@ -165,7 +171,7 @@ export function ConnectMcpDialog({ open, onOpenChange }: { open: boolean; onOpen
             </ClientSection>
           </TabsContent>
 
-          <TabsContent value="codex">
+          <TabsContent value="codex" className="flex flex-col gap-5">
             <Steps>
               {[
                 <>
@@ -184,6 +190,12 @@ export function ConnectMcpDialog({ open, onOpenChange }: { open: boolean; onOpen
                 </>,
               ]}
             </Steps>
+            {local && (
+              <ClientSection title="Or install the Codex plugin" note="adds a Snip skill">
+                <span className="text-sm leading-[1.5]">Instead of step 1, run these. They connect the same server and teach Codex when to use each Snip tool. Then sign in as in step 3:</span>
+                <Code text={codexPluginCommands} label="Codex plugin commands" />
+              </ClientSection>
+            )}
           </TabsContent>
 
           <TabsContent value="opencode">

@@ -1,0 +1,19 @@
+{
+  "name": "snip",
+  "version": "0.1.0",
+  "description": "Search and pull the websites you saved in Snip: screenshots cut into sections, animations, design tokens and HTML. Connects to Snip running on your Mac.",
+  "author": {
+    "name": "Max Chen"
+  },
+  "homepage": "https://github.com/MaxChen04/Snip",
+  "repository": "https://github.com/MaxChen04/Snip",
+  "keywords": [
+    "design",
+    "references",
+    "mcp",
+    "screenshots",
+    "design-tokens"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json"
+}
